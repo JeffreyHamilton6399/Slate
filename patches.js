@@ -330,9 +330,116 @@
     if (_rawGrid) {
       window._drawGridOn = function (c) {
         if (window._slateGridEnabled) _rawGrid.call(this, c);
-        // else: no-op = plain white paper
       };
     }
   }, 150);
+
+  // ── 12. MEMBER CLICK: stop propagation so mod-menu stays open ─────────────
+  // Bug: click on member row bubbles to document which fires the "close menu"
+  // handler immediately, so the menu opens and vanishes in <1 ms.
+  // Fix: clone the row to remove old listeners, then attach with stopPropagation.
+  const _origRenderMembers = window.renderMembers;
+  window.renderMembers = function () {
+    _origRenderMembers.apply(this, arguments);
+    const list = document.getElementById('member-list');
+    if (!list) return;
+    list.querySelectorAll('.member-row[data-peer]').forEach(row => {
+      const clone = row.cloneNode(true);
+      row.parentNode.replaceChild(clone, row);
+      clone.addEventListener('click', e => {
+        e.stopPropagation();
+        if (typeof showModMenu === 'function') showModMenu(clone.dataset.peer, clone);
+      });
+    });
+  };
+
+  // ── 13. BOARD LIST: auto-prune empty boards on every lobby update ──────────
+  // Bug: liveBoards keeps empty boards forever (pruneEmptyBoards only runs once at startup).
+  // Fix: wrap scheduleRenderBoards to prune first.
+  const _origScheduleRB = window.scheduleRenderBoards;
+  window.scheduleRenderBoards = function (filter) {
+    if (typeof pruneEmptyBoards === 'function') {
+      try { pruneEmptyBoards(); } catch {}
+    }
+    if (_origScheduleRB) _origScheduleRB.apply(this, arguments);
+  };
+  // Also prune periodically so boards disappear even without a lobby update
+  setInterval(() => {
+    if (typeof pruneEmptyBoards === 'function') {
+      try { const n = pruneEmptyBoards(); if (n && typeof scheduleRenderBoards === 'function') scheduleRenderBoards(); } catch {}
+    }
+  }, 12000);
+
+  // ── 14. HOST ELECTION: don't eagerly claim host if lobby shows others ───────
+  // Bug: joinBoard calls getPeersInBoard which checks conn.open — but the connection
+  // hasn't opened yet, so it returns 0 even when others ARE in the board.
+  // Both peers then set isBoardHost=true until host-changed arrives.
+  // Fix: also check the lobby registry before claiming host.
+  const _origJoinBoardHost = window.joinBoard;
+  window.joinBoard = function (board) {
+    const r = _origJoinBoardHost && _origJoinBoardHost.apply(this, arguments);
+    // If lobby registry shows other peers in this board, relinquish early host claim
+    if (typeof state !== 'undefined' && typeof state.lobbyRegistry !== 'undefined') {
+      const othersInBoard = Object.entries(state.lobbyRegistry)
+        .filter(([id, info]) => id !== state.myId && info.board === board);
+      if (othersInBoard.length > 0) {
+        // Others are already here — we don't know who the host is yet.
+        // Reset isBoardHost so we don't broadcast a false host-changed.
+        state.isBoardHost = false;
+        state.boardHostId = null;
+      }
+    }
+    return r;
+  };
+
+  // ── 15. VOICE: auto-request mic when joining a board ───────────────────────
+  // Clicking a board item is a valid user gesture — use it to trigger getUserMedia
+  // so voice chat is ready immediately without needing to find and click the mic btn.
+  const _origJoinBoardVoice = window.joinBoard;
+  window.joinBoard = function (board) {
+    const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
+    if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
+      if (typeof joinVoice === 'function') {
+        setTimeout(() => joinVoice(), 400);
+      }
+    }
+    return r;
+  };
+
+  // ── 16. MOBILE CSS: fix layout for small screens ───────────────────────────
+  const mobilePatchCSS = document.createElement('style');
+  mobilePatchCSS.textContent = `
+    /* Prevent horizontal overflow of new toolbar items on mobile */
+    @media (max-width: 768px) {
+      #draw-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      #opacity-wrap { display: none !important; } /* hide opacity on narrow screens */
+      #layers-toolbar-btn { display: none !important; }
+      #shortcuts-hint-btn { display: none !important; }
+      #color-history { display: none !important; }
+      #minimap-wrap { bottom: 60px; right: 8px; }
+
+      /* Board header: tighten up new buttons */
+      #leave-board-btn span { display: none; } /* icon only on mobile */
+      #leave-board-btn { padding: 6px 8px !important; }
+
+      /* Layers panel + minimap: reposition for mobile */
+      #layers-panel { top: 50px; right: 8px; width: 148px; }
+    }
+
+    @media (max-height: 500px) and (max-width: 1024px) {
+      #opacity-wrap { display: none !important; }
+      #layers-toolbar-btn { display: none !important; }
+      #shortcuts-hint-btn { display: none !important; }
+      #minimap-wrap { bottom: 48px; right: 8px; }
+    }
+
+    /* Fix mod-menu visibility: ensure it always appears above everything */
+    #mod-menu { z-index: 9000 !important; }
+
+    /* Mic button in member row — make it clearly tappable on mobile */
+    #mute-btn { min-width: 36px; min-height: 32px; touch-action: manipulation; }
+    .member-row { min-height: 40px; touch-action: manipulation; }
+  `;
+  document.head.appendChild(mobilePatchCSS);
 
 })();

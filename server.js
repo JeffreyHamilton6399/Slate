@@ -63,20 +63,11 @@ app.use(express.static(ROOT, {
   },
 }));
 
-// ── SPA fallback — serve index.html with patches.js injected ─────────────────
-const fs = require('node:fs');
+// ── SPA fallback — single-page routes serve index.html ───────────────────────
 app.use((req, res) => {
   if (req.method !== 'GET') { res.sendStatus(404); return; }
   res.setHeader('cache-control', 'no-cache');
-  // Inject patches.js so we can apply UI fixes without touching index.html
-  try {
-    let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    html = html.replace('</body>', '<script src="/patches.js"></script>\n<script src="/features.js"></script>\n</body>');
-    res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.send(html);
-  } catch {
-    res.sendFile(path.join(ROOT, 'index.html'));
-  }
+  res.sendFile(path.join(ROOT, 'index.html'));
 });
 
 // ── PeerJS events ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 /**
  * features.js — Pro art-tool features for Slate.
- * Injected by server.js after patches.js.
+ * Loaded after the main inline script (and layout-dock.js when served via server.js).
  * Shares the same browser global scope as index.html scripts,
  * so top-level vars (doc, vp, canvas, ctx, genId, etc.) are directly accessible.
  */
@@ -27,6 +27,13 @@ featureCSS.textContent = `
   #layers-panel { position:absolute;top:56px;right:16px;z-index:30;width:164px;
     border:1px solid var(--border2);border-radius:8px;background:var(--bg2);
     box-shadow:0 4px 20px rgba(0,0,0,.5);flex-direction:column;overflow:hidden; }
+  #dock-body #layers-panel,
+  .dock-panel #layers-panel {
+    position: relative !important; top: auto !important; right: auto !important;
+    width: 100% !important; max-width: none !important; z-index: 1;
+    box-shadow: none; flex: 1; min-height: 0; border-radius: 0; border: none;
+    border-top: 1px solid var(--border);
+  }
   .layer-row { display:flex;align-items:center;gap:6px;padding:6px 10px;cursor:pointer;
     font-size:0.78rem;border-left:2px solid transparent;transition:background .1s,border-color .1s; }
   .layer-row:hover { background:var(--bg3); }
@@ -158,6 +165,27 @@ if (_drawShapeBase) {
   window.drawShape._layerPatched = true;
 }
 
+function _layerGate(s) {
+  if (!s || !s._layer) return true;
+  const layer = _layers.find(l => l.id === s._layer);
+  return !layer || layer.visible;
+}
+
+const _drawStrokeOnBase = window.drawStrokeOn;
+if (_drawStrokeOnBase) {
+  window.drawStrokeOn = function (c, s) {
+    if (!_layerGate(s)) return;
+    return _drawStrokeOnBase.call(this, c, s);
+  };
+}
+const _drawShapeOnBase = window.drawShapeOn;
+if (_drawShapeOnBase) {
+  window.drawShapeOn = function (c, s) {
+    if (!_layerGate(s)) return;
+    return _drawShapeOnBase.call(this, c, s);
+  };
+}
+
 
 /* ─────────────────────────────────────────────────────────────────────────
    COPY / PASTE / DUPLICATE / CUT / SELECT-ALL
@@ -256,11 +284,13 @@ function collectSelected() {
 function doPaste(items, offset) {
   if (!items.length) return;
   const newSel = [];
+  const layerId = typeof window.__slateActiveLayerId === 'string' ? window.__slateActiveLayerId : null;
   items.forEach(item => {
     const newId = genId();
     if (item.points) {
       const s = { ...item, id: newId, t: Date.now(),
         points: item.points.map(([x, y]) => [x + offset, y + offset]) };
+      if (layerId) s._layer = layerId;
       // Use exposed API if available, else directly set
       if (typeof docApplyShape === 'function' && !s.points) {
         docApplyShape(s);
@@ -271,6 +301,7 @@ function doPaste(items, offset) {
       newSel.push({ kind: 'stroke', id: newId });
     } else {
       const s = { ...item, id: newId, t: Date.now(), x: (item.x || 0) + offset, y: (item.y || 0) + offset };
+      if (layerId) s._layer = layerId;
       if (typeof docApplyShape === 'function') docApplyShape(s);
       else {
         doc.shapes.set(newId, s);
@@ -385,6 +416,10 @@ function renderMinimap() {
   mc.fillRect(0, 0, W, H);
 
   doc.strokes.forEach(s => {
+    if (s._layer) {
+      const layer = _layers.find(l => l.id === s._layer);
+      if (layer && !layer.visible) return;
+    }
     if (!s.points?.length) return;
     mc.strokeStyle = s.color || '#333';
     mc.lineWidth = Math.max(0.5, (s.size || 2) * scX * 3);
@@ -399,6 +434,10 @@ function renderMinimap() {
 
   mc.globalAlpha = 1;
   doc.shapes.forEach(s => {
+    if (s._layer) {
+      const layer = _layers.find(l => l.id === s._layer);
+      if (layer && !layer.visible) return;
+    }
     if (s.type === 'image' || s.type === 'text') return;
     mc.fillStyle = s.fill || s.color || '#666';
     mc.globalAlpha = (s._opacity || 1) * 0.5;
@@ -437,31 +476,57 @@ const _layers = [
 ];
 let _activeLayerId = 'l1';
 
+function _syncActiveLayerGlobal() {
+  window.__slateActiveLayerId = _activeLayerId;
+}
+_syncActiveLayerGlobal();
+
 function injectLayersPanel() {
   if (document.getElementById('layers-panel')) return;
-  const area = document.getElementById('canvas-area');
-  if (!area) return;
-  const panel = document.createElement('div');
-  panel.id = 'layers-panel';
-  panel.style.display = 'none';
-  panel.innerHTML = `
+
+  function buildPanel(parentEl) {
+    const panel = document.createElement('div');
+    panel.id = 'layers-panel';
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+    panel.innerHTML = `
     <div style="padding:8px 10px 6px;font-size:.68rem;font-weight:600;color:var(--text-dim);
       letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);
-      display:flex;align-items:center;justify-content:space-between">
+      display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
       Layers
       <button id="layers-add-btn" title="Add layer" style="background:none;border:none;
         color:var(--text-mid);cursor:pointer;font-size:15px;padding:0 2px;line-height:1">+</button>
     </div>
-    <div id="layers-list"></div>
+    <div id="layers-list" style="flex:1;min-height:0;overflow-y:auto"></div>
   `;
-  area.appendChild(panel);
-  renderLayersList();
-  document.getElementById('layers-add-btn').addEventListener('click', () => {
-    const id = 'l' + Date.now();
-    _layers.unshift({ id, name: 'Layer ' + (_layers.length + 1), visible: true });
-    _activeLayerId = id;
+    parentEl.appendChild(panel);
     renderLayersList();
-  });
+    document.getElementById('layers-add-btn').addEventListener('click', () => {
+      const id = 'l' + Date.now();
+      _layers.unshift({ id, name: 'Layer ' + (_layers.length + 1), visible: true });
+      _activeLayerId = id;
+      _syncActiveLayerGlobal();
+      renderLayersList();
+    });
+  }
+
+  if (window.slateDock && typeof window.slateDock.registerPanel === 'function') {
+    window.slateDock.registerPanel({
+      id: 'layers',
+      title: 'Layers',
+      order: 10,
+      mount(el) {
+        buildPanel(el);
+      },
+    });
+    return;
+  }
+
+  const area = document.getElementById('canvas-area');
+  if (!area) return;
+  buildPanel(area);
+  const panel = document.getElementById('layers-panel');
+  if (panel) panel.style.display = 'none';
 }
 
 function renderLayersList() {
@@ -489,6 +554,7 @@ function renderLayersList() {
     row.addEventListener('click', e => {
       if (e.target.closest('.layer-vis-btn')) return;
       _activeLayerId = row.dataset.lid;
+      _syncActiveLayerGlobal();
       renderLayersList();
     });
   });
@@ -504,30 +570,31 @@ function renderLayersList() {
       }
     });
   });
+  _syncActiveLayerGlobal();
 }
 
 function toggleLayersPanel() {
   const panel = document.getElementById('layers-panel');
   const btn   = document.getElementById('layers-toolbar-btn');
+  if (panel && panel.closest('#dock-body') && window.slateDock) {
+    const dock = document.getElementById('right-dock');
+    const collapsed = dock?.classList.contains('dock-user-collapsed');
+    const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || 0;
+    if (collapsed || w < 48) {
+      window.slateDock.revealPanel('layers');
+      btn?.classList.add('active');
+    } else {
+      window.slateDock.toggleCollapsed();
+      btn?.classList.remove('active');
+    }
+    return;
+  }
   if (!panel) return;
   const open = panel.style.display !== 'none';
   panel.style.display = open ? 'none' : 'flex';
   panel.style.flexDirection = 'column';
   btn?.classList.toggle('active', !open);
 }
-
-// Tag new strokes with active layer
-document.getElementById('board-canvas')?.addEventListener('pointerdown', () => {
-  setTimeout(() => {
-    if (typeof currentStroke !== 'undefined' && currentStroke) {
-      currentStroke._layer = _activeLayerId;
-    }
-  }, 0);
-}, false);
-
-// Layer visibility patching is now done inline above (drawStroke/drawShape wrappers),
-// so no separate patchLayerVisibility() call is needed.
-
 
 /* ─────────────────────────────────────────────────────────────────────────
    KEYBOARD SHORTCUTS OVERLAY
@@ -731,6 +798,18 @@ function showToast(msg) {
 }
 
 
+function injectPropsDockPlaceholder() {
+  if (!window.slateDock || typeof window.slateDock.registerPanel !== 'function') return;
+  window.slateDock.registerPanel({
+    id: 'props',
+    title: 'Properties',
+    order: 30,
+    mount(el) {
+      el.innerHTML = '<p style="margin:12px 14px;font-size:0.78rem;line-height:1.45;color:var(--text-dim)">Selection and tool options will appear here. Register panels with <code style="font-size:0.7rem;font-family:var(--mono,monospace)">slateDock.registerPanel()</code>.</p>';
+    },
+  });
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    INIT
 ───────────────────────────────────────────────────────────────────────── */
@@ -739,6 +818,7 @@ function init() {
   injectColorHistory();
   injectMinimap();
   injectLayersPanel();
+  injectPropsDockPlaceholder();
   injectShortcutsOverlay();
   injectToolbarExtras();
   patchZoomLabel();
@@ -748,7 +828,7 @@ function init() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
-  setTimeout(init, 60);   // Let main script + patches.js finish first
+  setTimeout(init, 60);   // Let main script + layout-dock finish first
 }
 
 })();

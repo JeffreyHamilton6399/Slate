@@ -15,6 +15,14 @@
 <!-- Pencil-on-board favicon — distinctive at small sizes -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c0c0e'/%3E%3Crect x='3' y='3' width='26' height='26' rx='4' fill='none' stroke='%237c6aff' stroke-width='1.8'/%3E%3Cpath d='M20 8l4 4-10 10-4.5 1 1-4.5z' fill='none' stroke='%237c6aff' stroke-width='1.7' stroke-linejoin='round' stroke-linecap='round'/%3E%3Cline x1='7' y1='25' x2='14' y2='25' stroke='%237c6aff' stroke-width='1.6' stroke-linecap='round' opacity='.5'/%3E%3C/svg%3E">
 <title>Slate</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
@@ -45,6 +53,7 @@
   --radius:      10px;
   --radius-sm:   6px;
   --sidebar-w:   260px;
+  --dock-w:      220px;
   --header-h:    52px;
   --toolbar-h:   52px;
 }
@@ -295,6 +304,10 @@ input, textarea { font-family: var(--sans); }
   color: var(--text-mid); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
+.board-3d-badge {
+  margin-left: 4px; font-size: 0.62rem; font-family: var(--mono);
+  color: var(--accent); opacity: 0.85; vertical-align: 1px;
+}
 .board-item__count {
   font-size: 0.7rem; font-family: var(--mono);
   color: var(--text-dim); background: var(--bg4);
@@ -344,6 +357,75 @@ input, textarea { font-family: var(--sans); }
   position: relative;
 }
 
+/* ── Resizable workspace (editor + dock) ── */
+.split-handle-v {
+  width: 5px; flex-shrink: 0; cursor: col-resize; z-index: 12;
+  background: transparent; position: relative;
+}
+.split-handle-v::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+  background: var(--border); opacity: 0.85;
+}
+.split-handle-v:hover::after, .split-handle-v.dragging::after {
+  background: var(--accent); opacity: 1;
+}
+#workspace-split {
+  flex: 1; min-height: 0; display: flex; flex-direction: row; position: relative;
+}
+#editor-pane {
+  flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column;
+}
+#dock-resize-handle.split-handle-v {
+  order: 2;
+}
+#right-dock {
+  order: 3;
+  width: var(--dock-w);
+  min-width: 0;
+  flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  z-index: 8;
+}
+#right-dock.dock-collapsed {
+  width: 0 !important; min-width: 0 !important; border: none; overflow: hidden;
+}
+#right-dock.dock-collapsed #dock-tabs,
+#right-dock.dock-collapsed #dock-body { display: none; }
+#right-dock.dock-user-collapsed {
+  width: 0 !important; min-width: 0 !important; border: none; overflow: hidden;
+}
+#right-dock.dock-user-collapsed #dock-tabs,
+#right-dock.dock-user-collapsed #dock-body { display: none; }
+.dock-tabs {
+  display: flex; flex-wrap: nowrap; gap: 2px; padding: 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.dock-tab {
+  flex: 0 0 auto;
+  padding: 6px 10px; font-size: 0.72rem; font-weight: 500;
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: 6px 6px 0 0; background: transparent; color: var(--text-dim);
+  cursor: pointer; font-family: var(--sans);
+}
+.dock-tab:hover { color: var(--text); background: var(--bg3); }
+.dock-tab.active {
+  color: var(--accent); background: var(--bg2);
+  border-color: var(--border2); border-bottom-color: var(--bg2); margin-bottom: -1px;
+}
+#dock-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#canvas-area-3d {
+  position: absolute; inset: 0; z-index: 4; background: #12121a;
+}
+#canvas-area-3d canvas { display: block; width: 100% !important; height: 100% !important; }
+
 /* ── Header ── */
 #board-header {
   height: var(--header-h);
@@ -377,11 +459,13 @@ input, textarea { font-family: var(--sans); }
 .visibility-chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 0.7rem; font-family: var(--mono);
-  padding: 3px 8px; border-radius: 20px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid transparent;
   flex-shrink: 0;
 }
 .chip-public  { background: rgba(34,211,165,0.12); color: var(--green); border: 1px solid rgba(34,211,165,0.25); }
 .chip-private { background: rgba(248,113,113,0.1);  color: var(--danger); border: 1px solid rgba(248,113,113,0.22); }
+button.visibility-chip { font: inherit; cursor: pointer; }
 #share-board-btn { flex-shrink: 0; }
 #members-toggle { flex-shrink: 0; display: none; }
 
@@ -1100,7 +1184,6 @@ input, textarea { font-family: var(--sans); }
 
   #board-header { gap: 6px; padding: 0 10px; }
   #board-topic-input { display: none; }
-  #vis-chip { display: none; }
 
   #draw-toolbar { padding: 0 4px; gap: 1px; overflow-x: auto; }
   #draw-toolbar .tool-btn { padding: 6px 6px; flex-shrink: 0; }
@@ -1179,6 +1262,15 @@ input, textarea { font-family: var(--sans); }
           <label for="vis-priv">Private</label>
         </div>
       </div>
+      <div class="field-wrap">
+        <div class="field-label">Workspace</div>
+        <div class="seg-control">
+          <input type="radio" name="workspace" id="ws-2d" value="2d" checked>
+          <label for="ws-2d">2D canvas</label>
+          <input type="radio" name="workspace" id="ws-3d" value="3d">
+          <label for="ws-3d">3D editor</label>
+        </div>
+      </div>
       <button id="onboard-submit" class="btn btn-primary">Start drawing →</button>
     </div>
   </div>
@@ -1250,12 +1342,19 @@ input, textarea { font-family: var(--sans); }
         </button>
         <button id="create-board-btn" class="btn btn-primary" title="Create board">+</button>
       </div>
+      <div class="seg-control create-ws-control" style="font-size:0.72rem;padding:2px;margin-top:2px" title="New board workspace">
+        <input type="radio" name="create-ws" id="cws-2d" value="2d" checked>
+        <label for="cws-2d">2D</label>
+        <input type="radio" name="create-ws" id="cws-3d" value="3d">
+        <label for="cws-3d">3D</label>
+      </div>
       <div id="join-private-row">
         <input id="join-private-input" type="text" placeholder="join private board…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
         <button id="join-private-btn" class="btn btn-ghost" title="Request to join">→</button>
       </div>
     </div>
   </nav>
+  <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
 
   <!-- MAIN -->
   <div id="main">
@@ -1271,10 +1370,11 @@ input, textarea { font-family: var(--sans); }
       </button>
       <span id="board-name-display">No board</span>
       <input id="board-topic-input" type="text" placeholder="Add a topic…" maxlength="80">
-      <span id="vis-chip" class="visibility-chip chip-public" hidden>
+      <button type="button" id="vis-chip" class="visibility-chip chip-public" hidden aria-live="polite">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="4"/></svg>
-        public
-      </span>
+        <span class="vis-chip-label">public</span>
+      </button>
+      <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <button id="share-board-btn" class="btn-icon" title="Copy invite link">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="3" r="1.5"/>
@@ -1299,6 +1399,10 @@ input, textarea { font-family: var(--sans); }
           <path d="M1 10h11v2H1z"/>
         </svg>
         Export PNG
+      </button>
+      <button id="leave-board-btn" class="btn btn-ghost" title="Leave board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0;color:var(--danger);border-color:rgba(248,113,113,0.25)">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
+        Leave
       </button>
       <!-- Voice bar (empty — mute btn is in member list next to self) -->
       <div id="voice-bar" style="display:none"></div>
@@ -1478,20 +1582,30 @@ input, textarea { font-family: var(--sans); }
       </div>
     </div>
 
-    <!-- Canvas area -->
-    <div id="canvas-area">
-      <canvas id="board-canvas"></canvas>
-      <div id="no-board-hint">
-        <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
-          <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
-          <line x1="20" y1="36" x2="52" y2="36" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-          <line x1="20" y1="24" x2="40" y2="24" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-          <line x1="20" y1="48" x2="32" y2="48" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-        </svg>
-        <p>Select or create a board to start drawing</p>
+    <!-- Workspace: 2D / 3D editor + docked panels -->
+    <div id="workspace-split">
+      <div id="editor-pane">
+        <div id="canvas-area">
+          <canvas id="board-canvas"></canvas>
+          <div id="no-board-hint">
+            <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+              <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
+              <line x1="20" y1="36" x2="52" y2="36" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+              <line x1="20" y1="24" x2="40" y2="24" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+              <line x1="20" y1="48" x2="32" y2="48" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+            <p>Select or create a board to start drawing</p>
+          </div>
+          <textarea id="text-input-overlay" rows="1" autocomplete="off" spellcheck="false"></textarea>
+          <div id="text-drag-guide"></div>
+        </div>
+        <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
       </div>
-      <textarea id="text-input-overlay" rows="1" autocomplete="off" spellcheck="false"></textarea>
-      <div id="text-drag-guide"></div>
+      <div id="dock-resize-handle" class="split-handle split-handle-v" title="Drag to resize panel column" role="separator" aria-orientation="vertical"></div>
+      <aside id="right-dock" aria-label="Tool panels">
+        <div class="dock-tabs" id="dock-tabs"></div>
+        <div id="dock-body"></div>
+      </aside>
     </div>
 
   </div><!-- /#main -->
@@ -1831,6 +1945,7 @@ let brokerIdx = 0;
 ═══════════════════════════════════════════ */
 const liveBoards      = new Set();
 const boardVisibility = {};   // boardName -> 'public' | 'private'
+const boardDocModes   = {};    // boardName -> '2d' | '3d'
 const boardTopics     = {};   // boardName -> string
 
 function publicBoards() {
@@ -1845,6 +1960,17 @@ function loadPersistedBoards() {
   try {
     const saved = JSON.parse(localStorage.getItem('slate_boards') || '[]');
     if (Array.isArray(saved)) saved.forEach(b => { if (b) liveBoards.add(b); });
+  } catch {}
+}
+
+function persistBoardDocModes() {
+  try { localStorage.setItem('slate_board_doc_modes', JSON.stringify(boardDocModes)); } catch {}
+}
+
+function loadPersistedBoardDocModes() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('slate_board_doc_modes') || '{}');
+    if (saved && typeof saved === 'object') Object.assign(boardDocModes, saved);
   } catch {}
 }
 
@@ -2800,6 +2926,7 @@ function joinBoard(board) {
 
   updateBoardChip();
   updateTopicInput();
+  applyWorkspaceMode(board);
   lobbyAnnounce(board);
   scheduleRenderBoards();
   renderMembers();
@@ -2844,6 +2971,7 @@ function leaveBoard() {
   const saveBoardBtn2 = document.getElementById('save-board-btn');
   if (saveBoardBtn2) saveBoardBtn2.style.display = 'none';
   syncInviteHash(null);
+  applyWorkspaceMode(null);
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
   hangupAll();
@@ -3251,6 +3379,7 @@ function placeImage(file, wx, wy) {
   if (!state.currentBoard) return;
   resizeImageToDataURL(file).then(({ dataUrl, w, h }) => {
     const shape = { id: genId(), type: 'image', x: wx - w/2, y: wy - h/2, w, h, src: dataUrl, peerId: state.myId, t: Date.now() };
+    if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
     doc.shapes.set(shape.id, shape);
     pendingDiff.added.push(shape);
     scheduleDiff();
@@ -3297,6 +3426,7 @@ function scheduleRender() {
 
 function resizeCanvas() {
   const area = document.getElementById('canvas-area');
+  if (!area || area.offsetParent === null || area.clientWidth < 4) return;
   canvas.width  = area.clientWidth;
   canvas.height = area.clientHeight;
   clampViewport();
@@ -3572,6 +3702,7 @@ function onPointerDown(e) {
     const size = currentTool === 'highlighter' ? Math.max(strokeSize, 16) : strokeSize;
     const color = currentTool === 'highlighter' ? (strokeColor === '#1a1a2e' ? '#facc15' : strokeColor) : strokeColor;
     currentStroke = { id: genId(), peerId: state.myId, color, size, points: [[wx, wy]], t: Date.now(), highlighter: currentTool === 'highlighter' };
+    if (typeof window.__slateActiveLayerId === 'string') currentStroke._layer = window.__slateActiveLayerId;
     scheduleRender();
   } else if (currentTool === 'eraser') {
     isDrawing = true;
@@ -3817,13 +3948,18 @@ function makeShape(wx, wy, preview = false) {
   const w = Math.abs(wx - shapeStart.wx) || 1;
   const h = Math.abs(wy - shapeStart.wy) || 1;
   const fill = useFill ? fillColor : null;
+  let shape;
   switch (currentTool) {
-    case 'rect':    return { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
-    case 'ellipse': return { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
-    case 'line':    return { id, type: 'line',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
-    case 'arrow':   return { id, type: 'arrow',   x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
+    case 'rect':    shape = { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'ellipse': shape = { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'line':    shape = { id, type: 'line',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    case 'arrow':   shape = { id, type: 'arrow',   x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    default: return null;
   }
-  return null;
+  if (shape && !preview && typeof window.__slateActiveLayerId === 'string') {
+    shape._layer = window.__slateActiveLayerId;
+  }
+  return shape;
 }
 
 /* ── Box-select helpers ── */
@@ -4075,6 +4211,7 @@ function commitText() {
   const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy,
     w: wrapW, h: textBoxSh / vp.zoom,
     color: strokeColor, fontSize, text, peerId: state.myId, t: Date.now() };
+  if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
   doc.shapes.set(shape.id, shape);
   undoStack.push({ kind: 'shape', action: 'add', id: shape.id });
   redoStack.length = 0;
@@ -4299,6 +4436,13 @@ document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(
 document.addEventListener('keydown', e => {
   if (e.target === document.getElementById('text-input-overlay')) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.ctrlKey && e.shiftKey && e.key === 'B') {
+    e.preventDefault();
+    if (typeof toggleBoardVisibility === 'function' && state.isBoardHost && state.currentBoard) {
+      toggleBoardVisibility();
+    }
+    return;
+  }
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     return;
@@ -4354,6 +4498,7 @@ function removeBoard(b) {
   if (b === state.currentBoard) { toast("Can't remove the active board — leave it first", 'red'); return; }
   liveBoards.delete(b);
   delete boardVisibility[b];
+  delete boardDocModes[b];
   delete boardTopics[b];
   persistBoards();
   persistBoardVisibility();
@@ -4369,7 +4514,7 @@ function pruneEmptyBoards() {
   let pruned = 0;
   [...liveBoards].forEach(b => {
     if (b === state.currentBoard) return;
-    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardTopics[b]; pruned++; }
+    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardDocModes[b]; delete boardTopics[b]; pruned++; }
   });
   if (pruned) { persistBoards(); persistBoardVisibility(); persistBoardTopics(); scheduleRenderBoards(); }
   return pruned;
@@ -4398,14 +4543,14 @@ function renderBoards(filter) {
     const isActive = b === state.currentBoard;
     const count    = counts[b] || 0;
     const isDrawingActive = state.boardActivity[b] && Date.now() - state.boardActivity[b] < ACTIVITY_TTL;
-    const vis      = boardVisibility[b] || 'public';
+    const is3d     = boardDocModes[b] === '3d';
 
     const div = document.createElement('div');
     div.className = `board-item${isActive ? ' active' : ''}${isDrawingActive ? ' active-drawing' : ''}`;
     div.dataset.board = b;
     div.innerHTML = `
       <div class="board-item__icon">${b.charAt(0).toUpperCase()}</div>
-      <div class="board-item__name" title="${escHtml(b)}">${escHtml(b)}</div>
+      <div class="board-item__name" title="${escHtml(b)}">${escHtml(b)}${is3d ? '<span class="board-3d-badge">3D</span>' : ''}</div>
       <div class="board-item__count">${count}</div>
       <button class="board-item__trash" data-board="${escHtml(b)}" title="Remove board" aria-label="Remove ${escHtml(b)}">
         <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -4558,10 +4703,12 @@ function updateBoardChip() {
   const vis = boardVisibility[state.currentBoard] || 'public';
   chip.hidden = false;
   chip.className = `visibility-chip chip-${vis}`;
-  chip.innerHTML = `
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="4"/></svg>
-    ${vis}
-  `;
+  const lbl = chip.querySelector('.vis-chip-label');
+  if (lbl) lbl.textContent = vis;
+  chip.style.cursor = state.isBoardHost ? 'pointer' : 'default';
+  chip.title = state.isBoardHost
+    ? (vis === 'private' ? 'Private — click to make public' : 'Public — click to make private')
+    : (vis === 'private' ? 'Private board' : 'Public board');
 }
 
 function updateTopicInput() {
@@ -4573,7 +4720,49 @@ function updateTopicInput() {
 function updateBoardControls() {
   const clearBtn = document.getElementById('clear-btn');
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
+  const leaveBtn = document.getElementById('leave-board-btn');
+  if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
 }
+
+function getBoardDocMode(board) {
+  return boardDocModes[board] === '3d' ? '3d' : '2d';
+}
+
+function applyWorkspaceMode(board) {
+  const mode = board ? getBoardDocMode(board) : '2d';
+  const area2 = document.getElementById('canvas-area');
+  const area3 = document.getElementById('canvas-area-3d');
+  const tb = document.getElementById('draw-toolbar');
+  if (!area2 || !area3) return;
+  if (mode === '3d') {
+    area2.style.display = 'none';
+    area3.style.display = 'block';
+    if (tb) tb.style.display = 'none';
+    window.dispatchEvent(new CustomEvent('slate-3d-activate'));
+  } else {
+    window.dispatchEvent(new CustomEvent('slate-3d-deactivate'));
+    area3.style.display = 'none';
+    area2.style.display = '';
+    if (tb) tb.style.display = '';
+    requestAnimationFrame(() => {
+      if (typeof resizeCanvas === 'function') resizeCanvas();
+      if (typeof scheduleRender === 'function') scheduleRender();
+    });
+  }
+}
+
+function toggleBoardVisibility() {
+  if (!state.currentBoard || !state.isBoardHost) return;
+  const cur = boardVisibility[state.currentBoard] || 'public';
+  const next = cur === 'private' ? 'public' : 'private';
+  boardVisibility[state.currentBoard] = next;
+  persistBoardVisibility();
+  broadcastAll({ type: 'board-visibility', board: state.currentBoard, visibility: next });
+  updateBoardChip();
+  scheduleRenderBoards();
+  lobbyAnnounce(state.currentBoard);
+}
+window.toggleBoardVisibility = toggleBoardVisibility;
 
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -4608,6 +4797,14 @@ document.getElementById('share-board-btn').addEventListener('click', () => {
   }
 });
 
+document.getElementById('vis-chip')?.addEventListener('click', () => {
+  if (state.isBoardHost && state.currentBoard) toggleBoardVisibility();
+});
+
+document.getElementById('leave-board-btn')?.addEventListener('click', () => {
+  leaveBoard();
+});
+
 function fallbackCopy(text) {
   const ta = document.createElement('textarea');
   ta.value = text; ta.style.cssText = 'position:fixed;opacity:0';
@@ -4631,9 +4828,12 @@ document.getElementById('create-board-input').addEventListener('keydown', e => {
   btn.addEventListener('click', () => {
     const goPriv = btn.getAttribute('aria-label') !== 'private';
     btn.setAttribute('aria-label', goPriv ? 'private' : 'public');
-    btn.querySelector('.vis-pub-icon').style.display  = goPriv ? 'none' : '';
-    btn.querySelector('.vis-priv-icon').style.display = goPriv ? '' : 'none';
-    btn.querySelector('.vis-label').textContent       = goPriv ? 'Private' : 'Public';
+    const pub = btn.querySelector('.vis-pub-icon');
+    const priv = btn.querySelector('.vis-priv-icon');
+    if (pub) pub.style.display = goPriv ? 'none' : '';
+    if (priv) priv.style.display = goPriv ? '' : 'none';
+    const vl = btn.querySelector('.vis-label');
+    if (vl) vl.textContent = goPriv ? 'Private' : 'Public';
     btn.title = goPriv ? 'Private board (click to make public)' : 'Public board (click to make private)';
   });
 }
@@ -4647,6 +4847,9 @@ function createBoard() {
   const vis   = document.getElementById('vis-toggle-btn').getAttribute('aria-label') || 'public';
   boardVisibility[name] = vis;
   persistBoardVisibility();
+  const dim = document.querySelector('input[name="create-ws"]:checked')?.value || '2d';
+  boardDocModes[name] = dim === '3d' ? '3d' : '2d';
+  persistBoardDocModes();
   safeAddBoard(name);
   input.value = '';
   lobbyAnnounce(name);
@@ -5012,6 +5215,7 @@ window.addEventListener('resize', () => {
   loadPersistedBoards();
   loadPersistedBoardTopics();
   loadPersistedBoardVisibility();
+  loadPersistedBoardDocModes();
 
   state.myId = loadOrCreate('slate_peer_id', () => 'slate-' + crypto.randomUUID().replace(/-/g,'').slice(0, 16));
   state.myName = localStorage.getItem('slate_name');
@@ -5034,12 +5238,15 @@ window.addEventListener('resize', () => {
 
     const boardRaw = document.getElementById('board-input').value.trim();
     const vis  = document.querySelector('input[name="vis"]:checked')?.value || 'public';
+    const workspace = document.querySelector('input[name="workspace"]:checked')?.value || '2d';
 
     if (boardRaw) {
       const boardName = normalizeBoard(boardRaw);
       if (boardName) {
         boardVisibility[boardName] = vis;
         persistBoardVisibility();
+        boardDocModes[boardName] = workspace === '3d' ? '3d' : '2d';
+        persistBoardDocModes();
         safeAddBoard(boardName);
         state._startBoard    = boardName;
       }
@@ -5462,6 +5669,8 @@ function loadSavedSnapshot(snap) {
   const bname = normalizeBoard(snap.name) || 'restored-' + snap.id.slice(0,6);
   boardVisibility[bname] = 'private';
   persistBoardVisibility();
+  boardDocModes[bname] = '2d';
+  persistBoardDocModes();
   safeAddBoard(bname);
   joinBoard(bname);
   // Apply snapshot after a brief tick
@@ -5601,7 +5810,8 @@ document.getElementById('save-board-btn').addEventListener('click', openSaveDial
 renderSavedBoards();
 </script>
 
-<script src="patches.js"></script>
+<script src="layout-dock.js"></script>
 <script src="features.js"></script>
+<script type="module" src="editor3d.js"></script>
 </body>
 </html>

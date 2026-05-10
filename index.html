@@ -178,6 +178,12 @@
     gap: 1px;
     line-height: 1.2;
   }
+  .slate-chrome__roomline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .slate-chrome__room {
     font-family: var(--mono);
     font-size: 11px;
@@ -187,6 +193,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
   }
   .slate-chrome__peers {
     font-family: var(--mono);
@@ -319,6 +327,105 @@
     background: rgba(255,255,255,.06);
   }
   .slate-menu__action:active { background: rgba(255,255,255,.09); }
+
+  .ob-row-inline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .ob-row-inline input { width: auto; margin: 0; accent-color: var(--accent); }
+  .ob-row-inline label {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--text-mid);
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    user-select: none;
+  }
+  .ob-private-hint {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    line-height: 1.35;
+    margin: 0;
+  }
+
+  .slate-chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 6px;
+    vertical-align: middle;
+    color: var(--danger);
+    border: 1px solid rgba(248,113,113,0.35);
+    background: rgba(248,113,113,0.08);
+  }
+  .slate-chip--pub {
+    color: var(--text-mid);
+    border-color: rgba(255,255,255,.12);
+    background: rgba(255,255,255,.05);
+  }
+
+  .slate-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 299900;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(6,6,10,.55);
+    backdrop-filter: blur(6px);
+  }
+  .slate-overlay.show { display: flex; }
+  .slate-overlay__card {
+    width: 100%;
+    max-width: 340px;
+    padding: 22px 22px 18px;
+    border-radius: 14px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+    font-family: var(--sans);
+  }
+  .slate-overlay__card p {
+    margin: 0 0 16px;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .slate-overlay__sub { font-size: 12px; color: var(--text-mid); margin-top: -8px; margin-bottom: 14px; }
+  .slate-overlay__row {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+  .slate-overlay__row button {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .slate-overlay__row button:first-child {
+    background: var(--accent);
+    color: #fff;
+  }
+  .slate-overlay__row button.slate-ghost {
+    background: transparent;
+    color: var(--text-mid);
+    border: 1px solid var(--border2);
+  }
+  .slate-overlay__row button:hover { opacity: 0.9; }
+
   .slate-banner {
     position: fixed;
     bottom: 14px;
@@ -383,6 +490,11 @@
       <label class="ob-label" for="ob-room">room</label>
       <input class="ob-input" id="ob-room" type="text" placeholder="my-room" maxlength="64" autocomplete="off" spellcheck="false">
     </div>
+    <div class="ob-row-inline">
+      <input type="checkbox" id="ob-private" />
+      <label for="ob-private">Private room</label>
+    </div>
+    <p class="ob-private-hint">Private: guests must request access; only people you allow see the board. Share the full link (includes <code>?access=private</code>).</p>
     <button class="ob-join" id="ob-join">Join Room →</button>
   </div>
 </div>
@@ -391,7 +503,10 @@
   <div class="slate-chrome__bar">
     <span class="slate-chrome__dot" id="slate-conn-dot" aria-hidden="true"></span>
     <div class="slate-chrome__meta">
-      <span class="slate-chrome__room" id="slate-room"></span>
+      <div class="slate-chrome__roomline">
+        <span id="slate-access-chip" class="slate-chip" hidden>Private</span>
+        <span class="slate-chrome__room" id="slate-room"></span>
+      </div>
       <span class="slate-chrome__peers" id="slate-peers"></span>
     </div>
     <div class="slate-chrome__btns">
@@ -414,6 +529,26 @@
   </div>
 </div>
 <div id="slate-banner" class="slate-banner" role="status"></div>
+
+<div id="slate-gate" class="slate-overlay" role="dialog" aria-modal="true" aria-labelledby="slate-gate-msg">
+  <div class="slate-overlay__card">
+    <p id="slate-gate-msg"></p>
+    <p class="slate-overlay__sub">Anyone you deny stays out of this room.</p>
+    <div class="slate-overlay__row">
+      <button type="button" class="slate-ghost" id="slate-gate-deny">Deny</button>
+      <button type="button" id="slate-gate-accept">Allow</button>
+    </div>
+  </div>
+</div>
+<div id="slate-wait" class="slate-overlay">
+  <div class="slate-overlay__card">
+    <p>Waiting for the host to let you into this <strong>private</strong> room…</p>
+    <p class="slate-overlay__sub" id="slate-wait-sub"></p>
+    <div class="slate-overlay__row">
+      <button type="button" class="slate-ghost" id="slate-wait-cancel">Leave</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function loadPeerJS() {
@@ -527,6 +662,13 @@ function getRoomFromLocation() {
   }
 }
 
+/** `?access=private` — same idea as Chirp private channels (invite + knock). */
+function getRoomAccess() {
+  const v = (new URLSearchParams(location.search).get('access') || '').toLowerCase();
+  if (v === 'private' || v === '1' || v === 'yes') return 'private';
+  return 'public';
+}
+
 function roomToHostPeerId(room) {
   const compact = btoa(unescape(encodeURIComponent(room)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
@@ -544,13 +686,82 @@ function toast(msg, isErr) {
   toast._t = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
-function wireToolbar(roomName, peerLabel) {
+const GuestWait = (() => {
+  let countdownIv;
+  const el = () => document.getElementById('slate-wait');
+  const sub = () => document.getElementById('slate-wait-sub');
+  return {
+    show() {
+      const n = el();
+      if (!n) return;
+      let s = 30;
+      if (sub()) sub().textContent = `${s}s`;
+      clearInterval(countdownIv);
+      countdownIv = setInterval(() => {
+        s--;
+        if (sub()) sub().textContent = s > 0 ? `${s}s` : '';
+        if (s <= 0) clearInterval(countdownIv);
+      }, 1000);
+      n.classList.add('show');
+    },
+    hide() {
+      clearInterval(countdownIv);
+      el()?.classList.remove('show');
+    },
+  };
+})();
+
+const SlateGate = (() => {
+  let ctx = null;
+  const overlay = () => document.getElementById('slate-gate');
+  const msgEl = () => document.getElementById('slate-gate-msg');
+  function bindOnce() {
+    if (bindOnce.done) return;
+    bindOnce.done = true;
+    document.getElementById('slate-gate-accept')?.addEventListener('click', () => {
+      try { ctx?.onAccept?.(); } catch (_) {}
+    });
+    document.getElementById('slate-gate-deny')?.addEventListener('click', () => {
+      try { ctx?.onDeny?.(); } catch (_) {}
+    });
+  }
+  return {
+    open({ name, onAccept, onDeny }) {
+      bindOnce();
+      try { ctx?.onDeny?.(); } catch (_) {}
+      ctx = { onAccept, onDeny };
+      const m = msgEl();
+      if (m) m.textContent = `${name || 'Someone'} wants to join this private room`;
+      overlay()?.classList.add('show');
+    },
+    close() {
+      overlay()?.classList.remove('show');
+      ctx = null;
+    },
+  };
+})();
+
+document.getElementById('slate-wait-cancel')?.addEventListener('click', () => {
+  GuestWait.hide();
+  try { window.__slateGuestLeaveWait?.(); } catch (_) {}
+});
+
+function wireToolbar(roomName, peerLabel, roomAccess) {
   const wrap = document.getElementById('slate-ui');
+  const chip = document.getElementById('slate-access-chip');
   const roomEl = document.getElementById('slate-room');
   const peersEl = document.getElementById('slate-peers');
   const shareBtn = document.getElementById('slate-share');
   if (!wrap || !roomEl || !peersEl || !shareBtn) return;
   wrap.hidden = false;
+  if (chip) {
+    if (roomAccess === 'private') {
+      chip.hidden = false;
+      chip.textContent = 'Private';
+    } else {
+      chip.hidden = true;
+    }
+  }
   roomEl.textContent = `#${roomName}`;
   const short = String(peerLabel || '')
     .replace(/^Host ·\s*/i, '')
@@ -730,7 +941,8 @@ function whenDataConnOpen(conn, fn) {
   else conn.on('open', fn);
 }
 
-function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) {
+function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, setPeerLabel, brokerRotate }) {
+  const roomAccess = roomAccessArg === 'private' ? 'private' : 'public';
   const hostId = roomToHostPeerId(room);
   let peer = null;
   let mode = 'idle';
@@ -742,6 +954,9 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   let netFailures = 0;
   let destroyed = false;
   let clientConnectTimer = null;
+  const admittedPeers = new Set();
+  const pendingAdmission = new Map();
+  let clientHasSnapshot = false;
 
   function brokerConfig() {
     const b = BROKERS[brokerIdx % BROKERS.length] || {};
@@ -752,23 +967,64 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       path: b.path || '/peerjs',
       secure: !!b.secure,
       key: b.key || 'peerjs',
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+        ],
+      },
     };
     return c;
+  }
+
+  function isAdmittedConn(c) {
+    if (roomAccess !== 'private') return true;
+    return admittedPeers.has(c.peer);
   }
 
   function broadcast(obj, exceptConn) {
     const s = JSON.stringify(obj);
     for (const c of hostConns.values()) {
-      if (c.open && c !== exceptConn) {
-        try { c.send(s); } catch (_) {}
-      }
+      if (!c.open || c === exceptConn) continue;
+      if (!isAdmittedConn(c)) continue;
+      try { c.send(s); } catch (_) {}
     }
   }
 
   function broadcastPresence() {
-    const n = 1 + [...hostConns.values()].filter(c => c.open).length;
+    const n =
+      1 +
+      [...hostConns.values()].filter(c => c.open && isAdmittedConn(c)).length;
     if (mode === 'host') setPeerLabel(`Host · ${n} online`);
     broadcast({ t: 'pres', n });
+  }
+
+  function sendFullSnapshotToConn(conn) {
+    const sendSnap = () => {
+      const ed = editorRef.current;
+      if (!ed) return false;
+      try {
+        const snap = ed.store.getStoreSnapshot('document');
+        const payload = { t: 'full', snap };
+        try {
+          payload.pres = ed.store.getStoreSnapshot('presence');
+        } catch (_) {}
+        conn.send(JSON.stringify(payload));
+      } catch (e) {
+        console.warn('[Slate] snapshot send failed', e);
+      }
+      return true;
+    };
+    if (!sendSnap()) queueMicrotask(() => { sendSnap(); });
+  }
+
+  function admitConn(conn) {
+    admittedPeers.add(conn.peer);
+    sendFullSnapshotToConn(conn);
   }
 
   function attachConnHandlers(conn, isHostSide) {
@@ -779,28 +1035,80 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       } catch {
         return;
       }
+
+      if (!isHostSide) {
+        if (msg.t === 'join-wait') {
+          GuestWait.show();
+          setPeerLabel('Guest · waiting for host…');
+          return;
+        }
+        if (msg.t === 'join-denied') {
+          GuestWait.hide();
+          toast(msg.reason === 'timeout' ? 'Request timed out' : 'Host denied access', true);
+          setPeerLabel(msg.reason === 'timeout' ? 'Guest · timed out' : 'Guest · denied');
+          teardownPeer();
+          return;
+        }
+      }
+
       const editor = editorRef.current;
       if (!editor) return;
 
       if (isHostSide) {
         if (msg.t === 'hello') {
-          const sendSnap = () => {
-            const ed = editorRef.current;
-            if (!ed) return false;
-            try {
-              const snap = ed.store.getStoreSnapshot('document');
-              const payload = { t: 'full', snap };
-              try {
-                payload.pres = ed.store.getStoreSnapshot('presence');
-              } catch (_) {}
-              conn.send(JSON.stringify(payload));
-            } catch (e) {
-              console.warn('[Slate] snapshot send failed', e);
-            }
-            return true;
-          };
-          if (!sendSnap()) queueMicrotask(() => { if (sendSnap()) broadcastPresence(); });
-          else broadcastPresence();
+          const name = String(msg.name || 'Guest').slice(0, 40);
+          if (roomAccess !== 'private') {
+            admitConn(conn);
+            broadcastPresence();
+            return;
+          }
+          if (admittedPeers.has(conn.peer)) {
+            admitConn(conn);
+            broadcastPresence();
+            return;
+          }
+          if (pendingAdmission.has(conn.peer)) {
+            try { conn.send(JSON.stringify({ t: 'join-wait' })); } catch (_) {}
+            return;
+          }
+          const timer = setTimeout(() => {
+            pendingAdmission.delete(conn.peer);
+            try { conn.send(JSON.stringify({ t: 'join-denied', reason: 'timeout' })); } catch (_) {}
+            try { conn.close(); } catch (_) {}
+            hostConns.delete(conn.peer);
+            SlateGate.close();
+            broadcastPresence();
+          }, 30000);
+          pendingAdmission.set(conn.peer, { conn, name, timer });
+          try { conn.send(JSON.stringify({ t: 'join-wait' })); } catch (_) {}
+          SlateGate.open({
+            name,
+            onAccept: () => {
+              const p = pendingAdmission.get(conn.peer);
+              if (!p) return;
+              clearTimeout(p.timer);
+              pendingAdmission.delete(conn.peer);
+              admittedPeers.add(conn.peer);
+              sendFullSnapshotToConn(conn);
+              SlateGate.close();
+              broadcastPresence();
+            },
+            onDeny: () => {
+              const p = pendingAdmission.get(conn.peer);
+              if (p) {
+                clearTimeout(p.timer);
+                pendingAdmission.delete(conn.peer);
+              }
+              try { conn.send(JSON.stringify({ t: 'join-denied', reason: 'denied' })); } catch (_) {}
+              try { conn.close(); } catch (_) {}
+              hostConns.delete(conn.peer);
+              SlateGate.close();
+              broadcastPresence();
+            },
+          });
+          return;
+        }
+        if (roomAccess === 'private' && !admittedPeers.has(conn.peer)) {
           return;
         }
         if (msg.t === 'chg') {
@@ -817,6 +1125,8 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       }
 
       if (msg.t === 'full' && msg.snap) {
+        clientHasSnapshot = true;
+        GuestWait.hide();
         editor.store.mergeRemoteChanges(() => {
           editor.store.loadSnapshot(msg.snap);
         });
@@ -827,6 +1137,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
             });
           } catch (_) {}
         }
+        setPeerLabel('Guest · synced');
         return;
       }
       if (msg.t === 'chg') {
@@ -845,9 +1156,18 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
 
     conn.on('close', () => {
       if (isHostSide) {
+        const p = pendingAdmission.get(conn.peer);
+        if (p) {
+          clearTimeout(p.timer);
+          pendingAdmission.delete(conn.peer);
+        }
+        admittedPeers.delete(conn.peer);
         hostConns.delete(conn.peer);
+        SlateGate.close();
         broadcastPresence();
       } else if (conn === clientConn) {
+        GuestWait.hide();
+        clientHasSnapshot = false;
         setPeerLabel('Guest · reconnecting…');
         scheduleReconnect();
       }
@@ -877,7 +1197,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         msg.t = 'chg';
         if (mode === 'host') {
           broadcast(msg, null);
-        } else if (mode === 'client' && clientConn?.open) {
+        } else if (mode === 'client' && clientConn?.open && clientHasSnapshot) {
           try { clientConn.send(JSON.stringify(msg)); } catch (_) {}
         }
       },
@@ -892,7 +1212,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         msg.t = 'pch';
         if (mode === 'host') {
           broadcast(msg, null);
-        } else if (mode === 'client' && clientConn?.open) {
+        } else if (mode === 'client' && clientConn?.open && clientHasSnapshot) {
           try { clientConn.send(JSON.stringify(msg)); } catch (_) {}
         }
       },
@@ -901,6 +1221,14 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   }
 
   function teardownPeer() {
+    GuestWait.hide();
+    SlateGate.close();
+    for (const [, p] of pendingAdmission) {
+      try { clearTimeout(p.timer); } catch (_) {}
+    }
+    pendingAdmission.clear();
+    admittedPeers.clear();
+    clientHasSnapshot = false;
     if (unsubDoc) {
       unsubDoc();
       unsubDoc = null;
@@ -912,8 +1240,9 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
     clearTimeout(clientConnectTimer);
     clientConnectTimer = null;
     if (clientConn) {
-      try { clientConn.close(); } catch (_) {}
+      const c = clientConn;
       clientConn = null;
+      try { c.close(); } catch (_) {}
     }
     for (const c of hostConns.values()) {
       try { c.close(); } catch (_) {}
@@ -956,9 +1285,20 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         clearTimeout(clientConnectTimer);
         clientConnectTimer = null;
         if (destroyed) return;
+        clientHasSnapshot = false;
         attachConnHandlers(c, false);
-        try { c.send(JSON.stringify({ t: 'hello' })); } catch (_) {}
-        setPeerLabel('Guest · syncing…');
+        let helloName = '';
+        try { helloName = sessionStorage.getItem('slate_display_name') || ''; } catch (_) {}
+        try {
+          c.send(JSON.stringify({ t: 'hello', name: helloName.trim().slice(0, 40) }));
+        } catch (_) {}
+        setPeerLabel(roomAccess === 'private' ? 'Guest · requesting…' : 'Guest · syncing…');
+        window.__slateGuestLeaveWait = () => {
+          clearTimeout(clientConnectTimer);
+          clientConnectTimer = null;
+          teardownPeer();
+          toast('Left room', false);
+        };
       });
     });
 
@@ -1070,15 +1410,15 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   };
 }
 
-function SlateApp({ room }) {
+function SlateApp({ room, roomAccess }) {
   const store = useMemo(() => createTLStore(), []);
   const editorRef = useRef(null);
   const [peerLabel, setPeerLabel] = useState('Connecting…');
   const [editorReady, setEditorReady] = useState(null);
 
   useEffect(() => {
-    wireToolbar(room, peerLabel);
-  }, [room, peerLabel]);
+    wireToolbar(room, peerLabel, roomAccess);
+  }, [room, peerLabel, roomAccess]);
 
   const onMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -1089,12 +1429,13 @@ function SlateApp({ room }) {
     if (!editorReady) return undefined;
     return createPeerSync({
       room,
+      roomAccess,
       store,
       editorRef,
       setPeerLabel,
       brokerRotate: () => {},
     });
-  }, [editorReady, room, store]);
+  }, [editorReady, room, roomAccess, store]);
 
   useEffect(() => {
     if (!editorReady) return undefined;
@@ -1106,8 +1447,9 @@ function SlateApp({ room }) {
 
 function bootstrap() {
   const room = getRoomFromLocation();
+  const roomAccess = getRoomAccess();
   const root = createRoot(document.getElementById('root'));
-  root.render(React.createElement(SlateApp, { room }));
+  root.render(React.createElement(SlateApp, { room, roomAccess }));
 }
 
 // ── Lobby ──────────────────────────────────────────────────────────────────
@@ -1117,6 +1459,7 @@ function bootstrap() {
   const roomEl  = document.getElementById('ob-room');
   const joinBtn = document.getElementById('ob-join');
   const appRoot = document.getElementById('root');
+  const privateEl = document.getElementById('ob-private');
 
   // Pre-fill room from URL hash if present
   const hashRoom = (location.hash || '').replace(/^#/, '').trim();
@@ -1125,6 +1468,8 @@ function bootstrap() {
   // Pre-fill name from previous session
   try { nameEl.value = sessionStorage.getItem('slate_display_name') || ''; } catch (_) {}
 
+  if (privateEl && getRoomAccess() === 'private') privateEl.checked = true;
+
   function launch() {
     const name = nameEl.value.trim().slice(0, 28);
     const room = roomEl.value.trim().slice(0, 64) || randomRoomId();
@@ -1132,8 +1477,11 @@ function bootstrap() {
     // Persist name so the toolbar input inherits it
     try { sessionStorage.setItem('slate_display_name', name); } catch (_) {}
 
-    // Set canonical URL hash
-    history.replaceState(null, '', `#${encodeURIComponent(room)}`);
+    const url = new URL(location.href);
+    url.hash = `#${encodeURIComponent(room)}`;
+    if (privateEl?.checked) url.searchParams.set('access', 'private');
+    else url.searchParams.delete('access');
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 
     // Swap screens
     ob.classList.add('gone');

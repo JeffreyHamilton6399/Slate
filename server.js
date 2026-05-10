@@ -27,6 +27,11 @@ const server = http.createServer(app);
 server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT;
 server.headersTimeout   = KEEP_ALIVE_TIMEOUT + 1_000; // must exceed keepAliveTimeout
 
+// Behind Fly.io / Railway / nginx TLS termination, PeerJS needs correct secure / forwarded headers.
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 
 // Gzip/Brotli the HTML and JS responses — cuts wire bytes ~70 %.
@@ -87,6 +92,9 @@ server.listen(PORT, '0.0.0.0', () => {
   localUrls().forEach(url => console.log(`  ${url}`));
   console.log('PeerJS signaling: /peerjs');
   console.log(`Health check:     http://localhost:${PORT}/health`);
+  if (process.env.TRUST_PROXY) {
+    console.log(`Trust proxy:      hop count ${app.get('trust proxy')} (TRUST_PROXY=${process.env.TRUST_PROXY})`);
+  }
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────

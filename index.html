@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Slate">
+<!-- If you deploy only static HTML (e.g. GitHub Pages), set this to your Node/Fly/Railway host that runs server.js so PeerJS has a signaling server (hostname only, no protocol). -->
+<meta name="slate-public-peer-host" content="">
 <title>Slate</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f12'/%3E%3Cpath d='M6 24l8-16 4 8 8-8' stroke='%238b7cf7' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tldraw@3.6.0/tldraw.css">
@@ -200,9 +202,32 @@
   }
   .slate-banner.show { opacity: 1; }
   .slate-banner.err { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
+  #slate-file-warn {
+    display: none;
+    margin: 0;
+    padding: 12px 16px;
+    background: #3d2a1a;
+    color: #fcd9a6;
+    font: 13px/1.45 system-ui, sans-serif;
+    border-bottom: 1px solid rgba(255,180,100,.35);
+    text-align: center;
+  }
+  #slate-file-warn.show { display: block; }
 </style>
 </head>
 <body>
+<div id="slate-file-warn" role="alert">
+  You opened Slate as a local file (<code>file://</code>). There is no web server, so <strong>PeerJS signaling does not exist</strong> and rooms cannot work.
+  Run <code>npm install</code> then <code>npm start</code> and open the <code>http://localhost:…</code> URL from the terminal instead.
+</div>
+<script>
+(function () {
+  if (location.protocol === 'file:') {
+    var el = document.getElementById('slate-file-warn');
+    if (el) el.classList.add('show');
+  }
+})();
+</script>
 <div id="onboarding">
   <div class="ob-logo">
     <div class="ob-logo-icon">
@@ -283,15 +308,21 @@ function isPrivateNetworkHost(host) {
 
 function configuredPeerBrokers() {
   const params = new URLSearchParams(location.search);
-  const explicitHost = params.get('peerHost') || localStorage.getItem('slate_peer_host');
+  const metaPublished = document.querySelector('meta[name="slate-public-peer-host"]')?.getAttribute('content')?.trim();
+  const explicitHost =
+    params.get('peerHost') ||
+    localStorage.getItem('slate_peer_host') ||
+    (metaPublished || null);
   const explicitPort = params.get('peerPort') || localStorage.getItem('slate_peer_port');
   const explicitPath = params.get('peerPath') || localStorage.getItem('slate_peer_path');
   const secureSetting = params.get('peerSecure') || localStorage.getItem('slate_peer_secure');
   const secure = secureSetting == null
     ? location.protocol === 'https:'
     : ['1', 'true', 'yes'].includes(String(secureSetting).toLowerCase());
+  // Same broker order and cloud entries as Chirp (proven on static hosts + self-hosted Node).
   const cloudBrokers = [
     { name: 'PeerJS cloud', host: '0.peerjs.com', port: 443, path: '/', secure: true, key: 'peerjs' },
+    { name: 'PeerJS default cloud' },
   ];
   const brokers = [];
 
@@ -306,8 +337,9 @@ function configuredPeerBrokers() {
     });
   }
 
-  // Prefer this origin’s /peerjs first so self-hosted Slate matches the page (avoids cloud vs local split).
-  if (!explicitHost && /^https?:$/.test(location.protocol) && location.hostname) {
+  if (!explicitHost) brokers.push(...cloudBrokers);
+
+  if (/^https?:$/.test(location.protocol) && location.hostname) {
     brokers.push({
       name: isPrivateNetworkHost(location.hostname) ? 'Slate local server' : 'Slate hosted server',
       host: location.hostname,
@@ -317,8 +349,6 @@ function configuredPeerBrokers() {
       key: 'peerjs',
     });
   }
-
-  if (!explicitHost) brokers.push(...cloudBrokers);
 
   if (explicitHost) brokers.push(...cloudBrokers);
   return brokers;

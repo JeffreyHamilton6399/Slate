@@ -63,6 +63,25 @@
     cursor: not-allowed;
     transform: none;
   }
+  .slate-ui .slate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.06); }
+  .slate-ui .slate-actions button.secondary {
+    border-color: rgba(255,255,255,.15);
+    background: rgba(255,255,255,.06);
+    color: #d8d4e8;
+  }
+  .slate-ui input.slate-name {
+    flex: 1;
+    min-width: 72px;
+    max-width: 140px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(0,0,0,.25);
+    color: #eceaf4;
+    font: inherit;
+    font-size: 11px;
+  }
+  .slate-ui input.slate-name::placeholder { color: #6c6a78; }
   .slate-banner {
     position: fixed;
     bottom: 14px;
@@ -90,6 +109,14 @@
   <span class="room" id="slate-room"></span>
   <span class="muted" id="slate-peers"></span>
   <button type="button" id="slate-share">Share</button>
+  <div class="slate-actions">
+    <input type="text" id="slate-name" class="slate-name" maxlength="28" placeholder="Your name" autocomplete="nickname" aria-label="Display name">
+    <button type="button" id="slate-fit" class="secondary" title="Zoom to fit">Fit</button>
+    <button type="button" id="slate-export-png" class="secondary" title="Download page as PNG">PNG</button>
+    <button type="button" id="slate-export-json" class="secondary" title="Download page document JSON">JSON</button>
+    <button type="button" id="slate-new-room" class="secondary" title="Start a new random room">New room</button>
+    <button type="button" id="slate-join-room" class="secondary" title="Open another room by name">Join…</button>
+  </div>
 </div>
 <div id="slate-banner" class="slate-banner" role="status"></div>
 
@@ -122,7 +149,7 @@ const REACT_VERSION = '18.3.1';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@18.3.1';
 import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
-import { Tldraw, createTLStore } from 'https://esm.sh/tldraw@3.6.0?deps=react@18.3.1,react-dom@18.3.1';
+import { Tldraw, createTLStore, exportAs } from 'https://esm.sh/tldraw@3.6.0?deps=react@18.3.1,react-dom@18.3.1';
 
 const CONFIG = { appName: 'Slate' };
 
@@ -251,6 +278,94 @@ function wireToolbar(roomName, peerLabel) {
   };
 }
 
+function wireSlateChrome(editor, room) {
+  const fit = document.getElementById('slate-fit');
+  const pngBtn = document.getElementById('slate-export-png');
+  const jsonBtn = document.getElementById('slate-export-json');
+  const newBtn = document.getElementById('slate-new-room');
+  const joinBtn = document.getElementById('slate-join-room');
+  const nameEl = document.getElementById('slate-name');
+  if (!fit || !pngBtn || !jsonBtn || !newBtn || !joinBtn || !nameEl) return () => {};
+
+  const safeSlug = (s) => String(s || 'room').replace(/[^\w-]+/g, '_').slice(0, 48) || 'room';
+
+  const applyName = () => {
+    const v = nameEl.value.trim().slice(0, 28);
+    try { sessionStorage.setItem('slate_display_name', v); } catch (_) {}
+    try {
+      if (editor.user?.updateUserPreferences) {
+        editor.user.updateUserPreferences(v ? { name: v } : { name: '' });
+      }
+    } catch (_) {}
+  };
+  try {
+    nameEl.value = sessionStorage.getItem('slate_display_name') || '';
+  } catch (_) {}
+  nameEl.addEventListener('input', applyName);
+  if (nameEl.value) queueMicrotask(applyName);
+
+  const onFit = () => {
+    try { editor.zoomToFit({ animation: { duration: 220 } }); } catch (_) {}
+  };
+  const onPng = async () => {
+    try {
+      const ids = [...editor.getCurrentPageShapeIds()];
+      await exportAs(editor, ids, { format: 'png', name: `slate-${safeSlug(room)}` });
+      toast('PNG downloaded');
+    } catch (_) {
+      toast('PNG export failed', true);
+    }
+  };
+  const onJson = () => {
+    try {
+      const snap = editor.store.getStoreSnapshot('document');
+      const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `slate-${safeSlug(room)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('JSON downloaded');
+    } catch (_) {
+      toast('JSON export failed', true);
+    }
+  };
+  const onNew = () => {
+    const r = randomRoomId(7);
+    location.assign(`${location.pathname}${location.search}#${encodeURIComponent(r)}`);
+  };
+  const onJoin = () => {
+    const raw = window.prompt('Open room (name goes in the URL hash):', room);
+    if (raw == null) return;
+    const r = raw.trim().slice(0, 64);
+    if (!r) return;
+    location.assign(`${location.pathname}${location.search}#${encodeURIComponent(r)}`);
+  };
+  const onKey = (ev) => {
+    if (ev.ctrlKey && ev.shiftKey && (ev.key === 'E' || ev.key === 'e')) {
+      ev.preventDefault();
+      onPng();
+    }
+  };
+
+  fit.addEventListener('click', onFit);
+  pngBtn.addEventListener('click', onPng);
+  jsonBtn.addEventListener('click', onJson);
+  newBtn.addEventListener('click', onNew);
+  joinBtn.addEventListener('click', onJoin);
+  window.addEventListener('keydown', onKey);
+
+  return () => {
+    nameEl.removeEventListener('input', applyName);
+    fit.removeEventListener('click', onFit);
+    pngBtn.removeEventListener('click', onPng);
+    jsonBtn.removeEventListener('click', onJson);
+    newBtn.removeEventListener('click', onNew);
+    joinBtn.removeEventListener('click', onJoin);
+    window.removeEventListener('keydown', onKey);
+  };
+}
+
 function diffMessageFromEntry(entry) {
   const { added, updated, removed } = entry.changes;
   return {
@@ -313,7 +428,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
 
   function broadcastPresence() {
     const n = 1 + [...hostConns.values()].filter(c => c.open).length;
-    if (mode === 'host') setPeerLabel(`${n} online`);
+    if (mode === 'host') setPeerLabel(`Host · ${n} online`);
     broadcast({ t: 'pres', n });
   }
 
@@ -384,7 +499,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         return;
       }
       if (msg.t === 'pres' && typeof msg.n === 'number') {
-        setPeerLabel(`${msg.n} online`);
+        setPeerLabel(`Guest · ${msg.n} online`);
         return;
       }
     });
@@ -394,20 +509,21 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         hostConns.delete(conn.peer);
         broadcastPresence();
       } else if (conn === clientConn) {
-        setPeerLabel('Reconnecting…');
+        setPeerLabel('Guest · reconnecting…');
         scheduleReconnect();
       }
     });
   }
 
   let reconnectTimer = null;
+  /** Longer delay avoids everyone hammering host-id at once after a short signaling blip. */
   function scheduleReconnect() {
     if (destroyed) return;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       netFailures = 0;
       start();
-    }, 900);
+    }, 2800);
   }
 
   function startListenLocal(storeInst) {
@@ -480,20 +596,20 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       netFailures = 0;
       peer = p;
       mode = 'client';
-      setPeerLabel('Finding host…');
+      setPeerLabel('Guest · finding host…');
       startListenLocal(store);
       const c = p.connect(hostId, { reliable: true, serialization: 'json' });
       clientConn = c;
       c.on('error', () => {
         clearTimeout(clientConnectTimer);
         if (c.open) return;
-        setPeerLabel('Data channel failed');
+        setPeerLabel('Guest · channel error');
         scheduleReconnect();
       });
       clearTimeout(clientConnectTimer);
       clientConnectTimer = setTimeout(() => {
         if (destroyed || !clientConn || clientConn.open) return;
-        setPeerLabel('Host timeout');
+        setPeerLabel('Guest · host timeout');
         toast('No host answered — open this room in one tab first, or retry.', true);
         scheduleReconnect();
       }, 14_000);
@@ -503,7 +619,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         if (destroyed) return;
         attachConnHandlers(c, false);
         try { c.send(JSON.stringify({ t: 'hello' })); } catch (_) {}
-        setPeerLabel('Syncing…');
+        setPeerLabel('Guest · syncing…');
       });
     });
 
@@ -513,7 +629,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       netFailures++;
       brokerIdx++;
       if (netFailures > 14) {
-        setPeerLabel('Offline');
+        setPeerLabel('Offline · broker');
         toast('Could not reach a PeerJS broker.', true);
         startListenLocal(store);
         return;
@@ -523,14 +639,23 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
     });
 
     p.on('disconnected', () => {
-      if (!destroyed) scheduleReconnect();
+      if (destroyed) return;
+      try {
+        if (peer === p && typeof p.reconnect === 'function') {
+          p.reconnect();
+          return;
+        }
+      } catch (_) {}
+      scheduleReconnect();
     });
   }
 
   function start() {
     if (destroyed) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     if (window.__peerjsLoadFailed || typeof Peer !== 'function') {
-      setPeerLabel('Offline (no PeerJS)');
+      setPeerLabel('Offline · no PeerJS');
       startListenLocal(store);
       toast('PeerJS failed to load — drawing works locally only.', true);
       return;
@@ -556,7 +681,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       netFailures = 0;
       peer = hostPeer;
       mode = 'host';
-      setPeerLabel('1 online');
+      setPeerLabel('Host · 1 online');
       startListenLocal(store);
     });
 
@@ -573,7 +698,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       netFailures++;
       brokerIdx++;
       if (netFailures > 14) {
-        setPeerLabel('Offline');
+        setPeerLabel('Offline · broker');
         toast('Could not reach a PeerJS broker.', true);
         startListenLocal(store);
         return;
@@ -583,7 +708,14 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
     });
 
     hostPeer.on('disconnected', () => {
-      if (!destroyed) scheduleReconnect();
+      if (destroyed) return;
+      try {
+        if (typeof hostPeer.reconnect === 'function') {
+          hostPeer.reconnect();
+          return;
+        }
+      } catch (_) {}
+      toast('Brief disconnect from room server — peers may reconnect.', false);
     });
   }
 
@@ -592,6 +724,7 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   return () => {
     destroyed = true;
     clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     clearTimeout(clientConnectTimer);
     clientConnectTimer = null;
     teardownPeer();
@@ -623,6 +756,11 @@ function SlateApp({ room }) {
       brokerRotate: () => {},
     });
   }, [editorReady, room, store]);
+
+  useEffect(() => {
+    if (!editorReady) return undefined;
+    return wireSlateChrome(editorReady, room);
+  }, [editorReady, room]);
 
   return React.createElement(Tldraw, { store, onMount });
 }

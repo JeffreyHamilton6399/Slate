@@ -1046,4 +1046,454 @@
   `;
   document.head.appendChild(uiCSS);
 
+  // ── 20. IOS TOGGLE for visibility picker ──────────────────────────────────
+  (function patchVisToggle() {
+    const btn = document.getElementById('vis-toggle-btn');
+    if (!btn) return;
+    // Replace inner content keeping .vis-pub-icon / .vis-priv-icon for compat
+    btn.innerHTML = `
+      <span class="vt-knob"></span>
+      <svg class="vis-pub-icon" width="10" height="10" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="pointer-events:none">
+        <circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/>
+      </svg>
+      <svg class="vis-priv-icon" width="10" height="10" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;pointer-events:none">
+        <rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/>
+      </svg>
+      <span class="vis-label" style="display:none"></span>
+    `;
+  })();
+
+  const visToggleCSS = document.createElement('style');
+  visToggleCSS.textContent = `
+    /* Vis toggle: iOS pill switch */
+    #vis-toggle-btn.vis-toggle {
+      position: relative; width: 50px; height: 26px;
+      border-radius: 13px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: flex-end;
+      padding-right: 6px; gap: 0; overflow: hidden; flex-shrink: 0;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    #vis-toggle-btn[aria-label="public"] {
+      background: rgba(34,211,165,0.12);
+      border: 1px solid rgba(34,211,165,0.28);
+    }
+    #vis-toggle-btn[aria-label="private"] {
+      background: rgba(248,113,113,0.1);
+      border: 1px solid rgba(248,113,113,0.28);
+    }
+    /* Knob */
+    #vis-toggle-btn .vt-knob {
+      position: absolute; left: 3px; top: 3px;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.28);
+      transition: transform 0.18s ease, background 0.18s;
+      pointer-events: none; z-index: 1;
+    }
+    #vis-toggle-btn[aria-label="private"] .vt-knob {
+      transform: translateX(22px);
+      background: #f87171;
+    }
+    /* Icon: right-side of track */
+    #vis-toggle-btn .vis-pub-icon,
+    #vis-toggle-btn .vis-priv-icon {
+      position: relative; z-index: 2; pointer-events: none;
+      color: currentColor; opacity: 0.7; flex-shrink: 0;
+    }
+    #vis-toggle-btn[aria-label="public"]  { color: var(--green); }
+    #vis-toggle-btn[aria-label="private"] { color: var(--danger); }
+  `;
+  document.head.appendChild(visToggleCSS);
+
+  // ── 21. COMPACT MIC / LIVE BUTTON ─────────────────────────────────────────
+  // Make the voice-toggle-btn in the header a tiny icon-only pill
+  (function compactVoiceBtn() {
+    // wait a tick for existing patches to create the button
+    setTimeout(() => {
+      const vBtn = document.getElementById('voice-toggle-btn');
+      if (!vBtn) return;
+      // Replace label-based display with icon dot
+      const lbl = vBtn.querySelector('span, .voice-lbl');
+      if (lbl) lbl.style.display = 'none';
+      vBtn.style.cssText += `
+        width:30px;height:30px;padding:6px;border-radius:7px;
+        font-size:0;gap:0;position:relative;flex-shrink:0;
+      `;
+      // State dot
+      if (!vBtn.querySelector('.voice-dot')) {
+        const dot = document.createElement('span');
+        dot.className = 'voice-dot';
+        dot.style.cssText = `
+          position:absolute;top:5px;right:5px;
+          width:6px;height:6px;border-radius:3px;
+          background:var(--text-dim);
+          transition:background 0.2s;pointer-events:none;
+        `;
+        vBtn.appendChild(dot);
+      }
+    }, 600);
+  })();
+
+  // ── 22. LEAVE BUTTON: always icon-only ────────────────────────────────────
+  (function compactLeave() {
+    setTimeout(() => {
+      const lb = document.getElementById('leave-board-btn');
+      if (!lb) return;
+      // Kill any text nodes / spans that aren't SVG
+      [...lb.childNodes].forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) n.remove();
+        if (n.nodeType === Node.ELEMENT_NODE && n.tagName !== 'SVG' && n.tagName.toLowerCase() !== 'svg') n.remove();
+      });
+      lb.style.cssText += `padding:6px 7px!important;font-size:0!important;gap:0!important;`;
+      lb.title = 'Leave board';
+    }, 400);
+  })();
+
+  // ── 23. HOST-CONTROLLED AUDIO MUTE ────────────────────────────────────────
+  (function patchAudioMute() {
+    // Extend state
+    setTimeout(() => {
+      if (typeof state !== 'undefined') {
+        if (!state.audioMutedPeers) state.audioMutedPeers = new Set();
+        if (!('isAudioMuted' in state)) state.isAudioMuted = false;
+      }
+    }, 300);
+
+    // Add "Mute mic" item to mod menu after existing items load
+    setTimeout(() => {
+      const menu = document.getElementById('mod-menu');
+      if (!menu) return;
+      const kickBtn = document.getElementById('mod-kick-btn');
+      if (!kickBtn) return;
+
+      const audioMuteBtn = document.createElement('button');
+      audioMuteBtn.id = 'mod-audiomute-btn';
+      audioMuteBtn.className = 'mod-menu-item';
+      audioMuteBtn.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="1" width="5" height="7" rx="2.5"/>
+          <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+          <line x1="2" y1="2" x2="11" y2="11" stroke="var(--danger)" stroke-width="1.8"/>
+        </svg>
+        <span id="mod-audiomute-label">Mute mic</span>
+      `;
+      audioMuteBtn.onclick = () => {
+        const targetId = menu._targetPeerId;
+        if (!targetId) return;
+        modAudioMute(targetId);
+        menu.classList.remove('open');
+      };
+      menu.insertBefore(audioMuteBtn, kickBtn);
+    }, 500);
+
+    // Update label when menu opens
+    const _origShowModMenu = window.showModMenu;
+    if (typeof _origShowModMenu === 'function') {
+      window.showModMenu = function(peerId, x, y) {
+        _origShowModMenu.call(this, peerId, x, y);
+        setTimeout(() => {
+          const menu = document.getElementById('mod-menu');
+          if (!menu) return;
+          const lbl = document.getElementById('mod-audiomute-label');
+          if (!lbl) return;
+          const isMuted = state?.audioMutedPeers?.has(peerId);
+          lbl.textContent = isMuted ? 'Unmute mic' : 'Mute mic';
+          const audioMuteBtn = document.getElementById('mod-audiomute-btn');
+          if (audioMuteBtn) audioMuteBtn.style.display = state?.isBoardHost ? '' : 'none';
+        }, 10);
+      };
+    }
+
+    // Patch handleData to process new message types
+    const _origHandleData = window.handleData;
+    if (typeof _origHandleData === 'function') {
+      window.handleData = function(peerId, data) {
+        if (data.type === 'mod-audio-mute') {
+          state.isAudioMuted = true;
+          // Disable mic tracks
+          if (typeof voiceState !== 'undefined' && voiceState.localStream) {
+            voiceState.localStream.getAudioTracks().forEach(t => { t.enabled = false; });
+          }
+          // Show lock badge on self in member list
+          const selfRow = document.querySelector('.member-row[data-peer-id="me"], .member-row.self');
+          if (selfRow) {
+            let badge = selfRow.querySelector('.audio-muted-badge');
+            if (!badge) {
+              badge = document.createElement('span');
+              badge.className = 'audio-muted-badge draw-muted-badge';
+              badge.textContent = 'mic muted';
+              const nameEl = selfRow.querySelector('.member-name');
+              if (nameEl) nameEl.after(badge);
+            }
+          }
+          // Disable the mute-btn so user can't self-unmute
+          const muteBtn = document.getElementById('mute-btn');
+          if (muteBtn) {
+            muteBtn.disabled = true;
+            muteBtn.title = 'Your mic was muted by the host';
+            muteBtn.style.opacity = '0.4';
+            muteBtn.style.pointerEvents = 'none';
+          }
+          if (typeof toast === 'function') toast('Your mic was muted by the host', 'red');
+          return;
+        }
+        if (data.type === 'mod-audio-unmute') {
+          state.isAudioMuted = false;
+          // Re-enable mic tracks
+          if (typeof voiceState !== 'undefined' && voiceState.localStream) {
+            voiceState.localStream.getAudioTracks().forEach(t => { t.enabled = !voiceState.isMuted; });
+          }
+          const muteBtn = document.getElementById('mute-btn');
+          if (muteBtn) {
+            muteBtn.disabled = false;
+            muteBtn.title = 'Toggle mic';
+            muteBtn.style.opacity = '';
+            muteBtn.style.pointerEvents = '';
+          }
+          if (typeof toast === 'function') toast('Your mic was unmuted', 'info');
+          return;
+        }
+        return _origHandleData.call(this, peerId, data);
+      };
+    }
+  })();
+
+  // Host function: toggle audio mute for a peer
+  window.modAudioMute = function(peerId) {
+    if (!state?.isBoardHost) return;
+    if (!state.audioMutedPeers) state.audioMutedPeers = new Set();
+    const name = state.connections?.[peerId]?.name || peerId;
+    if (state.audioMutedPeers.has(peerId)) {
+      state.audioMutedPeers.delete(peerId);
+      try { state.connections[peerId]?.conn.send({ type: 'mod-audio-unmute' }); } catch {}
+      if (typeof toast === 'function') toast(`Unmuted mic for ${name}`);
+    } else {
+      state.audioMutedPeers.add(peerId);
+      try { state.connections[peerId]?.conn.send({ type: 'mod-audio-mute' }); } catch {}
+      if (typeof toast === 'function') toast(`Mic muted for ${name}`, 'red');
+    }
+    if (typeof renderMembers === 'function') renderMembers();
+  };
+
+  // ── 24. DRAW-MUTE = FULL BLOCK (pan + zoom too) ───────────────────────────
+  (function patchDrawMuteFullBlock() {
+    const _origOnPointerDown = window.onPointerDown;
+    // Wrap canvas events at capture phase
+    setTimeout(() => {
+      const cv = document.getElementById('board-canvas');
+      if (!cv) return;
+      cv.addEventListener('pointerdown', e => {
+        if (state?.isDrawMuted) { e.stopImmediatePropagation(); e.preventDefault(); }
+      }, true);
+      cv.addEventListener('wheel', e => {
+        if (state?.isDrawMuted) { e.stopImmediatePropagation(); e.preventDefault(); }
+      }, { capture: true, passive: false });
+    }, 800);
+
+    // Also show a clear "locked" overlay when draw-muted
+    const lockStyle = document.createElement('style');
+    lockStyle.textContent = `
+      #board-canvas.draw-muted {
+        cursor: not-allowed !important;
+        outline: 2px solid rgba(248,113,113,0.35) !important;
+        outline-offset: -2px;
+      }
+      #draw-muted-overlay {
+        position: absolute; inset: 0; z-index: 10;
+        display: none; align-items: center; justify-content: center;
+        pointer-events: none;
+      }
+      #draw-muted-overlay.active { display: flex; }
+      .draw-muted-msg {
+        background: rgba(248,113,113,0.12);
+        border: 1px solid rgba(248,113,113,0.3);
+        color: var(--danger);
+        padding: 6px 12px; border-radius: 8px;
+        font-size: 0.75rem; font-weight: 600;
+        letter-spacing: 0.04em;
+        pointer-events: none;
+      }
+    `;
+    document.head.appendChild(lockStyle);
+
+    // Create overlay
+    setTimeout(() => {
+      const area = document.getElementById('canvas-area');
+      if (!area) return;
+      area.style.position = 'relative';
+      const overlay = document.createElement('div');
+      overlay.id = 'draw-muted-overlay';
+      overlay.innerHTML = `<span class="draw-muted-msg">Drawing muted by host</span>`;
+      area.appendChild(overlay);
+
+      // Observer for draw-muted class on canvas
+      const obs = new MutationObserver(() => {
+        const cv = document.getElementById('board-canvas');
+        const ov = document.getElementById('draw-muted-overlay');
+        if (!cv || !ov) return;
+        ov.classList.toggle('active', cv.classList.contains('draw-muted'));
+      });
+      const cv2 = document.getElementById('board-canvas');
+      if (cv2) obs.observe(cv2, { attributes: true, attributeFilter: ['class'] });
+    }, 900);
+  })();
+
+  // ── 25. DRAGGABLE / DETACHABLE PANELS ─────────────────────────────────────
+  const panelDragCSS = document.createElement('style');
+  panelDragCSS.textContent = `
+    .panel-grip {
+      cursor: grab; background: none; border: none;
+      padding: 4px; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0.35; transition: opacity 0.15s;
+      flex-shrink: 0;
+    }
+    .panel-grip:hover { opacity: 0.8; background: var(--bg3); }
+    .panel-grip:active { cursor: grabbing; }
+    .panel--floating {
+      border-radius: 12px !important;
+      box-shadow: 0 20px 56px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.07) !important;
+      overflow: hidden;
+      resize: both;
+    }
+    .panel--floating .panel-grip { opacity: 0.6; }
+    .panel-dock-btn {
+      width: 24px; height: 24px;
+      border-radius: 5px; border: none;
+      background: var(--bg3); color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; margin-left: auto; flex-shrink: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .panel-dock-btn:hover { background: var(--accent-dim); color: var(--accent); }
+  `;
+  document.head.appendChild(panelDragCSS);
+
+  (function setupDraggablePanels() {
+    const CONFIGS = [
+      { id: 'member-panel', headerSel: '.member-panel-header' },
+      { id: 'chat-panel',   headerSel: '.chat-header' },
+    ];
+    const SNAP_EDGE_PX = 80;
+
+    CONFIGS.forEach(({ id, headerSel }) => {
+      const panel = document.getElementById(id);
+      if (!panel) return;
+      const header = panel.querySelector(headerSel);
+      if (!header) return;
+
+      let floating = false, dragging = false, ox = 0, oy = 0;
+
+      // Drag grip icon
+      const grip = document.createElement('button');
+      grip.className = 'panel-grip';
+      grip.title = 'Drag to float · double-click to re-dock';
+      grip.innerHTML = `<svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor">
+        <circle cx="3" cy="2.5" r="1.2"/><circle cx="7" cy="2.5" r="1.2"/>
+        <circle cx="3" cy="6"   r="1.2"/><circle cx="7" cy="6"   r="1.2"/>
+        <circle cx="3" cy="9.5" r="1.2"/><circle cx="7" cy="9.5" r="1.2"/>
+      </svg>`;
+      header.insertBefore(grip, header.firstChild);
+
+      function detach() {
+        if (floating) return;
+        const rect = panel.getBoundingClientRect();
+        panel._savedParent = panel.parentElement;
+        panel._savedNext   = panel.nextElementSibling;
+        document.body.appendChild(panel);
+        Object.assign(panel.style, {
+          position: 'fixed',
+          left: rect.left + 'px',
+          top:  rect.top  + 'px',
+          width:  rect.width  + 'px',
+          height: rect.height + 'px',
+          zIndex: '8400',
+          display: 'flex',
+          flexDirection: 'column',
+        });
+        panel.classList.add('panel--floating');
+        floating = true;
+
+        // Dock button in header
+        if (!header.querySelector('.panel-dock-btn')) {
+          const dockBtn = document.createElement('button');
+          dockBtn.className = 'panel-dock-btn';
+          dockBtn.title = 'Dock panel back';
+          dockBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 6h8M7 3l3 3-3 3"/></svg>`;
+          dockBtn.addEventListener('click', e => { e.stopPropagation(); dock(); });
+          header.appendChild(dockBtn);
+        }
+      }
+
+      function dock() {
+        if (!floating) return;
+        const parent  = panel._savedParent;
+        const nextSib = panel._savedNext;
+        if (parent) {
+          if (nextSib && nextSib.parentElement === parent) parent.insertBefore(panel, nextSib);
+          else parent.appendChild(panel);
+        }
+        ['position','left','top','width','height','zIndex'].forEach(p => panel.style[p] = '');
+        panel.classList.remove('panel--floating');
+        const db = header.querySelector('.panel-dock-btn');
+        if (db) db.remove();
+        floating = false;
+      }
+
+      // Grip mouse drag
+      grip.addEventListener('mousedown', e => {
+        e.preventDefault(); e.stopPropagation();
+        if (!floating) detach();
+        const rect = panel.getBoundingClientRect();
+        ox = e.clientX - rect.left;
+        oy = e.clientY - rect.top;
+        dragging = true;
+      });
+
+      // Grip touch drag
+      grip.addEventListener('touchstart', e => {
+        e.preventDefault();
+        if (!floating) detach();
+        const t = e.touches[0];
+        const rect = panel.getBoundingClientRect();
+        ox = t.clientX - rect.left;
+        oy = t.clientY - rect.top;
+        dragging = true;
+      }, { passive: false });
+
+      document.addEventListener('mousemove', e => {
+        if (!dragging || !floating) return;
+        panel.style.left = (e.clientX - ox) + 'px';
+        panel.style.top  = (e.clientY - oy) + 'px';
+      });
+
+      document.addEventListener('touchmove', e => {
+        if (!dragging || !floating) return;
+        const t = e.touches[0];
+        panel.style.left = (t.clientX - ox) + 'px';
+        panel.style.top  = (t.clientY - oy) + 'px';
+      }, { passive: false });
+
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        // Snap back to right edge if close enough
+        if (floating) {
+          const x = parseFloat(panel.style.left) || 0;
+          if (x + (panel.offsetWidth || 280) > window.innerWidth - SNAP_EDGE_PX) {
+            dock();
+          }
+        }
+      });
+
+      document.addEventListener('touchend', () => { dragging = false; });
+
+      // Double-click header to toggle float/dock
+      header.addEventListener('dblclick', e => {
+        if (e.target === grip) return;
+        floating ? dock() : detach();
+      });
+    });
+  })();
+
 })();

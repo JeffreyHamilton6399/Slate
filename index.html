@@ -423,8 +423,12 @@ input, textarea { font-family: var(--sans); }
 }
 #canvas-area-3d {
   position: absolute; inset: 0; z-index: 4; background: #12121a;
+  touch-action: none;
 }
-#canvas-area-3d canvas { display: block; width: 100% !important; height: 100% !important; }
+#canvas-area-3d canvas {
+  display: block; width: 100% !important; height: 100% !important;
+  touch-action: none;
+}
 
 /* ── Header ── */
 #board-header {
@@ -456,6 +460,23 @@ input, textarea { font-family: var(--sans); }
 }
 #board-topic-input::placeholder { color: var(--text-dim); }
 #board-topic-input:focus { color: var(--text); }
+
+.host-controls-bar {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 2px 8px; border-radius: var(--radius-sm);
+  background: rgba(124,106,255,0.1);
+  border: 1px solid rgba(124,106,255,0.28);
+}
+.host-controls-bar[hidden] { display: none !important; }
+.host-controls-label {
+  font-size: 0.62rem; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--accent); font-weight: 600;
+}
+.host-controls-btn {
+  padding: 4px 8px; font-size: 0.72rem; border-radius: var(--radius-sm);
+}
+
 .visibility-chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 0.7rem; font-family: var(--mono);
@@ -634,48 +655,48 @@ button.visibility-chip { font: inherit; cursor: pointer; }
    MEMBERS PANEL
 ═══════════════════════════════════════════ */
 #member-panel {
-  width: 220px; flex-shrink: 0;
+  width: 152px; flex-shrink: 0;
   background: var(--bg2);
   border-left: 1px solid var(--border);
   display: flex; flex-direction: column;
   overflow: hidden; z-index: 5;
 }
 .member-panel-header {
-  padding: 12px 14px 8px;
+  padding: 8px 10px 6px;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
 }
 .member-panel-title {
-  font-size: 0.72rem; font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.14em;
+  font-size: 0.65rem; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.12em;
   color: var(--text-dim);
 }
 #member-count-badge {
-  font-size: 0.68rem; font-family: var(--mono);
+  font-size: 0.62rem; font-family: var(--mono);
   background: var(--bg4); color: var(--text-dim);
-  padding: 2px 6px; border-radius: 10px;
+  padding: 1px 5px; border-radius: 8px;
 }
 #member-list {
   flex: 1; overflow-y: auto;
-  padding: 6px 8px;
-  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 6px;
+  display: flex; flex-direction: column; gap: 1px;
 }
 .member-row {
   display: flex; align-items: center;
-  padding: 6px 8px; border-radius: var(--radius-sm);
-  gap: 8px; position: relative;
+  padding: 4px 6px; border-radius: var(--radius-sm);
+  gap: 6px; position: relative;
 }
 .member-row:hover { background: var(--bg3); }
 .member-avatar {
-  width: 32px; height: 32px; border-radius: 50%;
+  width: 26px; height: 26px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.8rem; font-weight: 700;
+  font-size: 0.68rem; font-weight: 700;
   flex-shrink: 0; overflow: hidden;
   background-size: cover; background-position: center;
 }
 .member-info { flex: 1; min-width: 0; }
 .member-name {
-  font-size: 0.82rem; font-weight: 500;
+  font-size: 0.76rem; font-weight: 500;
   color: var(--text); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
@@ -1173,7 +1194,7 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     position: fixed; top: 0; right: 0; bottom: 0;
     transform: translateX(110%);
     transition: transform 0.25s ease;
-    z-index: 60; width: min(280px, 88vw);
+    z-index: 60; width: min(220px, 78vw);
     box-shadow: -4px 0 24px rgba(0,0,0,0.5);
   }
   #member-panel.open { transform: translateX(0); display: flex; }
@@ -1184,6 +1205,10 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 
   #board-header { gap: 6px; padding: 0 10px; }
   #board-topic-input { display: none; }
+
+  .host-controls-bar { gap: 4px; padding: 2px 6px; }
+  .host-controls-label { display: none; }
+  .host-controls-btn { padding: 4px 6px; font-size: 0.68rem; }
 
   #draw-toolbar { padding: 0 4px; gap: 1px; overflow-x: auto; }
   #draw-toolbar .tool-btn { padding: 6px 6px; flex-shrink: 0; }
@@ -1216,7 +1241,7 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     position: fixed; top: 0; right: 0; bottom: 0;
     transform: translateX(110%);
     transition: transform 0.25s ease;
-    z-index: 60; width: min(260px, 70vw);
+    z-index: 60; width: min(200px, 72vw);
   }
   #member-panel.open { transform: translateX(0); display: flex; }
   #chat-panel.open   { transform: translateX(0); display: flex; }
@@ -1370,6 +1395,11 @@ button.visibility-chip { font: inherit; cursor: pointer; }
       </button>
       <span id="board-name-display">No board</span>
       <input id="board-topic-input" type="text" placeholder="Add a topic…" maxlength="80">
+      <div id="host-controls-bar" class="host-controls-bar" hidden aria-label="Host controls">
+        <span class="host-controls-label">Host</span>
+        <button type="button" id="host-members-btn" class="btn btn-ghost host-controls-btn" title="Members — mute drawing, kick…">Members</button>
+        <button type="button" id="host-vis-btn" class="btn btn-ghost host-controls-btn" title="Toggle public / private">Visibility</button>
+      </div>
       <button type="button" id="vis-chip" class="visibility-chip chip-public" hidden aria-live="polite">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="4"/></svg>
         <span class="vis-chip-label">public</span>
@@ -1697,10 +1727,6 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
     <span id="mod-drawmute-label">Mute drawing</span>
   </button>
-  <button class="mod-menu-item" id="mod-promote-btn">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 2l1.2 3.5H11L8.4 7.6l1 3L6.5 9 3.6 10.6l1-3L2 5.5h3.3z"/></svg>
-    Make host
-  </button>
   <button class="mod-menu-item danger" id="mod-kick-btn">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
     Kick
@@ -1946,6 +1972,7 @@ let brokerIdx = 0;
 const liveBoards      = new Set();
 const boardVisibility = {};   // boardName -> 'public' | 'private'
 const boardDocModes   = {};    // boardName -> '2d' | '3d'
+const boardCreators  = {};    // boardName -> peerId (permanent host = creator)
 const boardTopics     = {};   // boardName -> string
 
 function publicBoards() {
@@ -1971,6 +1998,17 @@ function loadPersistedBoardDocModes() {
   try {
     const saved = JSON.parse(localStorage.getItem('slate_board_doc_modes') || '{}');
     if (saved && typeof saved === 'object') Object.assign(boardDocModes, saved);
+  } catch {}
+}
+
+function persistBoardCreators() {
+  try { localStorage.setItem('slate_board_creators', JSON.stringify(boardCreators)); } catch {}
+}
+
+function loadPersistedBoardCreators() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('slate_board_creators') || '{}');
+    if (saved && typeof saved === 'object') Object.assign(boardCreators, saved);
   } catch {}
 }
 
@@ -2276,7 +2314,7 @@ function initPeer() {
       setTimeout(() => {
         lobbyAnnounce();
         syncBoardPeers();
-        broadcastAll({ type: 'hello', name: state.myName, avatar: state.myAvatar, board: state.currentBoard, joinTime: state.myJoinTime || Date.now(), boards: publicBoards(), topics: boardTopics });
+        broadcastAll(helloPayload());
       }, 700);
     }
     const inviteBoard = state.pendingInviteBoard || boardFromUrl();
@@ -2596,9 +2634,8 @@ function setupDataConn(conn, incoming = false) {
   conn.on('open', () => {
     if (!isCurrentDataConn(peerId, conn)) return;
     notePeerSeen(peerId);
-    conn.send({ type: 'hello', name: state.myName, avatar: state.myAvatar, board: state.currentBoard, joinTime: state.myJoinTime || Date.now(), boards: publicBoards(), topics: boardTopics });
+    conn.send(helloPayload());
     if (state.isBoardHost) {
-      try { conn.send({ type: 'host-changed', newHostId: state.myId }); } catch {}
       // Send current doc snapshot to new joiner
       if (state.currentBoard) {
         try { conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
@@ -2666,10 +2703,13 @@ function handleData(peerId, data) {
       const peerList = Object.keys(state.connections)
         .filter(id => id !== peerId)
         .map(id => ({ id, joinTime: state.connections[id].joinTime || 0 }));
+      if (data.boardCreatorId && data.board) {
+        mergeBoardCreatorFromPeer(data.board, data.boardCreatorId);
+      }
       try { state.connections[peerId]?.conn.send({ type: 'peer-list', peers: peerList }); } catch {}
-      ensureBoardHost(); renderMembers(); scheduleRenderBoards();
+      syncBoardHostState(); renderMembers(); scheduleRenderBoards();
       // If the new peer is in our board, call them
-      if (data.board === state.currentBoard && voiceState.localStream) {
+      if (data.board === state.currentBoard && voiceState.localStream && shouldInitiateVoiceTo(peerId)) {
         callPeer(peerId);
       }
       break;
@@ -2729,10 +2769,14 @@ function handleData(peerId, data) {
       break;
 
     case 'host-changed':
-      state.boardHostId = data.newHostId;
-      state.isBoardHost = data.newHostId === state.myId;
-      if (state.isBoardHost) toast('You are now the board host 👑', 'green');
-      renderMembers(); updateBoardControls();
+      /* Legacy no-op — board host is the permanent creator only */
+      break;
+
+    case 'board-creator-sync':
+      if (data.board && data.creatorId) {
+        mergeBoardCreatorFromPeer(data.board, data.creatorId);
+        if (data.board === state.currentBoard) syncBoardHostState();
+      }
       break;
 
     case 'doc-snap':
@@ -2863,7 +2907,7 @@ function removePeer(peerId, opts = {}) {
   try { voiceState.inbound[peerId]?.close(); } catch {}
   delete voiceState.inbound[peerId];
   clearPeerReconnect(peerId);
-  ensureBoardHost();
+  syncBoardHostState();
   renderMembers();
   scheduleRenderBoards();
   if (wasInBoard && opts.reason === 'leave') {
@@ -2872,23 +2916,62 @@ function removePeer(peerId, opts = {}) {
 }
 
 /* ═══════════════════════════════════════════
-   HOST ELECTION
+   BOARD HOST (permanent creator — never transfers)
 ═══════════════════════════════════════════ */
-function ensureBoardHost() {
-  if (!state.currentBoard) return;
-  const candidates = [
-    { id: state.myId, joinTime: state.myJoinTime || 0 },
-    ...Object.entries(state.connections)
-      .filter(([id, info]) => peerInCurrentBoard(id, info))
-      .map(([id, info]) => ({ id, joinTime: info.joinTime || 0 })),
-  ].sort((a, b) => (a.joinTime - b.joinTime) || a.id.localeCompare(b.id));
+function mergeBoardCreatorFromPeer(board, creatorId) {
+  if (!board || !creatorId) return;
+  if (boardCreators[board] && boardCreators[board] !== creatorId) return;
+  if (!boardCreators[board]) {
+    boardCreators[board] = creatorId;
+    persistBoardCreators();
+  }
+}
 
-  const nextHostId = candidates[0]?.id || state.myId;
-  const changed = state.boardHostId !== nextHostId;
-  state.boardHostId = nextHostId;
-  state.isBoardHost  = nextHostId === state.myId;
-  if (changed && state.isBoardHost) broadcastAll({ type: 'host-changed', newHostId: state.myId });
+function setPermanentBoardCreator(board, creatorPeerId) {
+  if (!board || !creatorPeerId) return;
+  boardCreators[board] = creatorPeerId;
+  persistBoardCreators();
+}
+
+function syncBoardHostState() {
+  if (!state.currentBoard) return;
+  let creator = boardCreators[state.currentBoard];
+  if (!creator) {
+    const candidates = [
+      { id: state.myId, joinTime: state.myJoinTime || 0 },
+      ...Object.entries(state.connections)
+        .filter(([id, info]) => peerInCurrentBoard(id, info))
+        .map(([id, info]) => ({ id, joinTime: info.joinTime || 0 })),
+    ].sort((a, b) => (a.joinTime - b.joinTime) || String(a.id).localeCompare(String(b.id)));
+    creator = candidates[0]?.id || state.myId;
+    if (creator) {
+      boardCreators[state.currentBoard] = creator;
+      persistBoardCreators();
+      broadcastAll({ type: 'board-creator-sync', board: state.currentBoard, creatorId: creator });
+    }
+  }
+  state.boardHostId = creator || state.myId;
+  state.isBoardHost = (state.boardHostId === state.myId);
   updateBoardControls();
+}
+
+function helloPayload() {
+  return {
+    type: 'hello',
+    name: state.myName,
+    avatar: state.myAvatar,
+    board: state.currentBoard,
+    joinTime: state.myJoinTime || Date.now(),
+    boards: publicBoards(),
+    topics: boardTopics,
+    boardCreatorId: state.currentBoard ? (boardCreators[state.currentBoard] || null) : null,
+  };
+}
+
+function updateHostControlsBar() {
+  const bar = document.getElementById('host-controls-bar');
+  if (!bar) return;
+  bar.hidden = !(state.currentBoard && state.isBoardHost);
 }
 
 /* ═══════════════════════════════════════════
@@ -2905,9 +2988,8 @@ function joinBoard(board) {
   syncInviteHash(board);
 
   const peersInBoard = getPeersInBoard(board);
-  if (peersInBoard.length === 0) {
-    state.isBoardHost = true;
-    state.boardHostId = state.myId;
+  if (peersInBoard.length === 0 && !boardCreators[board]) {
+    setPermanentBoardCreator(board, state.myId || localStorage.getItem('slate_peer_id'));
   }
 
   // Reset doc + viewport for new board
@@ -2930,9 +3012,9 @@ function joinBoard(board) {
   lobbyAnnounce(board);
   scheduleRenderBoards();
   renderMembers();
-  updateBoardControls();
   syncBoardPeers();
-  broadcastAll({ type: 'hello', name: state.myName, avatar: state.myAvatar, board, joinTime: state.myJoinTime, boards: publicBoards(), topics: boardTopics });
+  syncBoardHostState();
+  broadcastAll(helloPayload());
   requestWakeLock();
   scheduleRender();
   // Join voice if mic already acquired
@@ -4499,6 +4581,7 @@ function removeBoard(b) {
   liveBoards.delete(b);
   delete boardVisibility[b];
   delete boardDocModes[b];
+  delete boardCreators[b];
   delete boardTopics[b];
   persistBoards();
   persistBoardVisibility();
@@ -4514,7 +4597,7 @@ function pruneEmptyBoards() {
   let pruned = 0;
   [...liveBoards].forEach(b => {
     if (b === state.currentBoard) return;
-    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardDocModes[b]; delete boardTopics[b]; pruned++; }
+    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardDocModes[b]; delete boardCreators[b]; delete boardTopics[b]; pruned++; }
   });
   if (pruned) { persistBoards(); persistBoardVisibility(); persistBoardTopics(); scheduleRenderBoards(); }
   return pruned;
@@ -4651,7 +4734,6 @@ function showModMenu(peerId, anchorEl) {
   // Show/hide host-only actions based on role
   const isHost = state.isBoardHost;
   document.getElementById('mod-drawmute-btn').style.display = isHost ? '' : 'none';
-  document.getElementById('mod-promote-btn').style.display  = isHost ? '' : 'none';
   document.getElementById('mod-kick-btn').style.display     = isHost ? '' : 'none';
 
   const isMuted = state.mutedDrawers.has(peerId);
@@ -4674,20 +4756,6 @@ document.getElementById('mod-drawmute-btn').addEventListener('click', () => {
   const pid = menu._targetPeer;
   menu.classList.remove('open');
   if (pid) modDrawMute(pid);
-});
-
-document.getElementById('mod-promote-btn').addEventListener('click', () => {
-  const menu = document.getElementById('mod-menu');
-  const pid = menu._targetPeer;
-  menu.classList.remove('open');
-  if (!pid || !state.isBoardHost) return;
-  const name = state.connections[pid]?.name || pid;
-  // Transfer host: tell everyone new host is pid
-  state.boardHostId = pid;
-  state.isBoardHost = false;
-  broadcastAll({ type: 'host-changed', newHost: pid });
-  renderMembers();
-  toast(`${name} is now the host`);
 });
 
 document.getElementById('mod-kick-btn').addEventListener('click', () => {
@@ -4722,6 +4790,7 @@ function updateBoardControls() {
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
   const leaveBtn = document.getElementById('leave-board-btn');
   if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
+  updateHostControlsBar();
 }
 
 function getBoardDocMode(board) {
@@ -4801,6 +4870,15 @@ document.getElementById('vis-chip')?.addEventListener('click', () => {
   if (state.isBoardHost && state.currentBoard) toggleBoardVisibility();
 });
 
+document.getElementById('host-members-btn')?.addEventListener('click', () => {
+  const panel = document.getElementById('member-panel');
+  if (panel) panel.classList.add('open');
+});
+
+document.getElementById('host-vis-btn')?.addEventListener('click', () => {
+  if (state.isBoardHost && state.currentBoard) toggleBoardVisibility();
+});
+
 document.getElementById('leave-board-btn')?.addEventListener('click', () => {
   leaveBoard();
 });
@@ -4852,6 +4930,8 @@ function createBoard() {
   persistBoardDocModes();
   safeAddBoard(name);
   input.value = '';
+  const creator = state.myId || localStorage.getItem('slate_peer_id');
+  if (creator) setPermanentBoardCreator(name, creator);
   lobbyAnnounce(name);
   joinBoard(name);
 }
@@ -4991,7 +5071,7 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     renderSettingsAvatar();
     renderMembers();
     if (state.currentBoard) {
-      broadcastAll({ type: 'hello', name: state.myName, avatar: state.myAvatar, board: state.currentBoard, joinTime: state.myJoinTime || Date.now(), boards: publicBoards(), topics: boardTopics });
+      broadcastAll(helloPayload());
     }
   }
   window.announceProfile = announceProfile;
@@ -5216,6 +5296,7 @@ window.addEventListener('resize', () => {
   loadPersistedBoardTopics();
   loadPersistedBoardVisibility();
   loadPersistedBoardDocModes();
+  loadPersistedBoardCreators();
 
   state.myId = loadOrCreate('slate_peer_id', () => 'slate-' + crypto.randomUUID().replace(/-/g,'').slice(0, 16));
   state.myName = localStorage.getItem('slate_name');
@@ -5350,6 +5431,12 @@ document.getElementById('vote-no-btn').addEventListener('click', () => {
 /* ═══════════════════════════════════════════
    VOICE CHAT (open mic)
 ═══════════════════════════════════════════ */
+/** Lexicographically lower peer id opens the media call so both sides never glare-call each other. */
+function shouldInitiateVoiceTo(peerId) {
+  if (!state.myId || !peerId) return true;
+  return String(state.myId) < String(peerId);
+}
+
 async function acquireMic() {
   if (voiceState.localStream) return true;
   try {
@@ -5366,13 +5453,15 @@ async function acquireMic() {
 
 function startVAD(stream) {
   try {
-    const ctx      = new AudioContext();
-    const src      = ctx.createMediaStreamSource(stream);
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const src = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
     src.connect(analyser);
     voiceState.audioCtx = ctx;
     voiceState.analyser = analyser;
+    void ctx.resume().catch(() => {});
     const data = new Uint8Array(analyser.frequencyBinCount);
     let mySpeak = false;
     function loop() {
@@ -5395,7 +5484,7 @@ function startVAD(stream) {
 }
 
 function callPeer(peerId) {
-  if (!voiceState.localStream || !state.peer || voiceState.calls[peerId]) return;
+  if (!voiceState.localStream || !state.peer || voiceState.calls[peerId] || voiceState.inbound[peerId]) return;
   try {
     const call = state.peer.call(peerId, voiceState.localStream);
     voiceState.calls[peerId] = call;
@@ -5408,11 +5497,16 @@ function callPeer(peerId) {
 function attachAudio(peerId, stream) {
   removeAudio(peerId);
   const el = document.createElement('audio');
-  el.id        = `audio-${peerId}`;
+  el.id = `audio-${peerId}`;
+  el.setAttribute('playsinline', '');
+  el.setAttribute('webkit-playsinline', '');
   el.srcObject = stream;
-  el.autoplay  = true;
+  el.autoplay = true;
+  el.volume = 1;
   el.style.display = 'none';
   document.body.appendChild(el);
+  const p = el.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
 }
 
 function removeAudio(peerId) {
@@ -5434,7 +5528,9 @@ async function joinVoice() {
   const ok = await acquireMic();
   if (!ok) return;
   Object.entries(state.connections).forEach(([pid, info]) => {
-    if (info.board === state.currentBoard) callPeer(pid);
+    if (info.board !== state.currentBoard) return;
+    if (!shouldInitiateVoiceTo(pid)) return;
+    callPeer(pid);
   });
   updateMuteBtn();
 }
@@ -5470,26 +5566,60 @@ function updateMuteBtn() {
 
 document.getElementById('mute-btn').addEventListener('click', toggleMute);
 
-// Handle incoming calls from PeerJS
+function slateVoiceIncomingCall(call) {
+  const pid = call.peer;
+  if (!state.currentBoard) {
+    try { call.close(); } catch {}
+    return;
+  }
+  const inf = state.connections[pid];
+  if (inf && inf.board !== state.currentBoard) {
+    try { call.close(); } catch {}
+    return;
+  }
+  voiceState.inbound[pid] = call;
+
+  const answerWith = stream => {
+    const inf2 = state.connections[pid];
+    if (!state.currentBoard || (inf2 && inf2.board !== state.currentBoard)) {
+      try { call.close(); } catch {}
+      delete voiceState.inbound[pid];
+      return;
+    }
+    try {
+      if (stream) call.answer(stream);
+      else call.answer();
+    } catch {}
+  };
+
+  if (voiceState.localStream) answerWith(voiceState.localStream);
+  else {
+    acquireMic().then(ok => {
+      if (ok) answerWith(voiceState.localStream);
+      else answerWith(null);
+    });
+  }
+
+  call.on('stream', remoteStream => attachAudio(pid, remoteStream));
+  call.on('close', () => {
+    delete voiceState.inbound[pid];
+    removeAudio(pid);
+    voiceState.speakingPeers.delete(pid);
+    renderMembers();
+  });
+  call.on('error', () => {
+    delete voiceState.inbound[pid];
+    removeAudio(pid);
+    voiceState.speakingPeers.delete(pid);
+    renderMembers();
+  });
+}
+
 function setupVoiceCallHandler() {
   if (!state.peer) return;
-  state.peer.on('call', call => {
-    const pid = call.peer;
-    // Only answer if we share a board
-    if (!state.currentBoard) return;
-    voiceState.inbound[pid] = call;
-    if (voiceState.localStream) {
-      call.answer(voiceState.localStream);
-    } else {
-      acquireMic().then(ok => {
-        if (ok) call.answer(voiceState.localStream);
-        else    call.answer(); // answer without stream (listen only)
-      });
-    }
-    call.on('stream', remoteStream => attachAudio(pid, remoteStream));
-    call.on('close',  () => { delete voiceState.inbound[pid]; removeAudio(pid); voiceState.speakingPeers.delete(pid); renderMembers(); });
-    call.on('error',  () => { delete voiceState.inbound[pid]; removeAudio(pid); voiceState.speakingPeers.delete(pid); renderMembers(); });
-  });
+  try { state.peer.removeListener('call', slateVoiceIncomingCall); } catch {}
+  if (typeof state.peer.off === 'function') state.peer.off('call', slateVoiceIncomingCall);
+  state.peer.on('call', slateVoiceIncomingCall);
 }
 
 /* ═══════════════════════════════════════════
@@ -5672,6 +5802,8 @@ function loadSavedSnapshot(snap) {
   boardDocModes[bname] = '2d';
   persistBoardDocModes();
   safeAddBoard(bname);
+  const creator = state.myId || localStorage.getItem('slate_peer_id');
+  if (creator) setPermanentBoardCreator(bname, creator);
   joinBoard(bname);
   // Apply snapshot after a brief tick
   setTimeout(() => {

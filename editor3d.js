@@ -17,6 +17,7 @@ let pointer = new THREE.Vector2();
 let selected = null;
 let raf = 0;
 let bound = false;
+let vvResizeBound = false;
 
 function pickObject(clientX, clientY) {
   if (!container || !camera) return null;
@@ -130,12 +131,21 @@ function loop() {
   renderer.render(scene, camera);
 }
 
+function onVisualViewportChange() {
+  resize();
+}
+
 function bindEvents() {
   if (bound || !container) return;
   bound = true;
   window.addEventListener('resize', resize);
   window.addEventListener('keydown', onKeyDown, true);
   container.addEventListener('pointerdown', onPointerDown);
+  if (window.visualViewport && !vvResizeBound) {
+    vvResizeBound = true;
+    window.visualViewport.addEventListener('resize', onVisualViewportChange);
+    window.visualViewport.addEventListener('scroll', onVisualViewportChange);
+  }
 }
 
 function unbindEvents() {
@@ -144,6 +154,11 @@ function unbindEvents() {
   window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', onKeyDown, true);
   if (container) container.removeEventListener('pointerdown', onPointerDown);
+  if (window.visualViewport && vvResizeBound) {
+    vvResizeBound = false;
+    window.visualViewport.removeEventListener('resize', onVisualViewportChange);
+    window.visualViewport.removeEventListener('scroll', onVisualViewportChange);
+  }
 }
 
 export function initEditor3D(rootEl) {
@@ -157,12 +172,14 @@ export function initEditor3D(rootEl) {
   }
   disposeEditor3D();
   container = rootEl;
+  container.style.touchAction = 'none';
   ensureScene();
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.shadowMap.enabled = true;
   container.appendChild(renderer.domElement);
+  renderer.domElement.style.touchAction = 'none';
 
   orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = true;

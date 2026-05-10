@@ -115,74 +115,210 @@
     from { opacity: 0; transform: translateY(18px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  .slate-ui {
+  /* ── In-canvas chrome (minimal pill + menu) ── */
+  .slate-chrome {
     position: fixed;
-    top: 10px;
-    right: 10px;
+    top: 12px;
+    right: 12px;
     z-index: 300000;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+    font-family: var(--sans);
+    pointer-events: none;
+  }
+  .slate-chrome > * { pointer-events: auto; }
+
+  .slate-chrome__bar {
+    display: flex;
     align-items: center;
-    gap: 8px;
-    max-width: min(96vw, 420px);
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    font-size: 12px;
-    line-height: 1.3;
-    color: #eceaf4;
-    background: rgba(18, 18, 22, 0.88);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
-    padding: 8px 10px;
-    backdrop-filter: blur(10px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-    pointer-events: auto;
+    gap: 10px;
+    padding: 5px 6px 5px 10px;
+    max-width: min(calc(100vw - 24px), 280px);
+    user-select: none;
+    -webkit-user-select: none;
+    background: rgba(10, 10, 14, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 100px;
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 8px 32px rgba(0,0,0,.35);
   }
-  .slate-ui .room {
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    word-break: break-all;
-    opacity: 0.95;
+
+  .slate-chrome__dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.22);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.4) inset;
+    transition: background 0.25s ease, box-shadow 0.25s ease;
   }
-  .slate-ui .muted { color: #9a97a8; font-weight: 500; }
-  .slate-ui button {
-    font: inherit;
-    cursor: pointer;
-    border-radius: 8px;
-    border: 1px solid rgba(139, 124, 247, 0.45);
-    background: rgba(139, 124, 247, 0.2);
-    color: #e8e4ff;
-    padding: 6px 12px;
-    transition: background 0.15s, border-color 0.15s;
+  .slate-chrome[data-conn="on"] .slate-chrome__dot {
+    background: #5fd4a4;
+    box-shadow: 0 0 10px rgba(95,212,164,.45);
   }
-  .slate-ui button:hover {
-    background: rgba(139, 124, 247, 0.32);
-    border-color: rgba(139, 124, 247, 0.65);
+  .slate-chrome[data-conn="wait"] .slate-chrome__dot {
+    background: #e8b84a;
+    box-shadow: 0 0 8px rgba(232,184,74,.35);
   }
-  .slate-ui button:active { transform: scale(0.98); }
-  .slate-ui button:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-    transform: none;
+  .slate-chrome[data-conn="off"] .slate-chrome__dot {
+    background: #e85a6a;
+    box-shadow: 0 0 6px rgba(232,90,106,.25);
   }
-  .slate-ui .slate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.06); }
-  .slate-ui .slate-actions button.secondary {
-    border-color: rgba(255,255,255,.15);
-    background: rgba(255,255,255,.06);
-    color: #d8d4e8;
-  }
-  .slate-ui input.slate-name {
+
+  .slate-chrome__meta {
     flex: 1;
-    min-width: 72px;
-    max-width: 140px;
-    padding: 5px 8px;
-    border-radius: 6px;
-    border: 1px solid rgba(255,255,255,.12);
-    background: rgba(0,0,0,.25);
-    color: #eceaf4;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    line-height: 1.2;
+  }
+  .slate-chrome__room {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .slate-chrome__peers {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--text-mid);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .slate-chrome__btns {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .slate-btn {
     font: inherit;
     font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    border: none;
+    border-radius: 100px;
+    padding: 6px 11px;
+    color: var(--text-mid);
+    background: transparent;
+    transition: color 0.15s, background 0.15s;
   }
-  .slate-ui input.slate-name::placeholder { color: #6c6a78; }
+  .slate-btn:hover {
+    color: var(--text);
+    background: rgba(255,255,255,.06);
+  }
+  .slate-btn:active { transform: scale(0.97); }
+  .slate-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .slate-btn--icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    letter-spacing: 0;
+    color: var(--text-mid);
+    border-radius: 50%;
+  }
+  .slate-btn--icon:hover { color: var(--text); }
+
+  .slate-menu {
+    margin-top: 8px;
+    min-width: 200px;
+    max-width: min(calc(100vw - 24px), 260px);
+    padding: 10px 0;
+    background: rgba(12, 12, 16, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+    backdrop-filter: blur(24px) saturate(1.3);
+    -webkit-backdrop-filter: blur(24px) saturate(1.3);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.05) inset,
+      0 16px 48px rgba(0,0,0,.5);
+    animation: slateMenuIn 0.18s ease-out both;
+  }
+  @keyframes slateMenuIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .slate-menu[hidden] { display: none !important; }
+
+  .slate-menu__section {
+    padding: 0 12px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+  }
+  .slate-menu__section:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .slate-menu__label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .slate-menu__input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(0,0,0,.35);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .slate-menu__input:focus {
+    border-color: rgba(139,124,247,.45);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+  }
+  .slate-menu__input::placeholder { color: var(--text-dim); }
+
+  .slate-menu__actions {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 8px;
+    padding-bottom: 0;
+  }
+  .slate-menu__action {
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    font-size: 12px;
+    padding: 9px 12px;
+    margin: 0 -2px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--text-mid);
+    background: transparent;
+    transition: background 0.12s, color 0.12s;
+  }
+  .slate-menu__action:hover {
+    color: var(--text);
+    background: rgba(255,255,255,.06);
+  }
+  .slate-menu__action:active { background: rgba(255,255,255,.09); }
   .slate-banner {
     position: fixed;
     bottom: 14px;
@@ -251,17 +387,30 @@
   </div>
 </div>
 <div id="root"></div>
-<div id="slate-ui" class="slate-ui" hidden>
-  <span class="room" id="slate-room"></span>
-  <span class="muted" id="slate-peers"></span>
-  <button type="button" id="slate-share">Share</button>
-  <div class="slate-actions">
-    <input type="text" id="slate-name" class="slate-name" maxlength="28" placeholder="Your name" autocomplete="nickname" aria-label="Display name">
-    <button type="button" id="slate-fit" class="secondary" title="Zoom to fit">Fit</button>
-    <button type="button" id="slate-export-png" class="secondary" title="Download page as PNG">PNG</button>
-    <button type="button" id="slate-export-json" class="secondary" title="Download page document JSON">JSON</button>
-    <button type="button" id="slate-new-room" class="secondary" title="Start a new random room">New room</button>
-    <button type="button" id="slate-join-room" class="secondary" title="Open another room by name">Join…</button>
+<div id="slate-ui" class="slate-chrome" data-conn="wait" hidden>
+  <div class="slate-chrome__bar">
+    <span class="slate-chrome__dot" id="slate-conn-dot" aria-hidden="true"></span>
+    <div class="slate-chrome__meta">
+      <span class="slate-chrome__room" id="slate-room"></span>
+      <span class="slate-chrome__peers" id="slate-peers"></span>
+    </div>
+    <div class="slate-chrome__btns">
+      <button type="button" id="slate-share" class="slate-btn" title="Copy room link">Copy link</button>
+      <button type="button" id="slate-menu-btn" class="slate-btn slate-btn--icon" aria-expanded="false" aria-controls="slate-menu" title="More">⋯</button>
+    </div>
+  </div>
+  <div id="slate-menu" class="slate-menu" role="menu" hidden>
+    <div class="slate-menu__section">
+      <label class="slate-menu__label" for="slate-name">Display name</label>
+      <input type="text" id="slate-name" class="slate-menu__input" maxlength="28" placeholder="Anonymous" autocomplete="nickname" spellcheck="false">
+    </div>
+    <div class="slate-menu__section slate-menu__actions">
+      <button type="button" id="slate-fit" class="slate-menu__action" role="menuitem">Fit to content</button>
+      <button type="button" id="slate-export-png" class="slate-menu__action" role="menuitem">Export PNG</button>
+      <button type="button" id="slate-export-json" class="slate-menu__action" role="menuitem">Export JSON</button>
+      <button type="button" id="slate-new-room" class="slate-menu__action" role="menuitem">New room</button>
+      <button type="button" id="slate-join-room" class="slate-menu__action" role="menuitem">Join room…</button>
+    </div>
   </div>
 </div>
 <div id="slate-banner" class="slate-banner" role="status"></div>
@@ -403,7 +552,15 @@ function wireToolbar(roomName, peerLabel) {
   if (!wrap || !roomEl || !peersEl || !shareBtn) return;
   wrap.hidden = false;
   roomEl.textContent = `#${roomName}`;
-  peersEl.textContent = peerLabel;
+  const short = String(peerLabel || '')
+    .replace(/^Host ·\s*/i, '')
+    .replace(/^Guest ·\s*/i, '');
+  peersEl.textContent = short || '…';
+  peersEl.title = peerLabel;
+  const pl = String(peerLabel || '').toLowerCase();
+  if (pl.includes('offline') || pl.includes('no peerjs')) wrap.dataset.conn = 'off';
+  else if (pl.includes('reconnect') || pl.includes('finding') || pl.includes('timeout') || pl.includes('syncing') || pl.includes('connecting') || pl.includes('channel')) wrap.dataset.conn = 'wait';
+  else wrap.dataset.conn = 'on';
 
   shareBtn.onclick = async () => {
     const url = location.href;
@@ -430,15 +587,33 @@ function wireToolbar(roomName, peerLabel) {
 }
 
 function wireSlateChrome(editor, room) {
+  const chrome = document.getElementById('slate-ui');
+  const menu = document.getElementById('slate-menu');
+  const menuBtn = document.getElementById('slate-menu-btn');
   const fit = document.getElementById('slate-fit');
   const pngBtn = document.getElementById('slate-export-png');
   const jsonBtn = document.getElementById('slate-export-json');
   const newBtn = document.getElementById('slate-new-room');
   const joinBtn = document.getElementById('slate-join-room');
   const nameEl = document.getElementById('slate-name');
-  if (!fit || !pngBtn || !jsonBtn || !newBtn || !joinBtn || !nameEl) return () => {};
+  if (!chrome || !menu || !menuBtn || !fit || !pngBtn || !jsonBtn || !newBtn || !joinBtn || !nameEl) return () => {};
 
   const safeSlug = (s) => String(s || 'room').replace(/[^\w-]+/g, '_').slice(0, 48) || 'room';
+
+  function closeMenu() {
+    menu.hidden = true;
+    menuBtn.setAttribute('aria-expanded', 'false');
+  }
+  function toggleMenu(ev) {
+    ev.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  const onDocClick = (ev) => {
+    if (!chrome.contains(ev.target)) closeMenu();
+  };
 
   const applyName = () => {
     const v = nameEl.value.trim().slice(0, 28);
@@ -457,6 +632,7 @@ function wireSlateChrome(editor, room) {
 
   const onFit = () => {
     try { editor.zoomToFit({ animation: { duration: 220 } }); } catch (_) {}
+    closeMenu();
   };
   const onPng = async () => {
     try {
@@ -466,10 +642,11 @@ function wireSlateChrome(editor, room) {
     } catch (_) {
       toast('PNG export failed', true);
     }
+    closeMenu();
   };
   const onJson = () => {
     try {
-      const snap = editor.store.getSnapshot('document');
+      const snap = editor.store.getStoreSnapshot('document');
       const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -480,6 +657,7 @@ function wireSlateChrome(editor, room) {
     } catch (_) {
       toast('JSON export failed', true);
     }
+    closeMenu();
   };
   const onNew = () => {
     const r = randomRoomId(7);
@@ -491,14 +669,21 @@ function wireSlateChrome(editor, room) {
     const r = raw.trim().slice(0, 64);
     if (!r) return;
     location.assign(`${location.pathname}${location.search}#${encodeURIComponent(r)}`);
+    closeMenu();
   };
   const onKey = (ev) => {
+    if (ev.key === 'Escape') {
+      closeMenu();
+      return;
+    }
     if (ev.ctrlKey && ev.shiftKey && (ev.key === 'E' || ev.key === 'e')) {
       ev.preventDefault();
       onPng();
     }
   };
 
+  menuBtn.addEventListener('click', toggleMenu);
+  document.addEventListener('click', onDocClick);
   fit.addEventListener('click', onFit);
   pngBtn.addEventListener('click', onPng);
   jsonBtn.addEventListener('click', onJson);
@@ -507,7 +692,10 @@ function wireSlateChrome(editor, room) {
   window.addEventListener('keydown', onKey);
 
   return () => {
+    closeMenu();
     nameEl.removeEventListener('input', applyName);
+    menuBtn.removeEventListener('click', toggleMenu);
+    document.removeEventListener('click', onDocClick);
     fit.removeEventListener('click', onFit);
     pngBtn.removeEventListener('click', onPng);
     jsonBtn.removeEventListener('click', onJson);
@@ -600,10 +788,10 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
             const ed = editorRef.current;
             if (!ed) return false;
             try {
-              const snap = ed.store.getSnapshot('document');
+              const snap = ed.store.getStoreSnapshot('document');
               const payload = { t: 'full', snap };
               try {
-                payload.pres = ed.store.getSnapshot('presence');
+                payload.pres = ed.store.getStoreSnapshot('presence');
               } catch (_) {}
               conn.send(JSON.stringify(payload));
             } catch (e) {

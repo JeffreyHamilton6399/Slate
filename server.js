@@ -71,7 +71,7 @@ app.use((req, res) => {
   // Inject patches.js so we can apply UI fixes without touching index.html
   try {
     let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    html = html.replace('</body>', '<script src="/patches.js"></script>\n</body>');
+    html = html.replace('</body>', '<script src="/patches.js"></script>\n<script src="/features.js"></script>\n</body>');
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.send(html);
   } catch {

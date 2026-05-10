@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Slate">
+<title>Slate</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f12'/%3E%3Cpath d='M6 24l8-16 4 8 8-8' stroke='%238b7cf7' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tldraw@3.6.0/tldraw.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body, #root { height: 100%; margin: 0; overflow: hidden; background: #0f0f12; }
+  #root { position: fixed; inset: 0; }
+  .slate-ui {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 300000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    max-width: min(96vw, 420px);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #eceaf4;
+    background: rgba(18, 18, 22, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 8px 10px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+  }
+  .slate-ui .room {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    word-break: break-all;
+    opacity: 0.95;
+  }
+  .slate-ui .muted { color: #9a97a8; font-weight: 500; }
+  .slate-ui button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid rgba(139, 124, 247, 0.45);
+    background: rgba(139, 124, 247, 0.2);
+    color: #e8e4ff;
+    padding: 6px 12px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .slate-ui button:hover {
+    background: rgba(139, 124, 247, 0.32);
+    border-color: rgba(139, 124, 247, 0.65);
+  }
+  .slate-ui button:active { transform: scale(0.98); }
+  .slate-ui button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .slate-banner {
+    position: fixed;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 300001;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: rgba(30, 30, 36, 0.95);
+    color: #c4c0d4;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .slate-banner.show { opacity: 1; }
+  .slate-banner.err { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="slate-ui" class="slate-ui" hidden>
+  <span class="room" id="slate-room"></span>
+  <span class="muted" id="slate-peers"></span>
+  <button type="button" id="slate-share">Share</button>
+</div>
+<div id="slate-banner" class="slate-banner" role="status"></div>
+
+<script>
+(function loadPeerJS() {
+  const cdns = [
+    'https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js',
+    'https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js',
+  ];
+  let i = 0;
+  function tryNext() {
+    if (i >= cdns.length) {
+      window.__peerjsLoadFailed = true;
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = cdns[i++];
+    s.onerror = tryNext;
+    document.head.appendChild(s);
+  }
+  tryNext();
+})();
+</script>
+
+<!-- tldraw is published as ES modules (no official UMD build); we load it from esm.sh with no local bundler. -->
+<script type="module">
+const TLDRAW_VERSION = '3.6.0';
+const REACT_VERSION = '18.3.1';
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@18.3.1';
+import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+import { Tldraw, createTLStore } from 'https://esm.sh/tldraw@3.6.0?deps=react@18.3.1,react-dom@18.3.1';
+
+const CONFIG = { appName: 'Slate' };
+
+function isPrivateNetworkHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' ||
+    h.endsWith('.local') || /^10\./.test(h) || /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(h);
+}
+
+function configuredPeerBrokers() {
+  const params = new URLSearchParams(location.search);
+  const explicitHost = params.get('peerHost') || localStorage.getItem('slate_peer_host');
+  const explicitPort = params.get('peerPort') || localStorage.getItem('slate_peer_port');
+  const explicitPath = params.get('peerPath') || localStorage.getItem('slate_peer_path');
+  const secureSetting = params.get('peerSecure') || localStorage.getItem('slate_peer_secure');
+  const secure = secureSetting == null
+    ? location.protocol === 'https:'
+    : ['1', 'true', 'yes'].includes(String(secureSetting).toLowerCase());
+  const cloudBrokers = [
+    { name: 'PeerJS cloud', host: '0.peerjs.com', port: 443, path: '/', secure: true, key: 'peerjs' },
+    { name: 'PeerJS default cloud' },
+  ];
+  const brokers = [];
+
+  if (explicitHost) {
+    brokers.push({
+      name: 'Custom Slate server',
+      host: explicitHost,
+      port: Number(explicitPort || (secure ? 443 : 80)),
+      path: explicitPath || '/peerjs',
+      secure,
+      key: 'peerjs',
+    });
+  }
+
+  if (!explicitHost) brokers.push(...cloudBrokers);
+
+  if (/^https?:$/.test(location.protocol) && location.hostname) {
+    brokers.push({
+      name: isPrivateNetworkHost(location.hostname) ? 'Slate local server' : 'Slate hosted server',
+      host: location.hostname,
+      port: Number(location.port || (location.protocol === 'https:' ? 443 : 80)),
+      path: '/peerjs',
+      secure: location.protocol === 'https:',
+      key: 'peerjs',
+    });
+  }
+
+  if (explicitHost) brokers.push(...cloudBrokers);
+  return brokers;
+}
+
+const BROKERS = configuredPeerBrokers();
+
+function randomRoomId(len = 6) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const a = new Uint8Array(len);
+  crypto.getRandomValues(a);
+  let s = '';
+  for (let i = 0; i < len; i++) s += chars[a[i] % chars.length];
+  return s;
+}
+
+function getRoomFromLocation() {
+  let raw = (location.hash || '').replace(/^#/, '').trim();
+  if (!raw) {
+    raw = randomRoomId();
+    history.replaceState(null, '', `#${encodeURIComponent(raw)}`);
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function roomToHostPeerId(room) {
+  const compact = btoa(unescape(encodeURIComponent(room)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const id = `slate-${compact}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 59);
+  return id.length >= 6 ? id : `slate-${compact.padEnd(6, '0')}`.slice(0, 59);
+}
+
+function toast(msg, isErr) {
+  const el = document.getElementById('slate-banner');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle('err', !!isErr);
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+function wireToolbar(roomName, peerLabel) {
+  const wrap = document.getElementById('slate-ui');
+  const roomEl = document.getElementById('slate-room');
+  const peersEl = document.getElementById('slate-peers');
+  const shareBtn = document.getElementById('slate-share');
+  if (!wrap || !roomEl || !peersEl || !shareBtn) return;
+  wrap.hidden = false;
+  roomEl.textContent = `#${roomName}`;
+  peersEl.textContent = peerLabel;
+
+  shareBtn.onclick = async () => {
+    const url = location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Room link copied');
+    } catch {
+      try {
+        shareBtn.disabled = true;
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('Room link copied');
+      } catch {
+        toast('Could not copy link', true);
+      } finally {
+        shareBtn.disabled = false;
+      }
+    }
+  };
+}
+
+function diffMessageFromEntry(entry) {
+  const { added, updated, removed } = entry.changes;
+  return {
+    t: 'chg',
+    added: Object.values(added),
+    updated: Object.values(updated).map(([, to]) => to),
+    removed: Object.keys(removed),
+  };
+}
+
+function applyRemoteDiff(store, msg) {
+  store.mergeRemoteChanges(() => {
+    const put = [...(msg.added || []), ...(msg.updated || [])];
+    if (put.length) store.put(put);
+    const rem = msg.removed || [];
+    if (rem.length) store.remove(rem);
+  });
+}
+
+function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) {
+  const hostId = roomToHostPeerId(room);
+  let peer = null;
+  let mode = 'idle';
+  let hostConns = new Map();
+  let clientConn = null;
+  let unsubStore = null;
+  let brokerIdx = 0;
+  let netFailures = 0;
+  let destroyed = false;
+
+  function brokerConfig() {
+    const b = BROKERS[brokerIdx % BROKERS.length] || {};
+    const c = {
+      debug: 0,
+      host: b.host || location.hostname,
+      port: b.port != null ? b.port : (location.protocol === 'https:' ? 443 : 80),
+      path: b.path || '/peerjs',
+      secure: !!b.secure,
+      key: b.key || 'peerjs',
+    };
+    return c;
+  }
+
+  function broadcast(obj, exceptConn) {
+    const s = JSON.stringify(obj);
+    for (const c of hostConns.values()) {
+      if (c.open && c !== exceptConn) {
+        try { c.send(s); } catch (_) {}
+      }
+    }
+  }
+
+  function broadcastPresence() {
+    const n = 1 + [...hostConns.values()].filter(c => c.open).length;
+    if (mode === 'host') setPeerLabel(`${n} online`);
+    broadcast({ t: 'pres', n });
+  }
+
+  function attachConnHandlers(conn, isHostSide) {
+    conn.on('data', (raw) => {
+      let msg;
+      try {
+        msg = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw));
+      } catch {
+        return;
+      }
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      if (isHostSide) {
+        if (msg.t === 'hello') {
+          try {
+            const snap = editor.store.getStoreSnapshot('document');
+            conn.send(JSON.stringify({ t: 'full', snap }));
+          } catch (e) {
+            console.warn('[Slate] snapshot send failed', e);
+          }
+          broadcastPresence();
+          return;
+        }
+        if (msg.t === 'chg') {
+          applyRemoteDiff(editor.store, msg);
+          broadcast(msg, conn);
+          return;
+        }
+        return;
+      }
+
+      if (msg.t === 'full' && msg.snap) {
+        editor.store.mergeRemoteChanges(() => {
+          editor.store.loadStoreSnapshot(msg.snap);
+        });
+        return;
+      }
+      if (msg.t === 'chg') {
+        applyRemoteDiff(editor.store, msg);
+        return;
+      }
+      if (msg.t === 'pres' && typeof msg.n === 'number') {
+        setPeerLabel(`${msg.n} online`);
+        return;
+      }
+    });
+
+    conn.on('close', () => {
+      if (isHostSide) {
+        hostConns.delete(conn.peer);
+        broadcastPresence();
+      } else if (conn === clientConn) {
+        setPeerLabel('Reconnecting…');
+        scheduleReconnect();
+      }
+    });
+  }
+
+  let reconnectTimer = null;
+  function scheduleReconnect() {
+    if (destroyed) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      netFailures = 0;
+      start();
+    }, 900);
+  }
+
+  function startListenLocal(storeInst) {
+    if (unsubStore) unsubStore();
+    unsubStore = storeInst.listen(
+      (entry) => {
+        const editor = editorRef.current;
+        if (!editor || destroyed) return;
+        const msg = diffMessageFromEntry(entry);
+        if (!msg.added.length && !msg.updated.length && !msg.removed.length) return;
+        if (mode === 'host') {
+          broadcast(msg, null);
+        } else if (mode === 'client' && clientConn?.open) {
+          try { clientConn.send(JSON.stringify(msg)); } catch (_) {}
+        }
+      },
+      { source: 'user', scope: 'document' },
+    );
+  }
+
+  function teardownPeer() {
+    if (unsubStore) {
+      unsubStore();
+      unsubStore = null;
+    }
+    if (clientConn) {
+      try { clientConn.close(); } catch (_) {}
+      clientConn = null;
+    }
+    for (const c of hostConns.values()) {
+      try { c.close(); } catch (_) {}
+    }
+    hostConns.clear();
+    if (peer) {
+      try { peer.destroy(); } catch (_) {}
+      peer = null;
+    }
+    mode = 'idle';
+  }
+
+  function startAsClient() {
+    const cfg = brokerConfig();
+    const p = new Peer(undefined, cfg);
+
+    p.on('open', () => {
+      if (destroyed) return;
+      netFailures = 0;
+      peer = p;
+      mode = 'client';
+      setPeerLabel('Finding host…');
+      startListenLocal(store);
+      const c = p.connect(hostId, { reliable: true });
+      clientConn = c;
+      c.on('open', () => {
+        attachConnHandlers(c, false);
+        try { c.send(JSON.stringify({ t: 'hello' })); } catch (_) {}
+        setPeerLabel('Syncing…');
+      });
+      c.on('error', () => setPeerLabel('Sync error'));
+    });
+
+    p.on('error', () => {
+      if (destroyed) return;
+      try { p.destroy(); } catch (_) {}
+      netFailures++;
+      brokerIdx++;
+      if (netFailures > 14) {
+        setPeerLabel('Offline');
+        toast('Could not reach a PeerJS broker.', true);
+        startListenLocal(store);
+        return;
+      }
+      brokerRotate?.();
+      setTimeout(() => start(), 400);
+    });
+
+    p.on('disconnected', () => {
+      if (!destroyed) scheduleReconnect();
+    });
+  }
+
+  function start() {
+    if (destroyed) return;
+    if (window.__peerjsLoadFailed || typeof Peer !== 'function') {
+      setPeerLabel('Offline (no PeerJS)');
+      startListenLocal(store);
+      toast('PeerJS failed to load — drawing works locally only.', true);
+      return;
+    }
+
+    teardownPeer();
+
+    const cfg = brokerConfig();
+    const hostPeer = new Peer(hostId, cfg);
+
+    hostPeer.on('connection', (conn) => {
+      conn.on('open', () => {
+        hostConns.set(conn.peer, conn);
+        attachConnHandlers(conn, true);
+        broadcastPresence();
+      });
+    });
+
+    hostPeer.on('open', (id) => {
+      if (destroyed) return;
+      if (id !== hostId) return;
+      netFailures = 0;
+      peer = hostPeer;
+      mode = 'host';
+      setPeerLabel('1 online');
+      startListenLocal(store);
+    });
+
+    hostPeer.on('error', (err) => {
+      if (destroyed) return;
+      const msg = String(err?.message || err || '');
+      const unavailable = /unavailable|ID.*taken/i.test(msg) || err?.type === 'unavailable-id';
+      try { hostPeer.destroy(); } catch (_) {}
+      if (unavailable) {
+        netFailures = 0;
+        startAsClient();
+        return;
+      }
+      netFailures++;
+      brokerIdx++;
+      if (netFailures > 14) {
+        setPeerLabel('Offline');
+        toast('Could not reach a PeerJS broker.', true);
+        startListenLocal(store);
+        return;
+      }
+      brokerRotate?.();
+      setTimeout(() => start(), 400);
+    });
+
+    hostPeer.on('disconnected', () => {
+      if (!destroyed) scheduleReconnect();
+    });
+  }
+
+  start();
+
+  return () => {
+    destroyed = true;
+    clearTimeout(reconnectTimer);
+    teardownPeer();
+  };
+}
+
+function SlateApp({ room }) {
+  const store = useMemo(() => createTLStore(), []);
+  const editorRef = useRef(null);
+  const [peerLabel, setPeerLabel] = useState('Connecting…');
+
+  useEffect(() => {
+    wireToolbar(room, peerLabel);
+  }, [room, peerLabel]);
+
+  const onMount = useCallback((editor) => {
+    editorRef.current = editor;
+  }, []);
+
+  useEffect(() => {
+    const cleanup = createPeerSync({
+      room,
+      store,
+      editorRef,
+      setPeerLabel,
+      brokerRotate: () => {},
+    });
+    return cleanup;
+  }, [room, store]);
+
+  return React.createElement(Tldraw, { store, onMount });
+}
+
+function bootstrap() {
+  const room = getRoomFromLocation();
+  const root = createRoot(document.getElementById('root'));
+  root.render(React.createElement(SlateApp, { room }));
+}
+
+bootstrap();
+</script>
+</body>
+</html>

@@ -2094,6 +2094,7 @@ const state = {
 const voiceState = {
   localStream:   null,
   isMuted:       false,
+  micDenied:     false,
   calls:         {},
   inbound:       {},
   peerVolume:    {},   // peerId -> 0..1
@@ -2328,6 +2329,9 @@ function initPeer() {
     startPing();
     connectToLobby();
     startPresenceHeartbeat();
+    // Request mic permission early so audio is ready when joining a board.
+    // acquireMic() is silent on failure — permission denied just means no-mic state.
+    if (!voiceState.localStream) acquireMic().catch(() => {});
     if (state.currentBoard) {
       setLobbyBoard(state.myId, state.currentBoard, state.myName);
       setTimeout(() => {
@@ -3136,6 +3140,7 @@ function joinBoard(board) {
   scheduleRender();
   updateMuteBtn();
   if (voiceState.localStream) joinVoice();
+  startAutoSave();
 }
 
 function leaveBoard() {
@@ -3173,6 +3178,7 @@ function leaveBoard() {
   applyWorkspaceMode(null);
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
+  stopAutoSave();
   hangupAll();
   scheduleRenderBoards();
   renderMembers();
@@ -4623,6 +4629,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+    if (e.key === 's') { e.preventDefault(); if (state.currentBoard) openSaveDialog(); }
     return;
   }
   switch (e.key) {
@@ -5401,6 +5408,12 @@ window.addEventListener('focus', () => {
 
 window.addEventListener('beforeunload', () => {
   announceLeavingBoard();
+  // Remove boards that were never manually saved from liveBoards so the
+  // public board list stays clean and performant.
+  if (state.currentBoard && !_manuallySavedBoards.has(state.currentBoard)) {
+    liveBoards.delete(state.currentBoard);
+    try { localStorage.setItem('slate_boards', JSON.stringify([...liveBoards])); } catch {}
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -5559,13 +5572,19 @@ async function acquireMic() {
     });
     voiceState.localStream = stream;
     voiceState.isMuted = false;
+    voiceState.micDenied = false;
     if (voiceState.audioCtx?.state === 'suspended') {
       try { await voiceState.audioCtx.resume(); } catch {}
     }
     updateMuteBtn();
     startVAD(stream);
     return true;
-  } catch {
+  } catch (err) {
+    // NotAllowedError = user denied; other errors = device not available.
+    // Don't toast on the background early-request attempt; only toast when
+    // the user explicitly clicks the mic button (toggleMute path will toast).
+    voiceState.micDenied = (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError');
+    updateMuteBtn();
     return false;
   }
 }
@@ -5626,11 +5645,25 @@ function attachAudio(peerId, stream) {
   el.volume = voiceState.peerVolume[peerId] ?? 1;
   el.style.display = 'none';
   document.body.appendChild(el);
-  const tryPlay = () => { try { el.play().catch(() => {}); } catch {} };
+
+  const tryPlay = () => {
+    const p = el.play();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  };
   tryPlay();
+
+  // Re-attempt on visibility restore (tab switch back)
   const ac = new AbortController();
   el._visAbort = ac;
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tryPlay(); }, { signal: ac.signal });
+
+  // Re-attempt on any user interaction in case autoplay policy blocked us
+  const gestureEvents = ['pointerdown', 'keydown', 'click'];
+  const gestureUnlock = () => {
+    tryPlay();
+    gestureEvents.forEach(ev => document.removeEventListener(ev, gestureUnlock, { capture: true }));
+  };
+  gestureEvents.forEach(ev => document.addEventListener(ev, gestureUnlock, { once: false, capture: true, signal: ac.signal }));
 }
 
 function removeAudio(peerId) {
@@ -5672,7 +5705,16 @@ async function joinVoice() {
 
 function toggleMute() {
   if (!voiceState.localStream) {
-    acquireMic().then(ok => { if (ok) { updateMuteBtn(); joinVoice(); } });
+    acquireMic().then(ok => {
+      if (ok) {
+        updateMuteBtn();
+        joinVoice();
+      } else if (voiceState.micDenied) {
+        toast('Microphone access denied — allow it in your browser settings', 'red');
+      } else {
+        toast('Microphone unavailable', 'red');
+      }
+    });
     return;
   }
   voiceState.isMuted = !voiceState.isMuted;
@@ -5685,7 +5727,9 @@ function updateMuteBtn() {
   if (!btn) return;
   if (!voiceState.localStream) {
     btn.className = 'no-mic';
-    btn.title = 'Click to enable microphone';
+    btn.title = voiceState.micDenied
+      ? 'Mic blocked — allow in browser settings'
+      : 'Click to enable microphone';
   } else {
     btn.className = voiceState.isMuted ? 'muted' : '';
     btn.title = voiceState.isMuted ? 'Unmute mic' : 'Mute mic';
@@ -5875,6 +5919,42 @@ function startApp() {
 /* ═══════════════════════════════════════════
    SAVE BOARD SYSTEM
 ═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════
+   AUTO-SAVE SYSTEM
+═══════════════════════════════════════════ */
+// Auto-save slot stored under a fixed key, separate from user manual saves.
+const AUTO_SAVE_KEY   = 'slate_autosave';
+const AUTO_SAVE_MS    = 30_000; // save every 30 s while board is active
+let   _autoSaveTimer  = null;
+
+// Tracks which boards have been manually saved at least once this session.
+const _manuallySavedBoards = new Set();
+
+function _writeAutoSave() {
+  if (!state.currentBoard) return;
+  try {
+    const entry = {
+      board: state.currentBoard,
+      ts:    Date.now(),
+      snapshot: docSerialize(),
+    };
+    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(entry));
+  } catch {}
+}
+
+function startAutoSave() {
+  stopAutoSave();
+  _writeAutoSave(); // immediate write on join
+  _autoSaveTimer = setInterval(_writeAutoSave, AUTO_SAVE_MS);
+}
+
+function stopAutoSave() {
+  if (_autoSaveTimer) { clearInterval(_autoSaveTimer); _autoSaveTimer = null; }
+}
+
+/* ═══════════════════════════════════════════
+   SAVE BOARD SYSTEM
+═══════════════════════════════════════════ */
 const SAVED_KEY = 'slate_saved_boards';
 
 function loadSavedBoards() {
@@ -5884,12 +5964,22 @@ function persistSavedBoards(data) {
   localStorage.setItem(SAVED_KEY, JSON.stringify(data));
 }
 
+// Returns true if the current board already has at least one manual save entry.
+function currentBoardHasManualSave() {
+  const board = state.currentBoard;
+  if (!board) return false;
+  return Object.values(savedBoards).some(items =>
+    Array.isArray(items) && items.some(s => s.name === board)
+  );
+}
+
 // { folderName: [ { id, name, ts, snapshot: { shapes, strokes } } ] }
 let savedBoards = loadSavedBoards();
 
 function saveBoardSnapshot(folderName) {
   const board = state.currentBoard;
   if (!board) return;
+  const alreadySaved = currentBoardHasManualSave();
   if (!savedBoards[folderName]) savedBoards[folderName] = [];
   const snap = {
     id: genId(),
@@ -5902,7 +5992,13 @@ function saveBoardSnapshot(folderName) {
   if (savedBoards[folderName].length > 20) savedBoards[folderName].length = 20;
   persistSavedBoards(savedBoards);
   renderSavedBoards();
-  toast(`Saved to "${folderName}"`, 'green');
+  _manuallySavedBoards.add(board);
+  // Show confirmation toast — differentiate first save from re-save
+  if (alreadySaved) {
+    toast(`Board saved ✓`, 'green');
+  } else {
+    toast(`Saved to "${folderName}"`, 'green');
+  }
 }
 
 function loadSavedSnapshot(snap) {

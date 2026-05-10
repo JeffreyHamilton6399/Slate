@@ -9,113 +9,184 @@
 <meta name="apple-mobile-web-app-title" content="Slate">
 <!-- If you deploy only static HTML (e.g. GitHub Pages), set this to your Node/Fly/Railway host that runs server.js so PeerJS has a signaling server (hostname only, no protocol). -->
 <meta name="slate-public-peer-host" content="">
-<title>Slate</title>
+<title>Slate — Collaborative Whiteboard</title>
+<meta name="description" content="Slate is a real-time collaborative whiteboard. Spin up a public board anyone can join, or lock it down as private and admit guests one by one. No accounts. No installs.">
+<meta property="og:title" content="Slate — Collaborative Whiteboard">
+<meta property="og:description" content="Real-time, peer-to-peer whiteboarding with public and private rooms.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f12'/%3E%3Cpath d='M6 24l8-16 4 8 8-8' stroke='%238b7cf7' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tldraw@3.6.0/tldraw.css">
 <style>
   :root {
-    --bg:          #0f0f12;
-    --bg2:         #13131a;
-    --bg3:         #1a1a22;
-    --border:      #252530;
-    --border2:     #2e2e3a;
-    --accent:      #8b7cf7;
-    --accent-dim:  #3d3580;
-    --accent-glow: rgba(139,124,247,0.18);
-    --text:        #eceaf4;
-    --text-dim:    #6c6a78;
-    --text-mid:    #9d9baf;
-    --mono:        ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
-    --sans:        ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-    --radius:      10px;
-    --radius-sm:   6px;
+    --bg:           #0b0b0f;
+    --bg2:          #111118;
+    --bg3:          #181820;
+    --bg4:          #1f1f29;
+    --surface:      rgba(20, 20, 28, 0.72);
+    --border:       #1f1f2a;
+    --border2:      #2a2a38;
+    --border3:      #353548;
+    --accent:       #8b7cf7;
+    --accent-2:     #a78bfa;
+    --accent-dim:   #3d3580;
+    --accent-glow:  rgba(139,124,247,0.2);
+    --success:      #5fd4a4;
+    --success-dim:  #1e6b54;
+    --warning:      #e8b84a;
+    --danger:       #f87171;
+    --danger-dim:   #6b1e1e;
+    --text:         #f0eef9;
+    --text-mid:     #9fa0b4;
+    --text-dim:     #6a6c80;
+    --text-faint:   #4d4f60;
+    --mono:         'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+    --sans:         'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --radius-xs:    6px;
+    --radius-sm:    8px;
+    --radius:       12px;
+    --radius-lg:    16px;
+    --shadow-sm:    0 2px 8px rgba(0,0,0,0.25);
+    --shadow:       0 8px 24px rgba(0,0,0,0.4);
+    --shadow-lg:    0 24px 64px rgba(0,0,0,0.55);
+    --ease-out:     cubic-bezier(0.32, 0.72, 0.34, 1);
+    --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   *, *::before, *::after { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); }
+  html, body {
+    height: 100%; margin: 0; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--accent-glow); color: var(--text); }
   #root { position: fixed; inset: 0; height: 100%; display: none; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border3); }
 
-  /* ── Lobby ── */
+  /* ── Lobby / Onboarding ── */
   #onboarding {
     position: fixed; inset: 0; z-index: 9999;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    gap: 36px; padding: 32px;
+    gap: 32px; padding: 32px 24px 24px;
     background: var(--bg);
+    overflow-y: auto;
   }
   #onboarding.gone { display: none; }
 
   body::before {
     content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background-image:
-      linear-gradient(var(--border) 1px, transparent 1px),
-      linear-gradient(90deg, var(--border) 1px, transparent 1px);
-    background-size: 40px 40px; opacity: 0.22;
-    animation: bgDrift 28s linear infinite;
+      linear-gradient(rgba(60,60,80,0.16) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(60,60,80,0.16) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 35%, #000 30%, transparent 100%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 35%, #000 30%, transparent 100%);
+    animation: bgDrift 32s linear infinite;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse 60% 45% at 50% 30%, rgba(139,124,247,0.10) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 30% at 80% 80%, rgba(167,139,250,0.06) 0%, transparent 60%);
   }
   @keyframes bgDrift {
     0%   { background-position: 0 0, 0 0; }
-    100% { background-position: 40px 40px, -40px 40px; }
+    100% { background-position: 56px 56px, -56px 56px; }
   }
 
   .ob-logo {
     display: flex; flex-direction: column; align-items: center; gap: 14px;
-    animation: fadeUp 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+    animation: fadeUp 0.55s var(--ease-spring) both;
     position: relative; z-index: 1;
   }
   .ob-logo-icon {
-    width: 68px; height: 68px; border-radius: 18px;
-    background: linear-gradient(135deg, var(--accent-dim), #111118);
+    width: 64px; height: 64px; border-radius: 18px;
+    background: linear-gradient(135deg, #2a2350, #14141d);
     border: 1px solid var(--accent-dim);
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 40px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.06);
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.04) inset,
+      0 0 40px var(--accent-glow),
+      0 8px 24px rgba(0,0,0,0.4);
   }
   .ob-logo h1 {
-    font-family: var(--sans); font-size: 2.8rem; font-weight: 800;
-    letter-spacing: -0.02em; margin: 0;
-    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+    font-family: var(--sans); font-size: 2.6rem; font-weight: 800;
+    letter-spacing: -0.03em; margin: 0; line-height: 1;
+    background: linear-gradient(135deg, #ffffff 0%, var(--accent-2) 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
   .ob-logo p {
-    font-family: var(--mono); font-size: 0.65rem; color: var(--text-dim);
-    letter-spacing: 0.22em; text-transform: uppercase; margin: 0;
+    font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim);
+    letter-spacing: 0.24em; text-transform: uppercase; margin: 0; font-weight: 500;
   }
 
   .ob-card {
-    width: 100%; max-width: 340px; position: relative; z-index: 1;
-    background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px;
+    width: 100%; max-width: 380px; position: relative; z-index: 1;
+    background: linear-gradient(180deg, rgba(24,24,32,0.92), rgba(17,17,24,0.92));
+    border: 1px solid var(--border2); border-radius: var(--radius-lg);
     padding: 28px; display: flex; flex-direction: column; gap: 18px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-    animation: fadeUp 0.5s 0.08s cubic-bezier(0.34,1.56,0.64,1) both;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.02) inset,
+      var(--shadow-lg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    animation: fadeUp 0.55s 0.08s var(--ease-spring) both;
   }
-  .ob-field { display: flex; flex-direction: column; gap: 6px; }
+  .ob-field { display: flex; flex-direction: column; gap: 8px; }
   .ob-label {
-    font-family: var(--mono); font-size: 0.62rem; color: var(--text-dim);
-    letter-spacing: 0.18em; text-transform: uppercase;
+    font-family: var(--sans); font-size: 0.7rem; color: var(--text-mid);
+    letter-spacing: 0.04em; text-transform: none; font-weight: 600;
   }
   .ob-input {
-    width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+    width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border2);
     border-radius: var(--radius-sm); padding: 12px 14px;
-    font-family: var(--mono); font-size: 0.95rem; color: var(--text); outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    font-family: var(--sans); font-size: 0.95rem; color: var(--text); outline: none;
+    transition: border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), background 0.18s;
   }
-  .ob-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .ob-input:hover { border-color: var(--border3); }
+  .ob-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+    background: rgba(0,0,0,0.4);
+  }
   .ob-input::placeholder { color: var(--text-dim); }
   .ob-join {
-    width: 100%; background: var(--accent); color: #fff; border: none;
-    border-radius: var(--radius-sm); padding: 14px;
-    font-family: var(--sans); font-size: 0.95rem; font-weight: 700;
-    letter-spacing: 0.04em; cursor: pointer;
-    box-shadow: 0 4px 20px rgba(139,124,247,0.35);
-    transition: opacity 0.15s, box-shadow 0.2s;
+    width: 100%;
+    background: linear-gradient(180deg, var(--accent), #7a6ce6);
+    color: #fff; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius-sm); padding: 13px;
+    font-family: var(--sans); font-size: 0.95rem; font-weight: 600;
+    letter-spacing: -0.005em; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.06) inset,
+      0 8px 24px rgba(139,124,247,0.35);
+    transition: transform 0.12s var(--ease-out), box-shadow 0.18s var(--ease-out), filter 0.15s;
   }
-  .ob-join:hover  { opacity: 0.88; box-shadow: 0 4px 30px rgba(139,124,247,0.5); }
-  .ob-join:active { opacity: 0.72; transform: scale(0.98); }
+  .ob-join:hover  { box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset, 0 12px 32px rgba(139,124,247,0.45); filter: brightness(1.05); }
+  .ob-join:active { transform: scale(0.985); filter: brightness(0.96); }
+  .ob-join:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ob-join svg { width: 16px; height: 16px; }
 
   @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(18px); }
+    from { opacity: 0; transform: translateY(14px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  /* ── In-canvas chrome (minimal pill + menu) ── */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  /* ── In-canvas chrome ── */
   .slate-chrome {
     position: fixed;
     top: 12px;
@@ -127,6 +198,7 @@
     gap: 0;
     font-family: var(--sans);
     pointer-events: none;
+    animation: fadeIn 0.4s var(--ease-out) 0.1s both;
   }
   .slate-chrome > * { pointer-events: auto; }
 
@@ -134,40 +206,56 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 5px 6px 5px 10px;
-    max-width: min(calc(100vw - 24px), 280px);
+    padding: 5px 6px 5px 12px;
+    max-width: min(calc(100vw - 24px), 320px);
     user-select: none;
     -webkit-user-select: none;
-    background: rgba(10, 10, 14, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(15, 15, 22, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 100px;
-    backdrop-filter: blur(20px) saturate(1.4);
-    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    backdrop-filter: blur(24px) saturate(1.6);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
     box-shadow:
-      0 1px 0 rgba(255,255,255,.04) inset,
-      0 8px 32px rgba(0,0,0,.35);
+      0 0 0 1px rgba(255,255,255,0.03) inset,
+      0 1px 0 rgba(255,255,255,0.04) inset,
+      0 12px 36px rgba(0,0,0,0.4);
+    transition: border-color 0.25s var(--ease-out);
   }
 
   .slate-chrome__dot {
     flex-shrink: 0;
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    background: rgba(255,255,255,.22);
-    box-shadow: 0 0 0 1px rgba(0,0,0,.4) inset;
-    transition: background 0.25s ease, box-shadow 0.25s ease;
+    background: rgba(255,255,255,.2);
+    position: relative;
+    transition: background 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+  }
+  .slate-chrome__dot::after {
+    content: '';
+    position: absolute; inset: -3px;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+    opacity: 0;
+    transition: opacity 0.25s var(--ease-out);
   }
   .slate-chrome[data-conn="on"] .slate-chrome__dot {
-    background: #5fd4a4;
-    box-shadow: 0 0 10px rgba(95,212,164,.45);
+    background: var(--success);
+    box-shadow: 0 0 12px rgba(95,212,164,.5);
+    color: var(--success);
+    animation: pulseDot 2.4s var(--ease-out) infinite;
   }
   .slate-chrome[data-conn="wait"] .slate-chrome__dot {
-    background: #e8b84a;
-    box-shadow: 0 0 8px rgba(232,184,74,.35);
+    background: var(--warning);
+    box-shadow: 0 0 10px rgba(232,184,74,.4);
   }
   .slate-chrome[data-conn="off"] .slate-chrome__dot {
-    background: #e85a6a;
-    box-shadow: 0 0 6px rgba(232,90,106,.25);
+    background: var(--danger);
+    box-shadow: 0 0 8px rgba(248,113,113,.35);
+  }
+  @keyframes pulseDot {
+    0%, 100% { box-shadow: 0 0 12px rgba(95,212,164,.5); }
+    50%      { box-shadow: 0 0 16px rgba(95,212,164,.7); }
   }
 
   .slate-chrome__meta {
@@ -186,9 +274,9 @@
   }
   .slate-chrome__room {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 500;
-    letter-spacing: 0.02em;
+    letter-spacing: -0.005em;
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
@@ -197,9 +285,9 @@
     min-width: 0;
   }
   .slate-chrome__peers {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 400;
+    font-family: var(--sans);
+    font-size: 10.5px;
+    font-weight: 500;
     color: var(--text-mid);
     white-space: nowrap;
     overflow: hidden;
@@ -214,89 +302,93 @@
   }
 
   .slate-btn {
-    font: inherit;
-    font-size: 11px;
+    font-family: var(--sans);
+    font-size: 11.5px;
     font-weight: 500;
-    letter-spacing: 0.04em;
+    letter-spacing: -0.005em;
     cursor: pointer;
     border: none;
     border-radius: 100px;
-    padding: 6px 11px;
+    padding: 6px 12px;
     color: var(--text-mid);
     background: transparent;
-    transition: color 0.15s, background 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: color 0.15s var(--ease-out), background 0.15s var(--ease-out), transform 0.1s;
   }
   .slate-btn:hover {
     color: var(--text);
     background: rgba(255,255,255,.06);
   }
-  .slate-btn:active { transform: scale(0.97); }
+  .slate-btn:active { transform: scale(0.96); }
   .slate-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .slate-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .slate-btn svg { width: 13px; height: 13px; }
 
   .slate-btn--icon {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     padding: 0;
-    font-size: 18px;
-    line-height: 1;
-    letter-spacing: 0;
     color: var(--text-mid);
     border-radius: 50%;
+    justify-content: center;
   }
   .slate-btn--icon:hover { color: var(--text); }
+  .slate-btn--icon svg { width: 15px; height: 15px; }
 
   .slate-menu {
     margin-top: 8px;
-    min-width: 200px;
-    max-width: min(calc(100vw - 24px), 260px);
-    padding: 10px 0;
-    background: rgba(12, 12, 16, 0.82);
+    min-width: 240px;
+    max-width: min(calc(100vw - 24px), 280px);
+    padding: 8px 0;
+    background: rgba(15, 15, 22, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 14px;
-    backdrop-filter: blur(24px) saturate(1.3);
-    -webkit-backdrop-filter: blur(24px) saturate(1.3);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(28px) saturate(1.4);
+    -webkit-backdrop-filter: blur(28px) saturate(1.4);
     box-shadow:
-      0 1px 0 rgba(255,255,255,.05) inset,
-      0 16px 48px rgba(0,0,0,.5);
-    animation: slateMenuIn 0.18s ease-out both;
+      0 0 0 1px rgba(255,255,255,0.02) inset,
+      0 1px 0 rgba(255,255,255,0.05) inset,
+      var(--shadow-lg);
+    animation: slateMenuIn 0.22s var(--ease-spring) both;
+    transform-origin: top right;
   }
   @keyframes slateMenuIn {
-    from { opacity: 0; transform: translateY(-6px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .slate-menu[hidden] { display: none !important; }
 
   .slate-menu__section {
-    padding: 0 12px 10px;
+    padding: 10px 14px;
     border-bottom: 1px solid rgba(255,255,255,.05);
   }
-  .slate-menu__section:last-child { border-bottom: none; padding-bottom: 0; }
+  .slate-menu__section:last-child { border-bottom: none; padding-bottom: 8px; }
+  .slate-menu__section:first-child { padding-top: 8px; }
 
   .slate-menu__label {
     display: block;
-    font-family: var(--mono);
-    font-size: 9px;
-    font-weight: 500;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin-bottom: 6px;
+    font-family: var(--sans);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-mid);
+    margin-bottom: 8px;
   }
   .slate-menu__input {
     width: 100%;
     box-sizing: border-box;
-    padding: 8px 10px;
-    border-radius: 8px;
+    padding: 9px 11px;
+    border-radius: var(--radius-sm);
     border: 1px solid rgba(255,255,255,.08);
-    background: rgba(0,0,0,.35);
+    background: rgba(0,0,0,.4);
     color: var(--text);
-    font: inherit;
-    font-size: 12px;
+    font-family: var(--sans);
+    font-size: 12.5px;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
   }
   .slate-menu__input:focus {
-    border-color: rgba(139,124,247,.45);
+    border-color: rgba(139,124,247,.55);
     box-shadow: 0 0 0 2px var(--accent-glow);
   }
   .slate-menu__input::placeholder { color: var(--text-dim); }
@@ -304,51 +396,76 @@
   .slate-menu__actions {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding-top: 8px;
-    padding-bottom: 0;
+    gap: 1px;
+    padding: 6px 8px 4px !important;
   }
   .slate-menu__action {
     width: 100%;
     text-align: left;
     font: inherit;
-    font-size: 12px;
-    padding: 9px 12px;
-    margin: 0 -2px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 8px 10px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     color: var(--text-mid);
     background: transparent;
-    transition: background 0.12s, color 0.12s;
+    display: flex; align-items: center; gap: 10px;
+    transition: background 0.12s var(--ease-out), color 0.12s var(--ease-out);
   }
+  .slate-menu__action svg { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.85; }
   .slate-menu__action:hover {
     color: var(--text);
-    background: rgba(255,255,255,.06);
+    background: rgba(255,255,255,.05);
   }
-  .slate-menu__action:active { background: rgba(255,255,255,.09); }
+  .slate-menu__action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  .ob-row-inline {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 4px;
+  /* Segmented control (private/public) */
+  .ob-segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    position: relative;
   }
-  .ob-row-inline input { width: auto; margin: 0; accent-color: var(--accent); }
-  .ob-row-inline label {
-    font-family: var(--mono);
-    font-size: 0.62rem;
-    color: var(--text-mid);
-    letter-spacing: 0.06em;
-    cursor: pointer;
+  .ob-segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .ob-segmented label {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 9px 10px;
+    border-radius: var(--radius-xs);
+    font-family: var(--sans); font-size: 12.5px; font-weight: 500;
+    color: var(--text-mid); cursor: pointer;
+    transition: background 0.18s var(--ease-out), color 0.18s var(--ease-out);
     user-select: none;
+    -webkit-user-select: none;
   }
+  .ob-segmented label svg { width: 13px; height: 13px; opacity: 0.7; }
+  .ob-segmented label:hover { color: var(--text); }
+  .ob-segmented input:checked + label {
+    background: var(--bg4);
+    color: var(--text);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.25);
+  }
+  .ob-segmented input:checked + label svg { opacity: 1; color: var(--accent-2); }
+  .ob-segmented input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   .ob-private-hint {
-    font-size: 0.68rem;
+    font-size: 0.78rem;
     color: var(--text-dim);
-    line-height: 1.35;
-    margin: 0;
+    line-height: 1.4;
+    margin: -4px 0 0;
   }
+  .ob-private-hint code {
+    font-family: var(--mono); font-size: 0.72rem;
+    color: var(--text-mid); background: rgba(255,255,255,0.04);
+    padding: 1px 5px; border-radius: 4px;
+  }
+
   .ob-room-row {
     display: flex;
     gap: 8px;
@@ -357,134 +474,218 @@
   .ob-room-row .ob-input { flex: 1; min-width: 0; }
   .ob-random {
     flex-shrink: 0;
-    padding: 0 12px;
+    padding: 0 14px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border2);
-    background: var(--bg3);
+    background: rgba(0,0,0,0.3);
     color: var(--text-mid);
-    font-family: var(--mono);
-    font-size: 0.62rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    font-weight: 500;
     cursor: pointer;
-    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: border-color 0.15s var(--ease-out), color 0.15s var(--ease-out), background 0.15s, transform 0.1s;
   }
+  .ob-random svg { width: 13px; height: 13px; }
   .ob-random:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: rgba(139,124,247,0.08);
+    border-color: var(--border3);
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
   }
+  .ob-random:active { transform: scale(0.97); }
+
   .ob-public-block {
-    margin-top: 8px;
-    padding-top: 16px;
+    margin-top: 4px;
+    padding-top: 18px;
     border-top: 1px solid var(--border);
   }
-  .ob-public-note {
-    font-size: 0.65rem;
-    color: var(--text-dim);
-    margin: 4px 0 10px;
-    line-height: 1.35;
+  .ob-public-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .ob-public-head .ob-label { margin: 0; }
+  .ob-public-status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+    font-weight: 500;
+  }
+  .ob-public-status::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success); box-shadow: 0 0 8px rgba(95,212,164,0.5);
+    animation: pulseDotSmall 2.4s var(--ease-out) infinite;
+  }
+  @keyframes pulseDotSmall {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
   }
   .ob-public-list {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    min-height: 28px;
-    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 32px;
+    align-items: stretch;
+    max-height: 220px;
+    overflow-y: auto;
+    margin: 0 -4px;
+    padding: 0 4px;
   }
   .ob-board-pill {
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    padding: 6px 10px;
-    border-radius: 999px;
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border2);
-    background: var(--bg3);
-    color: var(--text-mid);
+    background: rgba(255,255,255,0.015);
+    color: var(--text);
     cursor: pointer;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    text-align: left;
+    display: flex; align-items: center; gap: 10px;
+    transition: border-color 0.15s var(--ease-out), background 0.15s var(--ease-out), transform 0.1s;
   }
   .ob-board-pill:hover {
-    border-color: var(--accent);
+    border-color: var(--border3);
+    background: rgba(139,124,247,0.06);
+  }
+  .ob-board-pill:active { transform: scale(0.99); }
+  .ob-board-pill__icon {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(139,124,247,0.2), rgba(139,124,247,0.05));
+    border: 1px solid rgba(139,124,247,0.25);
+    color: var(--accent-2);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .ob-board-pill__icon svg { width: 14px; height: 14px; }
+  .ob-board-pill__name {
+    flex: 1; min-width: 0;
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 500;
     color: var(--text);
-    background: rgba(139,124,247,0.1);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .ob-muted {
-    font-size: 0.65rem;
+  .ob-board-pill__arrow { color: var(--text-faint); flex-shrink: 0; }
+  .ob-board-pill__arrow svg { width: 12px; height: 12px; }
+  .ob-empty {
+    font-size: 0.8rem;
     color: var(--text-dim);
-    font-style: italic;
+    padding: 14px 12px;
+    border: 1px dashed var(--border2);
+    border-radius: var(--radius-sm);
+    text-align: center;
+    line-height: 1.4;
   }
+  .ob-foot {
+    margin-top: 16px; text-align: center;
+    font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
+    letter-spacing: 0.04em;
+    position: relative; z-index: 1;
+    animation: fadeUp 0.6s 0.2s var(--ease-spring) both;
+  }
+  .ob-foot a { color: var(--text-dim); text-decoration: none; }
+  .ob-foot a:hover { color: var(--text-mid); }
+
+  /* In-canvas members list */
   .slate-access-toggle {
-    display: flex;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border2);
   }
   .slate-access-toggle button {
-    flex: 1;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,.1);
-    background: rgba(0,0,0,.25);
+    padding: 7px 8px;
+    border-radius: var(--radius-xs);
+    border: none;
+    background: transparent;
     color: var(--text-mid);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 600;
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out);
   }
-  .slate-access-toggle button:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .slate-access-toggle button svg { width: 12px; height: 12px; opacity: 0.7; }
+  .slate-access-toggle button:hover { color: var(--text); }
   .slate-access-toggle button.active {
-    border-color: rgba(139,124,247,.45);
+    background: var(--bg4);
     color: var(--text);
-    background: rgba(139,124,247,.12);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.3);
   }
+  .slate-access-toggle button.active svg { opacity: 1; color: var(--accent-2); }
+
   .slate-members {
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 140px;
+    max-height: 160px;
     overflow-y: auto;
   }
   .slate-members li {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-mid);
-    padding: 4px 0;
-    border-bottom: 1px solid rgba(255,255,255,.04);
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(255,255,255,.035);
     display: flex;
-    justify-content: space-between;
-    gap: 8px;
+    align-items: center;
+    gap: 9px;
   }
-  .slate-members li:last-child { border-bottom: none; }
-  .slate-members .nm { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slate-members li:first-child { padding-top: 4px; }
+  .slate-members li:last-child { border-bottom: none; padding-bottom: 4px; }
+  .slate-members .avatar {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--sans); font-size: 10px; font-weight: 600;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+  }
+  .slate-members .nm {
+    flex: 1; min-width: 0;
+    color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .slate-members .role {
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-family: var(--sans);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
     color: var(--text-dim);
     flex-shrink: 0;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+  }
+  .slate-members .role--host {
+    color: var(--accent-2);
+    background: rgba(139,124,247,0.14);
   }
 
   .slate-chip {
-    display: inline-block;
-    font-family: var(--mono);
-    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--sans);
+    font-size: 9.5px;
     font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    padding: 2px 6px;
+    letter-spacing: 0.02em;
+    padding: 2px 7px;
     border-radius: 4px;
     margin-right: 6px;
     vertical-align: middle;
     color: var(--danger);
-    border: 1px solid rgba(248,113,113,0.35);
-    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.32);
+    background: rgba(248,113,113,0.1);
   }
+  .slate-chip svg { width: 10px; height: 10px; }
   .slate-chip--pub {
     color: var(--text-mid);
     border-color: rgba(255,255,255,.12);
-    background: rgba(255,255,255,.05);
+    background: rgba(255,255,255,.04);
   }
 
   .slate-overlay {
@@ -495,83 +696,156 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(6,6,10,.55);
-    backdrop-filter: blur(6px);
+    background: rgba(6,6,12,.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: fadeIn 0.18s var(--ease-out);
   }
   .slate-overlay.show { display: flex; }
   .slate-overlay__card {
     width: 100%;
-    max-width: 340px;
-    padding: 22px 22px 18px;
-    border-radius: 14px;
-    background: var(--bg2);
+    max-width: 380px;
+    padding: 24px;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(180deg, rgba(24,24,32,0.96), rgba(17,17,24,0.96));
     border: 1px solid var(--border2);
-    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset, var(--shadow-lg);
     font-family: var(--sans);
+    animation: slateMenuIn 0.25s var(--ease-spring);
+    transform-origin: center;
   }
+  .slate-overlay__head {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 14px;
+  }
+  .slate-overlay__avatar {
+    flex-shrink: 0;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700; color: #fff;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .slate-overlay__title {
+    font-size: 13.5px; font-weight: 600; color: var(--text); margin: 0 0 2px;
+    line-height: 1.3;
+  }
+  .slate-overlay__title strong { color: var(--accent-2); font-weight: 700; }
   .slate-overlay__card p {
-    margin: 0 0 16px;
-    font-size: 14px;
-    line-height: 1.45;
+    margin: 0 0 14px;
+    font-size: 13.5px;
+    line-height: 1.5;
     color: var(--text);
   }
-  .slate-overlay__sub { font-size: 12px; color: var(--text-mid); margin-top: -8px; margin-bottom: 14px; }
+  .slate-overlay__sub {
+    font-size: 12px; color: var(--text-mid);
+    margin-top: -6px; margin-bottom: 18px;
+  }
   .slate-overlay__row {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     justify-content: flex-end;
   }
   .slate-overlay__row button {
-    font: inherit;
+    font-family: var(--sans);
     font-size: 13px;
     font-weight: 600;
+    letter-spacing: -0.005em;
     padding: 10px 18px;
-    border-radius: 8px;
-    border: none;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
     cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  .slate-overlay__row button:first-child {
     background: var(--accent);
     color: #fff;
+    border-color: rgba(255,255,255,0.08);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset, 0 4px 14px rgba(139,124,247,0.3);
+    transition: background 0.15s var(--ease-out), border-color 0.15s, color 0.15s, transform 0.1s, filter 0.15s;
   }
+  .slate-overlay__row button:hover { filter: brightness(1.08); }
   .slate-overlay__row button.slate-ghost {
     background: transparent;
     color: var(--text-mid);
-    border: 1px solid var(--border2);
+    border-color: var(--border2);
+    box-shadow: none;
+    filter: none;
   }
-  .slate-overlay__row button:hover { opacity: 0.9; }
+  .slate-overlay__row button.slate-ghost:hover {
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    border-color: var(--border3);
+    filter: none;
+  }
+  .slate-overlay__row button:active { transform: scale(0.97); }
+  .slate-overlay__row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .slate-overlay__waiter {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    margin-bottom: 14px;
+  }
+  .slate-overlay__spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(139,124,247,0.18);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .slate-banner {
     position: fixed;
-    bottom: 14px;
+    bottom: 18px;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) translateY(8px);
     z-index: 300001;
-    padding: 8px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: rgba(30, 30, 36, 0.95);
-    color: #c4c0d4;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    background: rgba(20, 20, 28, 0.96);
+    color: var(--text);
+    border: 1px solid var(--border2);
+    box-shadow: var(--shadow);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: opacity 0.2s var(--ease-out), transform 0.2s var(--ease-out);
+    display: inline-flex; align-items: center; gap: 8px;
   }
-  .slate-banner.show { opacity: 1; }
-  .slate-banner.err { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
+  .slate-banner.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .slate-banner.err {
+    border-color: rgba(248, 113, 113, 0.45);
+    color: #fecaca;
+    background: rgba(40, 18, 24, 0.96);
+  }
+
   #slate-file-warn {
     display: none;
+    position: fixed; left: 0; right: 0; top: 0; z-index: 300002;
     margin: 0;
-    padding: 12px 16px;
-    background: #3d2a1a;
+    padding: 14px 18px;
+    background: linear-gradient(180deg, rgba(60,40,18,0.96), rgba(40,28,14,0.96));
     color: #fcd9a6;
-    font: 13px/1.45 system-ui, sans-serif;
+    font: 13px/1.45 var(--sans);
     border-bottom: 1px solid rgba(255,180,100,.35);
     text-align: center;
+    backdrop-filter: blur(12px);
   }
   #slate-file-warn.show { display: block; }
+  #slate-file-warn code {
+    font-family: var(--mono); font-size: 12px;
+    background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 4px;
+  }
 </style>
 </head>
 <body>
@@ -590,36 +864,58 @@
 <div id="onboarding">
   <div class="ob-logo">
     <div class="ob-logo-icon">
-      <svg width="36" height="36" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M6 24l8-16 4 8 8-8" stroke="#8b7cf7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg width="34" height="34" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M6 24l8-16 4 8 8-8" stroke="#a78bfa" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
     <h1>Slate</h1>
-    <p>collaborative whiteboard</p>
+    <p>Real-time collaborative whiteboard</p>
   </div>
   <div class="ob-card">
     <div class="ob-field">
-      <label class="ob-label" for="ob-name">your name</label>
+      <label class="ob-label" for="ob-name">Your name</label>
       <input class="ob-input" id="ob-name" type="text" placeholder="Anonymous" maxlength="28" autocomplete="nickname" spellcheck="false">
     </div>
     <div class="ob-field">
-      <label class="ob-label" for="ob-room">room</label>
+      <label class="ob-label" for="ob-room">Room</label>
       <div class="ob-room-row">
-        <input class="ob-input" id="ob-room" type="text" placeholder="my-room" maxlength="64" autocomplete="off" spellcheck="false">
-        <button type="button" class="ob-random" id="ob-random-room" title="Random room name">Random</button>
+        <input class="ob-input" id="ob-room" type="text" placeholder="design-review" maxlength="64" autocomplete="off" spellcheck="false">
+        <button type="button" class="ob-random" id="ob-random-room" title="Generate a random room name">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4v4h-4"/><path d="M2 12v-4h4"/><path d="M14 8a6 6 0 01-10.5 4M2 8a6 6 0 0110.5-4"/></svg>
+          Random
+        </button>
       </div>
     </div>
-    <div class="ob-row-inline">
-      <input type="checkbox" id="ob-private" />
-      <label for="ob-private">Private room</label>
+    <div class="ob-field">
+      <span class="ob-label">Visibility</span>
+      <div class="ob-segmented" role="radiogroup" aria-label="Room visibility">
+        <input type="radio" id="ob-vis-public" name="ob-vis" value="public" checked>
+        <label for="ob-vis-public">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12"/><path d="M8 2c2 2 3 4 3 6s-1 4-3 6c-2-2-3-4-3-6s1-4 3-6z"/></svg>
+          Public
+        </label>
+        <input type="radio" id="ob-vis-private" name="ob-vis" value="private">
+        <label for="ob-vis-private">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+          Private
+        </label>
+      </div>
+      <p class="ob-private-hint" id="ob-vis-hint">Anyone with the link can join instantly.</p>
     </div>
-    <p class="ob-private-hint">Private: guests must request access; only people you allow see the board. Share the full link (includes <code>?access=private</code>).</p>
-    <button class="ob-join" id="ob-join">Join Room →</button>
+    <button class="ob-join" id="ob-join" type="button">
+      <span id="ob-join-label">Open board</span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10"/><path d="M9 4l4 4-4 4"/></svg>
+    </button>
     <div class="ob-public-block">
-      <div class="ob-label">Public boards live now</div>
-      <p class="ob-public-note">Private boards never appear here (same idea as Chirp).</p>
+      <div class="ob-public-head">
+        <span class="ob-label">Live public boards</span>
+        <span class="ob-public-status">Discovering</span>
+      </div>
       <div id="ob-public-list" class="ob-public-list" aria-live="polite"></div>
     </div>
+  </div>
+  <div class="ob-foot">
+    Peer-to-peer · End-to-end · No accounts required
   </div>
 </div>
 <div id="root"></div>
@@ -628,27 +924,43 @@
     <span class="slate-chrome__dot" id="slate-conn-dot" aria-hidden="true"></span>
     <div class="slate-chrome__meta">
       <div class="slate-chrome__roomline">
-        <span id="slate-access-chip" class="slate-chip" hidden>Private</span>
-        <span id="slate-access-chip-pub" class="slate-chip slate-chip--pub" hidden>Public</span>
+        <span id="slate-access-chip" class="slate-chip" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+          Private
+        </span>
+        <span id="slate-access-chip-pub" class="slate-chip slate-chip--pub" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12"/><path d="M8 2c2 2 3 4 3 6s-1 4-3 6c-2-2-3-4-3-6s1-4 3-6z"/></svg>
+          Public
+        </span>
         <span class="slate-chrome__room" id="slate-room"></span>
       </div>
       <span class="slate-chrome__peers" id="slate-peers"></span>
     </div>
     <div class="slate-chrome__btns">
-      <button type="button" id="slate-share" class="slate-btn" title="Copy room link">Copy link</button>
-      <button type="button" id="slate-menu-btn" class="slate-btn slate-btn--icon" aria-expanded="false" aria-controls="slate-menu" title="More">⋯</button>
+      <button type="button" id="slate-share" class="slate-btn slate-btn--icon" title="Copy room link" aria-label="Copy room link">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9a3 3 0 004 0l2-2a3 3 0 00-4-4l-1 1"/><path d="M9 7a3 3 0 00-4 0l-2 2a3 3 0 004 4l1-1"/></svg>
+      </button>
+      <button type="button" id="slate-menu-btn" class="slate-btn slate-btn--icon" aria-expanded="false" aria-controls="slate-menu" title="More options" aria-label="More options">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>
+      </button>
     </div>
   </div>
   <div id="slate-menu" class="slate-menu" role="menu" hidden>
     <div class="slate-menu__section">
-      <label class="slate-menu__label" for="slate-name">Display name</label>
+      <label class="slate-menu__label" for="slate-name">Your name</label>
       <input type="text" id="slate-name" class="slate-menu__input" maxlength="28" placeholder="Anonymous" autocomplete="nickname" spellcheck="false">
     </div>
     <div class="slate-menu__section" id="slate-room-access-wrap" hidden>
-      <span class="slate-menu__label">Room visibility (host)</span>
+      <span class="slate-menu__label">Visibility</span>
       <div class="slate-access-toggle" id="slate-access-toggle">
-        <button type="button" id="slate-menu-pub" class="active">Public</button>
-        <button type="button" id="slate-menu-priv">Private</button>
+        <button type="button" id="slate-menu-pub" class="active">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12"/><path d="M8 2c2 2 3 4 3 6s-1 4-3 6c-2-2-3-4-3-6s1-4 3-6z"/></svg>
+          Public
+        </button>
+        <button type="button" id="slate-menu-priv">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+          Private
+        </button>
       </div>
     </div>
     <div class="slate-menu__section">
@@ -656,20 +968,41 @@
       <ul id="slate-members" class="slate-members" aria-label="Members"></ul>
     </div>
     <div class="slate-menu__section slate-menu__actions">
-      <button type="button" id="slate-fit" class="slate-menu__action" role="menuitem">Fit to content</button>
-      <button type="button" id="slate-export-png" class="slate-menu__action" role="menuitem">Export PNG</button>
-      <button type="button" id="slate-export-json" class="slate-menu__action" role="menuitem">Export JSON</button>
-      <button type="button" id="slate-new-room" class="slate-menu__action" role="menuitem">New room</button>
-      <button type="button" id="slate-join-room" class="slate-menu__action" role="menuitem">Join room…</button>
+      <button type="button" id="slate-fit" class="slate-menu__action" role="menuitem">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6V3h3"/><path d="M13 6V3h-3"/><path d="M3 10v3h3"/><path d="M13 10v3h-3"/></svg>
+        Fit to content
+      </button>
+      <button type="button" id="slate-export-png" class="slate-menu__action" role="menuitem">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M3 12l3-3 4 4M9 9l1.5-1.5L13 10"/></svg>
+        Export PNG
+      </button>
+      <button type="button" id="slate-export-json" class="slate-menu__action" role="menuitem">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2H3v12h2"/><path d="M11 2h2v12h-2"/></svg>
+        Export JSON
+      </button>
+      <button type="button" id="slate-new-room" class="slate-menu__action" role="menuitem">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M8 5v6M5 8h6"/></svg>
+        New room
+      </button>
+      <button type="button" id="slate-join-room" class="slate-menu__action" role="menuitem">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10"/><path d="M9 4l4 4-4 4"/></svg>
+        Join room…
+      </button>
     </div>
   </div>
 </div>
 <div id="slate-banner" class="slate-banner" role="status"></div>
 
-<div id="slate-gate" class="slate-overlay" role="dialog" aria-modal="true" aria-labelledby="slate-gate-msg">
+<div id="slate-gate" class="slate-overlay" role="dialog" aria-modal="true" aria-labelledby="slate-gate-title">
   <div class="slate-overlay__card">
-    <p id="slate-gate-msg"></p>
-    <p class="slate-overlay__sub">Anyone you deny stays out of this room.</p>
+    <div class="slate-overlay__head">
+      <div class="slate-overlay__avatar" id="slate-gate-avatar">?</div>
+      <div>
+        <p class="slate-overlay__title" id="slate-gate-title">Knock at the door</p>
+        <p class="slate-overlay__sub" id="slate-gate-msg" style="margin: 0;">Someone wants to join</p>
+      </div>
+    </div>
+    <p class="slate-overlay__sub">Allow gives them access to draw and view everything. Deny ends their request.</p>
     <div class="slate-overlay__row">
       <button type="button" class="slate-ghost" id="slate-gate-deny">Deny</button>
       <button type="button" id="slate-gate-accept">Allow</button>
@@ -678,8 +1011,12 @@
 </div>
 <div id="slate-wait" class="slate-overlay">
   <div class="slate-overlay__card">
-    <p>Waiting for the host to let you into this <strong>private</strong> room…</p>
-    <p class="slate-overlay__sub" id="slate-wait-sub"></p>
+    <p class="slate-overlay__title" style="font-size: 16px; margin-bottom: 6px;">Waiting on the host</p>
+    <p class="slate-overlay__sub">This is a <strong>private</strong> board. The host will allow or deny your request.</p>
+    <div class="slate-overlay__waiter">
+      <div class="slate-overlay__spinner" aria-hidden="true"></div>
+      <span id="slate-wait-sub" style="font-family: var(--mono); font-size: 12px; color: var(--text-mid);"></span>
+    </div>
     <div class="slate-overlay__row">
       <button type="button" class="slate-ghost" id="slate-wait-cancel">Leave</button>
     </div>
@@ -850,10 +1187,33 @@ const GuestWait = (() => {
   };
 })();
 
+/** Stable hue from a name so the same person gets the same avatar color across views. */
+function hueFromName(name) {
+  const s = String(name || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function avatarStyleFor(name) {
+  const h = hueFromName(name || 'guest');
+  return `background: linear-gradient(135deg, hsl(${h} 55% 45%), hsl(${(h + 32) % 360} 65% 36%));`;
+}
+
+function avatarInitial(name) {
+  const s = String(name || '').trim();
+  if (!s) return '?';
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return s[0].toUpperCase();
+}
+
 const SlateGate = (() => {
   let ctx = null;
   const overlay = () => document.getElementById('slate-gate');
   const msgEl = () => document.getElementById('slate-gate-msg');
+  const titleEl = () => document.getElementById('slate-gate-title');
+  const avatarEl = () => document.getElementById('slate-gate-avatar');
   function bindOnce() {
     if (bindOnce.done) return;
     bindOnce.done = true;
@@ -869,8 +1229,16 @@ const SlateGate = (() => {
       bindOnce();
       try { ctx?.onDeny?.(); } catch (_) {}
       ctx = { onAccept, onDeny };
+      const display = (name || 'Someone').trim() || 'Someone';
+      const title = titleEl();
+      if (title) title.textContent = `${display} wants to join`;
       const m = msgEl();
-      if (m) m.textContent = `${name || 'Someone'} wants to join this private room`;
+      if (m) m.textContent = 'Allow them onto this private board?';
+      const a = avatarEl();
+      if (a) {
+        a.textContent = avatarInitial(display);
+        a.setAttribute('style', avatarStyleFor(display));
+      }
       overlay()?.classList.add('show');
     },
     close() {
@@ -894,24 +1262,8 @@ function wireToolbar(roomName, peerLabel, roomAccess) {
   const shareBtn = document.getElementById('slate-share');
   if (!wrap || !roomEl || !peersEl || !shareBtn) return;
   wrap.hidden = false;
-  if (chip && chipPub) {
-    if (roomAccess === 'private') {
-      chip.hidden = false;
-      chip.textContent = 'Private';
-      chipPub.hidden = true;
-    } else {
-      chip.hidden = true;
-      chipPub.hidden = false;
-      chipPub.textContent = 'Public';
-    }
-  } else if (chip) {
-    if (roomAccess === 'private') {
-      chip.hidden = false;
-      chip.textContent = 'Private';
-    } else {
-      chip.hidden = true;
-    }
-  }
+  if (chip) chip.hidden = roomAccess !== 'private';
+  if (chipPub) chipPub.hidden = roomAccess === 'private';
   roomEl.textContent = `#${roomName}`;
   const short = String(peerLabel || '')
     .replace(/^Host ·\s*/i, '')
@@ -1968,18 +2320,26 @@ function SlateApp({ room, roomAccess }) {
     const list = Array.isArray(members) ? members : [];
     if (!list.length) {
       const li = document.createElement('li');
-      li.textContent = '…';
+      li.style.color = 'var(--text-dim)';
+      li.style.fontSize = '12px';
+      li.style.justifyContent = 'center';
+      li.textContent = 'Just you, for now';
       ul.appendChild(li);
       return;
     }
     list.forEach((m) => {
       const li = document.createElement('li');
+      const av = document.createElement('span');
+      av.className = 'avatar';
+      av.setAttribute('style', avatarStyleFor(m.name || m.id || ''));
+      av.textContent = avatarInitial(m.name || '?');
       const nm = document.createElement('span');
       nm.className = 'nm';
       nm.textContent = m.name || '…';
       const role = document.createElement('span');
-      role.className = 'role';
+      role.className = m.role === 'host' ? 'role role--host' : 'role';
       role.textContent = m.role === 'host' ? 'Host' : 'Guest';
+      li.appendChild(av);
       li.appendChild(nm);
       li.appendChild(role);
       ul.appendChild(li);
@@ -2015,25 +2375,46 @@ function bootstrap() {
   root.render(React.createElement(SlateApp, { room, roomAccess }));
 }
 
-function renderObPublicBoards(boards, roomInput, privateCb) {
+function renderObPublicBoards(boards, roomInput, visPublicEl) {
   const el = document.getElementById('ob-public-list');
+  const statusEl = document.querySelector('.ob-public-status');
   if (!el) return;
   el.replaceChildren();
-  if (!boards.length) {
-    const s = document.createElement('span');
-    s.className = 'ob-muted';
-    s.textContent = 'No public boards online — host one below';
+  const list = Array.isArray(boards) ? boards : [];
+  if (statusEl) {
+    statusEl.textContent = list.length
+      ? `${list.length} live`
+      : 'Discovering';
+  }
+  if (!list.length) {
+    const s = document.createElement('div');
+    s.className = 'ob-empty';
+    s.textContent = 'No public boards online right now. Open one and others will see it here.';
     el.appendChild(s);
     return;
   }
-  boards.forEach((name) => {
+  list.forEach((name) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'ob-board-pill';
-    b.textContent = name;
+    b.title = `Join #${name}`;
+    const icon = document.createElement('span');
+    icon.className = 'ob-board-pill__icon';
+    icon.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 6.5l2 2 2-2"/></svg>';
+    const label = document.createElement('span');
+    label.className = 'ob-board-pill__name';
+    label.textContent = `#${name}`;
+    const arrow = document.createElement('span');
+    arrow.className = 'ob-board-pill__arrow';
+    arrow.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3l5 5-5 5"/></svg>';
+    b.appendChild(icon);
+    b.appendChild(label);
+    b.appendChild(arrow);
     b.addEventListener('click', () => {
       roomInput.value = name;
-      if (privateCb) privateCb.checked = false;
+      if (visPublicEl) visPublicEl.checked = true;
+      const evt = new Event('change', { bubbles: true });
+      visPublicEl?.dispatchEvent(evt);
     });
     el.appendChild(b);
   });
@@ -2041,19 +2422,26 @@ function renderObPublicBoards(boards, roomInput, privateCb) {
 
 // ── Lobby ──────────────────────────────────────────────────────────────────
 (function setupLobby() {
-  const ob      = document.getElementById('onboarding');
-  const nameEl  = document.getElementById('ob-name');
-  const roomEl  = document.getElementById('ob-room');
-  const joinBtn = document.getElementById('ob-join');
-  const appRoot = document.getElementById('root');
-  const privateEl = document.getElementById('ob-private');
-  const randomBtn = document.getElementById('ob-random-room');
+  const ob          = document.getElementById('onboarding');
+  const nameEl      = document.getElementById('ob-name');
+  const roomEl      = document.getElementById('ob-room');
+  const joinBtn     = document.getElementById('ob-join');
+  const joinLabel   = document.getElementById('ob-join-label');
+  const appRoot     = document.getElementById('root');
+  const visPublic   = document.getElementById('ob-vis-public');
+  const visPrivate  = document.getElementById('ob-vis-private');
+  const visHint     = document.getElementById('ob-vis-hint');
+  const randomBtn   = document.getElementById('ob-random-room');
 
   let lobbyUnsub = null;
   let lobbyBootTries = 0;
 
+  function isPrivateChecked() {
+    return !!visPrivate?.checked;
+  }
+
   function paintPublicFromLobby(boards) {
-    renderObPublicBoards(boards, roomEl, privateEl);
+    renderObPublicBoards(boards, roomEl, visPublic);
   }
 
   function bootLobbyDiscovery() {
@@ -2077,8 +2465,24 @@ function renderObPublicBoards(boards, roomInput, privateCb) {
   }
   bootLobbyDiscovery();
 
+  function syncVisibilityUi() {
+    const priv = isPrivateChecked();
+    if (visHint) {
+      visHint.textContent = priv
+        ? 'Guests must request access. You decide who joins. The board is hidden from the live list.'
+        : 'Anyone with the link can join instantly. The board appears in the live list while you’re on it.';
+    }
+    if (joinLabel) {
+      joinLabel.textContent = priv ? 'Open private board' : 'Open board';
+    }
+  }
+  visPublic?.addEventListener('change', syncVisibilityUi);
+  visPrivate?.addEventListener('change', syncVisibilityUi);
+
   randomBtn?.addEventListener('click', () => {
     roomEl.value = randomRoomId(7);
+    roomEl.focus();
+    roomEl.select();
   });
 
   // Pre-fill room from URL hash if present
@@ -2088,7 +2492,11 @@ function renderObPublicBoards(boards, roomInput, privateCb) {
   // Pre-fill name from previous session
   try { nameEl.value = sessionStorage.getItem('slate_display_name') || ''; } catch (_) {}
 
-  if (privateEl && getRoomAccess() === 'private') privateEl.checked = true;
+  if (visPrivate && getRoomAccess() === 'private') {
+    visPrivate.checked = true;
+    if (visPublic) visPublic.checked = false;
+  }
+  syncVisibilityUi();
 
   function launch() {
     if (lobbyUnsub) {
@@ -2099,13 +2507,14 @@ function renderObPublicBoards(boards, roomInput, privateCb) {
 
     const name = nameEl.value.trim().slice(0, 28);
     const room = roomEl.value.trim().slice(0, 64) || randomRoomId();
+    const priv = isPrivateChecked();
 
     // Persist name so the toolbar input inherits it
     try { sessionStorage.setItem('slate_display_name', name); } catch (_) {}
 
     const url = new URL(location.href);
     url.hash = `#${encodeURIComponent(room)}`;
-    if (privateEl?.checked) url.searchParams.set('access', 'private');
+    if (priv) url.searchParams.set('access', 'private');
     else url.searchParams.delete('access');
     history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 

@@ -299,13 +299,51 @@ input, textarea { font-family: var(--sans); }
 .board-item.active .board-item__count { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.7); }
 .board-item.active-drawing .board-item__icon { box-shadow: 0 0 0 2px var(--green); }
 
+/* ── Compact Create/Join bottom bar ── */
 .sidebar-create {
-  padding: 10px 12px 12px;
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex; flex-direction: column; gap: 6px;
 }
-.create-row {
+
+/* Two compact trigger buttons side by side */
+.create-join-triggers {
   display: flex; gap: 6px;
+}
+.create-trigger-btn, .join-trigger-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  font-size: 0.8rem; font-weight: 600;
+  border: 1px solid var(--border2); background: var(--bg3);
+  color: var(--text-mid); transition: all 0.15s;
+  white-space: nowrap; cursor: pointer;
+}
+.create-trigger-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.join-trigger-btn:hover { border-color: var(--border2); color: var(--text); background: var(--bg4); }
+.create-trigger-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.join-trigger-btn.active { border-color: var(--border2); color: var(--text); background: var(--bg4); }
+
+/* Expanded create panel */
+.create-expanded {
+  display: none; flex-direction: column; gap: 7px;
+  animation: expandIn 0.15s ease;
+}
+.create-expanded.open { display: flex; }
+
+/* Expanded join panel */
+.join-expanded {
+  display: none; flex-direction: column; gap: 6px;
+  animation: expandIn 0.15s ease;
+}
+.join-expanded.open { display: flex; }
+
+@keyframes expandIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.create-row {
+  display: flex; gap: 6px; align-items: center;
 }
 .create-row input {
   flex: 1; min-width: 0;
@@ -317,6 +355,15 @@ input, textarea { font-family: var(--sans); }
 .create-row input::placeholder { color: var(--text-dim); }
 .create-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .create-row .btn { padding: 8px 12px; font-size: 0.82rem; }
+
+/* Visibility + workspace options row inside expanded create */
+.create-options-row {
+  display: flex; gap: 6px; align-items: center;
+}
+.create-options-row .seg-control {
+  flex: 1; font-size: 0.72rem; padding: 2px;
+}
+
 #join-private-row {
   display: flex; gap: 6px;
 }
@@ -357,6 +404,7 @@ input, textarea { font-family: var(--sans); }
 }
 #editor-pane {
   flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column;
+  /* toolbar is now fixed-position on the right, no horizontal space needed here */
 }
 #dock-resize-handle.split-handle-v {
   order: 2;
@@ -473,19 +521,28 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 #share-board-btn { flex-shrink: 0; }
 #members-toggle { flex-shrink: 0; display: none; }
 
-/* ── Toolbar ── */
+/* ── Vertical right toolbar ── */
 #draw-toolbar {
-  height: var(--toolbar-h);
+  position: fixed;
+  top: calc(var(--header-h) + 10px);
+  right: 64px; /* next to member panel */
+  width: 44px;
   background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center;
-  padding: 0 10px; gap: 4px;
-  flex-shrink: 0; z-index: 4;
-  overflow-x: auto; scrollbar-width: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex; flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  gap: 2px;
+  flex-shrink: 0; z-index: 39;
+  overflow-y: auto; scrollbar-width: none;
+  max-height: calc(100vh - var(--header-h) - 20px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
 #draw-toolbar::-webkit-scrollbar { display: none; }
 #draw-toolbar .tool-btn {
-  padding: 7px 9px; border-radius: var(--radius-sm);
+  width: 34px; height: 34px;
+  padding: 0; border-radius: var(--radius-sm);
   background: transparent; border: 1px solid transparent;
   color: var(--text-mid); display: flex; align-items: center; justify-content: center;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
@@ -497,39 +554,86 @@ button.visibility-chip { font: inherit; cursor: pointer; }
   border-color: var(--accent-dim);
 }
 .toolbar-sep {
-  width: 1px; background: var(--border); height: 28px;
-  margin: 0 4px; flex-shrink: 0;
+  width: 24px; height: 1px; background: var(--border);
+  margin: 2px auto; flex-shrink: 0;
 }
 #stroke-size-wrap {
-  display: flex; align-items: center; gap: 6px;
-  margin-left: 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 0; width: 100%;
 }
 #stroke-size {
-  width: 70px; accent-color: var(--accent);
+  width: 32px; accent-color: var(--accent);
+  writing-mode: vertical-lr; direction: rtl;
+  height: 52px;
+  -webkit-appearance: slider-vertical;
 }
 #color-picker-wrap {
-  display: flex; align-items: center; gap: 4px;
-  margin-left: 4px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 2px 0;
 }
 #color-picker {
-  width: 28px; height: 28px; border-radius: 50%;
+  width: 24px; height: 24px; border-radius: 50%;
   border: 2px solid var(--border2); cursor: pointer;
   padding: 0; background: none; overflow: hidden;
 }
 #color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 #color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
-.toolbar-spacer { flex: 1; }
+.toolbar-spacer { display: none; }
 #zoom-wrap {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 0.75rem; font-family: var(--mono);
-  color: var(--text-dim); flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 0.62rem; font-family: var(--mono);
+  color: var(--text-dim); flex-shrink: 0; padding: 2px 0;
 }
-#zoom-label { min-width: 38px; text-align: center; }
+#zoom-label { min-width: auto; text-align: center; font-size: 0.58rem; writing-mode: horizontal-tb; }
+
+/* Color swatches — vertical stack */
+#color-swatches {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  flex-shrink: 0; padding: 2px 0;
+}
+.swatch {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer;
+  flex-shrink: 0; transition: transform 0.12s, border-color 0.12s;
+}
+.swatch:hover { transform: scale(1.2); }
+.swatch.active { border-color: var(--text); transform: scale(1.1); }
+#color-picker {
+  width: 22px; height: 22px; border: none; background: none;
+  padding: 0; cursor: pointer; border-radius: 50%;
+  outline: 2px solid var(--border2); outline-offset: 1px;
+}
+#color-picker::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
+#color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+/* Fill toggle — compact vertical */
+#fill-toggle-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 2px 0;
+}
+#fill-color { width: 22px; height: 22px; border: none; background: none; padding: 0; cursor: pointer; border-radius: 50%; outline: 2px solid var(--border2); outline-offset: 1px; }
+#fill-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
+#fill-color::-webkit-color-swatch { border: none; border-radius: 50%; }
+.fill-none-btn { width: 22px; height: 18px; font-size: 0.7rem; padding: 2px 3px; border-radius: 4px; background: transparent; border: 1px solid var(--border2); color: var(--text-dim); cursor: pointer; }
+.fill-none-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Font size — compact */
+#font-size-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-size: 0.62rem; font-family: var(--mono); color: var(--text-dim); padding: 2px 0;
+}
+#font-size-input {
+  width: 34px; background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 4px; color: var(--text); padding: 3px 2px;
+  font-family: var(--mono); font-size: 0.68rem; text-align: center;
+  outline: none;
+}
+#font-size-input:focus { border-color: var(--accent); }
 
 /* ── Canvas area ── */
 #canvas-area {
   flex: 1; position: relative; overflow: hidden;
   background: #16161b; /* dark desk/stage behind the paper */
+  margin-right: 120px; /* make room for fixed toolbar + member panel */
 }
 /* Drop overlay for images */
 /* drag-over ring instead of overlay */
@@ -635,48 +739,66 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 }
 
 /* ═══════════════════════════════════════════
-   MEMBERS PANEL (Chirp-inspired, compact)
+   MEMBERS PANEL — compact floating square
 ═══════════════════════════════════════════ */
 #member-panel {
-  width: 132px; flex-shrink: 0;
+  position: fixed;
+  top: calc(var(--header-h) + var(--toolbar-h) + 10px);
+  right: 12px;
+  width: 44px;
   background: var(--bg2);
-  border-left: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  overflow: hidden; z-index: 5;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex; flex-direction: column; align-items: center;
+  overflow: visible; z-index: 40;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  padding: 6px 0 4px;
+  gap: 2px;
+  transition: width 0.2s ease, background 0.15s;
+}
+#member-panel:hover {
+  width: 160px;
 }
 .member-panel-header {
-  padding: 6px 9px 5px;
+  width: 100%; padding: 0 6px 4px;
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; gap: 4px;
 }
 .member-panel-title {
-  font-size: 0.6rem; font-family: var(--mono);
+  font-size: 0.58rem; font-family: var(--mono);
   text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--text-dim);
+  color: var(--text-dim); white-space: nowrap; overflow: hidden;
+  max-width: 0; transition: max-width 0.2s ease, opacity 0.2s;
+  opacity: 0;
+}
+#member-panel:hover .member-panel-title {
+  max-width: 80px; opacity: 1;
 }
 #member-count-badge {
   font-size: 0.58rem; font-family: var(--mono);
   background: var(--bg4); color: var(--text-dim);
-  padding: 1px 5px; border-radius: 8px;
+  padding: 1px 5px; border-radius: 8px; flex-shrink: 0;
 }
 #member-list {
-  flex: 1; overflow-y: auto;
+  width: 100%; overflow-y: auto; max-height: 220px;
   padding: 3px 4px;
   display: flex; flex-direction: column; gap: 1px;
 }
 .member-row {
   display: flex; align-items: center;
-  padding: 4px 6px; border-radius: var(--radius-sm);
-  gap: 7px; position: relative; cursor: pointer;
+  padding: 3px 5px; border-radius: var(--radius-sm);
+  gap: 6px; position: relative; cursor: pointer;
   transition: background 0.14s ease;
+  justify-content: center;
 }
+#member-panel:hover .member-row { justify-content: flex-start; }
 .member-row:hover { background: var(--bg3); }
 .member-row.is-self { cursor: default; }
 .member-avatar {
-  width: 22px; height: 22px; border-radius: 50%;
+  width: 26px; height: 26px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.6rem; font-weight: 700;
+  font-size: 0.62rem; font-weight: 700;
   flex-shrink: 0; overflow: hidden;
   background-size: cover; background-position: center;
   border: 1.5px solid transparent; transition: border-color 0.18s, box-shadow 0.18s;
@@ -687,8 +809,9 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 }
 .member-info {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 4px;
+  display: none; align-items: center; gap: 4px;
 }
+#member-panel:hover .member-info { display: flex; }
 .member-name {
   font-size: 0.7rem; font-weight: 500;
   color: var(--text); overflow: hidden;
@@ -1145,42 +1268,12 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 .vote-clear-btns .btn { flex: 1; padding: 9px; font-size: 0.85rem; }
 .vote-progress { font-size: 0.78rem; font-family: var(--mono); color: var(--text-dim); }
 
-/* Color swatches */
-#color-swatches {
-  display: flex; align-items: center; gap: 3px;
-  flex-shrink: 0;
-}
-.swatch {
-  width: 18px; height: 18px; border-radius: 50%;
-  border: 2px solid transparent; cursor: pointer;
-  flex-shrink: 0; transition: transform 0.12s, border-color 0.12s;
-}
-.swatch:hover { transform: scale(1.2); }
-.swatch.active { border-color: var(--text); transform: scale(1.1); }
-#color-picker {
-  width: 22px; height: 22px; border: none; background: none;
-  padding: 0; cursor: pointer; border-radius: 50%;
-  outline: 2px solid var(--border2); outline-offset: 1px;
-}
-#color-picker::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
-#color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+/* (color swatches defined with toolbar above) */
 
+/* (fill-toggle, font-size defined with toolbar above) */
 /* Highlighter cursor */
 #board-canvas.tool-highlighter { cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='24' viewBox='0 0 20 24'><rect x='5' y='2' width='10' height='16' rx='4' fill='rgba(250,204,21,0.6)' stroke='%23333' stroke-width='1.5'/><rect x='8' y='18' width='4' height='4' rx='1' fill='%23333'/></svg>") 10 22, crosshair; }
 #board-canvas.tool-arrow { cursor: crosshair; }
-
-/* Font size for text tool */
-#font-size-wrap {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 0.72rem; font-family: var(--mono); color: var(--text-dim);
-}
-#font-size-input {
-  width: 44px; background: var(--bg3); border: 1px solid var(--border2);
-  border-radius: 4px; color: var(--text); padding: 3px 5px;
-  font-family: var(--mono); font-size: 0.75rem; text-align: center;
-  outline: none;
-}
-#font-size-input:focus { border-color: var(--accent); }
 
 /* ═══════════════════════════════════════════
    MOBILE OVERRIDES
@@ -1207,8 +1300,17 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     transition: transform 0.25s ease;
     z-index: 60; width: min(220px, 78vw);
     box-shadow: -4px 0 24px rgba(0,0,0,0.5);
+    /* override the new fixed-square style on mobile */
+    border-radius: 0; border: none; padding: 0;
+    flex-direction: column;
   }
+  #member-panel { top: 0; width: min(200px, 70vw); }
   #member-panel.open { transform: translateX(0); display: flex; }
+  #member-panel:hover { width: min(200px, 70vw); }
+  /* show names always on mobile expanded panel */
+  #member-panel.open .member-info { display: flex; }
+  #member-panel.open .member-panel-title { max-width: 120px; opacity: 1; }
+  #member-panel.open .member-row { justify-content: flex-start; }
   #chat-panel.open   { transform: translateX(0); display: flex; }
 
   #sidebar-toggle { display: flex; }
@@ -1221,11 +1323,28 @@ button.visibility-chip { font: inherit; cursor: pointer; }
   .host-controls-label { display: none; }
   .host-controls-btn { padding: 4px 6px; font-size: 0.68rem; }
 
-  #draw-toolbar { padding: 0 4px; gap: 1px; overflow-x: auto; }
-  #draw-toolbar .tool-btn { padding: 6px 6px; flex-shrink: 0; }
-  #draw-toolbar .toolbar-sep { display: none; }
-  #color-swatches { gap: 3px; }
-  .swatch { width: 18px; height: 18px; }
+  /* Toolbar: revert to horizontal strip at bottom on mobile */
+  #draw-toolbar {
+    position: fixed; bottom: 0; left: 0; right: 0; top: auto;
+    width: auto; max-height: 52px;
+    flex-direction: row; padding: 0 6px;
+    border-radius: 0; border-top: 1px solid var(--border);
+    border-bottom: none; border-left: none; border-right: none;
+    overflow-x: auto; overflow-y: hidden; gap: 2px;
+    right: 0;
+  }
+  #draw-toolbar .tool-btn { width: 36px; height: 36px; flex-shrink: 0; }
+  #draw-toolbar .toolbar-sep { width: 1px; height: 24px; margin: 0 2px; }
+  #stroke-size { width: 52px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
+  #stroke-size-wrap { flex-direction: row; gap: 4px; width: auto; }
+  #color-swatches { flex-direction: row; }
+  #fill-toggle-wrap { flex-direction: row; }
+  #font-size-wrap { flex-direction: row; }
+  #zoom-wrap { flex-direction: row; }
+  #zoom-label { writing-mode: horizontal-tb; font-size: 0.7rem; min-width: 34px; }
+  #canvas-area { margin-right: 0; margin-bottom: 52px; }
+  #member-panel { position: fixed; top: auto; right: 0; bottom: 52px; width: auto; border-radius: 8px; padding: 6px 0; }
+  .toolbar-spacer { display: flex; flex: 1; }
 
   /* Voice bar compact on mobile */
   #voice-bar { gap: 4px; }
@@ -1367,26 +1486,44 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     </div>
 
     <div class="sidebar-create">
-      <div class="create-row">
-        <input id="create-board-input" type="text" placeholder="board name…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
-        <button id="vis-toggle-btn" class="vis-toggle" title="Public board (click to make private)" aria-label="public">
-          <!-- public = globe icon -->
-          <svg class="vis-pub-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/></svg>
-          <!-- private = lock icon (hidden initially) -->
-          <svg class="vis-priv-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/></svg>
-          <span class="vis-label">Public</span>
+      <!-- Compact trigger buttons -->
+      <div class="create-join-triggers">
+        <button id="create-trigger-btn" class="create-trigger-btn" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg>
+          Create
         </button>
-        <button id="create-board-btn" class="btn btn-primary" title="Create board">+</button>
+        <button id="join-trigger-btn" class="join-trigger-btn" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="6" x2="9" y2="6"/><polyline points="6,3 9,6 6,9"/></svg>
+          Join
+        </button>
       </div>
-      <div class="seg-control create-ws-control" style="font-size:0.72rem;padding:2px;margin-top:2px" title="New board workspace">
-        <input type="radio" name="create-ws" id="cws-2d" value="2d" checked>
-        <label for="cws-2d">2D</label>
-        <input type="radio" name="create-ws" id="cws-3d" value="3d">
-        <label for="cws-3d">3D</label>
+
+      <!-- Expanded Create panel -->
+      <div id="create-expanded" class="create-expanded">
+        <div class="create-row">
+          <input id="create-board-input" type="text" placeholder="Board name…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
+          <button id="create-board-btn" class="btn btn-primary" title="Create board">+</button>
+        </div>
+        <div class="create-options-row">
+          <div class="seg-control create-ws-control" style="font-size:0.72rem;padding:2px" title="New board workspace">
+            <input type="radio" name="create-ws" id="cws-2d" value="2d" checked>
+            <label for="cws-2d">2D</label>
+            <input type="radio" name="create-ws" id="cws-3d" value="3d">
+            <label for="cws-3d">3D</label>
+          </div>
+          <button id="vis-toggle-btn" class="vis-toggle" title="Public board (click to make private)" aria-label="public" style="flex-shrink:0">
+            <svg class="vis-pub-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/></svg>
+            <svg class="vis-priv-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/></svg>
+          </button>
+        </div>
       </div>
-      <div id="join-private-row">
-        <input id="join-private-input" type="text" placeholder="join private board…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
-        <button id="join-private-btn" class="btn btn-ghost" title="Request to join">→</button>
+
+      <!-- Expanded Join panel -->
+      <div id="join-expanded" class="join-expanded">
+        <div id="join-private-row">
+          <input id="join-private-input" type="text" placeholder="Private board name…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
+          <button id="join-private-btn" class="btn btn-ghost" title="Request to join">→</button>
+        </div>
       </div>
     </div>
   </nav>
@@ -1663,7 +1800,9 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 
   </div><!-- /#main -->
 
-  <!-- MEMBERS PANEL -->
+</div><!-- /#app -->
+
+<!-- MEMBERS PANEL — fixed floating square -->
   <aside id="member-panel">
     <div class="member-panel-header">
       <span class="member-panel-title">Members</span>
@@ -6150,6 +6289,46 @@ document.getElementById('save-board-btn').addEventListener('click', openSaveDial
 
 // Initial render of saved boards in sidebar
 renderSavedBoards();
+
+// ── Create / Join expand toggle ──────────────────────────────────────────────
+(function initCreateJoinToggles() {
+  const createBtn  = document.getElementById('create-trigger-btn');
+  const joinBtn    = document.getElementById('join-trigger-btn');
+  const createExp  = document.getElementById('create-expanded');
+  const joinExp    = document.getElementById('join-expanded');
+  if (!createBtn || !joinBtn || !createExp || !joinExp) return;
+
+  function showCreate() {
+    createExp.classList.add('open');
+    joinExp.classList.remove('open');
+    createBtn.classList.add('active');
+    joinBtn.classList.remove('active');
+    document.getElementById('create-board-input')?.focus();
+  }
+  function showJoin() {
+    joinExp.classList.add('open');
+    createExp.classList.remove('open');
+    joinBtn.classList.add('active');
+    createBtn.classList.remove('active');
+    document.getElementById('join-private-input')?.focus();
+  }
+  function closeAll() {
+    createExp.classList.remove('open');
+    joinExp.classList.remove('open');
+    createBtn.classList.remove('active');
+    joinBtn.classList.remove('active');
+  }
+  createBtn.addEventListener('click', () => {
+    createExp.classList.contains('open') ? closeAll() : showCreate();
+  });
+  joinBtn.addEventListener('click', () => {
+    joinExp.classList.contains('open') ? closeAll() : showJoin();
+  });
+  // Close on Escape
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeAll();
+  });
+})();
 </script>
 
 <script src="layout-dock.js"></script>

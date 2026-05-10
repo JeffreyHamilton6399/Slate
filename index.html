@@ -811,6 +811,158 @@ input, textarea { font-family: var(--sans); }
 }
 .fill-none-btn.active { border-color: var(--accent); color: var(--accent); }
 
+/* Visibility toggle button */
+.vis-toggle {
+  padding: 7px 9px; border-radius: var(--radius-sm);
+  background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--green); cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; transition: background 0.15s, border-color 0.15s;
+}
+.vis-toggle[aria-label="private"] {
+  color: var(--danger); border-color: rgba(248,113,113,0.3);
+  background: rgba(248,113,113,0.08);
+}
+.vis-toggle:hover { border-color: var(--border2); filter: brightness(1.15); }
+
+/* Speaking ring on member avatar */
+.member-avatar.speaking {
+  box-shadow: 0 0 0 2.5px var(--green);
+  animation: speak-pulse 0.8s ease-in-out infinite;
+}
+@keyframes speak-pulse { 0%,100% { box-shadow: 0 0 0 2.5px var(--green); } 50% { box-shadow: 0 0 0 4px rgba(34,211,165,0.35); } }
+
+/* Member row clickable */
+.member-row { cursor: pointer; }
+.member-row:hover .member-avatar { outline: 1.5px solid var(--border2); }
+
+/* Voice bar in header */
+#voice-bar {
+  display: flex; align-items: center;
+  flex-shrink: 0;
+}
+#mute-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.78rem; font-family: var(--mono);
+  cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+#mute-btn:hover { background: var(--bg3); border-color: var(--border2); color: var(--text); }
+#mute-btn.muted  { background: rgba(248,113,113,0.1); border-color: var(--danger); color: var(--danger); }
+#mute-btn.no-mic { opacity: 0.45; pointer-events: all; } /* still clickable to request mic */
+.mic-bar {
+  display: flex; align-items: flex-end; gap: 1.5px; height: 12px;
+}
+.mic-bar-seg {
+  width: 2.5px; border-radius: 1px; background: var(--green);
+  transition: height 0.08s ease;
+}
+
+/* Chat toggle button */
+#chat-btn { position: relative; }
+.chat-unread {
+  position: absolute; top: -3px; right: -3px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font-size: 0.6rem; font-family: var(--mono);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+
+/* Chat panel */
+#chat-panel {
+  width: 260px; flex-shrink: 0;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  display: none; flex-direction: column;
+  z-index: 5;
+}
+#chat-panel.open { display: flex; }
+.chat-header {
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.chat-header-title {
+  font-size: 0.72rem; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+#chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.chat-msg {
+  display: flex; flex-direction: column; gap: 2px;
+  max-width: 100%;
+}
+.chat-msg-mine { align-items: flex-end; }
+.chat-msg-header {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 0.68rem; color: var(--text-dim); font-family: var(--mono);
+}
+.chat-msg-avatar {
+  width: 18px; height: 18px; border-radius: 50%;
+  font-size: 0.55rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.chat-msg-bubble {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px 10px 10px 2px;
+  padding: 7px 10px; font-size: 0.85rem; line-height: 1.45;
+  max-width: 200px; word-break: break-word;
+  white-space: pre-wrap;
+}
+.chat-msg-mine .chat-msg-bubble {
+  background: var(--accent-dim); border-color: var(--accent);
+  border-radius: 10px 10px 2px 10px;
+}
+.chat-input-row {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 6px; flex-shrink: 0;
+}
+#chat-input {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: var(--radius-sm); padding: 8px 10px;
+  font-family: var(--sans); font-size: 0.85rem;
+  color: var(--text); outline: none; resize: none;
+}
+#chat-input:focus { border-color: var(--accent); }
+#chat-send-btn {
+  padding: 8px 12px; flex-shrink: 0;
+  background: var(--accent); border: none;
+  border-radius: var(--radius-sm); color: #fff;
+  font-size: 0.8rem; cursor: pointer;
+}
+#chat-send-btn:hover { opacity: 0.85; }
+
+/* Vote-to-clear overlay */
+#vote-clear-overlay {
+  position: fixed; inset: 0; z-index: 350;
+  display: none; align-items: flex-end; justify-content: center;
+  padding: 0 16px 80px; pointer-events: none;
+}
+#vote-clear-overlay.show { display: flex; }
+.vote-clear-card {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 10px;
+  width: 100%; max-width: 360px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+  pointer-events: all;
+  animation: slideUp 0.2s ease;
+}
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.vote-clear-title { font-weight: 600; font-size: 0.95rem; }
+.vote-clear-sub   { font-size: 0.82rem; color: var(--text-dim); }
+.vote-clear-btns  { display: flex; gap: 8px; }
+.vote-clear-btns .btn { flex: 1; padding: 9px; font-size: 0.85rem; }
+.vote-progress { font-size: 0.78rem; font-family: var(--mono); color: var(--text-dim); }
+
 /* Font size for text tool */
 #font-size-wrap {
   display: flex; align-items: center; gap: 4px;
@@ -838,13 +990,14 @@ input, textarea { font-family: var(--sans); }
   }
   #sidebar.open { transform: translateX(0); }
 
-  #member-panel {
+  #member-panel, #chat-panel {
     position: fixed; inset: 0; left: auto;
     transform: translateX(100%);
     transition: transform 0.25s ease;
     z-index: 50; width: 260px;
   }
-  #member-panel.open { transform: translateX(0); }
+  #member-panel.open { transform: translateX(0); display: flex; }
+  #chat-panel.open   { transform: translateX(0); display: flex; }
 
   #sidebar-toggle { display: flex; }
   #members-toggle { display: flex; }
@@ -917,9 +1070,14 @@ input, textarea { font-family: var(--sans); }
         <span id="conn-text">connecting</span>
       </div>
       <button id="sidebar-settings-btn" title="Settings" aria-label="Settings">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="8" cy="8" r="2.2"/>
-          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+        <!-- Sliders/filter icon — clearly "settings", not a sun -->
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <line x1="2" y1="4" x2="14" y2="4"/>
+          <line x1="2" y1="8" x2="14" y2="8"/>
+          <line x1="2" y1="12" x2="14" y2="12"/>
+          <circle cx="5" cy="4" r="1.5" fill="var(--bg2)"/>
+          <circle cx="10" cy="8" r="1.5" fill="var(--bg2)"/>
+          <circle cx="6" cy="12" r="1.5" fill="var(--bg2)"/>
         </svg>
       </button>
     </div>
@@ -933,14 +1091,12 @@ input, textarea { font-family: var(--sans); }
 
     <div class="sidebar-create">
       <div class="create-row">
-        <input id="create-board-input" type="text" placeholder="new board name" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
+        <input id="create-board-input" type="text" placeholder="board name…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
+        <button id="vis-toggle-btn" class="vis-toggle" title="Toggle public/private" aria-label="public">
+          <svg class="vis-pub-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/></svg>
+          <svg class="vis-priv-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/></svg>
+        </button>
         <button id="create-board-btn" class="btn btn-primary" title="Create board">+</button>
-      </div>
-      <div class="seg-control" id="create-vis-ctrl">
-        <input type="radio" name="create-vis" id="cv-pub" value="public" checked>
-        <label for="cv-pub">Public</label>
-        <input type="radio" name="create-vis" id="cv-priv" value="private">
-        <label for="cv-priv">Private</label>
       </div>
       <div id="join-private-row">
         <input id="join-private-input" type="text" placeholder="join private board…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
@@ -974,6 +1130,25 @@ input, textarea { font-family: var(--sans); }
           <circle cx="3" cy="8" r="1.5"/>
           <line x1="4.4" y1="8.75" x2="10.6" y2="12.25"/>
           <line x1="10.6" y1="3.75" x2="4.4" y2="7.25"/>
+        </svg>
+      </button>
+      <!-- Voice bar -->
+      <div id="voice-bar">
+        <button id="mute-btn" class="no-mic" title="Mic muted (no permission)">
+          <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
+            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+          </svg>
+          <div class="mic-bar" id="mic-level-bar">
+            <div class="mic-bar-seg" style="height:3px"></div>
+            <div class="mic-bar-seg" style="height:5px"></div>
+            <div class="mic-bar-seg" style="height:3px"></div>
+          </div>
+        </button>
+      </div>
+      <button id="chat-btn" class="btn-icon" aria-label="Toggle chat" title="Chat">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 3h12v8H9l-3 2v-2H2z"/>
         </svg>
       </button>
       <button id="members-toggle" class="btn-icon" aria-label="Toggle members">
@@ -1054,8 +1229,8 @@ input, textarea { font-family: var(--sans); }
           <polyline points="13,6 13,10 9,10"/>
         </svg>
       </button>
-      <!-- Clear (host only) -->
-      <button class="tool-btn" id="clear-btn" title="Clear board (host only)" style="display:none">
+      <!-- Clear (vote to clear) -->
+      <button class="tool-btn" id="clear-btn" title="Vote to clear board" style="display:none">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="3,5 13,5"/>
           <path d="M5 5V3h6v2M6 8v5M10 8v5"/>
@@ -1150,7 +1325,35 @@ input, textarea { font-family: var(--sans); }
     <div id="member-list"></div>
   </aside>
 
+  <!-- Chat panel -->
+  <aside id="chat-panel">
+    <div class="chat-header">
+      <span class="chat-header-title">Chat</span>
+      <button id="chat-close-btn" class="btn-icon" style="padding:4px" aria-label="Close chat">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
+      </button>
+    </div>
+    <div id="chat-messages"></div>
+    <div class="chat-input-row">
+      <textarea id="chat-input" rows="1" placeholder="Message…" maxlength="500"></textarea>
+      <button id="chat-send-btn">Send</button>
+    </div>
+  </aside>
+
 </div><!-- /#app -->
+
+<!-- Vote-to-clear overlay -->
+<div id="vote-clear-overlay">
+  <div class="vote-clear-card">
+    <div class="vote-clear-title">🗑️ Clear the board?</div>
+    <div class="vote-clear-sub" id="vote-clear-sub">A member wants to clear the board. Vote yes to erase everything.</div>
+    <div class="vote-progress" id="vote-progress"></div>
+    <div class="vote-clear-btns">
+      <button class="btn btn-ghost" id="vote-no-btn">No</button>
+      <button class="btn btn-danger" id="vote-yes-btn">Yes, clear it</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════════════
      MODALS
@@ -1184,8 +1387,12 @@ input, textarea { font-family: var(--sans); }
 <!-- Mod menu (host per-member actions) -->
 <div id="mod-menu">
   <button class="mod-menu-item" id="mod-drawmute-btn">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="11" y2="11"/><line x1="11" y1="2" x2="2" y2="11"/></svg>
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
     <span id="mod-drawmute-label">Mute drawing</span>
+  </button>
+  <button class="mod-menu-item" id="mod-promote-btn">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 2l1.2 3.5H11L8.4 7.6l1 3L6.5 9 3.6 10.6l1-3L2 5.5h3.3z"/></svg>
+    Make host
   </button>
   <button class="mod-menu-item danger" id="mod-kick-btn">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
@@ -1499,6 +1706,18 @@ const state = {
   wakeLock: null,
 };
 
+// Voice state declared here so renderMembers (defined later) can reference it safely
+const voiceState = {
+  localStream:   null,
+  isMuted:       false,
+  calls:         {},
+  inbound:       {},
+  speakingPeers: new Set(),
+  audioCtx:      null,
+  analyser:      null,
+  vadTimer:      null,
+};
+
 function makePeerInfo(conn, opts = {}) {
   return {
     conn,
@@ -1773,6 +1992,7 @@ function initPeer() {
     if (!state.reconnectTimer) setConnUI('error', 'offline');
   });
   state.peer.on('connection', conn => setupDataConn(conn, true));
+  setupVoiceCallHandler();
 }
 
 function scheduleReconnect() {
@@ -2085,8 +2305,20 @@ function handleData(peerId, data) {
         .map(id => ({ id, joinTime: state.connections[id].joinTime || 0 }));
       try { state.connections[peerId]?.conn.send({ type: 'peer-list', peers: peerList }); } catch {}
       ensureBoardHost(); renderMembers(); scheduleRenderBoards();
+      // If the new peer is in our board, call them
+      if (data.board === state.currentBoard && voiceState.localStream) {
+        callPeer(peerId);
+      }
       break;
     }
+
+    case 'voice-speaking':
+      if (state.connections[peerId]) {
+        if (data.speaking) voiceState.speakingPeers.add(peerId);
+        else               voiceState.speakingPeers.delete(peerId);
+        renderMembers();
+      }
+      break;
 
     case 'peer-list':
       data.peers.forEach(({ id: pid, joinTime }) => {
@@ -2159,12 +2391,33 @@ function handleData(peerId, data) {
       break;
 
     case 'doc-clear':
-      if (data.peerId === state.boardHostId) {
-        docClear();
-        scheduleRender();
-        toast('Board cleared by host');
-      }
+      docClear(); scheduleRender();
+      toast('Board cleared', 'red');
       break;
+
+    case 'vote-clear-req': {
+      const initiatorName = data.name || 'Someone';
+      // Set up vote tracking (non-initiator side)
+      if (!voteState.active) {
+        voteState.active      = true;
+        voteState.isInitiator = false;
+        voteState.votes       = {};
+        voteState.total       = 1 + Object.values(state.connections).filter(c => c.board === state.currentBoard).length;
+      }
+      showVoteClearUI(initiatorName, false);
+      break;
+    }
+
+    case 'vote-clear-resp':
+      // Any active initiator on this client handles incoming responses
+      handleVoteResp(data.responder || peerId, data.vote);
+      break;
+
+    case 'chat': {
+      const msg = { text: data.text, name: data.name, avatar: data.avatar, t: data.t || Date.now(), mine: false };
+      addChatMessage(msg);
+      break;
+    }
 
     case 'presence':
       if (state.connections[peerId]) {
@@ -2282,8 +2535,12 @@ function joinBoard(board) {
     state.boardHostId = state.myId;
   }
 
-  // Reset doc for new board
+  // Reset doc + viewport for new board
   docClear();
+  vp.panX = canvas.width / 2;
+  vp.panY = canvas.height / 2;
+  vp.zoom = 1;
+  updateZoomLabel();
 
   const nameEl  = document.getElementById('board-name-display');
   const noHint  = document.getElementById('no-board-hint');
@@ -2300,6 +2557,8 @@ function joinBoard(board) {
   broadcastAll({ type: 'hello', name: state.myName, avatar: state.myAvatar, board, joinTime: state.myJoinTime, boards: publicBoards(), topics: boardTopics });
   requestWakeLock();
   scheduleRender();
+  // Join voice if mic already acquired
+  if (voiceState.localStream) joinVoice();
 }
 
 function leaveBoard() {
@@ -2332,6 +2591,7 @@ function leaveBoard() {
   syncInviteHash(null);
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
+  hangupAll();
   scheduleRenderBoards();
   renderMembers();
   updateBoardControls();
@@ -2765,6 +3025,10 @@ canvas.addEventListener('pointermove', onPointerMove);
 canvas.addEventListener('pointerup',   onPointerUp);
 canvas.addEventListener('pointercancel', onPointerUp);
 canvas.addEventListener('wheel', onWheel, { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault()); // block right-click menu
+
+// Track last pinch center for simultaneous pan+zoom
+let lastPinchCenter = null;
 
 function onPointerDown(e) {
   e.preventDefault();
@@ -2772,19 +3036,30 @@ function onPointerDown(e) {
   canvas.setPointerCapture(e.pointerId);
 
   if (pointers.size === 2) {
-    // Start pinch
+    // Record initial pinch dist + center
     const pts = [...pointers.values()];
-    lastPinchDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    lastPinchDist   = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    const rect = canvas.getBoundingClientRect();
+    lastPinchCenter = { x: (pts[0].x + pts[1].x) / 2 - rect.left, y: (pts[0].y + pts[1].y) / 2 - rect.top };
     isDrawing = false;
+    shapeStart = null; shapePreview = null;
     return;
   }
 
   if (pointers.size > 2) return;
 
+  // Right-mouse-button OR middle-mouse → pan
+  if (e.button === 2 || e.button === 1) {
+    isPanDragging = true;
+    panStart = { x: e.clientX, y: e.clientY, panX: vp.panX, panY: vp.panY };
+    canvas.classList.add('tool-pan-drag');
+    return;
+  }
+
   if (currentTool === 'pan') {
     isPanDragging = true;
     panStart = { x: e.clientX, y: e.clientY, panX: vp.panX, panY: vp.panY };
-    document.getElementById('board-canvas').classList.add('tool-pan-drag');
+    canvas.classList.add('tool-pan-drag');
     return;
   }
 
@@ -2818,17 +3093,30 @@ function onPointerMove(e) {
   // Update pointer position
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Two-finger pinch-zoom / pan
+  // Two-finger: simultaneous pan + pinch-zoom
   if (pointers.size === 2) {
     const pts = [...pointers.values()];
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-    if (lastPinchDist) {
-      const cx = (pts[0].x + pts[1].x) / 2;
-      const cy = (pts[0].y + pts[1].y) / 2;
-      const rect = canvas.getBoundingClientRect();
-      setZoom(vp.zoom * (dist / lastPinchDist), cx - rect.left, cy - rect.top);
+    const rect  = canvas.getBoundingClientRect();
+    const cx = (pts[0].x + pts[1].x) / 2 - rect.left;
+    const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
+    if (lastPinchDist && lastPinchCenter) {
+      // 1. Pan: translate by how much the center moved
+      vp.panX += cx - lastPinchCenter.x;
+      vp.panY += cy - lastPinchCenter.y;
+      // 2. Zoom: scale around new center
+      if (lastPinchDist > 10) {
+        const ratio  = dist / lastPinchDist;
+        const { wx, wy } = screenToWorld(cx, cy);
+        vp.zoom  = Math.max(0.1, Math.min(8, vp.zoom * ratio));
+        vp.panX  = cx - wx * vp.zoom;
+        vp.panY  = cy - wy * vp.zoom;
+      }
     }
-    lastPinchDist = dist;
+    lastPinchDist   = dist;
+    lastPinchCenter = { x: cx, y: cy };
+    updateZoomLabel();
+    scheduleRender();
     return;
   }
 
@@ -2872,12 +3160,12 @@ function onPointerMove(e) {
 function onPointerUp(e) {
   e.preventDefault();
   pointers.delete(e.pointerId);
-  lastPinchDist = null;
+  if (pointers.size < 2) { lastPinchDist = null; lastPinchCenter = null; }
 
-  if (isPanDragging) {
+  if (isPanDragging && pointers.size === 0) {
     isPanDragging = false;
     panStart = null;
-    document.getElementById('board-canvas').classList.remove('tool-pan-drag');
+    canvas.classList.remove('tool-pan-drag');
     return;
   }
 
@@ -3083,11 +3371,8 @@ document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
 document.getElementById('undo-btn').addEventListener('click', undo);
 document.getElementById('redo-btn').addEventListener('click', redo);
 document.getElementById('clear-btn').addEventListener('click', () => {
-  if (!state.isBoardHost) return;
-  docClear();
-  broadcastAll({ type: 'doc-clear', peerId: state.myId });
-  scheduleRender();
-  toast('Board cleared', 'red');
+  if (!state.currentBoard) return;
+  initiateVoteClear();
 });
 
 document.getElementById('stroke-size').addEventListener('input', e => {
@@ -3319,48 +3604,42 @@ function renderMembers() {
   if (!list) return;
 
   const members = [];
-  // Self
   members.push({ id: state.myId, name: state.myName, avatar: state.myAvatar, isMe: true, joinTime: state.myJoinTime || 0, board: state.currentBoard });
-  // Peers in current board
   Object.entries(state.connections).forEach(([pid, info]) => {
     if (info.board !== state.currentBoard) return;
     members.push({ id: pid, name: info.name, avatar: info.avatar, isMe: false, joinTime: info.joinTime || 0, board: info.board, reconnecting: info.reconnecting });
   });
-
   members.sort((a, b) => a.joinTime - b.joinTime);
 
   if (badge) badge.textContent = members.length;
 
   const frag = document.createDocumentFragment();
   members.forEach(m => {
-    const isHost = m.id === state.boardHostId;
-    const isMuted = state.mutedDrawers.has(m.id);
+    const isHost    = m.id === state.boardHostId;
+    const isMuted   = state.mutedDrawers.has(m.id);
+    const isSpeaking = voiceState.speakingPeers.has(m.id);
     const row = document.createElement('div');
     row.className = 'member-row';
+    if (!m.isMe) row.dataset.peer = m.id;
 
-    const color = peerColor(m.name || m.id);
+    const color   = peerColor(m.name || m.id);
     const initial = avatarInitial(m.name);
-    let avatarHtml;
-    if (m.avatar) {
-      avatarHtml = `<div class="member-avatar" style="background-image:url('${m.avatar}');background-size:cover;background-position:center"></div>`;
-    } else {
-      avatarHtml = `<div class="member-avatar" style="background:${color}">${initial}</div>`;
-    }
+    const avatarStyle = m.avatar
+      ? `background-image:url('${m.avatar}');background-size:cover;background-position:center`
+      : `background:${color}`;
+    const avatarContent = m.avatar ? '' : initial;
+    const speakingClass = isSpeaking ? ' speaking' : '';
 
     const hostBadge = isHost ? ' 👑' : '';
     const muteHtml  = isMuted ? `<span class="draw-muted-badge">muted</span>` : '';
     const recoHtml  = m.reconnecting ? `<span style="font-size:0.62rem;color:var(--warn);font-family:var(--mono)">⟳</span>` : '';
-    const actionsHtml = (state.isBoardHost && !m.isMe)
-      ? `<button class="mod-btn" data-peer="${escHtml(m.id)}" title="Moderator actions">⋯</button>`
-      : '';
 
     row.innerHTML = `
-      ${avatarHtml}
+      <div class="member-avatar${speakingClass}" style="${avatarStyle}">${avatarContent}</div>
       <div class="member-info">
         <div class="member-name${m.isMe ? ' is-you' : ''}">${escHtml(m.name || m.id)}${hostBadge}</div>
         <div class="member-badge">${m.isMe ? 'you' : ''}${recoHtml}${muteHtml}</div>
       </div>
-      <div class="member-actions">${actionsHtml}</div>
     `;
     frag.appendChild(row);
   });
@@ -3368,11 +3647,10 @@ function renderMembers() {
   list.innerHTML = '';
   list.appendChild(frag);
 
-  // Bind mod buttons
-  list.querySelectorAll('.mod-btn[data-peer]').forEach(btn => {
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      showModMenu(btn.dataset.peer, btn);
+  // Clicking any non-self member row opens mod menu (host only)
+  list.querySelectorAll('.member-row[data-peer]').forEach(row => {
+    row.addEventListener('click', () => {
+      if (state.isBoardHost) showModMenu(row.dataset.peer, row);
     });
   });
 }
@@ -3402,6 +3680,20 @@ document.getElementById('mod-drawmute-btn').addEventListener('click', () => {
   if (pid) modDrawMute(pid);
 });
 
+document.getElementById('mod-promote-btn').addEventListener('click', () => {
+  const menu = document.getElementById('mod-menu');
+  const pid = menu._targetPeer;
+  menu.classList.remove('open');
+  if (!pid || !state.isBoardHost) return;
+  const name = state.connections[pid]?.name || pid;
+  // Transfer host: tell everyone new host is pid
+  state.boardHostId = pid;
+  state.isBoardHost = false;
+  broadcastAll({ type: 'host-changed', newHost: pid });
+  renderMembers();
+  toast(`${name} is now the host`);
+});
+
 document.getElementById('mod-kick-btn').addEventListener('click', () => {
   const menu = document.getElementById('mod-menu');
   const pid = menu._targetPeer;
@@ -3429,7 +3721,7 @@ function updateTopicInput() {
 
 function updateBoardControls() {
   const clearBtn = document.getElementById('clear-btn');
-  if (clearBtn) clearBtn.style.display = state.isBoardHost ? '' : 'none';
+  if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
 }
 
 function escHtml(s) {
@@ -3482,13 +3774,25 @@ document.getElementById('create-board-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') createBoard();
 });
 
+// Vis toggle button
+{
+  const btn = document.getElementById('vis-toggle-btn');
+  btn.addEventListener('click', () => {
+    const isPriv = btn.getAttribute('aria-label') === 'private';
+    btn.setAttribute('aria-label', isPriv ? 'public' : 'private');
+    btn.querySelector('.vis-pub-icon').style.display  = isPriv ? '' : 'none';
+    btn.querySelector('.vis-priv-icon').style.display = isPriv ? 'none' : '';
+    btn.title = isPriv ? 'Public board (click to make private)' : 'Private board (click to make public)';
+  });
+}
+
 function createBoard() {
   const input = document.getElementById('create-board-input');
   const raw   = input.value.trim();
   if (!raw) { input.focus(); return; }
   const name  = normalizeBoard(raw);
   if (!name)  { toast('Invalid board name', 'red'); return; }
-  const vis   = document.querySelector('input[name="create-vis"]:checked')?.value || 'public';
+  const vis   = document.getElementById('vis-toggle-btn').getAttribute('aria-label') || 'public';
   boardVisibility[name] = vis;
   persistBoardVisibility();
   safeAddBoard(name);
@@ -3757,6 +4061,7 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 
 document.getElementById('members-toggle').addEventListener('click', () => {
   document.getElementById('member-panel').classList.toggle('open');
+  if (window.innerWidth <= 768) document.getElementById('chat-panel').classList.remove('open');
 });
 
 /* ═══════════════════════════════════════════
@@ -3880,6 +4185,339 @@ window.addEventListener('resize', () => {
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { document.getElementById('board-input').focus(); } });
   document.getElementById('board-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
 })();
+
+/* ═══════════════════════════════════════════
+   VOTE-TO-CLEAR SYSTEM
+═══════════════════════════════════════════ */
+const voteState = { active: false, isInitiator: false, votes: {}, total: 0, timer: null };
+
+function initiateVoteClear() {
+  if (voteState.active) return;
+  voteState.active      = true;
+  voteState.isInitiator = true;
+  voteState.votes       = {};
+  const boardPeers = Object.values(state.connections).filter(c => c.board === state.currentBoard);
+  voteState.total  = 1 + boardPeers.length;
+  // Auto-vote yes for initiator
+  voteState.votes[state.myId] = true;
+  broadcastAll({ type: 'vote-clear-req', initiator: state.myId, name: state.myName });
+  showVoteClearUI(state.myName, true);
+  // Alone in the board? Just clear immediately
+  if (boardPeers.length === 0) {
+    voteState.active = false; voteState.isInitiator = false;
+    hideVoteClearUI();
+    docClear(); scheduleRender();
+    toast('Board cleared', 'red');
+  }
+}
+
+function handleVoteResp(peerId, vote) {
+  if (!voteState.active || !voteState.isInitiator) return;
+  voteState.votes[peerId] = vote;
+  const yea   = Object.values(voteState.votes).filter(Boolean).length;
+  const total = voteState.total;
+  updateVoteProgress(yea, total);
+  if (yea > total / 2) {
+    clearTimeout(voteState.timer);
+    voteState.active = false; voteState.isInitiator = false;
+    hideVoteClearUI();
+    docClear(); scheduleRender();
+    broadcastAll({ type: 'doc-clear' });
+    toast('Board cleared by vote', 'red');
+  } else if (Object.keys(voteState.votes).length >= total) {
+    clearTimeout(voteState.timer);
+    voteState.active = false; voteState.isInitiator = false;
+    hideVoteClearUI();
+    toast('Vote failed — not enough yes votes');
+  }
+}
+
+function showVoteClearUI(initiatorName, isInitiator) {
+  const overlay = document.getElementById('vote-clear-overlay');
+  const sub     = document.getElementById('vote-clear-sub');
+  sub.textContent = isInitiator
+    ? `You started a vote to clear the board. Waiting for others…`
+    : `${initiatorName} wants to clear the board. Vote now:`;
+  document.getElementById('vote-yes-btn').style.display = isInitiator ? 'none' : '';
+  document.getElementById('vote-no-btn').textContent    = isInitiator ? 'Cancel' : 'No';
+  updateVoteProgress(isInitiator ? 1 : 0, voteState.total || 1);
+  overlay.classList.add('show');
+  clearTimeout(voteState.timer);
+  voteState.timer = setTimeout(() => {
+    voteState.active = false;
+    hideVoteClearUI();
+    toast('Clear vote timed out');
+  }, 30000);
+}
+
+function hideVoteClearUI() {
+  document.getElementById('vote-clear-overlay').classList.remove('show');
+}
+
+function updateVoteProgress(yea, total) {
+  document.getElementById('vote-progress').textContent = `${yea} / ${total} in favour`;
+}
+
+document.getElementById('vote-yes-btn').addEventListener('click', () => {
+  hideVoteClearUI();
+  broadcastAll({ type: 'vote-clear-resp', vote: true, responder: state.myId });
+});
+
+document.getElementById('vote-no-btn').addEventListener('click', () => {
+  const isInitiator = voteState.isInitiator;
+  voteState.active = false; voteState.isInitiator = false;
+  clearTimeout(voteState.timer);
+  hideVoteClearUI();
+  if (!isInitiator) {
+    broadcastAll({ type: 'vote-clear-resp', vote: false, responder: state.myId });
+  }
+});
+
+/* ═══════════════════════════════════════════
+   VOICE CHAT (open mic)
+═══════════════════════════════════════════ */
+async function acquireMic() {
+  if (voiceState.localStream) return true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    voiceState.localStream = stream;
+    voiceState.isMuted = false;
+    updateMuteBtn();
+    startVAD(stream);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startVAD(stream) {
+  try {
+    const ctx      = new AudioContext();
+    const src      = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    voiceState.audioCtx = ctx;
+    voiceState.analyser = analyser;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    let mySpeak = false;
+    function loop() {
+      voiceState.vadTimer = requestAnimationFrame(loop);
+      analyser.getByteFrequencyData(data);
+      const rms = Math.sqrt(data.reduce((s, v) => s + v * v, 0) / data.length);
+      const speaking = rms > 18;
+      if (speaking !== mySpeak) {
+        mySpeak = speaking;
+        // Animate mic bar
+        const segs = document.querySelectorAll('.mic-bar-seg');
+        segs.forEach((s, i) => {
+          s.style.height = speaking ? `${6 + rms * 0.15 * (i === 1 ? 1.5 : 1)}px` : '3px';
+        });
+        broadcastAll({ type: 'voice-speaking', speaking });
+      }
+    }
+    loop();
+  } catch {}
+}
+
+function callPeer(peerId) {
+  if (!voiceState.localStream || !state.peer || voiceState.calls[peerId]) return;
+  try {
+    const call = state.peer.call(peerId, voiceState.localStream);
+    voiceState.calls[peerId] = call;
+    call.on('stream', remoteStream => attachAudio(peerId, remoteStream));
+    call.on('close',  () => { delete voiceState.calls[peerId]; removeAudio(peerId); });
+    call.on('error',  () => { delete voiceState.calls[peerId]; removeAudio(peerId); });
+  } catch {}
+}
+
+function attachAudio(peerId, stream) {
+  removeAudio(peerId);
+  const el = document.createElement('audio');
+  el.id        = `audio-${peerId}`;
+  el.srcObject = stream;
+  el.autoplay  = true;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+}
+
+function removeAudio(peerId) {
+  const el = document.getElementById(`audio-${peerId}`);
+  if (el) { el.srcObject = null; el.remove(); }
+}
+
+function hangupAll() {
+  Object.values(voiceState.calls).forEach(c => { try { c.close(); } catch {} });
+  Object.values(voiceState.inbound).forEach(c => { try { c.close(); } catch {} });
+  voiceState.calls   = {};
+  voiceState.inbound = {};
+  voiceState.speakingPeers.clear();
+  // Remove all audio elements
+  document.querySelectorAll('audio[id^="audio-"]').forEach(el => { el.srcObject = null; el.remove(); });
+}
+
+async function joinVoice() {
+  const ok = await acquireMic();
+  if (!ok) return;
+  Object.entries(state.connections).forEach(([pid, info]) => {
+    if (info.board === state.currentBoard) callPeer(pid);
+  });
+  updateMuteBtn();
+}
+
+function toggleMute() {
+  if (!voiceState.localStream) {
+    acquireMic().then(ok => { if (ok) { updateMuteBtn(); joinVoice(); } });
+    return;
+  }
+  voiceState.isMuted = !voiceState.isMuted;
+  voiceState.localStream.getAudioTracks().forEach(t => { t.enabled = !voiceState.isMuted; });
+  updateMuteBtn();
+}
+
+function updateMuteBtn() {
+  const btn = document.getElementById('mute-btn');
+  if (!btn) return;
+  if (!voiceState.localStream) {
+    btn.className = 'no-mic';
+    btn.title = 'Click to enable microphone';
+    return;
+  }
+  btn.className = voiceState.isMuted ? 'muted' : '';
+  btn.title     = voiceState.isMuted ? 'Unmute mic' : 'Mute mic';
+  const icon = document.getElementById('mic-icon');
+  if (icon) {
+    icon.innerHTML = voiceState.isMuted
+      ? `<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/><line x1="2" y1="11" x2="11" y2="2" stroke="var(--danger)" stroke-width="1.5"/>`
+      : `<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>`;
+  }
+}
+
+document.getElementById('mute-btn').addEventListener('click', toggleMute);
+
+// Handle incoming calls from PeerJS
+function setupVoiceCallHandler() {
+  if (!state.peer) return;
+  state.peer.on('call', call => {
+    const pid = call.peer;
+    // Only answer if we share a board
+    if (!state.currentBoard) return;
+    voiceState.inbound[pid] = call;
+    if (voiceState.localStream) {
+      call.answer(voiceState.localStream);
+    } else {
+      acquireMic().then(ok => {
+        if (ok) call.answer(voiceState.localStream);
+        else    call.answer(); // answer without stream (listen only)
+      });
+    }
+    call.on('stream', remoteStream => attachAudio(pid, remoteStream));
+    call.on('close',  () => { delete voiceState.inbound[pid]; removeAudio(pid); voiceState.speakingPeers.delete(pid); renderMembers(); });
+    call.on('error',  () => { delete voiceState.inbound[pid]; removeAudio(pid); voiceState.speakingPeers.delete(pid); renderMembers(); });
+  });
+}
+
+/* ═══════════════════════════════════════════
+   TEXT CHAT
+═══════════════════════════════════════════ */
+const chatMessages = [];
+let chatUnread = 0;
+
+function addChatMessage(msg) {
+  chatMessages.push(msg);
+  if (chatMessages.length > 200) chatMessages.shift();
+  renderChat();
+  if (!document.getElementById('chat-panel').classList.contains('open')) {
+    if (!msg.mine) {
+      chatUnread++;
+      updateChatBadge();
+    }
+  }
+}
+
+function renderChat() {
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.innerHTML = '';
+  chatMessages.forEach(msg => {
+    const div = document.createElement('div');
+    div.className = 'chat-msg' + (msg.mine ? ' chat-msg-mine' : '');
+    const color   = peerColor(msg.name || '?');
+    const initial = avatarInitial(msg.name);
+    const avatarHtml = msg.avatar
+      ? `<div class="chat-msg-avatar" style="background-image:url('${msg.avatar}');background-size:cover"></div>`
+      : `<div class="chat-msg-avatar" style="background:${color}">${initial}</div>`;
+    const timeStr = new Date(msg.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    div.innerHTML = `
+      <div class="chat-msg-header">
+        ${msg.mine ? '' : avatarHtml}
+        <span>${msg.mine ? 'You' : escHtml(msg.name || '?')}</span>
+        <span style="margin-left:auto;opacity:.55">${timeStr}</span>
+      </div>
+      <div class="chat-msg-bubble">${escHtml(msg.text)}</div>
+    `;
+    el.appendChild(div);
+  });
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function updateChatBadge() {
+  let badge = document.querySelector('#chat-btn .chat-unread');
+  if (chatUnread > 0) {
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'chat-unread';
+      document.getElementById('chat-btn').appendChild(badge);
+    }
+    badge.textContent = chatUnread > 9 ? '9+' : chatUnread;
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text  = input.value.trim();
+  if (!text || !state.currentBoard) return;
+  input.value = '';
+  input.style.height = '';
+  const msg = { text, name: state.myName, avatar: state.myAvatar, t: Date.now(), mine: true };
+  addChatMessage(msg);
+  broadcastAll({ type: 'chat', text, name: state.myName, avatar: state.myAvatar, t: msg.t });
+}
+
+document.getElementById('chat-send-btn').addEventListener('click', sendChat);
+document.getElementById('chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+document.getElementById('chat-input').addEventListener('input', e => {
+  // Auto-resize textarea
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
+});
+
+document.getElementById('chat-btn').addEventListener('click', () => {
+  const panel = document.getElementById('chat-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) {
+    chatUnread = 0;
+    updateChatBadge();
+    renderChat();
+    setTimeout(() => {
+      const el = document.getElementById('chat-messages');
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 50);
+  }
+  // Close member panel if open on mobile
+  if (window.innerWidth <= 768) {
+    document.getElementById('member-panel').classList.remove('open');
+  }
+});
+
+document.getElementById('chat-close-btn').addEventListener('click', () => {
+  document.getElementById('chat-panel').classList.remove('open');
+});
 
 function startApp() {
   document.getElementById('onboarding').style.display = 'none';

@@ -74,6 +74,7 @@ function makeGeometryFor(obj) {
       geo.computeVertexNormals();
       return geo;
     }
+    case 'folder': return null;  // folders are outliner-only, no mesh
     default: return new THREE.BoxGeometry(1, 1, 1);
   }
 }
@@ -122,6 +123,9 @@ function syncSceneFromDoc() {
 
   objects.forEach(obj => {
     seen.add(obj.id);
+    // Folders are outliner-only — they don't get any Three.js mesh in the
+    // scene, but we still track their id in `seen` so disposal works.
+    if (obj.type === 'folder') return;
     let mesh = objMeshes.get(obj.id);
     if (!mesh) {
       mesh = buildMesh(obj);
@@ -770,17 +774,67 @@ function ensureHierarchyPanel() {
       el.innerHTML = `
         <div style="padding:8px 10px 6px;font-size:.68rem;font-weight:600;color:var(--text-dim);
           letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);
-          display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
-          Scene
-          <span id="hierarchy-count" style="font-weight:500;color:var(--text-mid);text-transform:none;letter-spacing:0">0</span>
+          display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span style="flex:1">Scene</span>
+          <button id="hierarchy-add-folder" class="out-tool-btn" title="New folder" style="font-weight:500">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="currentColor"><path d="M1.5 3.7h4l1 1.2h6a.7.7 0 0 1 .7.7v6a.7.7 0 0 1-.7.7H1.5a.7.7 0 0 1-.7-.7V4.4a.7.7 0 0 1 .7-.7z"/></svg>
+            <span>Folder</span>
+          </button>
+          <span id="hierarchy-count" style="font-weight:500;color:var(--text-mid);text-transform:none;letter-spacing:0;margin-left:4px">0</span>
         </div>
         <div id="hierarchy-list" style="flex:1;min-height:0;overflow-y:auto"></div>
       `;
       hierarchyEl = el.querySelector('#hierarchy-list');
+      el.querySelector('#hierarchy-add-folder')?.addEventListener('click', () => {
+        const folder = window.slateScene3d?.createFolder('Folder');
+        if (folder) selectById(folder.id);
+      });
       renderHierarchy();
     },
   });
   hierarchyRegistered = true;
+}
+
+/* Build a tree map: parentId -> [child, ...] in current array order. */
+function _buildHierarchyTree(objects) {
+  const byParent = new Map();
+  const valid = new Set(objects.map(o => o.id));
+  for (const o of objects) {
+    const pid = o.parentId && valid.has(o.parentId) ? o.parentId : null;
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid).push(o);
+  }
+  return byParent;
+}
+
+function _renderRow(obj, depth, hasChildren) {
+  const sel = obj.id === selectedId || obj.id === editTargetId;
+  const visible = obj.visible !== false;
+  const isFolder = obj.type === 'folder';
+  const collapsed = !!obj.collapsed;
+  const icon = OUTLINER_ICONS[obj.type] || OUTLINER_ICONS.default;
+  const expander = isFolder
+    ? `<span class="out-twisty${collapsed ? '' : ' open'}" data-oid="${obj.id}">${
+        collapsed
+          ? `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1.5L7 5 3 8.5z"/></svg>`
+          : `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><path d="M1.5 3l3.5 4 3.5-4z"/></svg>`
+      }</span>`
+    : `<span class="out-twisty-spacer"></span>`;
+  return `<div class="outliner-row${sel ? ' selected' : ''}${visible ? '' : ' hidden-obj'}${isFolder ? ' is-folder' : ''}"
+    draggable="true" data-oid="${obj.id}" data-folder="${isFolder ? '1' : '0'}"
+    style="padding-left:${6 + depth * 14}px">
+    ${expander}
+    <span class="out-icon">${icon}</span>
+    <span class="out-name" data-oid="${obj.id}">${_escape(obj.name)}</span>
+    <button class="out-vis-btn" data-oid="${obj.id}" title="Toggle visibility">
+      ${visible
+        ? `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="6.5" cy="6.5" rx="5.5" ry="3.5"/><circle cx="6.5" cy="6.5" r="2"/></svg>`
+        : `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="2" y1="2" x2="11" y2="11"/><path d="M4.5 4.5a5 5 0 0 0-3 2 5.5 5.5 0 0 0 9 1M8 3.5A5.5 5.5 0 0 1 12 6.5"/></svg>`}
+    </button>
+    <button class="out-del-btn" data-oid="${obj.id}" title="Delete">
+      <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
+    </button>
+  </div>`;
 }
 
 function renderHierarchy() {
@@ -797,28 +851,26 @@ function renderHierarchy() {
     return;
   }
 
-  hierarchyEl.innerHTML = objects.map(obj => {
-    const sel = obj.id === selectedId || obj.id === editTargetId;
-    const visible = obj.visible !== false;
-    const icon = OUTLINER_ICONS[obj.type] || OUTLINER_ICONS.default;
-    return `<div class="outliner-row${sel ? ' selected' : ''}${visible ? '' : ' hidden-obj'}" draggable="true" data-oid="${obj.id}">
-      <span class="out-icon">${icon}</span>
-      <span class="out-name" data-oid="${obj.id}">${_escape(obj.name)}</span>
-      <button class="out-vis-btn" data-oid="${obj.id}" title="Toggle visibility">
-        ${visible
-          ? `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="6.5" cy="6.5" rx="5.5" ry="3.5"/><circle cx="6.5" cy="6.5" r="2"/></svg>`
-          : `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="2" y1="2" x2="11" y2="11"/><path d="M4.5 4.5a5 5 0 0 0-3 2 5.5 5.5 0 0 0 9 1M8 3.5A5.5 5.5 0 0 1 12 6.5"/></svg>`}
-      </button>
-      <button class="out-del-btn" data-oid="${obj.id}" title="Delete">
-        <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
-      </button>
-    </div>`;
-  }).join('');
+  const byParent = _buildHierarchyTree(objects);
+  const html = [];
+  function walk(parentId, depth) {
+    const kids = byParent.get(parentId) || [];
+    for (const obj of kids) {
+      const children = byParent.get(obj.id) || [];
+      html.push(_renderRow(obj, depth, children.length > 0));
+      if (obj.type === 'folder' && !obj.collapsed && children.length) {
+        walk(obj.id, depth + 1);
+      }
+    }
+  }
+  walk(null, 0);
+  hierarchyEl.innerHTML = html.join('');
+  _bindOutlinerRootDrop();
 
   hierarchyEl.querySelectorAll('.outliner-row').forEach(row => {
     const oid = row.dataset.oid;
     row.addEventListener('click', e => {
-      if (e.target.closest('.out-vis-btn') || e.target.closest('.out-del-btn')) return;
+      if (e.target.closest('.out-vis-btn') || e.target.closest('.out-del-btn') || e.target.closest('.out-twisty')) return;
       if (row.querySelector('.out-name input')) return;
       selectById(oid);
     });
@@ -833,10 +885,31 @@ function renderHierarchy() {
     });
     row.querySelector('.out-del-btn')?.addEventListener('click', e => {
       e.stopPropagation();
-      window.slateScene3d?.remove(oid);
+      _removeWithChildren(oid);
+    });
+    row.querySelector('.out-twisty')?.addEventListener('click', e => {
+      e.stopPropagation();
+      const obj = window.slateScene3d?.find(oid);
+      if (obj && obj.type === 'folder') {
+        window.slateScene3d.setCollapsed(oid, !obj.collapsed);
+      }
     });
     bindOutlinerDrag(row);
   });
+}
+
+/* Remove an object and all of its descendants. */
+function _removeWithChildren(id) {
+  const api = window.slateScene3d;
+  if (!api) return;
+  const stack = [id];
+  const toRemove = [];
+  while (stack.length) {
+    const cur = stack.pop();
+    toRemove.push(cur);
+    api.objects.filter(o => o.parentId === cur).forEach(c => stack.push(c.id));
+  }
+  toRemove.forEach(rid => api.remove(rid));
 }
 
 const OUTLINER_ICONS = {
@@ -847,6 +920,7 @@ const OUTLINER_ICONS = {
   cone:     `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.5L12 12H2z"/><ellipse cx="7" cy="12" rx="5" ry="1.3"/></svg>`,
   torus:    `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><ellipse cx="7" cy="7" rx="5.5" ry="2.5"/></svg>`,
   mesh:     `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 4l5-2 5 2v6l-5 2-5-2z M2 4l5 2 5-2M7 6v6"/></svg>`,
+  folder:   `<svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M1.2 3.5h4l1 1.2H12.8a.7.7 0 0 1 .7.7v6a.7.7 0 0 1-.7.7H1.2a.7.7 0 0 1-.7-.7v-7.2a.7.7 0 0 1 .7-.7z"/></svg>`,
   default:  `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5"/></svg>`,
 };
 function _escape(s) {
@@ -879,6 +953,11 @@ function beginOutlinerRename(span) {
   });
 }
 let _dragOutlinerId = null;
+function _clearDragCues() {
+  document.querySelectorAll('.outliner-row').forEach(r => {
+    r.classList.remove('drop-before', 'drop-after', 'drop-into');
+  });
+}
 function bindOutlinerDrag(row) {
   row.addEventListener('dragstart', e => {
     _dragOutlinerId = row.dataset.oid;
@@ -888,23 +967,81 @@ function bindOutlinerDrag(row) {
   row.addEventListener('dragend', () => {
     row.style.opacity = '';
     _dragOutlinerId = null;
-    document.querySelectorAll('.outliner-row').forEach(r => r.style.borderTop = '');
+    _clearDragCues();
   });
   row.addEventListener('dragover', e => {
     if (!_dragOutlinerId || _dragOutlinerId === row.dataset.oid) return;
     e.preventDefault();
     try { e.dataTransfer.dropEffect = 'move'; } catch {}
-    row.style.borderTop = '2px solid var(--accent)';
+    _clearDragCues();
+    const rect = row.getBoundingClientRect();
+    const isFolder = row.dataset.folder === '1';
+    const rel = (e.clientY - rect.top) / rect.height;
+    if (isFolder && rel > 0.25 && rel < 0.75) {
+      row.classList.add('drop-into');
+    } else if (rel < 0.5) {
+      row.classList.add('drop-before');
+    } else {
+      row.classList.add('drop-after');
+    }
   });
-  row.addEventListener('dragleave', () => { row.style.borderTop = ''; });
+  row.addEventListener('dragleave', () => {
+    row.classList.remove('drop-before', 'drop-after', 'drop-into');
+  });
   row.addEventListener('drop', e => {
     e.preventDefault();
-    row.style.borderTop = '';
-    if (!_dragOutlinerId || _dragOutlinerId === row.dataset.oid) return;
-    const list = window.slateScene3d?.objects || [];
-    const dropIdx = list.findIndex(o => o.id === row.dataset.oid);
-    if (dropIdx < 0) return;
-    window.slateScene3d.move(_dragOutlinerId, dropIdx);
+    if (!_dragOutlinerId || _dragOutlinerId === row.dataset.oid) { _clearDragCues(); return; }
+    const dropOnId = row.dataset.oid;
+    const into  = row.classList.contains('drop-into');
+    const after = row.classList.contains('drop-after');
+    _clearDragCues();
+    const api = window.slateScene3d;
+    if (!api) return;
+    const dragged = api.find(_dragOutlinerId);
+    const target  = api.find(dropOnId);
+    if (!dragged || !target) return;
+    // Prevent dropping a folder into its own descendant.
+    let cur = target.id;
+    while (cur) {
+      if (cur === dragged.id) return;
+      const p = api.find(cur);
+      cur = p ? p.parentId : null;
+    }
+    if (into && target.type === 'folder') {
+      api.setParent(dragged.id, target.id);
+      // Make sure the folder opens so the user sees the drop.
+      if (target.collapsed) api.setCollapsed(target.id, false);
+      const targetIdx = api.objects.findIndex(o => o.id === target.id);
+      api.move(dragged.id, targetIdx + 1);
+    } else {
+      // Same-parent reorder: drop next to the target row.
+      api.setParent(dragged.id, target.parentId || null);
+      const targetIdx = api.objects.findIndex(o => o.id === target.id);
+      api.move(dragged.id, after ? targetIdx + 1 : targetIdx);
+    }
+  });
+}
+
+/* Dragging onto the empty area of the list reparents to the root. */
+function _bindOutlinerRootDrop() {
+  if (!hierarchyEl || hierarchyEl._rootDropBound) return;
+  hierarchyEl._rootDropBound = true;
+  hierarchyEl.addEventListener('dragover', e => {
+    if (!_dragOutlinerId) return;
+    if (e.target === hierarchyEl) {
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch {}
+    }
+  });
+  hierarchyEl.addEventListener('drop', e => {
+    if (!_dragOutlinerId || e.target !== hierarchyEl) return;
+    e.preventDefault();
+    const api = window.slateScene3d;
+    if (api) {
+      api.setParent(_dragOutlinerId, null);
+      api.move(_dragOutlinerId, api.objects.length - 1);
+    }
+    _clearDragCues();
   });
 }
 

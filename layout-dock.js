@@ -89,6 +89,26 @@
 
   /** Extensible dock: registerPanel({ id, title, mount(el), order? }) — idempotent per id */
   const panels = [];
+  /** id -> floating window element (only set while floating) */
+  const floats = new Map();
+  const LS_FLOATS = 'slate_dock_floats';
+
+  function _saveFloats() {
+    const data = {};
+    floats.forEach((win, id) => {
+      data[id] = {
+        left:   parseInt(win.style.left, 10)   || 80,
+        top:    parseInt(win.style.top, 10)    || 80,
+        width:  parseInt(win.style.width, 10)  || 280,
+        height: parseInt(win.style.height, 10) || 320,
+      };
+    });
+    try { localStorage.setItem(LS_FLOATS, JSON.stringify(data)); } catch (_) {}
+  }
+  function _loadFloats() {
+    try { return JSON.parse(localStorage.getItem(LS_FLOATS) || '{}'); } catch (_) { return {}; }
+  }
+
   window.slateDock = {
     registerPanel(def) {
       if (!def || !def.id || !def.title || typeof def.mount !== 'function') return;
@@ -96,8 +116,21 @@
       panels.push({ ...def, order: def.order ?? 100 });
       panels.sort((a, b) => (a.order || 0) - (b.order || 0));
       appendDockPanel(def);
+      // Restore floating state if it was floating before.
+      const savedFloats = _loadFloats();
+      if (savedFloats[def.id]) {
+        requestAnimationFrame(() => window.slateDock.detachPanel(def.id, savedFloats[def.id]));
+      }
     },
     setActive(id) {
+      // If the target panel is currently floating, just bring it to the front
+      // instead of toggling dock tabs (and leave the previously active dock
+      // panel alone so the user keeps their context).
+      if (floats.has(id)) {
+        const w = floats.get(id);
+        w.style.zIndex = String(_topFloatZ());
+        return;
+      }
       const tabs = document.getElementById('dock-tabs');
       if (!tabs) return;
       tabs.querySelectorAll('.dock-tab').forEach(t => {
@@ -106,7 +139,10 @@
       const body = document.getElementById('dock-body');
       if (!body) return;
       body.querySelectorAll('.dock-panel').forEach(p => {
-        p.style.display = p.dataset.panel === id ? 'flex' : 'none';
+        // Don't override floating panels' display (they're parented elsewhere).
+        if (p.parentElement === body) {
+          p.style.display = p.dataset.panel === id ? 'flex' : 'none';
+        }
       });
       try { localStorage.setItem('slate_dock_active', id); } catch (_) {}
     },
@@ -114,6 +150,12 @@
       return localStorage.getItem('slate_dock_active') || (panels[0] && panels[0].id);
     },
     revealPanel(id) {
+      // If panel is floating, just focus the floating window.
+      if (floats.has(id)) {
+        const w = floats.get(id);
+        w.style.zIndex = String(_topFloatZ());
+        return;
+      }
       const dock = document.getElementById('right-dock');
       if (dock) dock.classList.remove('dock-user-collapsed');
       const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || 0;
@@ -131,7 +173,129 @@
         document.documentElement.style.setProperty('--dock-w', '0px');
       }
     },
+    /** Pop a docked panel out into a floating window (Photoshop-style). */
+    detachPanel(id, geom) {
+      if (floats.has(id)) return;
+      const def = panels.find(p => p.id === id);
+      if (!def) return;
+      const body = document.getElementById('dock-body');
+      const tabs = document.getElementById('dock-tabs');
+      if (!body || !tabs) return;
+      const panelEl = body.querySelector(`.dock-panel[data-panel="${id}"]`);
+      if (!panelEl) return;
+
+      const win = document.createElement('div');
+      win.className = 'panel-float';
+      win.dataset.panel = id;
+      const g = geom || { left: 120, top: 120, width: 280, height: 360 };
+      win.style.left   = g.left + 'px';
+      win.style.top    = g.top + 'px';
+      win.style.width  = g.width + 'px';
+      win.style.height = g.height + 'px';
+      win.style.zIndex = String(_topFloatZ());
+      win.innerHTML = `
+        <div class="panel-float-bar">
+          <span class="panel-float-title">${def.title}</span>
+          <button class="panel-float-close" title="Dock panel" aria-label="Dock panel">×</button>
+        </div>
+        <div class="panel-float-body"></div>
+        <div class="panel-float-resize" title="Drag to resize"></div>
+      `;
+      const fbody = win.querySelector('.panel-float-body');
+      fbody.appendChild(panelEl);
+      panelEl.style.display = 'flex';
+      panelEl.style.flex = '1';
+      panelEl.style.minHeight = '0';
+      document.body.appendChild(win);
+      floats.set(id, win);
+
+      // Hide the dock tab for this panel while floating; redock returns it.
+      const tab = tabs.querySelector(`.dock-tab[data-panel="${id}"]`);
+      if (tab) tab.style.display = 'none';
+
+      _bindFloatDrag(win);
+      _bindFloatResize(win);
+      win.querySelector('.panel-float-close').addEventListener('click', () => window.slateDock.dockPanel(id));
+
+      // If detached panel was active, switch the dock to a different one.
+      const stillVisible = [...tabs.children].find(t => t.style.display !== 'none' && t.dataset.panel !== id);
+      if (stillVisible) window.slateDock.setActive(stillVisible.dataset.panel);
+      _saveFloats();
+    },
+    /** Return a floating panel back into the dock body. */
+    dockPanel(id) {
+      const win = floats.get(id);
+      if (!win) return;
+      const body = document.getElementById('dock-body');
+      const tabs = document.getElementById('dock-tabs');
+      if (!body) return;
+      const panelEl = win.querySelector(`.dock-panel[data-panel="${id}"]`);
+      if (panelEl) body.appendChild(panelEl);
+      win.remove();
+      floats.delete(id);
+      const tab = tabs?.querySelector(`.dock-tab[data-panel="${id}"]`);
+      if (tab) tab.style.display = '';
+      window.slateDock.setActive(id);
+      _saveFloats();
+    },
   };
+
+  let _floatZ = 200;
+  function _topFloatZ() { return ++_floatZ; }
+
+  function _bindFloatDrag(win) {
+    const bar = win.querySelector('.panel-float-bar');
+    let dx = 0, dy = 0;
+    bar.addEventListener('pointerdown', e => {
+      if (e.target.closest('.panel-float-close')) return;
+      bar.setPointerCapture(e.pointerId);
+      win.style.zIndex = String(_topFloatZ());
+      const rect = win.getBoundingClientRect();
+      dx = e.clientX - rect.left; dy = e.clientY - rect.top;
+      win.classList.add('dragging');
+    });
+    bar.addEventListener('pointermove', e => {
+      if (!bar.hasPointerCapture(e.pointerId)) return;
+      const maxLeft = window.innerWidth  - win.offsetWidth;
+      const maxTop  = window.innerHeight - win.offsetHeight;
+      win.style.left = clamp(e.clientX - dx, 0, maxLeft) + 'px';
+      win.style.top  = clamp(e.clientY - dy, 0, maxTop)  + 'px';
+    });
+    bar.addEventListener('pointerup', e => {
+      if (bar.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);
+      win.classList.remove('dragging');
+      // If dropped near the right edge of the viewport, redock automatically.
+      const rect = win.getBoundingClientRect();
+      if (window.innerWidth - rect.right < 40) {
+        window.slateDock.dockPanel(win.dataset.panel);
+      } else {
+        _saveFloats();
+      }
+    });
+    bar.addEventListener('pointercancel', () => win.classList.remove('dragging'));
+  }
+  function _bindFloatResize(win) {
+    const handle = win.querySelector('.panel-float-resize');
+    let startX, startY, startW, startH;
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const rect = win.getBoundingClientRect();
+      startX = e.clientX; startY = e.clientY;
+      startW = rect.width; startH = rect.height;
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!handle.hasPointerCapture(e.pointerId)) return;
+      const w = clamp(startW + (e.clientX - startX), 200, window.innerWidth  - 40);
+      const h = clamp(startH + (e.clientY - startY), 160, window.innerHeight - 40);
+      win.style.width  = w + 'px';
+      win.style.height = h + 'px';
+    });
+    handle.addEventListener('pointerup', e => {
+      if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+      _saveFloats();
+    });
+  }
 
   function appendDockPanel(p) {
     const tabs = document.getElementById('dock-tabs');
@@ -143,8 +307,9 @@
     tab.className = 'dock-tab';
     tab.dataset.panel = p.id;
     tab.textContent = p.title;
-    tab.title = p.title;
+    tab.title = `${p.title} (drag tab to detach)`;
     tab.addEventListener('click', () => window.slateDock.setActive(p.id));
+    _bindTabDetach(tab);
     const insertBefore = [...tabs.children].find(ch => {
       const po = panels.find(x => x.id === ch.dataset.panel);
       return (po?.order ?? 999) > p.order;
@@ -166,6 +331,32 @@
     const want = window.slateDock.getActive();
     const valid = [...tabs.children].some(t => t.dataset.panel === want);
     window.slateDock.setActive(valid ? want : p.id);
+  }
+
+  /* A small drag-distance threshold on tab pointer events lets us tell apart
+     "click to activate" from "drag to detach". */
+  function _bindTabDetach(tab) {
+    let downX = 0, downY = 0, isDown = false;
+    tab.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      isDown = true; downX = e.clientX; downY = e.clientY;
+    });
+    tab.addEventListener('pointermove', e => {
+      if (!isDown) return;
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (Math.hypot(dx, dy) > 18) {
+        isDown = false;
+        const id = tab.dataset.panel;
+        const rect = tab.getBoundingClientRect();
+        window.slateDock.detachPanel(id, {
+          left: Math.max(20, e.clientX - 100),
+          top:  Math.max(20, e.clientY - 14),
+          width: 300, height: 360,
+        });
+      }
+    });
+    tab.addEventListener('pointerup', () => { isDown = false; });
+    tab.addEventListener('pointercancel', () => { isDown = false; });
   }
 
   function boot() {

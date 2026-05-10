@@ -15,10 +15,6 @@ featureCSS.textContent = `
   #opacity-slider { width:54px;accent-color:var(--accent);cursor:pointer; }
   #opacity-label  { font-size:0.68rem;color:var(--text-dim);min-width:26px;text-align:right;
                     font-family:var(--mono,'monospace'); }
-  #color-history  { display:flex;align-items:center;gap:3px;flex-shrink:0; }
-  .color-hist-swatch { transition:transform .1s,box-shadow .1s; }
-  .color-hist-swatch:hover { transform:scale(1.25); box-shadow:0 2px 8px rgba(0,0,0,.45); }
-
   #minimap-wrap { position:absolute;bottom:16px;right:16px;z-index:30;
     border:1px solid var(--border2);border-radius:8px;overflow:hidden;
     box-shadow:0 4px 20px rgba(0,0,0,.5);transition:opacity .2s;cursor:crosshair; }
@@ -335,50 +331,8 @@ function doPaste(items, offset) {
 }
 
 
-/* ─────────────────────────────────────────────────────────────────────────
-   COLOR HISTORY  — last 8 used colors
-───────────────────────────────────────────────────────────────────────── */
-let _colorHistory = (() => {
-  try { return JSON.parse(localStorage.getItem('slate_color_history') || '["#1a1a2e"]'); } catch { return ['#1a1a2e']; }
-})();
-
-function injectColorHistory() {
-  if (document.getElementById('color-history')) return;
-  const picker = document.getElementById('color-picker');
-  if (!picker) return;
-  const hist = document.createElement('div');
-  hist.id = 'color-history';
-  hist.title = 'Recent colors';
-  picker.parentNode.insertBefore(hist, picker.nextSibling);
-  renderColorHistory();
-  picker.addEventListener('change', e => addColor(e.target.value));
-}
-
-function addColor(color) {
-  if (!color) return;
-  _colorHistory = [color, ..._colorHistory.filter(c => c !== color)].slice(0, 8);
-  try { localStorage.setItem('slate_color_history', JSON.stringify(_colorHistory)); } catch {}
-  renderColorHistory();
-}
-
-function renderColorHistory() {
-  const hist = document.getElementById('color-history');
-  if (!hist) return;
-  hist.innerHTML = _colorHistory.map(c => `
-    <button class="color-hist-swatch" data-color="${c}" title="${c}" style="
-      width:16px;height:16px;border-radius:4px;
-      border:1.5px solid rgba(255,255,255,0.15);
-      background:${c};cursor:pointer;flex-shrink:0;padding:0;">
-    </button>
-  `).join('');
-  hist.querySelectorAll('.color-hist-swatch').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const color = btn.dataset.color;
-      const picker = document.getElementById('color-picker');
-      if (picker) { picker.value = color; picker.dispatchEvent(new Event('input', { bubbles: true })); }
-    });
-  });
-}
+/* Color history removed — Photoshop-style FG/BG widget lives in index.html. */
+try { localStorage.removeItem('slate_color_history'); } catch (_) {}
 
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -915,7 +869,6 @@ function injectPropsDockPlaceholder() {
 ───────────────────────────────────────────────────────────────────────── */
 function init() {
   injectOpacityControl();
-  injectColorHistory();
   injectMinimap();
   injectLayersPanel();
   injectPropsDockPlaceholder();

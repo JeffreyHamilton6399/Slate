@@ -452,6 +452,51 @@ input, textarea { font-family: var(--sans); }
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   overflow: hidden;
 }
+
+/* ── Photoshop-style floating panels (detached from the right dock) ── */
+.panel-float {
+  position: fixed;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.35);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  min-width: 200px; min-height: 160px;
+}
+.panel-float.dragging { opacity: 0.95; }
+.panel-float-bar {
+  display: flex; align-items: center;
+  padding: 5px 6px 5px 10px; gap: 6px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  cursor: move; user-select: none;
+}
+.panel-float-title {
+  flex: 1; font-size: 0.72rem; font-weight: 600;
+  color: var(--text); letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.panel-float-close {
+  background: none; border: none; color: var(--text-dim);
+  cursor: pointer; padding: 2px 6px; line-height: 1;
+  border-radius: 4px; font-size: 1rem;
+}
+.panel-float-close:hover { background: var(--bg4); color: var(--text); }
+.panel-float-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bg2);
+}
+.panel-float-body .dock-panel { display: flex !important; }
+.panel-float-resize {
+  position: absolute; right: 0; bottom: 0;
+  width: 14px; height: 14px; cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 50%, var(--border2) 50%, var(--border2) 60%, transparent 60%,
+                   transparent 70%, var(--border2) 70%, var(--border2) 80%, transparent 80%);
+  opacity: 0.7;
+}
+.panel-float-resize:hover { opacity: 1; }
 #canvas-area-3d {
   position: absolute; inset: 0; z-index: 4; background: #12121a;
   touch-action: none;
@@ -492,32 +537,7 @@ input, textarea { font-family: var(--sans); }
 #board-topic-input::placeholder { color: var(--text-dim); }
 #board-topic-input:focus { color: var(--text); }
 
-.host-controls-bar {
-  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
-  padding: 2px 8px; border-radius: var(--radius-sm);
-  background: rgba(124,106,255,0.1);
-  border: 1px solid rgba(124,106,255,0.28);
-}
-.host-controls-bar[hidden] { display: none !important; }
-.host-controls-label {
-  font-size: 0.62rem; font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.12em;
-  color: var(--accent); font-weight: 600;
-}
-.host-controls-btn {
-  padding: 4px 8px; font-size: 0.72rem; border-radius: var(--radius-sm);
-}
-
-.visibility-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 0.7rem; font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.06em;
-  padding: 3px 8px; border-radius: 999px; border: 1px solid transparent;
-  flex-shrink: 0;
-}
-.chip-public  { background: rgba(34,211,165,0.12); color: var(--green); border: 1px solid rgba(34,211,165,0.25); }
-.chip-private { background: rgba(248,113,113,0.1);  color: var(--danger); border: 1px solid rgba(248,113,113,0.22); }
-button.visibility-chip { font: inherit; cursor: pointer; }
+/* Legacy host bar / chip styles removed; replaced by .board-vis-toggle. */
 #share-board-btn { flex-shrink: 0; }
 #members-toggle { flex-shrink: 0; display: none; }
 
@@ -645,15 +665,34 @@ button.visibility-chip { font: inherit; cursor: pointer; }
   padding: 12px 14px; font-size: 0.75rem; color: var(--text-dim);
   text-align: center;
 }
+.outliner-row .out-twisty,
+.outliner-row .out-twisty-spacer {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 12px; height: 12px; flex-shrink: 0; color: var(--text-mid);
+}
+.outliner-row .out-twisty { cursor: pointer; }
+.outliner-row .out-twisty:hover { color: var(--text); }
+.outliner-row.is-folder .out-icon { color: var(--accent); opacity: 0.9; }
+.outliner-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.outliner-row.drop-after  { box-shadow: inset 0 -2px 0 var(--accent); }
+.outliner-row.drop-into   { background: rgba(124,106,255,0.18); box-shadow: inset 0 0 0 1px var(--accent); }
+.out-tool-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: none; border: 1px solid var(--border2);
+  border-radius: 4px; padding: 2px 6px;
+  color: var(--text-mid); cursor: pointer;
+  font-size: 0.66rem;
+}
+.out-tool-btn:hover { color: var(--text); border-color: var(--accent-dim); }
 
 /* Mode visibility helpers — applied to <body> by applyWorkspaceMode */
 body.mode-3d #draw-toolbar,
 body.mode-3d #minimap-wrap,
 body.mode-3d .dock-tab[data-panel="layers"],
-body.mode-3d .dock-panel[data-panel="layers"] { display: none !important; }
+body.mode-3d #dock-body .dock-panel[data-panel="layers"] { display: none !important; }
 body.mode-2d #toolbar-3d,
 body.mode-2d .dock-tab[data-panel="hierarchy"],
-body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
+body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !important; }
 
 @media (max-width: 720px) {
   #toolbar-3d {
@@ -672,33 +711,53 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
 }
 #zoom-label { min-width: auto; text-align: center; font-size: 0.58rem; writing-mode: horizontal-tb; }
 
-/* Color swatches — vertical stack */
-#color-swatches {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  flex-shrink: 0; padding: 2px 0;
+/* ── Photoshop-style FG/BG color widget ── */
+#color-fgbg {
+  position: relative;
+  width: 38px; height: 38px;
+  flex-shrink: 0; margin: 4px auto;
 }
-.swatch {
-  width: 18px; height: 18px; border-radius: 50%;
-  border: 2px solid transparent; cursor: pointer;
-  flex-shrink: 0; transition: transform 0.12s, border-color 0.12s;
+#color-fgbg .cfg-fg,
+#color-fgbg .cfg-bg {
+  position: absolute;
+  width: 22px; height: 22px;
+  border: 2px solid var(--text); border-radius: 3px;
+  padding: 0; cursor: pointer;
+  background: #1a1a2e;
 }
-.swatch:hover { transform: scale(1.2); }
-.swatch.active { border-color: var(--text); transform: scale(1.1); }
-#color-picker {
-  width: 22px; height: 22px; border: none; background: none;
-  padding: 0; cursor: pointer; border-radius: 50%;
-  outline: 2px solid var(--border2); outline-offset: 1px;
+#color-fgbg .cfg-fg::-webkit-color-swatch-wrapper,
+#color-fgbg .cfg-bg::-webkit-color-swatch-wrapper { padding: 0; }
+#color-fgbg .cfg-fg::-webkit-color-swatch,
+#color-fgbg .cfg-bg::-webkit-color-swatch { border: none; border-radius: 1px; }
+#color-fgbg .cfg-fg { top: 0; left: 0; z-index: 2; }
+#color-fgbg .cfg-bg {
+  bottom: 0; right: 0; z-index: 1;
+  border-color: var(--text-dim);
 }
-#color-picker::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
-#color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+.cfg-mini {
+  position: absolute;
+  width: 12px; height: 12px;
+  padding: 0; background: transparent; border: none;
+  color: var(--text-mid); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 2px;
+}
+.cfg-mini:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.cfg-swap   { top: 0;    right: 0; z-index: 3; }
+.cfg-default{ bottom: 0; left: 0;  z-index: 3; }
+.cfg-default .cfg-default-fg,
+.cfg-default .cfg-default-bg {
+  position: absolute;
+  width: 7px; height: 7px;
+  border: 1px solid var(--text-mid);
+}
+.cfg-default .cfg-default-fg { top: 0; left: 0; background: #000; }
+.cfg-default .cfg-default-bg { bottom: 0; right: 0; background: #fff; }
 
 /* Fill toggle — compact vertical */
 #fill-toggle-wrap {
   display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 2px 0;
 }
-#fill-color { width: 22px; height: 22px; border: none; background: none; padding: 0; cursor: pointer; border-radius: 50%; outline: 2px solid var(--border2); outline-offset: 1px; }
-#fill-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
-#fill-color::-webkit-color-swatch { border: none; border-radius: 50%; }
 .fill-none-btn { width: 22px; height: 18px; font-size: 0.7rem; padding: 2px 3px; border-radius: 4px; background: transparent; border: 1px solid var(--border2); color: var(--text-dim); cursor: pointer; }
 .fill-none-btn.active { border-color: var(--accent); color: var(--accent); }
 
@@ -1214,6 +1273,13 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
   transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
 .vis-toggle:hover { border-color: var(--accent-dim); color: var(--accent); }
+.board-vis-toggle {
+  position: absolute; left: 12px; bottom: 12px; z-index: 30;
+  width: 32px; height: 32px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+}
+.board-vis-toggle[hidden] { display: none !important; }
+.board-vis-toggle:not(.is-host) { cursor: default; opacity: 0.85; }
 .vis-toggle[aria-label="private"] {
   border-color: rgba(124,106,255,0.35);
   background: rgba(124,106,255,0.1);
@@ -1406,10 +1472,6 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
   #board-header { gap: 6px; padding: 0 10px; }
   #board-topic-input { display: none; }
 
-  .host-controls-bar { gap: 4px; padding: 2px 6px; }
-  .host-controls-label { display: none; }
-  .host-controls-btn { padding: 4px 6px; font-size: 0.68rem; }
-
   /* Toolbar: revert to horizontal strip at bottom on mobile */
   #draw-toolbar {
     position: fixed; bottom: 0; left: 0; right: 0; top: auto;
@@ -1424,7 +1486,7 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
   #draw-toolbar .toolbar-sep { width: 1px; height: 24px; margin: 0 2px; }
   #stroke-size { width: 52px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
   #stroke-size-wrap { flex-direction: row; gap: 4px; width: auto; }
-  #color-swatches { flex-direction: row; }
+  #color-fgbg { margin: 0 4px; }
   #fill-toggle-wrap { flex-direction: row; }
   #font-size-wrap { flex-direction: row; }
   #zoom-wrap { flex-direction: row; }
@@ -1432,6 +1494,21 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
   #canvas-area { margin-right: 0; margin-bottom: 52px; }
   #member-panel { position: fixed; bottom: 60px; right: 8px; top: auto; width: 44px; border-radius: 8px; padding: 6px 0; max-height: 200px; }
   .toolbar-spacer { display: flex; flex: 1; }
+
+  /* iOS Safari auto-zooms when focusing inputs whose font-size is < 16px,
+     and the page can get "stuck" zoomed in. Forcing 16px avoids that.
+     We exclude type=color / type=range so they keep their compact widgets. */
+  input:not([type="color"]):not([type="range"]):not([type="checkbox"]),
+  textarea, select { font-size: 16px; }
+
+  /* Make sure dock panels never trap pinch-zoom on mobile. */
+  #right-dock, #right-dock * { touch-action: pan-x pan-y pinch-zoom; }
+
+  /* Bottom-left visibility toggle sits above the toolbar strip on mobile. */
+  .board-vis-toggle { bottom: 60px; left: 8px; }
+
+  /* 3D toolbar fits on mobile (tighter primitive group). */
+  body.mode-3d #toolbar-3d { left: 8px; right: 8px; transform: none; max-width: calc(100vw - 16px); overflow-x: auto; }
 
   /* Voice bar compact on mobile */
   #voice-bar { gap: 4px; }
@@ -1630,15 +1707,6 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
       </button>
       <span id="board-name-display">No board</span>
       <input id="board-topic-input" type="text" placeholder="Add a topic…" maxlength="80">
-      <div id="host-controls-bar" class="host-controls-bar" hidden aria-label="Host controls">
-        <span class="host-controls-label">Host</span>
-        <button type="button" id="host-members-btn" class="btn btn-ghost host-controls-btn" title="Members — mute drawing, kick…">Members</button>
-        <button type="button" id="host-vis-btn" class="btn btn-ghost host-controls-btn" title="Toggle public / private">Visibility</button>
-      </div>
-      <button type="button" id="vis-chip" class="visibility-chip chip-public" hidden aria-live="polite">
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="4"/></svg>
-        <span class="vis-chip-label">public</span>
-      </button>
       <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <button id="share-board-btn" class="btn-icon" title="Copy invite link">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -1657,13 +1725,13 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
         </svg>
         Save
       </button>
-      <!-- Prominent export button in header -->
-      <button id="export-btn" class="btn btn-ghost" title="Save board as PNG" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+      <!-- Prominent export button in header (label updates per workspace mode) -->
+      <button id="export-btn" class="btn btn-ghost" title="Export board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/>
           <path d="M1 10h11v2H1z"/>
         </svg>
-        Export PNG
+        <span class="export-label">Export PNG</span>
       </button>
       <button id="leave-board-btn" class="btn btn-ghost" title="Leave board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0;color:var(--danger);border-color:rgba(248,113,113,0.25)">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
@@ -1799,22 +1867,25 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
         <input id="stroke-size" type="range" min="1" max="40" value="4" title="Stroke size">
       </div>
 
-      <!-- Color swatches + picker -->
-      <div id="color-swatches">
-        <button class="swatch active" data-color="#1a1a2e" style="background:#1a1a2e" title="Ink (dark)"></button>
-        <button class="swatch" data-color="#dc2626" style="background:#dc2626" title="Red"></button>
-        <button class="swatch" data-color="#d97706" style="background:#d97706" title="Amber"></button>
-        <button class="swatch" data-color="#16a34a" style="background:#16a34a" title="Green"></button>
-        <button class="swatch" data-color="#2563eb" style="background:#2563eb" title="Blue"></button>
-        <button class="swatch" data-color="#7c3aed" style="background:#7c3aed" title="Violet"></button>
-        <button class="swatch" data-color="#db2777" style="background:#db2777" title="Pink"></button>
-        <input id="color-picker" type="color" value="#1a1a2e" title="Custom color">
+      <!-- Foreground / Background color (Photoshop-style) -->
+      <div id="color-fgbg" title="Foreground / Background  (X swap • D default)">
+        <input id="color-picker"     type="color" value="#1a1a2e" class="cfg-fg" title="Foreground (stroke)">
+        <input id="fill-color"       type="color" value="#ffffff" class="cfg-bg" title="Background (fill)">
+        <button id="cfg-swap-btn"    class="cfg-mini cfg-swap"    title="Swap foreground / background (X)" aria-label="Swap colors">
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 3.2h5.5M5.5 1.5l2 1.7-2 1.7"/>
+            <path d="M8 6.8H2.5M4.5 8.5l-2-1.7 2-1.7"/>
+          </svg>
+        </button>
+        <button id="cfg-default-btn" class="cfg-mini cfg-default" title="Default foreground / background (D)" aria-label="Default colors">
+          <span class="cfg-default-fg"></span>
+          <span class="cfg-default-bg"></span>
+        </button>
       </div>
 
-      <!-- Fill (shapes only) -->
-      <div id="fill-toggle-wrap" title="Fill color (shapes)">
-        <input id="fill-color" type="color" value="#e8e6ff" title="Fill color">
-        <button class="fill-none-btn active" id="fill-none-btn" title="No fill">∅</button>
+      <!-- Fill toggle (no-fill / use BG as fill) -->
+      <div id="fill-toggle-wrap" title="Toggle shape fill">
+        <button class="fill-none-btn active" id="fill-none-btn" title="No fill (use stroke only)">∅</button>
       </div>
 
       <!-- Font size (text tool) -->
@@ -1948,6 +2019,8 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
           <div id="text-drag-guide"></div>
         </div>
         <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
+        <!-- Bottom-left current-board visibility toggle (replaces the old host bar) -->
+        <button type="button" id="board-vis-toggle" class="vis-toggle board-vis-toggle" title="Visibility" aria-label="public" hidden></button>
       </div>
       <div id="dock-resize-handle" class="split-handle split-handle-v" title="Drag to resize panel column" role="separator" aria-orientation="vertical"></div>
       <aside id="right-dock" aria-label="Tool panels">
@@ -2068,6 +2141,21 @@ body.mode-2d .dock-panel[data-panel="hierarchy"] { display: none !important; }
     <div class="modal-actions">
       <button id="save-dialog-cancel" class="btn btn-ghost">Cancel</button>
       <button id="save-dialog-confirm" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Unsaved-changes prompt (shown when leaving a board with local edits) -->
+<div id="unsaved-prompt-overlay" class="overlay-backdrop" style="display:none">
+  <div class="modal-card" style="width:340px">
+    <div class="modal-title">Unsaved changes</div>
+    <p class="modal-body" id="unsaved-prompt-body" style="margin-bottom:14px">
+      Save your work before leaving this board?
+    </p>
+    <div class="modal-actions" style="gap:6px">
+      <button id="unsaved-cancel-btn"  class="btn btn-ghost">Cancel</button>
+      <button id="unsaved-discard-btn" class="btn btn-ghost" style="color:var(--danger)">Don't save</button>
+      <button id="unsaved-save-btn"    class="btn btn-primary">Save</button>
     </div>
   </div>
 </div>
@@ -2389,6 +2477,7 @@ const state = {
   mutedDrawers: new Set(),  // peerIds whose doc-diff we ignore
   isDrawMuted: false,       // am I muted by host?
   wakeLock: null,
+  dirtyBoards: new Set(),   // boards with unsaved local changes
 };
 
 // Voice state declared here so renderMembers (defined later) can reference it safely
@@ -3263,6 +3352,8 @@ function handleData(peerId, data) {
           if (typeof o.color === 'string')  obj.color = o.color;
           if (typeof o.visible === 'boolean') obj.visible = o.visible;
           if (typeof o.type === 'string')   obj.type = o.type;
+          if ('parentId' in o) obj.parentId = o.parentId == null ? null : String(o.parentId);
+          if (typeof o.collapsed === 'boolean') obj.collapsed = o.collapsed;
           if (o.params && typeof o.params === 'object') obj.params = { ...obj.params, ...o.params };
           if (o.meshData && typeof o.meshData === 'object') obj.meshData = {
             vertices: Array.isArray(o.meshData.vertices) ? o.meshData.vertices.map(Number) : obj.meshData?.vertices || [],
@@ -3274,6 +3365,17 @@ function handleData(peerId, data) {
       if (Array.isArray(data.scene3dDel) && data.scene3dDel.length) {
         const delSet = new Set(data.scene3dDel);
         doc.scene3d.objects = doc.scene3d.objects.filter(o => !delSet.has(o.id));
+        scene3dChanged = true;
+      }
+      if (Array.isArray(data.scene3dOrder) && data.scene3dOrder.length) {
+        const byId = new Map(doc.scene3d.objects.map(o => [o.id, o]));
+        const ordered = [];
+        for (const id of data.scene3dOrder) {
+          const o = byId.get(id); if (o) { ordered.push(o); byId.delete(id); }
+        }
+        // Append any local objects that weren't in the remote order list.
+        byId.forEach(o => ordered.push(o));
+        doc.scene3d.objects = ordered;
         scene3dChanged = true;
       }
       if (scene3dChanged && typeof window.slateScene3d?._onSceneReplaced === 'function') {
@@ -3508,9 +3610,11 @@ function helloPayload() {
 }
 
 function updateHostControlsBar() {
-  const bar = document.getElementById('host-controls-bar');
-  if (!bar) return;
-  bar.hidden = !(state.currentBoard && state.isBoardHost);
+  // The old top-of-header host bar was removed in favour of a single
+  // bottom-left visibility toggle (#board-vis-toggle). This shim is kept
+  // so existing call sites continue to work; the real refresh happens in
+  // updateBoardChip(), which is called alongside this from updateBoardControls().
+  updateBoardChip();
 }
 
 /* ═══════════════════════════════════════════
@@ -3518,6 +3622,19 @@ function updateHostControlsBar() {
 ═══════════════════════════════════════════ */
 function joinBoard(board) {
   if (state.currentBoard === board) return;
+  if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    const target = board;
+    showUnsavedBoardPrompt(state.currentBoard, choice => {
+      if (choice === 'cancel') return;
+      if (choice === 'save') triggerSaveBoardDialog();
+      // Whether they saved or discarded, proceed with the join.
+      if (choice !== 'cancel') {
+        leaveBoard();
+        joinBoard(target);
+      }
+    });
+    return;
+  }
   if (state.currentBoard) leaveBoard();
 
   state.currentBoard = board;
@@ -3569,6 +3686,28 @@ function joinBoard(board) {
   startAutoSave();
 }
 
+/**
+ * Wrapper around leaveBoard() that prompts the user if the current board has
+ * unsaved changes. `andThen` runs after the user picks an option (or
+ * immediately if no prompt is needed). If they cancel, `andThen` is NOT called.
+ */
+function leaveBoardWithSavePrompt(andThen) {
+  const board = state.currentBoard;
+  if (!board || !boardHasUnsavedChanges(board)) {
+    leaveBoard();
+    if (typeof andThen === 'function') andThen();
+    return;
+  }
+  showUnsavedBoardPrompt(board, choice => {
+    if (choice === 'cancel') return;
+    if (choice === 'save')   triggerSaveBoardDialog();
+    if (choice === 'save' || choice === 'discard') {
+      leaveBoard();
+      if (typeof andThen === 'function') andThen();
+    }
+  });
+}
+
 function leaveBoard() {
   if (!state.currentBoard) return;
   const leftBoard = state.currentBoard;
@@ -3590,11 +3729,11 @@ function leaveBoard() {
 
   const nameEl  = document.getElementById('board-name-display');
   const noHint  = document.getElementById('no-board-hint');
-  const chipEl  = document.getElementById('vis-chip');
+  const visBtn  = document.getElementById('board-vis-toggle');
   const topicEl = document.getElementById('board-topic-input');
   if (nameEl)  nameEl.textContent = 'No board';
   if (noHint)  noHint.classList.remove('hidden');
-  if (chipEl)  chipEl.hidden = true;
+  if (visBtn)  visBtn.hidden = true;
   if (topicEl) topicEl.value = '';
   const exportBtn2 = document.getElementById('export-btn');
   if (exportBtn2) exportBtn2.style.display = 'none';
@@ -3861,6 +4000,8 @@ function _normalizeSceneObject(o) {
     visible:  o.visible !== false,
     color:    typeof o.color === 'string' ? o.color : '#7c6aff',
     params:   (o.params && typeof o.params === 'object') ? { ...o.params } : {},
+    parentId: o.parentId != null ? String(o.parentId) : null,
+    collapsed: !!o.collapsed,
   };
   if (o.type === 'mesh' && o.meshData && typeof o.meshData === 'object') {
     out.meshData = {
@@ -4060,12 +4201,52 @@ window.slateScene3d = {
       visible:  spec?.visible !== false,
       color:    spec?.color || '#7c6aff',
       params:   spec?.params || {},
+      parentId: spec?.parentId || null,
+      collapsed: !!spec?.collapsed,
       meshData: spec?.meshData,
     });
     doc.scene3d.objects.push(obj);
     _broadcastObjAdd(obj);
     this._emit();
     return obj;
+  },
+  /** Create a folder (organisational node — no mesh, no transform applied). */
+  createFolder(name) {
+    return this.add({
+      type: 'folder',
+      name: name || 'Folder',
+      params: {},
+      color: '#9aa0aa',
+    });
+  },
+  /** Re-parent an object. parentId=null means scene root. Skips cycles. */
+  setParent(id, parentId) {
+    const obj = this.find(id);
+    if (!obj) return false;
+    const pid = parentId || null;
+    if (obj.parentId === pid) return false;
+    // Guard against cycles.
+    let cursor = pid;
+    while (cursor) {
+      if (cursor === id) return false;
+      const p = this.find(cursor);
+      cursor = p ? p.parentId : null;
+    }
+    obj.parentId = pid;
+    _broadcastObjUpd(id, { parentId: pid });
+    this._emit();
+    return true;
+  },
+  /** Collapse / expand a folder in the outliner (local UI hint, also synced). */
+  setCollapsed(id, collapsed) {
+    const obj = this.find(id);
+    if (!obj) return false;
+    const v = !!collapsed;
+    if (obj.collapsed === v) return false;
+    obj.collapsed = v;
+    _broadcastObjUpd(id, { collapsed: v });
+    this._emit();
+    return true;
   },
   remove(id) {
     const idx = doc.scene3d.objects.findIndex(o => o.id === id);
@@ -4129,7 +4310,7 @@ window.slateScene3d = {
     if (opts?.silent !== true) this._emit();
     return true;
   },
-  /** Reorder object to a new index in the hierarchy. */
+  /** Reorder object to a new index in the hierarchy. Broadcasts to peers. */
   move(id, toIndex) {
     const from = doc.scene3d.objects.findIndex(o => o.id === id);
     if (from < 0) return false;
@@ -4137,9 +4318,8 @@ window.slateScene3d = {
     if (clamped === from) return false;
     const [item] = doc.scene3d.objects.splice(from, 1);
     doc.scene3d.objects.splice(clamped, 0, item);
-    // Order is local-UI only; broadcast a no-op transform on the moved item so
-    // remotes can pick up the latest version. (We deliberately skip syncing
-    // hierarchy order to keep the wire light.)
+    pendingDiff.scene3dOrder = doc.scene3d.objects.map(o => o.id);
+    scheduleDiff();
     this._emit();
     return true;
   },
@@ -4301,7 +4481,7 @@ const redoStack = [];
 
 // Deferred diff to batch changes
 function _freshPendingDiff() {
-  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [] };
+  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null };
 }
 let pendingDiff = _freshPendingDiff();
 let diffTimer   = null;
@@ -4312,7 +4492,8 @@ function flushDiff() {
   pendingDiff = _freshPendingDiff();
   const empty = !d.added.length && !d.updated.length && !d.removed.length &&
                 !d.strokes.length && !d.delStrokes.length && !d.layers &&
-                !d.scene3dAdd.length && !d.scene3dUpd.length && !d.scene3dDel.length;
+                !d.scene3dAdd.length && !d.scene3dUpd.length && !d.scene3dDel.length &&
+                !d.scene3dOrder;
   if (empty) return;
   if (state.isDrawMuted) return;
   const msg = { type: 'doc-diff', added: d.added, updated: d.updated, removed: d.removed, strokes: d.strokes, delStrokes: d.delStrokes };
@@ -4320,11 +4501,23 @@ function flushDiff() {
   if (d.scene3dAdd.length) msg.scene3dAdd = d.scene3dAdd;
   if (d.scene3dUpd.length) msg.scene3dUpd = d.scene3dUpd;
   if (d.scene3dDel.length) msg.scene3dDel = d.scene3dDel;
+  if (d.scene3dOrder)      msg.scene3dOrder = d.scene3dOrder;
   broadcastAll(msg);
 }
 
 function scheduleDiff() {
+  if (state.currentBoard) state.dirtyBoards.add(state.currentBoard);
   if (!diffTimer) diffTimer = setTimeout(flushDiff, DIFF_THROTTLE_MS);
+}
+
+function boardHasUnsavedChanges(board) {
+  if (!board) return false;
+  if (!state.dirtyBoards.has(board)) return false;
+  const isDefaultDoc =
+    doc.shapes.size === 0 && doc.strokes.size === 0 &&
+    doc.layers.length === 1 && doc.layers[0]?.id === 'l1' &&
+    doc.scene3d.objects.length === 1 && doc.scene3d.objects[0]?.id === 'obj_cube_default';
+  return !isDefaultDoc;
 }
 
 function genId() {
@@ -5285,21 +5478,11 @@ document.getElementById('stroke-size').addEventListener('input', e => {
   strokeSize = Number(e.target.value);
 });
 
-// Color swatches
-document.querySelectorAll('#color-swatches .swatch').forEach(btn => {
-  btn.addEventListener('click', () => {
-    strokeColor = btn.dataset.color;
-    document.getElementById('color-picker').value = strokeColor;
-    document.querySelectorAll('#color-swatches .swatch').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-  });
-});
+/* Photoshop-style foreground / background picker. FG = stroke / pen color,
+   BG = shape fill color. The two pickers are nested inside #color-fgbg. */
 document.getElementById('color-picker').addEventListener('input', e => {
   strokeColor = e.target.value;
-  // Deactivate swatches when custom color is picked
-  document.querySelectorAll('#color-swatches .swatch').forEach(b => b.classList.remove('active'));
 });
-
 document.getElementById('fill-color').addEventListener('input', e => {
   fillColor = e.target.value;
   useFill = true;
@@ -5311,13 +5494,42 @@ document.getElementById('fill-none-btn').addEventListener('click', () => {
   document.getElementById('fill-none-btn').classList.toggle('active', !useFill);
 });
 
+document.getElementById('cfg-swap-btn')?.addEventListener('click', () => {
+  const fg = document.getElementById('color-picker');
+  const bg = document.getElementById('fill-color');
+  const a = fg.value, b = bg.value;
+  fg.value = b; bg.value = a;
+  strokeColor = b; fillColor = a;
+});
+
+document.getElementById('cfg-default-btn')?.addEventListener('click', () => {
+  const fg = document.getElementById('color-picker');
+  const bg = document.getElementById('fill-color');
+  fg.value = '#000000'; bg.value = '#ffffff';
+  strokeColor = '#000000'; fillColor = '#ffffff';
+});
+
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'x' || e.key === 'X') document.getElementById('cfg-swap-btn')?.click();
+  else if (e.key === 'd' || e.key === 'D') document.getElementById('cfg-default-btn')?.click();
+});
+
 document.getElementById('font-size-input').addEventListener('change', e => {
   fontSize = Math.max(8, Math.min(120, Number(e.target.value) || 18));
   e.target.value = fontSize;
 });
 
-// Export as PNG
-document.getElementById('export-btn').addEventListener('click', exportAsPng);
+/* The export button is shared between 2D and 3D modes — its click handler
+   dispatches based on the active workspace mode. */
+document.getElementById('export-btn').addEventListener('click', () => {
+  const board = state.currentBoard;
+  const mode = board ? (boardDocModes[board] || '2d') : '2d';
+  if (mode === '3d') exportAsFbx();
+  else exportAsPng();
+});
 
 function exportAsPng() {
   const boardName = state.currentBoard || 'slate-board';
@@ -5343,6 +5555,41 @@ function exportAsPng() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     toast('Board exported as PNG', 'green');
   }, 'image/png');
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   FBX export (3D mode) — minimal FBX 7.4 ASCII writer.
+   Emits one Geometry + one Model node per visible scene object, connected
+   to the scene root. Triangulates all faces. Compatible with Blender,
+   Maya, 3ds Max import.
+────────────────────────────────────────────────────────────────────── */
+async function exportAsFbx() {
+  if (!window.slateScene3d) { toast('3D scene not ready', 'red'); return; }
+  if (!window.slateExportFbx) {
+    try { await import('./fbx-export.js'); } catch (e) {
+      console.error('FBX export module failed to load', e);
+      toast('FBX export failed to load', 'red'); return;
+    }
+  }
+  if (!window.slateExportFbx) { toast('FBX export unavailable', 'red'); return; }
+  const boardName = state.currentBoard || 'slate-scene';
+  try {
+    const text = window.slateExportFbx({
+      objects: window.slateScene3d.objects,
+      creator: 'Slate',
+    });
+    const blob = new Blob([text], { type: 'application/octet-stream' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `${boardName}-${new Date().toISOString().slice(0,10)}.fbx`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('Scene exported as FBX', 'green');
+  } catch (e) {
+    console.error('FBX export error', e);
+    toast('FBX export failed', 'red');
+  }
 }
 
 // Render to a specific context (for export)
@@ -5700,17 +5947,21 @@ document.getElementById('mod-volume')?.addEventListener('input', e => {
 });
 
 function updateBoardChip() {
-  const chip = document.getElementById('vis-chip');
-  if (!chip || !state.currentBoard) return;
+  const btn = document.getElementById('board-vis-toggle');
+  if (!btn) return;
+  if (!state.currentBoard) { btn.hidden = true; return; }
   const vis = boardVisibility[state.currentBoard] || 'public';
-  chip.hidden = false;
-  chip.className = `visibility-chip chip-${vis}`;
-  const lbl = chip.querySelector('.vis-chip-label');
-  if (lbl) lbl.textContent = vis;
-  chip.style.cursor = state.isBoardHost ? 'pointer' : 'default';
-  chip.title = state.isBoardHost
-    ? (vis === 'private' ? 'Private — click to make public' : 'Public — click to make private')
+  btn.hidden = false;
+  btn.setAttribute('aria-label', vis);
+  btn.classList.toggle('is-host', !!state.isBoardHost);
+  // Same iconography as the sidebar's create-board vis toggle.
+  btn.innerHTML = vis === 'private'
+    ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="8" height="6" rx="1"/><path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6"/></svg>`
+    : `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="5.2"/><path d="M2 7h10M7 2a8 8 0 0 1 0 10M7 2a8 8 0 0 0 0 10"/></svg>`;
+  btn.title = state.isBoardHost
+    ? (vis === 'private' ? 'Private board — click to make public' : 'Public board — click to make private')
     : (vis === 'private' ? 'Private board' : 'Public board');
+  btn.style.cursor = state.isBoardHost ? 'pointer' : 'default';
 }
 
 function updateTopicInput() {
@@ -5742,6 +5993,12 @@ function applyWorkspaceMode(board) {
   if (!area2 || !area3) return;
   document.body.classList.toggle('mode-3d', mode === '3d');
   document.body.classList.toggle('mode-2d', mode !== '3d');
+  const exportBtn = document.getElementById('export-btn');
+  if (exportBtn) {
+    exportBtn.title = mode === '3d' ? 'Export scene as FBX' : 'Save board as PNG';
+    const label = exportBtn.querySelector('span.export-label');
+    if (label) label.textContent = mode === '3d' ? 'Export FBX' : 'Export PNG';
+  }
   if (mode === '3d') {
     area2.style.display = 'none';
     area3.style.display = 'block';
@@ -5814,21 +6071,12 @@ document.getElementById('share-board-btn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('vis-chip')?.addEventListener('click', () => {
-  if (state.isBoardHost && state.currentBoard) toggleBoardVisibility();
-});
-
-document.getElementById('host-members-btn')?.addEventListener('click', () => {
-  const panel = document.getElementById('member-panel');
-  if (panel) panel.classList.add('open');
-});
-
-document.getElementById('host-vis-btn')?.addEventListener('click', () => {
+document.getElementById('board-vis-toggle')?.addEventListener('click', () => {
   if (state.isBoardHost && state.currentBoard) toggleBoardVisibility();
 });
 
 document.getElementById('leave-board-btn')?.addEventListener('click', () => {
-  leaveBoard();
+  leaveBoardWithSavePrompt();
 });
 
 function fallbackCopy(text) {
@@ -6820,6 +7068,7 @@ function saveBoardSnapshot(folderName) {
   persistSavedBoards(savedBoards);
   renderSavedBoards();
   _manuallySavedBoards.add(board);
+  state.dirtyBoards.delete(board);
   // Show confirmation toast — differentiate first save from re-save
   if (alreadySaved) {
     toast(`Board saved ✓`, 'green');
@@ -6830,7 +7079,15 @@ function saveBoardSnapshot(folderName) {
 
 function loadSavedSnapshot(snap) {
   if (!state.peer) { toast('Connect first', 'red'); return; }
-  // Leave current board
+  if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    const snapRef = snap;
+    showUnsavedBoardPrompt(state.currentBoard, choice => {
+      if (choice === 'cancel') return;
+      if (choice === 'save') triggerSaveBoardDialog();
+      if (choice !== 'cancel') { leaveBoard(); loadSavedSnapshot(snapRef); }
+    });
+    return;
+  }
   if (state.currentBoard) leaveBoard();
   // Join a fresh private board with the snapshot's name
   const bname = normalizeBoard(snap.name) || 'restored-' + snap.id.slice(0,6);
@@ -6930,6 +7187,38 @@ function closeSaveDialog() {
   document.getElementById('save-dialog-overlay').style.display = 'none';
   document.getElementById('save-new-folder-input').value = '';
 }
+function triggerSaveBoardDialog() { openSaveDialog(); }
+
+/* ── Unsaved-changes prompt ── */
+let _unsavedPromptCb = null;
+function showUnsavedBoardPrompt(board, cb) {
+  _unsavedPromptCb = cb || null;
+  const body = document.getElementById('unsaved-prompt-body');
+  if (body) body.textContent = `Save changes to "${board}" before leaving?`;
+  const overlay = document.getElementById('unsaved-prompt-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+function _resolveUnsavedPrompt(choice) {
+  const overlay = document.getElementById('unsaved-prompt-overlay');
+  if (overlay) overlay.style.display = 'none';
+  const cb = _unsavedPromptCb; _unsavedPromptCb = null;
+  if (cb) cb(choice);
+}
+document.getElementById('unsaved-cancel-btn')?.addEventListener('click',  () => _resolveUnsavedPrompt('cancel'));
+document.getElementById('unsaved-discard-btn')?.addEventListener('click', () => _resolveUnsavedPrompt('discard'));
+document.getElementById('unsaved-save-btn')?.addEventListener('click',    () => _resolveUnsavedPrompt('save'));
+document.getElementById('unsaved-prompt-overlay')?.addEventListener('click', e => {
+  if (e.target.id === 'unsaved-prompt-overlay') _resolveUnsavedPrompt('cancel');
+});
+
+/* Browser-level guard for refresh / tab close on dirty boards. */
+window.addEventListener('beforeunload', e => {
+  if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
+});
 
 function renderSaveFolderList() {
   const container = document.getElementById('save-folder-list');

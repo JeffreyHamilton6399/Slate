@@ -1,54 +1,55 @@
 # Slate
 
-Slate is a self-hosted collaborative whiteboard. Open a URL, share the room link (same URL hash), and everyone in that room edits the same canvas in real time. No accounts and no installs — just a browser.
+**Slate** is a real-time collaborative whiteboard built on peer-to-peer WebRTC data channels (PeerJS). It works from a single `index.html` with no build step and no external frameworks — inspired by the same architecture as Chirp.
 
-## Run locally
+---
+
+## Quickstart
 
 ```bash
 npm install
 npm start
 ```
 
-Then open one of the URLs printed in the terminal (for example `http://localhost:8080`). The room is in the hash (for example `http://localhost:8080/#my-room`). Use **Share** to copy the full link.
+Open **http://localhost:8080** in your browser (or the LAN IP shown in the terminal to join from another device).
 
-**Rooms need a signaling server.** Opening `index.html` as a `file://` URL or deploying **only** static files (for example the default GitHub Pages workflow that uploads the repo as static assets) does **not** run Node, so there is **no `/peerjs` endpoint** and PeerJS cannot pair peers. You must either:
+---
 
-1. Run **`npm start`** (or Docker) so Express + PeerJS run on a real `http(s)://` origin, or  
-2. Host the HTML somewhere static but point clients at a **separate** Node process that runs this same `server.js` (see below).
+## How it works
 
-## Environment
+```
+Each browser tab ──► slate-<uuid> peer
+                       │
+                       ├── connects to slate-lobby-0001 (lobby host, auto-elected)
+                       │     • discovers public boards and member counts
+                       │
+                       └── full-mesh data channels with every peer in the same board
+                             • doc-snap   – snapshot sent to new joiners
+                             • doc-diff   – incremental strokes / shape changes
+                             • presence   – cursor positions at ~10 Hz
+                             • mod-kick   – host removes a peer
+```
+
+- **One Peer per user.** The same PeerJS peer handles lobby registration, board membership, and drawing sync simultaneously.
+- **Lobby host election.** Any peer may claim the fixed well-known ID `slate-lobby-0001`. If that ID is already taken, the peer falls back to being a lobby client and syncs the board registry from the host every 10 s.
+- **Public boards** are visible to everyone in the lobby list with live member counts.
+- **Private boards** require a knock-to-join request. The board host sees an Allow / Deny modal; approved guests receive a `join-approved` message and are connected to the mesh.
+- **No server-side state.** The Express server only runs the PeerJS WebRTC signaling broker (ICE negotiation) and serves the static file. All collaborative state is peer-to-peer.
+
+---
+
+## Environment variables
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `PORT` | `8080` | HTTP port |
-| `KEEP_ALIVE_TIMEOUT` | `65000` | Node `server.keepAliveTimeout` (ms) |
-| `TRUST_PROXY` | _(unset)_ | Set to `1` when behind a reverse proxy (Fly, Railway, nginx) so PeerJS sees correct HTTPS |
+|---|---|---|
+| `PORT` | `8080` | HTTP port to listen on |
+| `KEEP_ALIVE_TIMEOUT` | `65000` | Keep-alive timeout in ms (should exceed proxy idle timeout) |
+| `TRUST_PROXY` | _(unset)_ | Set to `1` to trust `X-Forwarded-For` headers behind a reverse proxy |
 
-## Stack
+---
 
-- **Express** + Node HTTP server (same shape as Chirp: compression, keep-alive, `/health`, graceful shutdown, `/peerjs` PeerJS signaling)
-- **Single-file** `index.html` (no bundler): **tldraw** from CDN as ES modules (`type="module"`) and **PeerJS** for peer-to-peer sync over data channels
-- **No persistence** — document state exists only in connected peers’ memory
+## Deployment
 
-## Docker
+The app can be deployed to any platform that runs Node.js (Fly.io, Railway, Render, etc.). Make sure the PeerJS signaling path `/peerjs` is accessible from clients. The `/health` endpoint can be used for health checks.
 
-```bash
-docker build -t slate .
-docker run -p 8080:8080 slate
-```
-
-## PeerJS brokers (same pattern as Chirp)
-
-Optional **query string**: `peerHost`, `peerPort`, `peerPath`, `peerSecure`.
-
-Optional **`localStorage`** keys: `slate_peer_host`, `slate_peer_port`, `slate_peer_path`, `slate_peer_secure`.
-
-Optional **HTML meta** (for static deploys): set `slate-public-peer-host` to the **hostname only** of a machine running `server.js` (no `https://`). Example:
-
-```html
-<meta name="slate-public-peer-host" content="slate-signal.fly.dev">
-```
-
-That host must serve PeerJS at `https://THAT_HOST/peerjs` (same `path` and `ExpressPeerServer` mount as this repo’s `server.js`).
-
-Broker order matches Chirp: PeerJS cloud brokers first, then the **current page origin** `/peerjs` (works when the app and Node share one host), then cloud again if you used a custom `peerHost`.
+For production behind a TLS-terminating proxy (e.g. nginx, Caddy), set `TRUST_PROXY=1` and ensure WebSocket upgrades are forwarded to `/peerjs`.

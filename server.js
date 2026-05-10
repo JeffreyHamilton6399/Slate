@@ -11,7 +11,7 @@ try {
   compression = require('compression');
 } catch (err) {
   console.error('Missing dependencies.');
-  console.error('Run "npm.cmd install" once, then run "npm.cmd start".');
+  console.error('Run "npm install" once, then run "npm start".');
   process.exit(1);
 }
 
@@ -25,18 +25,16 @@ const ROOT = __dirname;
 const app    = express();
 const server = http.createServer(app);
 server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT;
-server.headersTimeout   = KEEP_ALIVE_TIMEOUT + 1_000; // must exceed keepAliveTimeout
-
-// Behind Fly.io / Railway / nginx TLS termination, PeerJS needs correct secure / forwarded headers.
-if (process.env.TRUST_PROXY) {
-  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
-}
+server.headersTimeout   = KEEP_ALIVE_TIMEOUT + 1_000;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
-// Gzip/Brotli the HTML and JS responses — cuts wire bytes ~70 %.
+// Gzip/Brotli the HTML and JS responses — cuts wire bytes ~70%.
 // PeerJS WebSocket upgrades are not affected.
 app.use(compression({ threshold: 1024 }));
+
+// Trust proxy headers (X-Forwarded-For etc.) when running behind Fly/Railway/nginx.
+if (process.env.TRUST_PROXY) app.set('trust proxy', 1);
 
 // ── PeerJS signaling ──────────────────────────────────────────────────────────
 const peerServer = ExpressPeerServer(server, {
@@ -92,13 +90,9 @@ server.listen(PORT, '0.0.0.0', () => {
   localUrls().forEach(url => console.log(`  ${url}`));
   console.log('PeerJS signaling: /peerjs');
   console.log(`Health check:     http://localhost:${PORT}/health`);
-  if (process.env.TRUST_PROXY) {
-    console.log(`Trust proxy:      hop count ${app.get('trust proxy')} (TRUST_PROXY=${process.env.TRUST_PROXY})`);
-  }
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
-// Finish in-flight requests before exiting; lets container restarts stay clean.
 function shutdown(signal) {
   console.log(`\n[${signal}] Shutting down…`);
   server.close(err => {
@@ -106,7 +100,6 @@ function shutdown(signal) {
     console.log('Server closed. Goodbye.');
     process.exit(0);
   });
-  // Force-exit after 10 s if connections are hanging.
   setTimeout(() => { console.error('Force exit after timeout'); process.exit(1); }, 10_000).unref();
 }
 

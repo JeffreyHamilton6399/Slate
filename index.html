@@ -318,7 +318,7 @@ function wireSlateChrome(editor, room) {
   };
   const onJson = () => {
     try {
-      const snap = editor.store.getStoreSnapshot('document');
+      const snap = editor.store.getSnapshot('document');
       const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -449,10 +449,10 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
             const ed = editorRef.current;
             if (!ed) return false;
             try {
-              const snap = ed.store.getStoreSnapshot('document');
+              const snap = ed.store.getSnapshot('document');
               const payload = { t: 'full', snap };
               try {
-                payload.pres = ed.store.getStoreSnapshot('presence');
+                payload.pres = ed.store.getSnapshot('presence');
               } catch (_) {}
               conn.send(JSON.stringify(payload));
             } catch (e) {
@@ -479,12 +479,12 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
 
       if (msg.t === 'full' && msg.snap) {
         editor.store.mergeRemoteChanges(() => {
-          editor.store.loadStoreSnapshot(msg.snap);
+          editor.store.loadSnapshot(msg.snap);
         });
         if (msg.pres) {
           try {
             editor.store.mergeRemoteChanges(() => {
-              editor.store.loadStoreSnapshot(msg.pres);
+              editor.store.loadSnapshot(msg.pres);
             });
           } catch (_) {}
         }

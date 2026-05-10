@@ -353,92 +353,197 @@
     });
   };
 
-  // ── 13. BOARD LIST: auto-prune empty boards on every lobby update ──────────
-  // Bug: liveBoards keeps empty boards forever (pruneEmptyBoards only runs once at startup).
-  // Fix: wrap scheduleRenderBoards to prune first.
-  const _origScheduleRB = window.scheduleRenderBoards;
-  window.scheduleRenderBoards = function (filter) {
-    if (typeof pruneEmptyBoards === 'function') {
-      try { pruneEmptyBoards(); } catch {}
-    }
-    if (_origScheduleRB) _origScheduleRB.apply(this, arguments);
+  // ── 13. BOARD LIST: fix lobbyBroadcast for PeerJS v1.x API ──────────────────
+  // PeerJS v1 exposes connections as peer.connections (not peer._connections).
+  // If _connections is undefined, lobbyBroadcast sends to nobody → boards never
+  // propagate to other users, requiring a full page refresh to see new boards.
+  window.lobbyBroadcast = function (data) {
+    if (!state.lobbyPeer) return;
+    const connsObj = state.lobbyPeer.connections || state.lobbyPeer._connections || {};
+    Object.values(connsObj).forEach(conns => {
+      const arr = Array.isArray(conns) ? conns : (conns ? [conns] : []);
+      arr.forEach(conn => { try { if (conn && conn.open) conn.send(data); } catch {} });
+    });
   };
-  // Also prune periodically so boards disappear even without a lobby update
+  // Also prune empty boards periodically (NOT in scheduleRenderBoards — that
+  // would erase boards before they're rendered when someone just joined).
   setInterval(() => {
     if (typeof pruneEmptyBoards === 'function') {
       try { const n = pruneEmptyBoards(); if (n && typeof scheduleRenderBoards === 'function') scheduleRenderBoards(); } catch {}
     }
-  }, 12000);
+  }, 20000);
 
-  // ── 14. HOST ELECTION: don't eagerly claim host if lobby shows others ───────
-  // Bug: joinBoard calls getPeersInBoard which checks conn.open — but the connection
-  // hasn't opened yet, so it returns 0 even when others ARE in the board.
-  // Both peers then set isBoardHost=true until host-changed arrives.
-  // Fix: also check the lobby registry before claiming host.
+  // ── 14. HOST ELECTION: robust fix using lobby registry + delayed re-check ───
+  // Root bug: setupDataConn's conn.on('open') callback fires while joinBoard is
+  // still on the call stack with isBoardHost=true, so the joiner sends a false
+  // host-changed to the real host before any election runs.
+  // Fix A — block the early host claim when lobby shows others are already there.
+  // Fix B — 2.5s after joining, re-run ensureBoardHost to correct any race.
   const _origJoinBoardHost = window.joinBoard;
   window.joinBoard = function (board) {
     const r = _origJoinBoardHost && _origJoinBoardHost.apply(this, arguments);
-    // If lobby registry shows other peers in this board, relinquish early host claim
-    if (typeof state !== 'undefined' && typeof state.lobbyRegistry !== 'undefined') {
-      const othersInBoard = Object.entries(state.lobbyRegistry)
-        .filter(([id, info]) => id !== state.myId && info.board === board);
-      if (othersInBoard.length > 0) {
-        // Others are already here — we don't know who the host is yet.
-        // Reset isBoardHost so we don't broadcast a false host-changed.
+    if (typeof state !== 'undefined') {
+      const othersInBoard = Object.entries(state.lobbyRegistry || {})
+        .some(([id, info]) => id !== state.myId && info.board === board);
+      if (othersInBoard) {
         state.isBoardHost = false;
         state.boardHostId = null;
       }
     }
+    // Delayed re-election: after connections open and hellos arrive, re-compute host
+    setTimeout(() => {
+      if (state.currentBoard === board && typeof ensureBoardHost === 'function') {
+        ensureBoardHost();
+      }
+    }, 2500);
     return r;
   };
 
   // ── 15. VOICE: auto-request mic when joining a board ───────────────────────
-  // Clicking a board item is a valid user gesture — use it to trigger getUserMedia
-  // so voice chat is ready immediately without needing to find and click the mic btn.
   const _origJoinBoardVoice = window.joinBoard;
   window.joinBoard = function (board) {
     const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
     if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
-      if (typeof joinVoice === 'function') {
-        setTimeout(() => joinVoice(), 400);
-      }
+      if (typeof joinVoice === 'function') setTimeout(() => joinVoice(), 400);
     }
     return r;
   };
 
-  // ── 16. MOBILE CSS: fix layout for small screens ───────────────────────────
+  // ── 16. REMOTE CURSORS: draw other users' cursors on the canvas ─────────────
+  // Cursor world-coords already arrive via 'presence' messages and are stored in
+  // state.connections[pid].cursor. We just need to render them.
+  const _origRenderFrame = window.renderFrame;
+  window.renderFrame = function () {
+    _origRenderFrame && _origRenderFrame.apply(this, arguments);
+    if (typeof state === 'undefined' || !state.currentBoard) return;
+    Object.entries(state.connections).forEach(([pid, info]) => {
+      if (info.board !== state.currentBoard || !info.cursor) return;
+      const sx = info.cursor.x * vp.zoom + vp.panX;
+      const sy = info.cursor.y * vp.zoom + vp.panY;
+      if (sx < -20 || sy < -20 || sx > canvas.width + 20 || sy > canvas.height + 20) return;
+      const col = typeof peerColor === 'function' ? peerColor(info.name || pid) : '#7c6aff';
+      ctx.save();
+      // Cursor arrow (pointer shape)
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + 8, sy + 14);
+      ctx.lineTo(sx + 3.5, sy + 11);
+      ctx.lineTo(sx + 2, sy + 17);
+      ctx.lineTo(sx - 0.5, sy + 11);
+      ctx.lineTo(sx - 5, sy + 13);
+      ctx.closePath();
+      ctx.fillStyle = col;
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 1;
+      ctx.fill();
+      ctx.stroke();
+      // Name label
+      const label = info.name || 'User';
+      ctx.font = 'bold 11px Inter,sans-serif';
+      const tw = ctx.measureText(label).width;
+      const lx = sx + 10, ly = sy + 10;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.roundRect(lx - 3, ly - 10, tw + 8, 15, 3);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, lx + 1, ly);
+      ctx.restore();
+    });
+  };
+
+  // ── 17. SFX: lightweight sounds for events ───────────────────────────────────
+  let _sfxCtx = null;
+  function sfx(type) {
+    try {
+      if (!_sfxCtx) _sfxCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ac = _sfxCtx;
+      if (ac.state === 'suspended') ac.resume();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      const t = ac.currentTime;
+      const configs = {
+        join:     { f: [440, 523], dur: 0.18, g: 0.12 },
+        leave:    { f: [523, 349], dur: 0.18, g: 0.08 },
+        chat:     { f: [880, 1047], dur: 0.09, g: 0.08 },
+        board:    { f: [523, 659, 784], dur: 0.28, g: 0.10 },
+        click:    { f: [600], dur: 0.05, g: 0.06 },
+        error:    { f: [220, 196], dur: 0.22, g: 0.10 },
+      };
+      const cfg = configs[type] || configs.click;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(cfg.f[0], t);
+      cfg.f.forEach((freq, i) => osc.frequency.setValueAtTime(freq, t + i * cfg.dur / cfg.f.length));
+      gain.gain.setValueAtTime(cfg.g, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + cfg.dur);
+      osc.start(t);
+      osc.stop(t + cfg.dur);
+    } catch {}
+  }
+  window._slateSfx = sfx;
+
+  // Hook SFX to peer events
+  const _origHandleData = window.handleData;
+  window.handleData = function (peerId, data) {
+    const prevBoard = typeof state !== 'undefined' ? state.connections[peerId]?.board : null;
+    _origHandleData && _origHandleData.apply(this, arguments);
+    if (typeof state === 'undefined') return;
+    try {
+      if (data.type === 'hello') {
+        const nowBoard = state.connections[peerId]?.board;
+        if (nowBoard === state.currentBoard && prevBoard !== state.currentBoard) sfx('join');
+      }
+      if (data.type === 'leave') sfx('leave');
+      if (data.type === 'chat')  sfx('chat');
+      if (data.type === 'doc-clear') sfx('error');
+    } catch {}
+  };
+
+  // SFX when we ourselves join a board
+  const _origJoinBoardSfx = window.joinBoard;
+  window.joinBoard = function (board) {
+    const r = _origJoinBoardSfx && _origJoinBoardSfx.apply(this, arguments);
+    setTimeout(() => sfx('board'), 200);
+    return r;
+  };
+
+  // ── 18. MOBILE CSS: fix layout for small screens ───────────────────────────
   const mobilePatchCSS = document.createElement('style');
   mobilePatchCSS.textContent = `
-    /* Prevent horizontal overflow of new toolbar items on mobile */
+    /* Toolbar scrollable on mobile; hide desktop-only extras */
     @media (max-width: 768px) {
-      #draw-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      #opacity-wrap { display: none !important; } /* hide opacity on narrow screens */
-      #layers-toolbar-btn { display: none !important; }
-      #shortcuts-hint-btn { display: none !important; }
-      #color-history { display: none !important; }
-      #minimap-wrap { bottom: 60px; right: 8px; }
-
-      /* Board header: tighten up new buttons */
-      #leave-board-btn span { display: none; } /* icon only on mobile */
-      #leave-board-btn { padding: 6px 8px !important; }
-
-      /* Layers panel + minimap: reposition for mobile */
+      #draw-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+        scrollbar-width: none; padding: 0 6px; }
+      #draw-toolbar::-webkit-scrollbar { display: none; }
+      #opacity-wrap, #layers-toolbar-btn, #shortcuts-hint-btn, #color-history { display: none !important; }
+      #minimap-wrap { bottom: 62px; right: 8px; opacity: 0.9; }
       #layers-panel { top: 50px; right: 8px; width: 148px; }
+      /* Board header: compact */
+      #leave-board-btn svg ~ * { display: none; }
+      #leave-board-btn { padding: 6px 8px !important; min-width: 34px; }
+      /* Ensure canvas fills remaining height */
+      #canvas-area { flex: 1; min-height: 0; }
+      /* Member panel takes half width on mobile */
+      #member-panel, #chat-panel { width: min(300px, 90vw) !important; }
     }
-
+    @media (max-width: 480px) {
+      #board-header { padding: 0 6px; gap: 4px; }
+      #board-name-display { font-size: 0.78rem; max-width: 100px; }
+      .btn { padding: 5px 8px; font-size: 0.72rem; }
+    }
     @media (max-height: 500px) and (max-width: 1024px) {
-      #opacity-wrap { display: none !important; }
-      #layers-toolbar-btn { display: none !important; }
-      #shortcuts-hint-btn { display: none !important; }
+      #opacity-wrap, #layers-toolbar-btn, #shortcuts-hint-btn { display: none !important; }
       #minimap-wrap { bottom: 48px; right: 8px; }
+      #draw-toolbar { padding: 0 4px; }
     }
-
-    /* Fix mod-menu visibility: ensure it always appears above everything */
+    /* Mod-menu always on top */
     #mod-menu { z-index: 9000 !important; }
-
-    /* Mic button in member row — make it clearly tappable on mobile */
+    /* Tap targets */
     #mute-btn { min-width: 36px; min-height: 32px; touch-action: manipulation; }
     .member-row { min-height: 40px; touch-action: manipulation; }
+    /* Canvas cursor indicator: smooth rendering */
+    #board-canvas { image-rendering: auto; }
   `;
   document.head.appendChild(mobilePatchCSS);
 

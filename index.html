@@ -444,6 +444,43 @@ input, textarea { font-family: var(--sans); }
   background: #16161b; /* dark desk/stage behind the paper */
 }
 /* Drop overlay for images */
+/* drag-over ring instead of overlay */
+#canvas-area.drag-over { outline: 3px dashed var(--accent); outline-offset: -3px; }
+
+/* Saved boards */
+#saved-boards-list { padding: 0 8px 4px; }
+.saved-folder {
+  margin-bottom: 4px;
+}
+.saved-folder-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; user-select: none;
+  font-size: 0.78rem; font-weight: 600; color: var(--text-mid);
+}
+.saved-folder-header:hover { background: var(--bg3); color: var(--text); }
+.saved-folder-icon { opacity: 0.7; transition: transform 0.15s; }
+.saved-folder.open .saved-folder-icon { transform: rotate(90deg); }
+.saved-folder-items { display: none; padding-left: 8px; }
+.saved-folder.open .saved-folder-items { display: block; }
+.saved-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 0.78rem; color: var(--text-mid);
+}
+.saved-item:hover { background: var(--bg3); color: var(--text); }
+.saved-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-item-del { opacity: 0; padding: 1px 4px; border-radius: 3px; background: transparent; border: none; color: var(--danger); cursor: pointer; font-size: 0.75rem; }
+.saved-item:hover .saved-item-del { opacity: 0.7; }
+.saved-item-del:hover { opacity: 1 !important; background: rgba(248,113,113,0.12); }
+.save-folder-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 0.83rem; color: var(--text-mid);
+  border: 1.5px solid transparent;
+}
+.save-folder-option:hover { background: var(--bg3); color: var(--text); }
+.save-folder-option.selected { border-color: var(--accent); color: var(--text); background: rgba(124,106,255,0.08); }
 #canvas-drop-overlay {
   position: absolute; inset: 0; z-index: 20;
   background: rgba(124,106,255,0.18);
@@ -483,19 +520,30 @@ input, textarea { font-family: var(--sans); }
 #text-input-overlay {
   display: none;
   position: absolute;
-  background: transparent;
-  border: 1.5px dashed var(--accent);
+  background: rgba(255,255,255,0.06);
+  border: 1.5px solid var(--accent);
   border-radius: 4px;
-  padding: 4px 6px;
+  padding: 6px 8px;
   font-family: var(--sans);
-  color: var(--text);
+  color: #1a1a2e;
   font-size: 16px;
   outline: none;
   resize: none;
   overflow: hidden;
-  min-width: 80px; min-height: 28px;
+  min-width: 60px; min-height: 28px;
   z-index: 20;
-  white-space: pre;
+  white-space: pre-wrap;
+  box-shadow: 0 0 0 2px rgba(124,106,255,0.3);
+}
+/* Drag-box guide shown while dragging for text tool */
+#text-drag-guide {
+  display: none;
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  border-radius: 4px;
+  background: rgba(124,106,255,0.05);
+  pointer-events: none;
+  z-index: 18;
 }
 
 /* ═══════════════════════════════════════════
@@ -828,16 +876,19 @@ input, textarea { font-family: var(--sans); }
 
 /* Visibility toggle button */
 .vis-toggle {
-  padding: 7px 9px; border-radius: var(--radius-sm);
-  background: var(--bg3); border: 1px solid var(--border2);
+  padding: 5px 10px; border-radius: var(--radius-sm);
+  background: rgba(34,211,165,0.08); border: 1px solid rgba(34,211,165,0.3);
   color: var(--green); cursor: pointer; flex-shrink: 0;
-  display: flex; align-items: center; transition: background 0.15s, border-color 0.15s;
+  display: flex; align-items: center; gap: 5px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  font-size: 0.75rem; font-weight: 500;
 }
 .vis-toggle[aria-label="private"] {
   color: var(--danger); border-color: rgba(248,113,113,0.3);
   background: rgba(248,113,113,0.08);
 }
-.vis-toggle:hover { border-color: var(--border2); filter: brightness(1.15); }
+.vis-toggle:hover { filter: brightness(1.18); }
+.vis-label { line-height: 1; }
 
 /* Speaking ring on member avatar */
 .member-avatar.speaking {
@@ -1018,22 +1069,28 @@ input, textarea { font-family: var(--sans); }
 /* ═══════════════════════════════════════════
    MOBILE OVERRIDES
 ═══════════════════════════════════════════ */
+/* ── Portrait phone ── */
 @media (max-width: 768px) {
-  :root { --sidebar-w: 100vw; }
+  :root { --sidebar-w: min(280px, 88vw); }
+
+  #app { flex-direction: column; }
 
   #sidebar {
-    position: fixed; inset: 0; right: auto;
-    transform: translateX(-100%);
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: var(--sidebar-w);
+    transform: translateX(-110%);
     transition: transform 0.25s ease;
-    z-index: 50;
+    z-index: 60;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
   }
   #sidebar.open { transform: translateX(0); }
 
   #member-panel, #chat-panel {
-    position: fixed; inset: 0; left: auto;
-    transform: translateX(100%);
+    position: fixed; top: 0; right: 0; bottom: 0;
+    transform: translateX(110%);
     transition: transform 0.25s ease;
-    z-index: 50; width: 260px;
+    z-index: 60; width: min(280px, 88vw);
+    box-shadow: -4px 0 24px rgba(0,0,0,0.5);
   }
   #member-panel.open { transform: translateX(0); display: flex; }
   #chat-panel.open   { transform: translateX(0); display: flex; }
@@ -1041,8 +1098,49 @@ input, textarea { font-family: var(--sans); }
   #sidebar-toggle { display: flex; }
   #members-toggle { display: flex; }
 
-  #draw-toolbar { padding: 0 6px; gap: 2px; }
-  #draw-toolbar .tool-btn { padding: 6px 7px; }
+  #board-header { gap: 6px; padding: 0 10px; }
+  #board-topic-input { display: none; }
+  #vis-chip { display: none; }
+
+  #draw-toolbar { padding: 0 4px; gap: 1px; overflow-x: auto; }
+  #draw-toolbar .tool-btn { padding: 6px 6px; flex-shrink: 0; }
+  #draw-toolbar .toolbar-sep { display: none; }
+  #color-swatches { gap: 3px; }
+  .swatch { width: 18px; height: 18px; }
+
+  /* Voice bar compact on mobile */
+  #voice-bar { gap: 4px; }
+  #mute-btn { padding: 5px 6px; }
+}
+
+/* ── Landscape phone (height < 500px) ── */
+@media (max-height: 500px) and (max-width: 1024px) {
+  :root { --header-h: 40px; --toolbar-h: 40px; }
+
+  #sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; right: auto;
+    width: min(260px, 80vw);
+    transform: translateX(-110%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar-toggle { display: flex; }
+  #members-toggle { display: flex; }
+
+  #member-panel, #chat-panel {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    transform: translateX(110%);
+    transition: transform 0.25s ease;
+    z-index: 60; width: min(260px, 70vw);
+  }
+  #member-panel.open { transform: translateX(0); display: flex; }
+  #chat-panel.open   { transform: translateX(0); display: flex; }
+
+  #board-topic-input { display: none; }
+  #draw-toolbar { padding: 0 4px; gap: 1px; }
+  #draw-toolbar .tool-btn { padding: 5px 5px; }
 }
 </style>
 </head>
@@ -1128,12 +1226,27 @@ input, textarea { font-family: var(--sans); }
       <!-- board items rendered by renderBoards() -->
     </div>
 
+    <div class="sidebar-section" style="margin-top:4px">
+      <div class="sidebar-section-label" style="display:flex;align-items:center;justify-content:space-between">
+        Saved
+        <button id="saved-boards-toggle" class="btn-icon" title="Toggle saved boards" style="padding:2px 4px">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5l3 3 3-3"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="saved-boards-list" style="display:none">
+      <!-- Rendered by renderSavedBoards() -->
+    </div>
+
     <div class="sidebar-create">
       <div class="create-row">
         <input id="create-board-input" type="text" placeholder="board name…" maxlength="30" autocomplete="off" autocorrect="off" spellcheck="false">
-        <button id="vis-toggle-btn" class="vis-toggle" title="Toggle public/private" aria-label="public">
+        <button id="vis-toggle-btn" class="vis-toggle" title="Public board (click to make private)" aria-label="public">
+          <!-- public = globe icon -->
           <svg class="vis-pub-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/></svg>
+          <!-- private = lock icon (hidden initially) -->
           <svg class="vis-priv-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/></svg>
+          <span class="vis-label">Public</span>
         </button>
         <button id="create-board-btn" class="btn btn-primary" title="Create board">+</button>
       </div>
@@ -1171,20 +1284,24 @@ input, textarea { font-family: var(--sans); }
           <line x1="10.6" y1="3.75" x2="4.4" y2="7.25"/>
         </svg>
       </button>
-      <!-- Voice bar -->
-      <div id="voice-bar">
-        <button id="mute-btn" class="no-mic" title="Mic muted (no permission)">
-          <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
-            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
-          </svg>
-          <div class="mic-bar" id="mic-level-bar">
-            <div class="mic-bar-seg" style="height:3px"></div>
-            <div class="mic-bar-seg" style="height:5px"></div>
-            <div class="mic-bar-seg" style="height:3px"></div>
-          </div>
-        </button>
-      </div>
+      <!-- Save board snapshot -->
+      <button id="save-board-btn" class="btn btn-ghost" title="Save snapshot of this board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 2h7l2 2v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>
+          <path d="M4 2v3h5V2M3.5 7.5h6M3.5 10h4"/>
+        </svg>
+        Save
+      </button>
+      <!-- Prominent export button in header -->
+      <button id="export-btn" class="btn btn-ghost" title="Save board as PNG" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/>
+          <path d="M1 10h11v2H1z"/>
+        </svg>
+        Export PNG
+      </button>
+      <!-- Voice bar (empty — mute btn is in member list next to self) -->
+      <div id="voice-bar" style="display:none"></div>
       <button id="chat-btn" class="btn-icon" aria-label="Toggle chat" title="Chat">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M2 3h12v8H9l-3 2v-2H2z"/>
@@ -1336,13 +1453,6 @@ input, textarea { font-family: var(--sans); }
         </svg>
       </button>
       <input id="insert-image-input" type="file" accept="image/*" style="display:none">
-      <!-- Export / Save as PNG -->
-      <button class="tool-btn" id="export-btn" title="Save board as PNG">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 2v8M5 7l3 3 3-3"/>
-          <path d="M2 12h12v2H2z"/>
-        </svg>
-      </button>
 
       <div class="toolbar-spacer"></div>
 
@@ -1371,7 +1481,6 @@ input, textarea { font-family: var(--sans); }
     <!-- Canvas area -->
     <div id="canvas-area">
       <canvas id="board-canvas"></canvas>
-      <div id="canvas-drop-overlay" hidden><div class="drop-hint">📷 Drop image here</div></div>
       <div id="no-board-hint">
         <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
           <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
@@ -1382,6 +1491,7 @@ input, textarea { font-family: var(--sans); }
         <p>Select or create a board to start drawing</p>
       </div>
       <textarea id="text-input-overlay" rows="1" autocomplete="off" spellcheck="false"></textarea>
+      <div id="text-drag-guide"></div>
     </div>
 
   </div><!-- /#main -->
@@ -1394,6 +1504,18 @@ input, textarea { font-family: var(--sans); }
     </div>
     <div id="member-list"></div>
   </aside>
+  <!-- Mute button: lives here until renderMembers() moves it into the self row -->
+  <button id="mute-btn" class="no-mic" title="Click to enable microphone" style="display:none">
+    <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="1" width="5" height="7" rx="2.5"/>
+      <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+    </svg>
+    <div class="mic-bar" id="mic-level-bar">
+      <div class="mic-bar-seg" style="height:3px"></div>
+      <div class="mic-bar-seg" style="height:5px"></div>
+      <div class="mic-bar-seg" style="height:3px"></div>
+    </div>
+  </button>
 
   <!-- Chat panel -->
   <aside id="chat-panel">
@@ -1456,6 +1578,7 @@ input, textarea { font-family: var(--sans); }
 
 <!-- Mod menu (host per-member actions) -->
 <div id="mod-menu">
+  <div id="mod-menu-peer-name" style="padding:8px 12px 4px;font-size:0.75rem;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);margin-bottom:2px;pointer-events:none"></div>
   <button class="mod-menu-item" id="mod-drawmute-btn">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
     <span id="mod-drawmute-label">Mute drawing</span>
@@ -1468,6 +1591,23 @@ input, textarea { font-family: var(--sans); }
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
     Kick
   </button>
+</div>
+
+<!-- Save board dialog -->
+<div id="save-dialog-overlay" class="overlay-backdrop" style="display:none">
+  <div class="modal-card" style="width:320px">
+    <div class="modal-title">Save Board Snapshot</div>
+    <p class="modal-body" style="margin-bottom:10px">Save to folder:</p>
+    <div id="save-folder-list" style="max-height:160px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:4px"></div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <input id="save-new-folder-input" type="text" class="input-styled" placeholder="New folder name…" maxlength="30" style="flex:1;font-size:0.83rem" autocomplete="off" spellcheck="false">
+      <button id="save-new-folder-btn" class="btn btn-ghost" style="padding:7px 10px;font-size:0.8rem">+ Folder</button>
+    </div>
+    <div class="modal-actions">
+      <button id="save-dialog-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="save-dialog-confirm" class="btn btn-primary">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- Install prompt (PWA) -->
@@ -1549,17 +1689,6 @@ input, textarea { font-family: var(--sans); }
         <button class="btn btn-ghost" id="clean-boards-btn" style="font-size:0.83rem">
           Remove all empty boards now
         </button>
-      </div>
-
-      <!-- Connection -->
-      <div class="settings-section">
-        <div class="settings-section-title">Connection</div>
-        <div class="field-wrap">
-          <div class="field-label">Custom server host <span style="font-weight:400;color:var(--text-dim)">(optional)</span></div>
-          <input id="custom-peer-host" type="text" class="input-styled" placeholder="e.g. my-server.com" style="font-size:0.85rem" autocomplete="off" spellcheck="false">
-        </div>
-        <button class="btn btn-ghost" id="save-connection-btn" style="font-size:0.83rem">Save &amp; reconnect</button>
-        <button class="btn btn-ghost" id="reset-connection-btn" style="font-size:0.83rem;color:var(--text-dim)">Use default (clear custom host)</button>
       </div>
 
       <!-- About -->
@@ -2111,6 +2240,33 @@ function connectToLobby() {
       if (data.board)   { safeAddBoard(data.board); scheduleRenderBoards(); }
       if (data.boards)  { data.boards.forEach(b => safeAddBoard(b)); scheduleRenderBoards(); }
     }
+    if (data.type === 'board-found') {
+      const { board, peerId } = data;
+      if (state._pendingFindBoard === board) {
+        state._pendingFindBoard = null;
+        boardVisibility[board] = 'private';
+        persistBoardVisibility();
+        safeAddBoard(board);
+        // Connect to the peer and knock directly
+        const existing = state.connections[peerId];
+        if (existing?.conn?.open) {
+          sendJoinRequest(board, peerId, existing.conn);
+        } else {
+          const c = state.peer.connect(peerId, { reliable: true });
+          state.connections[peerId] = makePeerInfo(c, { peerId });
+          setupDataConn(c);
+          c.on('open', () => { if (isCurrentDataConn(peerId, c)) sendJoinRequest(board, peerId, c); });
+          c.on('error', () => cancelPendingJoin('Could not reach board member'));
+        }
+        showWaitModal();
+      }
+    }
+    if (data.type === 'board-not-found') {
+      if (state._pendingFindBoard === data.board) {
+        state._pendingFindBoard = null;
+        toast(`No private board "${data.board}" found`, 'red');
+      }
+    }
   });
   conn.on('close', () => {
     state.lobbyConn = null;
@@ -2151,6 +2307,17 @@ function tryBecomeLobbyHost() {
           if (data.newBoard) safeAddBoard(data.newBoard);
           lobbyBroadcast({ type: 'lobby-update', registry: state.lobbyRegistry, board: data.newBoard || null, boards: publicBoards() });
           scheduleRenderBoards();
+        }
+        if (data.type === 'find-board') {
+          // Someone is looking for a private board — search registry and respond
+          const boardName = data.board;
+          const found = Object.entries(state.lobbyRegistry)
+            .find(([id, info]) => info.board === boardName && id !== conn.peer);
+          if (found) {
+            try { conn.send({ type: 'board-found', board: boardName, peerId: found[0] }); } catch {}
+          } else {
+            try { conn.send({ type: 'board-not-found', board: boardName }); } catch {}
+          }
         }
       });
       conn.on('close', () => {
@@ -2451,11 +2618,12 @@ function handleData(peerId, data) {
 
     case 'doc-diff':
       if (state.mutedDrawers.has(peerId)) break;
-      if (data.added)   data.added.forEach(shape   => docApplyShape(shape));
-      if (data.updated) data.updated.forEach(shape => docApplyShape(shape));
-      if (data.removed) data.removed.forEach(id     => doc.shapes.delete(id));
-      if (data.strokes)     data.strokes.forEach(s   => doc.strokes.set(s.id, s));
-      if (data.delStrokes)  data.delStrokes.forEach(id => doc.strokes.delete(id));
+      if (data.added)      data.added.forEach(s      => doc.shapes.set(s.id, s));
+      if (data.updated)    data.updated.forEach(s    => doc.shapes.set(s.id, s));
+      if (data.removed)    data.removed.forEach(id   => doc.shapes.delete(id));
+      if (data.strokes)    data.strokes.forEach(s    => doc.strokes.set(s.id, s));
+      if (data.delStrokes) data.delStrokes.forEach(id => doc.strokes.delete(id));
+      invalidateStatic();
       scheduleRender();
       markBoardActivity(peerId);
       break;
@@ -2625,6 +2793,10 @@ function joinBoard(board) {
   const noHint  = document.getElementById('no-board-hint');
   if (nameEl)  nameEl.textContent = board;
   if (noHint)  noHint.classList.add('hidden');
+  const exportBtn = document.getElementById('export-btn');
+  if (exportBtn) exportBtn.style.display = 'flex';
+  const saveBoardBtn = document.getElementById('save-board-btn');
+  if (saveBoardBtn) saveBoardBtn.style.display = 'flex';
 
   updateBoardChip();
   updateTopicInput();
@@ -2667,6 +2839,10 @@ function leaveBoard() {
   if (noHint)  noHint.classList.remove('hidden');
   if (chipEl)  chipEl.hidden = true;
   if (topicEl) topicEl.value = '';
+  const exportBtn2 = document.getElementById('export-btn');
+  if (exportBtn2) exportBtn2.style.display = 'none';
+  const saveBoardBtn2 = document.getElementById('save-board-btn');
+  if (saveBoardBtn2) saveBoardBtn2.style.display = 'none';
   syncInviteHash(null);
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
@@ -2849,17 +3025,20 @@ const doc = {
 function docClear() {
   doc.shapes.clear();
   doc.strokes.clear();
+  invalidateStatic();
 }
 
 function docApplyShape(shape) {
   if (!shape || !shape.id) return;
   doc.shapes.set(shape.id, shape);
+  invalidateStatic();
 }
 
 function docApplySnapshot(snap) {
   docClear();
   if (snap.shapes)  snap.shapes.forEach(s  => doc.shapes.set(s.id, s));
   if (snap.strokes) snap.strokes.forEach(s  => doc.strokes.set(s.id, s));
+  invalidateStatic();
 }
 
 function docSerialize() {
@@ -2873,7 +3052,7 @@ function docSerialize() {
    DRAWING ENGINE
 ═══════════════════════════════════════════ */
 const canvas = document.getElementById('board-canvas');
-const ctx    = canvas.getContext('2d');
+const ctx    = canvas.getContext('2d', { alpha: false }); // alpha:false → faster compositing
 
 // Viewport: world → screen  screen_xy = world_xy * zoom + pan
 const vp = { panX: 0, panY: 0, zoom: 1 };
@@ -2882,14 +3061,88 @@ const vp = { panX: 0, panY: 0, zoom: 1 };
 const WORLD_W = 9600;  // px in world space
 const WORLD_H = 6400;
 const PAPER_COLOR  = '#f8f7f4';
-const PAPER_RADIUS = 16;  // corner radius
+const PAPER_RADIUS = 16;
+
+// fitZoom = zoom level where the whole page fits the viewport (= "100%" to the user)
+let fitZoom = 1;
+
+// ── Performance: Path2D paper outline (rebuilt only when world size changes) ──
+let _paperPath2D = null;
+function getPaperPath2D() {
+  if (_paperPath2D) return _paperPath2D;
+  const hw = WORLD_W/2, hh = WORLD_H/2, r = PAPER_RADIUS;
+  _paperPath2D = new Path2D();
+  _paperPath2D.moveTo(-hw+r, -hh);
+  _paperPath2D.lineTo( hw-r, -hh); _paperPath2D.arcTo( hw, -hh,  hw, -hh+r, r);
+  _paperPath2D.lineTo( hw,  hh-r); _paperPath2D.arcTo( hw,  hh,  hw-r,  hh, r);
+  _paperPath2D.lineTo(-hw+r,  hh); _paperPath2D.arcTo(-hw,  hh, -hw,  hh-r, r);
+  _paperPath2D.lineTo(-hw, -hh+r); _paperPath2D.arcTo(-hw, -hh, -hw+r, -hh, r);
+  _paperPath2D.closePath();
+  return _paperPath2D;
+}
+
+// ── Performance: offscreen canvas for committed (static) content ──
+let _staticCanvas = null;
+let _staticCtx    = null;
+let _staticDirty  = true;   // set true whenever doc changes
+let _staticZoom   = 0;      // rerender if zoom changes significantly
+let _staticPanX   = 0;
+let _staticPanY   = 0;
+
+function invalidateStatic() { _staticDirty = true; }
+
+function ensureStaticCanvas() {
+  if (!_staticCanvas || _staticCanvas.width !== canvas.width || _staticCanvas.height !== canvas.height) {
+    _staticCanvas = document.createElement('canvas');
+    _staticCanvas.width  = canvas.width;
+    _staticCanvas.height = canvas.height;
+    _staticCtx   = _staticCanvas.getContext('2d', { alpha: true });
+    _staticDirty = true;
+  }
+  if (!_staticDirty && _staticZoom === vp.zoom && _staticPanX === vp.panX && _staticPanY === vp.panY) return;
+  _staticDirty = false;
+  _staticZoom  = vp.zoom;
+  _staticPanX  = vp.panX;
+  _staticPanY  = vp.panY;
+  const c = _staticCtx;
+  c.clearRect(0, 0, _staticCanvas.width, _staticCanvas.height);
+  c.save();
+  c.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
+  // clip to paper
+  c.clip(getPaperPath2D());
+  // draw grid
+  _drawGridOn(c);
+  // draw committed content
+  doc.strokes.forEach(s => drawStrokeOn(c, s));
+  doc.shapes.forEach(s  => drawShapeOn(c, s));
+  c.restore();
+}
+
+function _drawGridOn(c) {
+  const dotStep = 40;
+  const hw = WORLD_W/2, hh = WORLD_H/2;
+  const r  = Math.max(0.6, 0.9 / vp.zoom);
+  c.fillStyle = 'rgba(0,0,0,0.10)';
+  const sx = -hw + ((-hw % dotStep) + dotStep) % dotStep;
+  const sy = -hh + ((-hh % dotStep) + dotStep) % dotStep;
+  // Only draw dots inside the viewport
+  const { wx: vx1, wy: vy1 } = { wx: -vp.panX/vp.zoom, wy: -vp.panY/vp.zoom };
+  const vx2 = vx1 + canvas.width/vp.zoom, vy2 = vy1 + canvas.height/vp.zoom;
+  for (let x = sx; x <= hw; x += dotStep) {
+    if (x < vx1 - dotStep || x > vx2 + dotStep) continue;
+    for (let y = sy; y <= hh; y += dotStep) {
+      if (y < vy1 - dotStep || y > vy2 + dotStep) continue;
+      c.beginPath(); c.arc(x, y, r, 0, Math.PI*2); c.fill();
+    }
+  }
+}
 
 function fitViewport() {
-  // Fit the world into the canvas at the best zoom that shows the whole page
-  const padX = 60, padY = 60;
+  const padX = 80, padY = 80;
   const scaleX = (canvas.width  - padX * 2) / WORLD_W;
   const scaleY = (canvas.height - padY * 2) / WORLD_H;
-  vp.zoom = Math.min(1, Math.max(0.15, Math.min(scaleX, scaleY)));
+  fitZoom = Math.max(0.05, Math.min(scaleX, scaleY));
+  vp.zoom = fitZoom;
   vp.panX = canvas.width  / 2;
   vp.panY = canvas.height / 2;
   clampViewport();
@@ -2923,9 +3176,14 @@ let currentStroke = null;   // { id, points, color, size, peerId, t }
 let shapeStart  = null;     // { wx, wy } for rect/ellipse/line
 let shapePreview = null;    // temp shape during drag
 
-// Select state
-let selected    = null;
-let selOffset   = null;
+// Select / box-select state
+let selBox      = null;  // { x1,y1,x2,y2 } in world coords — rubber-band rect being drawn
+let selItems    = [];    // [{ kind:'shape'|'stroke', id }]
+let selOrigins  = [];    // original world positions at drag start
+let selDragStart = null; // { wx, wy } when moving selection
+let selHandle   = null;  // 'tl'|'tr'|'bl'|'br' for resize handle dragging
+let selHandleOriginBox = null; // original selection bbox when handle drag starts
+let selResizeItems = [];       // snapshot of item data at resize start
 
 // Pinch-zoom state
 let pointers = new Map();   // pointerId -> {x,y}
@@ -3012,7 +3270,10 @@ function worldToScreen(wx, wy) {
 }
 
 function setZoom(z, cx, cy) {
-  const clamped = Math.max(0.15, Math.min(6, z));
+  // Allow zoom from 20% to 1600% of fitZoom (full-fit)
+  const min = fitZoom * 0.2;
+  const max = fitZoom * 16;
+  const clamped = Math.max(min, Math.min(max, z));
   const { wx, wy } = screenToWorld(cx ?? canvas.width / 2, cy ?? canvas.height / 2);
   vp.zoom = clamped;
   vp.panX = (cx ?? canvas.width / 2) - wx * vp.zoom;
@@ -3024,7 +3285,8 @@ function setZoom(z, cx, cy) {
 
 function updateZoomLabel() {
   const el = document.getElementById('zoom-label');
-  if (el) el.textContent = Math.round(vp.zoom * 100) + '%';
+  // 100% means "whole canvas fits screen" — i.e., vp.zoom === fitZoom
+  if (el && fitZoom > 0) el.textContent = Math.round((vp.zoom / fitZoom) * 100) + '%';
 }
 
 // RAF render
@@ -3038,85 +3300,69 @@ function resizeCanvas() {
   canvas.width  = area.clientWidth;
   canvas.height = area.clientHeight;
   clampViewport();
+  invalidateStatic();
   scheduleRender();
 }
 
 // ── Render loop ──
 function renderFrame() {
   rafPending = false;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const w = canvas.width, h = canvas.height;
+
+  // ── 1. Dark desk background (no clearRect needed since alpha:false) ──
+  ctx.fillStyle = '#16161b';
+  ctx.fillRect(0, 0, w, h);
+
   ctx.save();
   ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
 
-  // ── Paper shadow (drawn before clipping) ──
+  // ── 2. Paper shadow ──
   ctx.save();
-  ctx.shadowColor   = 'rgba(0,0,0,0.55)';
-  ctx.shadowBlur    = 40 / vp.zoom;
-  ctx.shadowOffsetY = 6 / vp.zoom;
+  ctx.shadowColor   = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur    = Math.min(40, 40 / vp.zoom) * vp.zoom; // limit cost at low zoom
+  ctx.shadowOffsetY = 5;
+  ctx.fillStyle     = PAPER_COLOR;
+  ctx.fill(getPaperPath2D());
+  ctx.restore();
+
+  // ── 3. Paper fill ──
   ctx.fillStyle = PAPER_COLOR;
-  paperPath();
-  ctx.fill();
-  ctx.restore();
-
-  // ── Clip everything to the paper ──
-  paperPath();
-  ctx.clip();
-
-  // ── Paper fill ──
-  ctx.fillStyle = PAPER_COLOR;
-  paperPath(); ctx.fill();
-
-  // ── Grid ──
-  drawGrid();
-
-  // ── Content ──
-  doc.strokes.forEach(s => drawStroke(s));
-  doc.shapes.forEach(s  => drawShape(s));
-  if (currentStroke)  drawStroke(currentStroke);
-  if (shapePreview)   drawShape(shapePreview, true);
-
-  // ── Remote cursors (outside clip so they show at paper edge) ──
-  ctx.restore();
-  ctx.save();
-  ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
-  Object.entries(state.connections).forEach(([pid, info]) => {
-    if (info.cursor && info.board === state.currentBoard) {
-      drawCursor(info.cursor.x, info.cursor.y, info.name, peerDrawColor(info.name));
-    }
-  });
+  ctx.fill(getPaperPath2D());
 
   ctx.restore();
-}
 
-// Reusable paper rounded-rect path
-function paperPath() {
-  const hw = WORLD_W / 2, hh = WORLD_H / 2;
-  const r  = PAPER_RADIUS;
-  ctx.beginPath();
-  ctx.moveTo(-hw + r, -hh);
-  ctx.lineTo( hw - r, -hh); ctx.arcTo( hw, -hh,  hw, -hh + r, r);
-  ctx.lineTo( hw,  hh - r); ctx.arcTo( hw,  hh,  hw - r,  hh, r);
-  ctx.lineTo(-hw + r,  hh); ctx.arcTo(-hw,  hh, -hw,  hh - r, r);
-  ctx.lineTo(-hw, -hh + r); ctx.arcTo(-hw, -hh, -hw + r, -hh, r);
-  ctx.closePath();
-}
+  // ── 4. Static content (grid + committed strokes/shapes) via offscreen canvas ──
+  ensureStaticCanvas();
+  ctx.drawImage(_staticCanvas, 0, 0);
 
-function drawGrid() {
-  const dotStep = 40;
-  const hw = WORLD_W / 2, hh = WORLD_H / 2;
-  const r  = Math.max(0.6, 0.9 / vp.zoom);
-  ctx.fillStyle = 'rgba(0,0,0,0.10)';
-  // Snap grid to world origin so dots don't move with pan
-  const startX = -hw + ((-hw % dotStep) + dotStep) % dotStep;
-  const startY = -hh + ((-hh % dotStep) + dotStep) % dotStep;
-  for (let x = startX; x <= hw; x += dotStep) {
-    for (let y = startY; y <= hh; y += dotStep) {
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  // ── 5. Live / in-progress content (current stroke, shape preview) ──
+  if (currentStroke || shapePreview) {
+    ctx.save();
+    ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
+    ctx.clip(getPaperPath2D());
+    if (currentStroke) drawStroke(currentStroke);
+    if (shapePreview)  drawShape(shapePreview, true);
+    ctx.restore();
   }
+
+  // ── 6. Remote cursors ──
+  if (Object.keys(state.connections).length) {
+    ctx.save();
+    ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
+    Object.entries(state.connections).forEach(([pid, info]) => {
+      if (info.cursor && info.board === state.currentBoard) {
+        drawCursor(info.cursor.x, info.cursor.y, info.name, peerDrawColor(info.name));
+      }
+    });
+    ctx.restore();
+  }
+
+  // ── 7. Selection overlay ──
+  if (currentTool === 'select') drawSelectionOverlay();
 }
+
+// Legacy drawGrid kept for any direct calls — now only used through _drawGridOn
+function drawGrid() { _drawGridOn(ctx); }
 
 function drawStroke(s) {
   const isHL = s.highlighter;
@@ -3255,11 +3501,10 @@ canvas.addEventListener('contextmenu', e => e.preventDefault()); // block right-
 
 // Image drag & drop
 const canvasArea = document.getElementById('canvas-area');
-const dropOverlay = document.getElementById('canvas-drop-overlay');
-canvasArea.addEventListener('dragover', e => { e.preventDefault(); dropOverlay.hidden = false; });
-canvasArea.addEventListener('dragleave', e => { if (!canvasArea.contains(e.relatedTarget)) dropOverlay.hidden = true; });
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); canvasArea.classList.add('drag-over'); });
+canvasArea.addEventListener('dragleave', e => { if (!canvasArea.contains(e.relatedTarget)) canvasArea.classList.remove('drag-over'); });
 canvasArea.addEventListener('drop', e => {
-  e.preventDefault(); dropOverlay.hidden = true;
+  e.preventDefault(); canvasArea.classList.remove('drag-over');
   if (!state.currentBoard) return;
   const files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
@@ -3332,15 +3577,45 @@ function onPointerDown(e) {
     isDrawing = true;
     eraseAt(wx, wy);
   } else if (currentTool === 'select') {
-    const hit = hitTest(wx, wy);
-    if (hit) { selected = hit; selOffset = { dx: wx - (hit.x || 0), dy: wy - (hit.y || 0) }; }
-    else selected = null;
+    // Check resize handles first
+    const handle = hitTestHandle(wx, wy);
+    if (handle) {
+      selHandle = handle;
+      selHandleOriginBox = getSelectionBounds();
+      selResizeItems = selItems.map(it => {
+        const obj = it.kind === 'shape' ? doc.shapes.get(it.id) : null;
+        return obj ? { ...it, snap: { x: obj.x, y: obj.y, w: obj.w, h: obj.h } } : it;
+      });
+    } else {
+      // Check if clicking inside an existing selection to move it
+      const bounds = getSelectionBounds();
+      const inSel = bounds && wx >= bounds.x && wx <= bounds.x+bounds.w && wy >= bounds.y && wy <= bounds.y+bounds.h;
+      if (inSel && selItems.length) {
+        selDragStart = { wx, wy };
+        selOrigins   = selItems.map(it => {
+          if (it.kind === 'shape')  { const s = doc.shapes.get(it.id);  return s ? { x: s.x, y: s.y } : null; }
+          if (it.kind === 'stroke') { const s = doc.strokes.get(it.id); return s ? { pts: s.points.map(p => [...p]) } : null; }
+          return null;
+        });
+      } else {
+        // Start rubber-band box select
+        selBox = { x1: wx, y1: wy, x2: wx, y2: wy };
+        selItems = []; selOrigins = []; selDragStart = null;
+      }
+    }
     scheduleRender();
   } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool)) {
     isDrawing = true;
     shapeStart = { wx, wy };
   } else if (currentTool === 'text') {
-    openTextInput(wx, wy, e.clientX, e.clientY);
+    // Start drag to define text box — release to open textarea
+    if (textPos) { commitText(); } // commit any in-progress text first
+    textDragStart = { sx: e.clientX, sy: e.clientY, wx, wy };
+    isDrawing = true;
+    const g = textDragGuide;
+    g.style.display = 'block';
+    g.style.left = e.clientX + 'px'; g.style.top = e.clientY + 'px';
+    g.style.width = '0px'; g.style.height = '0px';
   }
 }
 
@@ -3391,6 +3666,17 @@ function onPointerMove(e) {
   // Broadcast cursor presence ~10 Hz
   broadcastAll({ type: 'presence', cursor: { x: wx, y: wy, color: strokeColor }, tool: currentTool, name: state.myName });
 
+  // Text tool drag-guide update
+  if (currentTool === 'text' && isDrawing && textDragStart) {
+    const dx = e.clientX - textDragStart.sx, dy = e.clientY - textDragStart.sy;
+    const g = textDragGuide;
+    const lx = dx < 0 ? e.clientX : textDragStart.sx;
+    const ty = dy < 0 ? e.clientY : textDragStart.sy;
+    g.style.left = lx + 'px'; g.style.top = ty + 'px';
+    g.style.width = Math.abs(dx) + 'px'; g.style.height = Math.abs(dy) + 'px';
+    return;
+  }
+
   if (!isDrawing && currentTool !== 'select') return;
 
   if (currentTool === 'pen' && isDrawing && currentStroke) {
@@ -3405,13 +3691,28 @@ function onPointerMove(e) {
   } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
     shapePreview = makeShape(wx, wy, true);
     scheduleRender();
-  } else if (currentTool === 'select' && selected && selOffset) {
-    selected.x = wx - selOffset.dx;
-    selected.y = wy - selOffset.dy;
-    doc.shapes.set(selected.id, selected);
-    pendingDiff.updated.push({ ...selected });
-    scheduleDiff();
-    scheduleRender();
+  } else if (currentTool === 'select') {
+    if (selBox) {
+      selBox.x2 = wx; selBox.y2 = wy;
+      scheduleRender();
+    } else if (selHandle && selHandleOriginBox) {
+      applyHandleResize(wx, wy);
+      scheduleRender();
+    } else if (selDragStart && selItems.length) {
+      const dx = wx - selDragStart.wx, dy = wy - selDragStart.wy;
+      selItems.forEach((it, i) => {
+        const orig = selOrigins[i];
+        if (!orig) return;
+        if (it.kind === 'shape') {
+          const s = doc.shapes.get(it.id);
+          if (s) { s.x = orig.x + dx; s.y = orig.y + dy; }
+        } else if (it.kind === 'stroke') {
+          const s = doc.strokes.get(it.id);
+          if (s && orig.pts) s.points = orig.pts.map(([px, py]) => [px + dx, py + dy]);
+        }
+      });
+      scheduleRender();
+    }
   }
 }
 
@@ -3429,13 +3730,31 @@ function onPointerUp(e) {
 
   if (!state.currentBoard || state.isDrawMuted) { isDrawing = false; return; }
 
-  if (currentTool === 'pen' && isDrawing && currentStroke) {
+  // Text drag-to-size finalization
+  if (currentTool === 'text' && isDrawing && textDragStart) {
+    textDragGuide.style.display = 'none';
+    isDrawing = false;
+    const dx = e.clientX - textDragStart.sx, dy = e.clientY - textDragStart.sy;
+    textBoxSw = Math.max(80, Math.abs(dx));
+    textBoxSh = Math.max(40, Math.abs(dy));
+    const sx = Math.min(e.clientX, textDragStart.sx);
+    const sy = Math.min(e.clientY, textDragStart.sy);
+    const { wx, wy } = screenToWorld(sx, sy);
+    textBoxSx = sx; textBoxSy = sy;
+    textDragStart = null;
+    openTextInput(wx, wy, sx, sy, textBoxSw, textBoxSh);
+    return;
+  }
+
+  const isDraw = currentTool === 'pen' || currentTool === 'highlighter';
+  if (isDraw && isDrawing && currentStroke) {
     if (currentStroke.points.length > 0) {
       doc.strokes.set(currentStroke.id, currentStroke);
-      undoStack.push({ type: 'stroke', id: currentStroke.id });
+      undoStack.push({ action: 'add', kind: 'stroke', id: currentStroke.id });
       redoStack.length = 0;
       pendingDiff.strokes.push({ ...currentStroke });
       scheduleDiff();
+      invalidateStatic();
     }
     currentStroke = null;
   } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
@@ -3443,13 +3762,47 @@ function onPointerUp(e) {
     const shape = makeShape(wx, wy);
     if (shape && (Math.abs(shape.w) > 2 || Math.abs(shape.h) > 2)) {
       doc.shapes.set(shape.id, shape);
-      undoStack.push({ type: 'shape', id: shape.id });
+      undoStack.push({ action: 'add', kind: 'shape', id: shape.id });
       redoStack.length = 0;
       pendingDiff.added.push({ ...shape });
       scheduleDiff();
+      invalidateStatic();
     }
     shapePreview = null;
     shapeStart   = null;
+  } else if (currentTool === 'select') {
+    if (selBox) {
+      // Finalize rubber-band selection
+      const { wx: endWx, wy: endWy } = getPos(e);
+      selBox.x2 = endWx; selBox.y2 = endWy;
+      finalizeSelectionBox();
+      selBox = null;
+    } else if (selHandle) {
+      // Broadcast final position of resized items
+      selItems.forEach(it => {
+        if (it.kind === 'shape') {
+          const s = doc.shapes.get(it.id);
+          if (s) pendingDiff.updated.push({ ...s });
+        }
+      });
+      if (pendingDiff.updated.length) scheduleDiff();
+      selHandle = null; selHandleOriginBox = null; selResizeItems = [];
+      invalidateStatic();
+    } else if (selDragStart) {
+      // Broadcast final moved positions
+      selItems.forEach(it => {
+        if (it.kind === 'shape') {
+          const s = doc.shapes.get(it.id);
+          if (s) pendingDiff.updated.push({ ...s });
+        } else if (it.kind === 'stroke') {
+          const s = doc.strokes.get(it.id);
+          if (s) pendingDiff.strokes.push({ ...s });
+        }
+      });
+      scheduleDiff();
+      selDragStart = null; selOrigins = [];
+      invalidateStatic();
+    }
   }
 
   isDrawing = false;
@@ -3471,6 +3824,159 @@ function makeShape(wx, wy, preview = false) {
     case 'arrow':   return { id, type: 'arrow',   x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
   }
   return null;
+}
+
+/* ── Box-select helpers ── */
+
+function finalizeSelectionBox() {
+  if (!selBox) return;
+  const bx = Math.min(selBox.x1, selBox.x2), bw = Math.abs(selBox.x2 - selBox.x1);
+  const by = Math.min(selBox.y1, selBox.y2), bh = Math.abs(selBox.y2 - selBox.y1);
+  selItems = [];
+  // Only select items belonging to us (or board host can select all)
+  doc.shapes.forEach((s, id) => {
+    if (!state.isBoardHost && s.peerId !== state.myId) return;
+    const sx = Math.min(s.x, s.x + (s.w||0)), sw = Math.abs(s.w||0);
+    const sy = Math.min(s.y, s.y + (s.h||0)), sh = Math.abs(s.h||0);
+    // Overlaps with selBox?
+    if (sx < bx+bw && sx+sw > bx && sy < by+bh && sy+sh > by) {
+      selItems.push({ kind: 'shape', id });
+    }
+  });
+  doc.strokes.forEach((s, id) => {
+    if (!state.isBoardHost && s.peerId !== state.myId) return;
+    if (s.points?.some(([px, py]) => px >= bx && px <= bx+bw && py >= by && py <= by+bh)) {
+      selItems.push({ kind: 'stroke', id });
+    }
+  });
+}
+
+function getSelectionBounds() {
+  if (!selItems.length) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  selItems.forEach(it => {
+    if (it.kind === 'shape') {
+      const s = doc.shapes.get(it.id);
+      if (!s) return;
+      const l = Math.min(s.x, s.x+(s.w||0)), r = Math.max(s.x, s.x+(s.w||0));
+      const t = Math.min(s.y, s.y+(s.h||0)), b = Math.max(s.y, s.y+(s.h||0));
+      minX=Math.min(minX,l); maxX=Math.max(maxX,r); minY=Math.min(minY,t); maxY=Math.max(maxY,b);
+    } else if (it.kind === 'stroke') {
+      const s = doc.strokes.get(it.id);
+      if (!s?.points) return;
+      s.points.forEach(([px, py]) => { minX=Math.min(minX,px); maxX=Math.max(maxX,px); minY=Math.min(minY,py); maxY=Math.max(maxY,py); });
+    }
+  });
+  if (!isFinite(minX)) return null;
+  const pad = 10 / vp.zoom;
+  return { x: minX-pad, y: minY-pad, w: maxX-minX+pad*2, h: maxY-minY+pad*2 };
+}
+
+const HANDLE_HIT_R = 10; // screen px
+function hitTestHandle(wx, wy) {
+  const b = getSelectionBounds();
+  if (!b || selItems.length < 1) return null;
+  const handles = {
+    tl: [b.x, b.y], tr: [b.x+b.w, b.y],
+    bl: [b.x, b.y+b.h], br: [b.x+b.w, b.y+b.h],
+    tc: [b.x+b.w/2, b.y], bc: [b.x+b.w/2, b.y+b.h],
+    ml: [b.x, b.y+b.h/2], mr: [b.x+b.w, b.y+b.h/2],
+  };
+  const thresh = HANDLE_HIT_R / vp.zoom;
+  for (const [key, [hx, hy]] of Object.entries(handles)) {
+    if (Math.hypot(wx-hx, wy-hy) < thresh) return key;
+  }
+  return null;
+}
+
+function applyHandleResize(wx, wy) {
+  if (!selHandleOriginBox || !selHandle) return;
+  const ob = selHandleOriginBox;
+  let newX = ob.x, newY = ob.y, newW = ob.w, newH = ob.h;
+  const h = selHandle;
+  if (h.includes('r')) newW = wx - ob.x;
+  if (h.includes('l')) { newW = (ob.x+ob.w) - wx; newX = wx; }
+  if (h.includes('b')) newH = wy - ob.y;
+  if (h.includes('t')) { newH = (ob.y+ob.h) - wy; newY = wy; }
+  if (Math.abs(newW) < 4 || Math.abs(newH) < 4) return;
+  const sx = newW / ob.w, sy = newH / ob.h;
+  // Scale each shape relative to the origin bounding box
+  selResizeItems.forEach(it => {
+    if (it.kind !== 'shape' || !it.snap) return;
+    const s = doc.shapes.get(it.id);
+    if (!s) return;
+    s.x = newX + (it.snap.x - ob.x) * sx;
+    s.y = newY + (it.snap.y - ob.y) * sy;
+    s.w = (it.snap.w || 1) * sx;
+    s.h = (it.snap.h || 1) * sy;
+  });
+}
+
+/* Selection rendering (called from within renderFrame) */
+function drawSelectionOverlay() {
+  if (currentTool !== 'select') return;
+  ctx.save();
+  ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
+
+  // Rubber-band selection rect
+  if (selBox) {
+    const bx = Math.min(selBox.x1,selBox.x2), bw = Math.abs(selBox.x2-selBox.x1);
+    const by = Math.min(selBox.y1,selBox.y2), bh = Math.abs(selBox.y2-selBox.y1);
+    ctx.strokeStyle = '#7c6aff';
+    ctx.lineWidth   = 1.5 / vp.zoom;
+    ctx.setLineDash([5/vp.zoom, 3/vp.zoom]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle   = 'rgba(124,106,255,0.06)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+  }
+
+  // Selection bounds + handles
+  if (selItems.length && !selBox) {
+    const b = getSelectionBounds();
+    if (b) {
+      // Bounding box
+      ctx.strokeStyle = '#7c6aff';
+      ctx.lineWidth   = 1.5 / vp.zoom;
+      ctx.setLineDash([5/vp.zoom, 3/vp.zoom]);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.setLineDash([]);
+
+      // Resize handles
+      const hw = 7 / vp.zoom;
+      const handles = [
+        [b.x, b.y], [b.x+b.w, b.y], [b.x, b.y+b.h], [b.x+b.w, b.y+b.h],
+        [b.x+b.w/2, b.y], [b.x+b.w/2, b.y+b.h], [b.x, b.y+b.h/2], [b.x+b.w, b.y+b.h/2],
+      ];
+      handles.forEach(([hx, hy]) => {
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#7c6aff';
+        ctx.lineWidth = 1.5 / vp.zoom;
+        ctx.beginPath();
+        ctx.rect(hx-hw/2, hy-hw/2, hw, hw);
+        ctx.fill(); ctx.stroke();
+      });
+    }
+  }
+
+  ctx.restore();
+}
+
+function deleteSelectedItems() {
+  if (!selItems.length) return;
+  selItems.forEach(it => {
+    if (it.kind === 'shape') {
+      doc.shapes.delete(it.id);
+      pendingDiff.removed.push(it.id);
+    } else if (it.kind === 'stroke') {
+      doc.strokes.delete(it.id);
+      pendingDiff.delStrokes.push(it.id);
+    }
+  });
+  scheduleDiff();
+  selItems = []; selBox = null; selDragStart = null;
+  invalidateStatic();
+  scheduleRender();
 }
 
 function eraseAt(wx, wy) {
@@ -3499,7 +4005,7 @@ function eraseAt(wx, wy) {
       changed = true;
     }
   });
-  if (changed) scheduleRender();
+  if (changed) { invalidateStatic(); scheduleRender(); }
 }
 
 function hitTest(wx, wy) {
@@ -3527,18 +4033,25 @@ function onWheel(e) {
   }
 }
 
-// ── Text input ──
-const textOverlay = document.getElementById('text-input-overlay');
-let textPos = null;
+// ── Text input (drag-to-size) ──
+const textOverlay  = document.getElementById('text-input-overlay');
+const textDragGuide = document.getElementById('text-drag-guide');
+let textPos  = null;
+let textDragStart = null; // { sx, sy } screen px when drag started
+let textBoxSx = 0, textBoxSy = 0, textBoxSw = 200, textBoxSh = 80; // screen-space box
 
-function openTextInput(wx, wy, sx, sy) {
+function openTextInput(wx, wy, sx, sy, sw, sh) {
   textPos = { wx, wy };
-  textOverlay.style.display = 'block';
-  textOverlay.style.left = sx + 'px';
-  textOverlay.style.top  = sy + 'px';
-  textOverlay.style.fontSize = Math.max(12, 18 * vp.zoom) + 'px';
+  const pxFontSize = Math.max(12, fontSize * vp.zoom);
+  textOverlay.style.display    = 'block';
+  textOverlay.style.left       = sx + 'px';
+  textOverlay.style.top        = sy + 'px';
+  textOverlay.style.width      = (sw || 200) + 'px';
+  textOverlay.style.height     = (sh || 80) + 'px';
+  textOverlay.style.fontSize   = pxFontSize + 'px';
+  textOverlay.style.lineHeight = '1.4';
   textOverlay.value = '';
-  textOverlay.focus();
+  setTimeout(() => textOverlay.focus(), 30);
 }
 
 textOverlay.addEventListener('keydown', e => {
@@ -3547,6 +4060,7 @@ textOverlay.addEventListener('keydown', e => {
     e.preventDefault();
     commitText();
   }
+  e.stopPropagation(); // don't trigger canvas shortcuts while typing
 });
 textOverlay.addEventListener('blur', commitText);
 
@@ -3556,55 +4070,61 @@ function commitText() {
   textOverlay.style.display = 'none';
   textOverlay.value = '';
   if (!text) { textPos = null; return; }
-  const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy, color: strokeColor, fontSize, text, peerId: state.myId, t: Date.now() };
+  // Convert screen box size back to world units for wrapping width
+  const wrapW = textBoxSw / vp.zoom;
+  const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy,
+    w: wrapW, h: textBoxSh / vp.zoom,
+    color: strokeColor, fontSize, text, peerId: state.myId, t: Date.now() };
   doc.shapes.set(shape.id, shape);
-  undoStack.push({ type: 'shape', id: shape.id });
+  undoStack.push({ kind: 'shape', action: 'add', id: shape.id });
   redoStack.length = 0;
   pendingDiff.added.push({ ...shape });
   scheduleDiff();
-  scheduleRender();
+  invalidateStatic(); scheduleRender();
   textPos = null;
 }
 
 // ── Undo / Redo ──
+// entry: { kind: 'stroke'|'shape', action: 'add', id, data? }
 function undo() {
   if (!undoStack.length) return;
   const entry = undoStack.pop();
-  if (entry.type === 'stroke') {
+  const kind = entry.kind || entry.type; // backwards compat
+  if (kind === 'stroke') {
     const s = doc.strokes.get(entry.id);
-    entry.data = entry.data || (s ? { ...s } : null);
+    if (!entry.data && s) entry.data = { ...s };
     doc.strokes.delete(entry.id);
     if (s) { pendingDiff.delStrokes.push(entry.id); scheduleDiff(); }
-  } else if (entry.type === 'shape') {
+  } else if (kind === 'shape') {
     const s = doc.shapes.get(entry.id);
-    entry.data = entry.data || (s ? { ...s } : null);
+    if (!entry.data && s) entry.data = { ...s };
     doc.shapes.delete(entry.id);
     if (s) { pendingDiff.removed.push(entry.id); scheduleDiff(); }
   }
-  redoStack.push(entry);
-  scheduleRender();
+  redoStack.push({ ...entry, kind });
+  invalidateStatic(); scheduleRender();
 }
 
 function redo() {
   if (!redoStack.length) return;
   const entry = redoStack.pop();
+  const kind = entry.kind || entry.type;
   if (entry.data) {
-    if (entry.type === 'stroke') {
+    if (kind === 'stroke') {
       doc.strokes.set(entry.id, entry.data);
-      pendingDiff.strokes.push({ ...entry.data });
-      scheduleDiff();
-    } else if (entry.type === 'shape') {
+      pendingDiff.strokes.push({ ...entry.data }); scheduleDiff();
+    } else if (kind === 'shape') {
       doc.shapes.set(entry.id, entry.data);
-      pendingDiff.added.push({ ...entry.data });
-      scheduleDiff();
+      pendingDiff.added.push({ ...entry.data }); scheduleDiff();
     }
   }
-  undoStack.push(entry);
-  scheduleRender();
+  undoStack.push({ ...entry, kind });
+  invalidateStatic(); scheduleRender();
 }
 
 // ── Tool selection ──
 function setTool(tool) {
+  if (tool !== 'select') { selItems = []; selBox = null; selHandle = null; selDragStart = null; }
   currentTool = tool;
   document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
@@ -3771,9 +4291,9 @@ function drawShapeOn(c, s) {
   c.restore();
 }
 
-document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(vp.zoom * 1.2));
-document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(vp.zoom / 1.2));
 document.getElementById('zoom-reset-btn').addEventListener('click', () => { fitViewport(); updateZoomLabel(); scheduleRender(); });
+document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(vp.zoom * 1.25));
+document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(vp.zoom / 1.25));
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {
@@ -3783,7 +4303,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     return;
   }
-  switch (e.key.toLowerCase()) {
+  switch (e.key) {
     case 'p': setTool('pen'); break;
     case 'y': setTool('highlighter'); break;
     case 'e': setTool('eraser'); break;
@@ -3794,6 +4314,14 @@ document.addEventListener('keydown', e => {
     case 't': setTool('text'); break;
     case 's': setTool('select'); break;
     case 'h': setTool('pan'); break;
+    case 'Escape':
+      selItems = []; selBox = null; selDragStart = null; selHandle = null;
+      scheduleRender(); break;
+    case 'Delete': case 'Backspace':
+      if (currentTool === 'select' && selItems.length) {
+        deleteSelectedItems(); e.preventDefault();
+      }
+      break;
   }
 });
 
@@ -3942,6 +4470,7 @@ function renderMembers() {
         <div class="member-name${m.isMe ? ' is-you' : ''}">${escHtml(m.name || m.id)}${hostBadge}</div>
         <div class="member-badge">${m.isMe ? 'you' : ''}${recoHtml}${muteHtml}</div>
       </div>
+      ${m.isMe ? '<div class="member-mute-slot" style="margin-left:auto"></div>' : ''}
     `;
     frag.appendChild(row);
   });
@@ -3949,11 +4478,18 @@ function renderMembers() {
   list.innerHTML = '';
   list.appendChild(frag);
 
-  // Clicking any non-self member row opens mod menu (host only)
+  // Move the actual mute button element into the self row slot
+  const muteSlot = list.querySelector('.member-mute-slot');
+  const muteEl   = document.getElementById('mute-btn');
+  if (muteSlot && muteEl) {
+    muteEl.style.display = '';  // show it (was hidden until placed)
+    muteSlot.appendChild(muteEl);
+    muteSlot.style.cssText += ';display:flex;align-items:center';
+  }
+
+  // Clicking any non-self member row opens mod menu for hosts, or view-only popup for non-hosts
   list.querySelectorAll('.member-row[data-peer]').forEach(row => {
-    row.addEventListener('click', () => {
-      if (state.isBoardHost) showModMenu(row.dataset.peer, row);
-    });
+    row.addEventListener('click', () => showModMenu(row.dataset.peer, row));
   });
 }
 
@@ -3961,13 +4497,26 @@ function showModMenu(peerId, anchorEl) {
   const menu = document.getElementById('mod-menu');
   menu._targetPeer = peerId;
   const rect = anchorEl.getBoundingClientRect();
-  menu.style.top  = rect.bottom + 4 + 'px';
-  menu.style.left = Math.min(rect.left, window.innerWidth - 180) + 'px';
+  const top  = Math.min(rect.bottom + 4, window.innerHeight - 160);
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 190));
+  menu.style.top  = top + 'px';
+  menu.style.left = left + 'px';
   menu.classList.add('open');
+
+  // Show/hide host-only actions based on role
+  const isHost = state.isBoardHost;
+  document.getElementById('mod-drawmute-btn').style.display = isHost ? '' : 'none';
+  document.getElementById('mod-promote-btn').style.display  = isHost ? '' : 'none';
+  document.getElementById('mod-kick-btn').style.display     = isHost ? '' : 'none';
 
   const isMuted = state.mutedDrawers.has(peerId);
   const lbl = document.getElementById('mod-drawmute-label');
   if (lbl) lbl.textContent = isMuted ? 'Unmute drawing' : 'Mute drawing';
+
+  // Show peer name in menu header
+  const info = state.connections[peerId];
+  const nameEl = document.getElementById('mod-menu-peer-name');
+  if (nameEl) nameEl.textContent = info?.name || peerId.slice(0, 8);
 }
 
 document.addEventListener('click', e => {
@@ -4080,11 +4629,12 @@ document.getElementById('create-board-input').addEventListener('keydown', e => {
 {
   const btn = document.getElementById('vis-toggle-btn');
   btn.addEventListener('click', () => {
-    const isPriv = btn.getAttribute('aria-label') === 'private';
-    btn.setAttribute('aria-label', isPriv ? 'public' : 'private');
-    btn.querySelector('.vis-pub-icon').style.display  = isPriv ? '' : 'none';
-    btn.querySelector('.vis-priv-icon').style.display = isPriv ? 'none' : '';
-    btn.title = isPriv ? 'Public board (click to make private)' : 'Private board (click to make public)';
+    const goPriv = btn.getAttribute('aria-label') !== 'private';
+    btn.setAttribute('aria-label', goPriv ? 'private' : 'public');
+    btn.querySelector('.vis-pub-icon').style.display  = goPriv ? 'none' : '';
+    btn.querySelector('.vis-priv-icon').style.display = goPriv ? '' : 'none';
+    btn.querySelector('.vis-label').textContent       = goPriv ? 'Private' : 'Public';
+    btn.title = goPriv ? 'Private board (click to make public)' : 'Public board (click to make private)';
   });
 }
 
@@ -4118,11 +4668,51 @@ function joinPrivate() {
   if (!raw) { input.focus(); return; }
   const name  = normalizeBoard(raw);
   if (!name) { toast('Invalid board name', 'red'); return; }
-  boardVisibility[name] = 'private';
-  persistBoardVisibility();
-  safeAddBoard(name);
   input.value = '';
-  requestJoinBoard(name);
+  toast(`Looking for "${name}"…`, 'info');
+  // Ask the lobby host directly — they have the authoritative registry
+  findBoardAndJoin(name);
+}
+
+function findBoardAndJoin(board, attempt = 0) {
+  // Check our local registry first (may already have it)
+  const members = getPeersInBoard(board);
+  if (members.length) {
+    boardVisibility[board] = 'private';
+    persistBoardVisibility();
+    safeAddBoard(board);
+    requestJoinBoard(board);
+    return;
+  }
+
+  // Ask the lobby host to look up the board
+  if (state.isLobbyHost) {
+    // We ARE the lobby host — if nobody is in that board, it doesn't exist
+    toast(`No private board "${board}" found`, 'red');
+    return;
+  }
+
+  if (state.lobbyConn?.open) {
+    try { state.lobbyConn.send({ type: 'find-board', board }); } catch {}
+    // Response handled in handleData case 'board-found' / 'board-not-found'
+    state._pendingFindBoard = board;
+    // Fallback timeout
+    setTimeout(() => {
+      if (state._pendingFindBoard === board) {
+        state._pendingFindBoard = null;
+        if (attempt < 2) findBoardAndJoin(board, attempt + 1);
+        else toast(`No private board "${board}" found`, 'red');
+      }
+    }, 2500);
+    return;
+  }
+
+  // Not connected to lobby yet — retry after a moment
+  if (attempt < 3) {
+    setTimeout(() => findBoardAndJoin(board, attempt + 1), 1000);
+  } else {
+    toast(`Not connected to lobby. Try again.`, 'red');
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -4153,8 +4743,6 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
   function openSettings() {
     const nameInput = document.getElementById('name-change-input');
     if (nameInput) nameInput.value = state.myName || '';
-    const hostInput = document.getElementById('custom-peer-host');
-    if (hostInput) hostInput.value = localStorage.getItem('slate_peer_host') || '';
     renderSettingsAvatar();
     overlay.classList.add('show');
   }
@@ -4329,29 +4917,6 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     toast(n ? `Removed ${n} empty board${n > 1 ? 's' : ''}` : 'No empty boards found');
   });
 
-  // ── Connection override ──
-  document.getElementById('save-connection-btn')?.addEventListener('click', () => {
-    const h = (document.getElementById('custom-peer-host')?.value || '').trim();
-    if (h) localStorage.setItem('slate_peer_host', h);
-    else localStorage.removeItem('slate_peer_host');
-    closeSettings();
-    toast('Reconnecting…', 'info');
-    setTimeout(() => {
-      try { state.peer?.destroy(); } catch {}
-      state.peer = null; state.lobbyConn = null;
-      state.isLobbyHost = false; state.reconnectAttempts = 0;
-      initPeer();
-    }, 300);
-  });
-
-  document.getElementById('reset-connection-btn')?.addEventListener('click', () => {
-    localStorage.removeItem('slate_peer_host');
-    localStorage.removeItem('slate_peer_port');
-    localStorage.removeItem('slate_peer_path');
-    localStorage.removeItem('slate_peer_secure');
-    document.getElementById('custom-peer-host').value = '';
-    toast('Custom host cleared', 'green');
-  });
 })();
 
 /* ═══════════════════════════════════════════
@@ -4680,6 +5245,7 @@ function toggleMute() {
 function updateMuteBtn() {
   const btn = document.getElementById('mute-btn');
   if (!btn) return;
+  btn.style.display = ''; // ensure visible once placed in member row
   if (!voiceState.localStream) {
     btn.className = 'no-mic';
     btn.title = 'Click to enable microphone';
@@ -4854,6 +5420,185 @@ function startApp() {
     }
   }
 }
+
+/* ═══════════════════════════════════════════
+   SAVE BOARD SYSTEM
+═══════════════════════════════════════════ */
+const SAVED_KEY = 'slate_saved_boards';
+
+function loadSavedBoards() {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '{}'); } catch { return {}; }
+}
+function persistSavedBoards(data) {
+  localStorage.setItem(SAVED_KEY, JSON.stringify(data));
+}
+
+// { folderName: [ { id, name, ts, snapshot: { shapes, strokes } } ] }
+let savedBoards = loadSavedBoards();
+
+function saveBoardSnapshot(folderName) {
+  const board = state.currentBoard;
+  if (!board) return;
+  if (!savedBoards[folderName]) savedBoards[folderName] = [];
+  const snap = {
+    id: genId(),
+    name: board,
+    ts: Date.now(),
+    snapshot: docSerialize(),
+  };
+  savedBoards[folderName].unshift(snap);
+  // Cap folder at 20 saves
+  if (savedBoards[folderName].length > 20) savedBoards[folderName].length = 20;
+  persistSavedBoards(savedBoards);
+  renderSavedBoards();
+  toast(`Saved to "${folderName}"`, 'green');
+}
+
+function loadSavedSnapshot(snap) {
+  if (!state.peer) { toast('Connect first', 'red'); return; }
+  // Leave current board
+  if (state.currentBoard) leaveBoard();
+  // Join a fresh private board with the snapshot's name
+  const bname = normalizeBoard(snap.name) || 'restored-' + snap.id.slice(0,6);
+  boardVisibility[bname] = 'private';
+  persistBoardVisibility();
+  safeAddBoard(bname);
+  joinBoard(bname);
+  // Apply snapshot after a brief tick
+  setTimeout(() => {
+    docApplySnapshot(snap.snapshot);
+    invalidateStatic(); scheduleRender();
+    toast(`Loaded "${snap.name}"`, 'green');
+  }, 100);
+}
+
+function deleteSavedItem(folderId, snapId) {
+  if (!savedBoards[folderId]) return;
+  savedBoards[folderId] = savedBoards[folderId].filter(s => s.id !== snapId);
+  if (!savedBoards[folderId].length) delete savedBoards[folderId];
+  persistSavedBoards(savedBoards);
+  renderSavedBoards();
+}
+
+function renderSavedBoards() {
+  const container = document.getElementById('saved-boards-list');
+  if (!container) return;
+  const folders = Object.keys(savedBoards);
+  if (!folders.length) {
+    container.innerHTML = `<div style="padding:8px 10px;font-size:0.75rem;color:var(--text-dim)">No saved boards yet.</div>`;
+    return;
+  }
+  container.innerHTML = '';
+  folders.forEach(folder => {
+    const items = savedBoards[folder];
+    const div = document.createElement('div');
+    div.className = 'saved-folder';
+    div.innerHTML = `
+      <div class="saved-folder-header">
+        <svg class="saved-folder-icon" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 9l1-5h7l1 5H2z"/><path d="M1 4h2l1-2h4l1 2h2"/></svg>
+        ${escHtml(folder)} <span style="opacity:0.4;font-weight:400">(${items.length})</span>
+      </div>
+      <div class="saved-folder-items">
+        ${items.map(s => `
+          <div class="saved-item" data-snap-folder="${escHtml(folder)}" data-snap-id="${s.id}">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="1" y="1" width="9" height="9" rx="1.5"/></svg>
+            <span class="saved-item-name" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
+            <span style="font-size:0.65rem;color:var(--text-dim);flex-shrink:0">${new Date(s.ts).toLocaleDateString()}</span>
+            <button class="saved-item-del" data-del-folder="${escHtml(folder)}" data-del-id="${s.id}" title="Delete">✕</button>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    // Toggle open
+    div.querySelector('.saved-folder-header').addEventListener('click', () => div.classList.toggle('open'));
+    // Load item
+    div.querySelectorAll('.saved-item').forEach(el => {
+      el.addEventListener('click', e => {
+        if (e.target.closest('.saved-item-del')) return; // handled below
+        const f = el.dataset.snapFolder, id = el.dataset.snapId;
+        const snap = savedBoards[f]?.find(s => s.id === id);
+        if (snap) loadSavedSnapshot(snap);
+      });
+    });
+    // Delete item
+    div.querySelectorAll('.saved-item-del').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        deleteSavedItem(btn.dataset.delFolder, btn.dataset.delId);
+      });
+    });
+    container.appendChild(div);
+  });
+}
+
+// Show/hide saved boards panel
+document.getElementById('saved-boards-toggle').addEventListener('click', () => {
+  const list = document.getElementById('saved-boards-list');
+  const isHidden = list.style.display === 'none';
+  list.style.display = isHidden ? 'block' : 'none';
+  if (isHidden) renderSavedBoards();
+});
+
+// Save dialog
+let _saveSelectedFolder = null;
+function openSaveDialog() {
+  if (!state.currentBoard) { toast('No active board', 'red'); return; }
+  _saveSelectedFolder = null;
+  const overlay = document.getElementById('save-dialog-overlay');
+  overlay.style.display = 'flex';
+  renderSaveFolderList();
+}
+function closeSaveDialog() {
+  document.getElementById('save-dialog-overlay').style.display = 'none';
+  document.getElementById('save-new-folder-input').value = '';
+}
+
+function renderSaveFolderList() {
+  const container = document.getElementById('save-folder-list');
+  const folders = Object.keys(savedBoards);
+  if (!folders.length) {
+    container.innerHTML = `<div style="font-size:0.78rem;color:var(--text-dim);padding:4px 0">No folders yet — create one below.</div>`;
+    return;
+  }
+  container.innerHTML = folders.map(f => `
+    <div class="save-folder-option${_saveSelectedFolder === f ? ' selected' : ''}" data-folder="${escHtml(f)}">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 9l1-5h7l1 5H2z"/><path d="M1 4h2l1-2h4l1 2h2"/></svg>
+      ${escHtml(f)}
+    </div>
+  `).join('');
+  container.querySelectorAll('.save-folder-option').forEach(el => {
+    el.addEventListener('click', () => {
+      _saveSelectedFolder = el.dataset.folder;
+      renderSaveFolderList();
+    });
+  });
+}
+
+document.getElementById('save-new-folder-btn').addEventListener('click', () => {
+  const input = document.getElementById('save-new-folder-input');
+  const name = input.value.trim().slice(0, 30);
+  if (!name) { input.focus(); return; }
+  if (!savedBoards[name]) savedBoards[name] = [];
+  _saveSelectedFolder = name;
+  persistSavedBoards(savedBoards);
+  input.value = '';
+  renderSaveFolderList();
+});
+
+document.getElementById('save-dialog-confirm').addEventListener('click', () => {
+  if (!_saveSelectedFolder) { toast('Select or create a folder first', 'red'); return; }
+  saveBoardSnapshot(_saveSelectedFolder);
+  closeSaveDialog();
+});
+document.getElementById('save-dialog-cancel').addEventListener('click', closeSaveDialog);
+document.getElementById('save-dialog-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('save-dialog-overlay')) closeSaveDialog();
+});
+
+document.getElementById('save-board-btn').addEventListener('click', openSaveDialog);
+
+// Initial render of saved boards in sidebar
+renderSavedBoards();
 </script>
 
 </body>

@@ -95,13 +95,14 @@ document.getElementById('board-canvas')?.addEventListener('pointerdown', () => {
   }
 }, false);
 
-// Patch drawStroke: apply opacity + Catmull-Rom smoothing for pen strokes
+// Patch drawStroke: layer visibility check (outermost) → opacity → Catmull-Rom smoothing
+// Layer check MUST be outermost so hidden-layer strokes never reach the render path.
 const _drawStrokeBase = window.drawStroke;
 if (_drawStrokeBase) {
-  window.drawStroke = function (s) {
+  // Inner wrapper: opacity + Catmull-Rom
+  const _drawStrokeOpacity = function (s) {
     if (!s) { _drawStrokeBase.call(this, s); return; }
     const op = (s._opacity != null) ? s._opacity : 1;
-
     // Smooth pen strokes with Catmull-Rom spline (skip highlighter / short strokes)
     if (s.points && s.points.length >= 4 && !s.highlighter) {
       ctx.save();
@@ -128,20 +129,33 @@ if (_drawStrokeBase) {
       ctx.restore();
       return;
     }
-    // Fallback for short / highlighter strokes
     if (op < 1) { ctx.save(); ctx.globalAlpha = op; _drawStrokeBase.call(this, s); ctx.restore(); }
     else _drawStrokeBase.call(this, s);
   };
+  // Outer wrapper: layer gate (checked first, every time)
+  window.drawStroke = function (s) {
+    if (s && s._layer) {
+      const layer = _layers.find(l => l.id === s._layer);
+      if (layer && !layer.visible) return; // hidden layer → skip entirely
+    }
+    _drawStrokeOpacity.call(this, s);
+  };
+  window.drawStroke._layerPatched = true;
 }
 
-// Patch drawShape for opacity
+// Patch drawShape for opacity + layer visibility
 const _drawShapeBase = window.drawShape;
 if (_drawShapeBase) {
   window.drawShape = function (s, preview) {
+    if (s && s._layer) {
+      const layer = _layers.find(l => l.id === s._layer);
+      if (layer && !layer.visible) return;
+    }
     const op = (s && s._opacity != null) ? s._opacity : 1;
     if (op < 1) { ctx.save(); ctx.globalAlpha = op; _drawShapeBase.call(this, s, preview); ctx.restore(); }
     else _drawShapeBase.call(this, s, preview);
   };
+  window.drawShape._layerPatched = true;
 }
 
 
@@ -511,33 +525,8 @@ document.getElementById('board-canvas')?.addEventListener('pointerdown', () => {
   }, 0);
 }, false);
 
-// Patch rendering to respect layer visibility
-function patchLayerVisibility() {
-  const _origDrawStroke2 = window.drawStroke;
-  if (_origDrawStroke2 && !_origDrawStroke2._layerPatched) {
-    const wrapped = function (s) {
-      if (s?._layer) {
-        const layer = _layers.find(l => l.id === s._layer);
-        if (layer && !layer.visible) return;
-      }
-      _origDrawStroke2.call(this, s);
-    };
-    wrapped._layerPatched = true;
-    window.drawStroke = wrapped;
-  }
-  const _origDrawShape2 = window.drawShape;
-  if (_origDrawShape2 && !_origDrawShape2._layerPatched) {
-    const wrapped = function (s, preview) {
-      if (s?._layer) {
-        const layer = _layers.find(l => l.id === s._layer);
-        if (layer && !layer.visible) return;
-      }
-      _origDrawShape2.call(this, s, preview);
-    };
-    wrapped._layerPatched = true;
-    window.drawShape = wrapped;
-  }
-}
+// Layer visibility patching is now done inline above (drawStroke/drawShape wrappers),
+// so no separate patchLayerVisibility() call is needed.
 
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -576,6 +565,13 @@ function injectShortcutsOverlay() {
     { key: 'Ctrl+0',      label: 'Fit canvas (100%)' },
     { key: '+  /  −',     label: 'Zoom in / out' },
     { key: '?',           label: 'This shortcuts panel' },
+    { head: 'Board' },
+    { key: 'Ctrl+S',        label: 'Save board' },
+    { key: 'Ctrl+E',        label: 'Export as PNG' },
+    { key: 'Ctrl+/',        label: 'Shortcuts overlay' },
+    { key: 'Ctrl+Shift+B',  label: 'Toggle visibility (host)' },
+    { key: 'Ctrl+Shift+L',  label: 'Leave board' },
+    { key: 'Ctrl+Shift+M',  label: 'Toggle minimap' },
   ];
   const rows = SHORTCUTS.map(s => s.head
     ? `<div class="sc-head" style="grid-column:1/-1">${s.head}</div>`
@@ -746,7 +742,6 @@ function init() {
   injectShortcutsOverlay();
   injectToolbarExtras();
   patchZoomLabel();
-  patchLayerVisibility();
   hookMinimapToBoard();
 }
 

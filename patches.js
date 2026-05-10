@@ -5,52 +5,39 @@
 (function () {
   'use strict';
 
-  // ── 1. VOICE BAR: mic toggle button in header ────────────────────────────────
-  // Renders the mic button, keeps its live/muted/off dot in sync, and wires the
-  // click handler.  Click behaviour:
-  //   • Mic not yet acquired → acquireMic() (silent if already granted, one-time
-  //     prompt if not), then joinVoice() to connect to room peers.
-  //   • Mic acquired, currently live → mute (track disabled, dot grey).
-  //   • Mic acquired, currently muted → unmute (track re-enabled, dot green).
-  // The mic is pre-acquired on page load by section 15; this button is therefore
-  // almost always in "toggle mute" mode rather than "request permission" mode.
+  // ── 1. VOICE BAR: restore open-mic toggle button ──────────────────────────
+  // The voice-bar div was set display:none. Restore it with a proper toggle btn.
   const voiceBar = document.getElementById('voice-bar');
   if (voiceBar) {
     voiceBar.style.display = 'flex';
     voiceBar.style.alignItems = 'center';
+    // If the toggle button doesn't already exist, add it
     if (!document.getElementById('voice-toggle-btn')) {
       voiceBar.innerHTML = `
-        <button id="voice-toggle-btn" title="Mute / unmute mic" data-live="false">
+        <button id="voice-toggle-btn" title="Join open mic" style="
+          display:flex;align-items:center;gap:5px;
+          padding:5px 10px;border-radius:6px;
+          background:var(--bg3);border:1px solid var(--border2);
+          color:var(--text-mid);cursor:pointer;font-size:0.75rem;font-weight:500;
+          transition:background 0.15s,color 0.15s,border-color 0.15s
+        ">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"
-            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
-            style="pointer-events:none;flex-shrink:0">
+            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <rect x="4" y="1" width="5" height="7" rx="2.5"/>
             <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
           </svg>
-          <span class="voice-dot"></span>
-          <span id="voice-toggle-label"></span>
+          <span id="voice-toggle-label">Mic off</span>
         </button>`;
-
+      // Wire the toggle button to the existing voice logic
       document.getElementById('voice-toggle-btn').addEventListener('click', () => {
-        if (typeof voiceState === 'undefined') return;
-
-        if (!voiceState.localStream) {
-          // No mic yet — acquire then immediately join voice.
-          // acquireMic() is idempotent; if permission was pre-granted in section 15
-          // this resolves instantly without any browser prompt.
-          if (typeof acquireMic === 'function') {
-            acquireMic().then(ok => {
-              if (!ok) return;
-              if (typeof updateMuteBtn === 'function') updateMuteBtn();
-              if (typeof joinVoice === 'function') joinVoice();
-              updateVoiceToggleBtn();
-            });
+        if (typeof toggleMute === 'function') {
+          // If no mic yet, acquire it; otherwise toggle mute
+          if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
+            if (typeof joinVoice === 'function') joinVoice();
+          } else {
+            toggleMute();
           }
-          return;
         }
-
-        // Stream exists — just toggle mute state on the existing track.
-        if (typeof toggleMute === 'function') toggleMute();
         updateVoiceToggleBtn();
       });
     }
@@ -58,25 +45,23 @@
 
   function updateVoiceToggleBtn() {
     const btn = document.getElementById('voice-toggle-btn');
+    const lbl = document.getElementById('voice-toggle-label');
     if (!btn || typeof voiceState === 'undefined') return;
     const hasStream = !!voiceState.localStream;
-    const muted     = hasStream && voiceState.isMuted;
-    const live      = hasStream && !muted;
-
-    btn.setAttribute('data-live', live ? 'true' : 'false');
-    // Dot colour is handled by CSS via [data-live] attribute (section 26).
-    btn.title = !hasStream ? 'Enable microphone' : muted ? 'Unmute mic' : 'Mute mic';
+    const muted = voiceState.isMuted;
+    btn.style.color = hasStream && !muted ? 'var(--green)' : 'var(--text-mid)';
+    btn.style.borderColor = hasStream && !muted ? 'rgba(34,211,165,0.4)' : 'var(--border2)';
+    btn.style.background = hasStream && !muted ? 'rgba(34,211,165,0.08)' : 'var(--bg3)';
+    if (lbl) lbl.textContent = !hasStream ? 'Mic off' : muted ? 'Muted' : 'Live';
+    btn.title = !hasStream ? 'Click to join open mic' : muted ? 'Click to unmute' : 'Click to mute';
   }
 
-  // Keep voice-toggle-btn in sync whenever the main updateMuteBtn fires.
+  // Patch updateMuteBtn to also update our toggle button
   const _origUpdateMuteBtn = window.updateMuteBtn;
   window.updateMuteBtn = function () {
     if (_origUpdateMuteBtn) _origUpdateMuteBtn.apply(this, arguments);
     updateVoiceToggleBtn();
   };
-
-  // Also sync on a 2-second heartbeat to catch state changes that bypass updateMuteBtn.
-  setInterval(updateVoiceToggleBtn, 2000);
 
   // ── 2. VIS TOGGLE: icon-only (remove text label) ──────────────────────────
   const visLabel = document.querySelector('#vis-toggle-btn .vis-label');
@@ -350,23 +335,18 @@
   }, 150);
 
   // ── 12. MEMBER CLICK: stop propagation so mod-menu stays open ─────────────
-  // Bug: click on member row bubbles to document which fires the "close menu"
-  // handler immediately, so the menu opens and vanishes in <1 ms.
-  // Fix: clone the row to remove old listeners, then attach with stopPropagation.
-  const _origRenderMembers = window.renderMembers;
-  window.renderMembers = function () {
-    _origRenderMembers.apply(this, arguments);
+  // Use event delegation on the list so we never clone/replace rows.
+  // Cloning destroyed the .member-mute-slot that renderMembers() moves #mute-btn into.
+  setTimeout(() => {
     const list = document.getElementById('member-list');
     if (!list) return;
-    list.querySelectorAll('.member-row[data-peer]').forEach(row => {
-      const clone = row.cloneNode(true);
-      row.parentNode.replaceChild(clone, row);
-      clone.addEventListener('click', e => {
-        e.stopPropagation();
-        if (typeof showModMenu === 'function') showModMenu(clone.dataset.peer, clone);
-      });
+    list.addEventListener('click', e => {
+      const row = e.target.closest('.member-row[data-peer]');
+      if (!row) return;
+      e.stopPropagation();
+      if (typeof showModMenu === 'function') showModMenu(row.dataset.peer, row);
     });
-  };
+  }, 600);
 
   // ── 13. BOARD LIST: fix lobbyBroadcast for PeerJS v1.x API ──────────────────
   // PeerJS v1 exposes connections as peer.connections (not peer._connections).
@@ -414,58 +394,15 @@
     return r;
   };
 
-  // ── 15. VOICE: acquire mic once on page load, never re-prompt ────────────────
-  // Strategy:
-  //   a) Request mic permission as soon as the page is interactive — one prompt, done.
-  //   b) If already granted (cached), grab it silently.
-  //   c) Store the stream in voiceState.localStream so all callers reuse it.
-  //   d) When joinBoard fires, wire up voice calls to any peers already in the board.
-  //   e) Inbound calls always answer with the cached stream — no second prompt.
-  (function setupVoice() {
-
-    // Step A: acquire mic once. Retry after a short delay if voiceState isn't ready yet.
-    function tryAcquireMic() {
-      if (typeof acquireMic === 'function') {
-        acquireMic().then(ok => {
-          if (ok && typeof updateMuteBtn === 'function') updateMuteBtn();
-        }).catch(() => {}); // silent if denied — user will see the mic button as inactive
-      } else {
-        // voiceState / acquireMic not yet defined — wait for main script to finish
-        setTimeout(tryAcquireMic, 300);
-      }
+  // ── 15. VOICE: auto-request mic when joining a board ───────────────────────
+  const _origJoinBoardVoice = window.joinBoard;
+  window.joinBoard = function (board) {
+    const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
+    if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
+      if (typeof joinVoice === 'function') setTimeout(() => joinVoice(), 400);
     }
-
-    // Delay slightly so index.html scripts finish defining acquireMic / voiceState
-    setTimeout(tryAcquireMic, 800);
-
-    // Step B: when joining a board, connect voice to all peers already in the room.
-    // We patch joinBoard exactly once here (section 14 already has its own wrapper).
-    // Using a named flag to avoid re-wrapping if this runs more than once.
-    if (!window._voiceJoinBoardPatched) {
-      window._voiceJoinBoardPatched = true;
-      const _origJoinBoardVoice = window.joinBoard;
-      window.joinBoard = function (board) {
-        const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
-        // Give connections 600 ms to open, then attach voice to each peer in board
-        setTimeout(() => {
-          if (typeof joinVoice === 'function') {
-            // joinVoice() calls acquireMic() internally but acquireMic() is idempotent:
-            // it returns immediately if localStream already exists.
-            joinVoice();
-          }
-        }, 600);
-        return r;
-      };
-    }
-
-    // Step C: patch inbound call handler so it ALWAYS answers with cached stream
-    // and never triggers a second getUserMedia prompt.
-    // The original handler in index.html calls acquireMic() if localStream is absent —
-    // which is correct and safe because our acquireMic() is now idempotent.
-    // No extra patching needed here; the pre-acquisition in step A ensures localStream
-    // is populated before any call can arrive.
-
-  })();
+    return r;
+  };
 
   // ── 16. REMOTE CURSORS: draw other users' cursors on the canvas ─────────────
   // Cursor world-coords already arrive via 'presence' messages and are stored in
@@ -2084,21 +2021,18 @@ input:focus-visible  { outline: none; }
     /* ── a. Hide hamburger & members toggle on desktop ── */
     const hideOnDesktopCSS = document.createElement('style');
     hideOnDesktopCSS.textContent = `
-      /* Desktop: sidebar is always visible, no need for hamburger or members btn */
-      @media (min-width: 769px) {
+      /* Desktop (wide): sidebar always visible, hide hamburger + members toggle */
+      @media (min-width: 901px) {
         #sidebar-toggle  { display: none !important; }
         #members-toggle  { display: none !important; }
       }
-      /* Mobile: show them */
-      @media (max-width: 768px) {
+      /* Mobile / tablet / landscape phone: show hamburger + members toggle */
+      @media (max-width: 900px) {
         #sidebar-toggle { display: flex !important; }
         #members-toggle { display: flex !important; }
       }
 
-      /* ── Voice button: visible in header, icon-only ── */
-      /* #mute-btn is in the member panel; #voice-toggle-btn is our injected header btn */
-
-      /* ── Vis-toggle: clean square icon button ── */
+      /* ── Vis-toggle in sidebar: icon-only square ── */
       #vis-toggle-btn.vis-toggle {
         width: 30px !important; height: 30px !important;
         padding: 0 !important; border-radius: 8px !important;
@@ -2106,7 +2040,7 @@ input:focus-visible  { outline: none; }
         justify-content: center !important;
         background: transparent !important;
         transition: background 0.12s, border-color 0.12s !important;
-        overflow: visible !important; gap: 0 !important;
+        overflow: hidden !important; gap: 0 !important;
         flex-shrink: 0 !important;
         position: relative !important;
       }
@@ -2122,12 +2056,16 @@ input:focus-visible  { outline: none; }
       }
       #vis-toggle-btn .vt-knob { display: none !important; }
       #vis-toggle-btn .vis-label { display: none !important; }
+      /* Only show the icon matching the current aria-label */
+      #vis-toggle-btn[aria-label="public"]  .vis-pub-icon  { display: block !important; }
+      #vis-toggle-btn[aria-label="public"]  .vis-priv-icon { display: none  !important; }
+      #vis-toggle-btn[aria-label="private"] .vis-priv-icon { display: block !important; }
+      #vis-toggle-btn[aria-label="private"] .vis-pub-icon  { display: none  !important; }
       #vis-toggle-btn .vis-pub-icon,
       #vis-toggle-btn .vis-priv-icon {
         position: static !important; width: 14px !important; height: 14px !important;
-        display: block !important; pointer-events: none; flex-shrink: 0;
+        pointer-events: none; flex-shrink: 0;
       }
-      /* Tooltip hover */
       #vis-toggle-btn:hover { filter: brightness(1.15) !important; }
 
       /* ── Header: flex spacer so actions cluster right ── */
@@ -2245,5 +2183,281 @@ input:focus-visible  { outline: none; }
     }, 400);
 
   })(); // end domOverhaul
+
+  // ── 28. HOST PANEL: crown icon in header opens host-capabilities popover ───
+  (function injectHostPanel() {
+    const css = document.createElement('style');
+    css.textContent = `
+      #host-panel-btn {
+        width:30px;height:30px;padding:6px;border-radius:7px;
+        background:rgba(250,204,21,0.08);border:1px solid rgba(250,204,21,0.22);
+        color:#f5c800;display:none;align-items:center;justify-content:center;
+        cursor:pointer;flex-shrink:0;transition:background 0.12s;
+      }
+      #host-panel-btn:hover { background:rgba(250,204,21,0.16); }
+      #host-panel-btn.active { background:rgba(250,204,21,0.2);border-color:rgba(250,204,21,0.5); }
+      #host-popover {
+        position:fixed;z-index:8500;background:var(--bg2);
+        border:1px solid var(--border2);border-radius:10px;
+        padding:6px 0;min-width:200px;
+        box-shadow:0 12px 40px rgba(0,0,0,0.6);
+        display:none;flex-direction:column;
+      }
+      #host-popover.open { display:flex; }
+      #host-popover-title {
+        font-size:0.6rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+        color:var(--text-dim);padding:4px 14px 8px;
+        border-bottom:1px solid var(--border);margin-bottom:4px;
+      }
+      .host-action {
+        display:flex;align-items:center;gap:9px;padding:7px 14px;
+        font-size:0.8rem;color:var(--text-mid);cursor:pointer;
+        background:none;border:none;width:100%;text-align:left;
+        transition:background 0.1s,color 0.1s;
+      }
+      .host-action:hover { background:var(--bg3);color:var(--text); }
+      .host-action.danger:hover { background:rgba(248,113,113,0.1);color:var(--danger); }
+      .host-action svg { flex-shrink:0;opacity:0.75; }
+      .host-action-sep { height:1px;background:var(--border);margin:4px 0; }
+      #host-vis-row {
+        display:flex;align-items:center;gap:9px;padding:7px 14px;
+        font-size:0.8rem;color:var(--text-mid);
+      }
+      #host-vis-row svg { flex-shrink:0;opacity:0.75; }
+      #host-vis-toggle-inner { margin-left:auto;display:flex;align-items:center;gap:6px;font-size:0.72rem; }
+      #host-vis-lbl { color:var(--text-dim);min-width:38px;text-align:right; }
+      .hv-pill {
+        width:30px;height:16px;border-radius:8px;
+        background:var(--bg4);border:1px solid var(--border2);
+        cursor:pointer;position:relative;flex-shrink:0;transition:background 0.2s;
+      }
+      .hv-pill.on { background:rgba(124,106,255,0.35);border-color:rgba(124,106,255,0.5); }
+      .hv-knob {
+        position:absolute;top:2px;left:2px;width:10px;height:10px;
+        border-radius:5px;background:var(--text-dim);
+        transition:transform 0.2s,background 0.2s;
+      }
+      .hv-pill.on .hv-knob { transform:translateX(14px);background:var(--accent); }
+      #host-member-hint {
+        padding:2px 14px 4px;font-size:0.62rem;
+        color:var(--text-dim);letter-spacing:.06em;text-transform:uppercase;
+      }
+    `;
+    document.head.appendChild(css);
+
+    setTimeout(function() {
+      var header = document.getElementById('board-header');
+      if (!header || document.getElementById('host-panel-btn')) return;
+
+      var btn = document.createElement('button');
+      btn.id = 'host-panel-btn';
+      btn.title = 'Host controls';
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M1 10h12l-1.5-5L9 8 7 3 5 8 2.5 5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="rgba(250,204,21,0.18)"/></svg>';
+      var leaveBtn = document.getElementById('leave-board-btn');
+      if (leaveBtn) header.insertBefore(btn, leaveBtn);
+      else header.appendChild(btn);
+
+      var pop = document.createElement('div');
+      pop.id = 'host-popover';
+      pop.innerHTML = [
+        '<div id="host-popover-title">⚙ Host Controls</div>',
+        '<div id="host-vis-row">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1S4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1s2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/></svg>',
+          '<span>Board visibility</span>',
+          '<div id="host-vis-toggle-inner">',
+            '<span id="host-vis-lbl">Public</span>',
+            '<div class="hv-pill" id="host-vis-pill"><div class="hv-knob"></div></div>',
+          '</div>',
+        '</div>',
+        '<div class="host-action-sep"></div>',
+        '<button class="host-action" id="hact-clearvote">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 2l9 9M11 2l-9 9"/></svg>',
+          'Vote to clear board',
+        '</button>',
+        '<div class="host-action-sep"></div>',
+        '<div id="host-member-hint">Select a member first:</div>',
+        '<button class="host-action" id="hact-drawmute">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1" y="4" width="4" height="8" rx="1"/><line x1="8" y1="4" x2="8" y2="12"/><line x1="11" y1="4" x2="11" y2="12"/><line x1="2" y1="2" x2="11" y2="11" stroke="var(--danger)" stroke-width="1.6"/></svg>',
+          'Mute drawing',
+        '</button>',
+        '<button class="host-action" id="hact-audiomute">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/><line x1="2" y1="2" x2="11" y2="11" stroke="var(--danger)" stroke-width="1.6"/></svg>',
+          'Mute mic',
+        '</button>',
+        '<button class="host-action" id="hact-promote">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><path d="M1 9.5h11l-1-4L9 8 6.5 2 4 8 2 5.5z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" fill="rgba(250,204,21,0.2)"/></svg>',
+          'Promote to host',
+        '</button>',
+        '<button class="host-action danger" id="hact-kick">',
+          '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="6.5" cy="4" r="2.5"/><path d="M1 12c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><line x1="9.5" y1="7.5" x2="12.5" y2="10.5"/><line x1="12.5" y1="7.5" x2="9.5" y2="10.5"/></svg>',
+          'Kick member',
+        '</button>',
+      ].join('');
+      document.body.appendChild(pop);
+
+      var _hostTargetPeer = null;
+
+      function positionPop() {
+        var rect = btn.getBoundingClientRect();
+        pop.style.top  = (rect.bottom + 6) + 'px';
+        var left = rect.right - 200;
+        pop.style.left = Math.max(8, left) + 'px';
+      }
+
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var isOpen = pop.classList.toggle('open');
+        btn.classList.toggle('active', isOpen);
+        if (isOpen) { positionPop(); syncHostVis(); }
+      });
+      document.addEventListener('click', function(e) {
+        if (!pop.contains(e.target) && e.target !== btn) {
+          pop.classList.remove('open');
+          btn.classList.remove('active');
+        }
+      });
+
+      function syncHostVis() {
+        var vis = (typeof boardVisibility !== 'undefined' && typeof state !== 'undefined')
+          ? (boardVisibility[state.currentBoard] || 'public') : 'public';
+        var isPriv = vis === 'private';
+        document.getElementById('host-vis-lbl').textContent = isPriv ? 'Private' : 'Public';
+        var pill = document.getElementById('host-vis-pill');
+        if (pill) pill.classList.toggle('on', isPriv);
+      }
+
+      var visPill = document.getElementById('host-vis-pill');
+      if (visPill) {
+        visPill.addEventListener('click', function() {
+          if (typeof toggleBoardVisibility === 'function') toggleBoardVisibility();
+          setTimeout(syncHostVis, 80);
+        });
+      }
+
+      // Capture target peer whenever mod menu opens
+      var _origSMM = window.showModMenu;
+      window.showModMenu = function(peerId, anchorEl) {
+        _hostTargetPeer = peerId;
+        if (_origSMM) _origSMM.apply(this, arguments);
+      };
+
+      function requirePeer() {
+        if (!_hostTargetPeer) {
+          if (typeof toast === 'function') toast('Click a member row first', 'info');
+          return false;
+        }
+        return true;
+      }
+
+      document.getElementById('hact-clearvote').addEventListener('click', function() {
+        pop.classList.remove('open'); btn.classList.remove('active');
+        if (typeof initiateVoteClear === 'function') initiateVoteClear();
+      });
+      document.getElementById('hact-drawmute').addEventListener('click', function() {
+        pop.classList.remove('open'); btn.classList.remove('active');
+        if (!requirePeer()) return;
+        var menu = document.getElementById('mod-menu');
+        if (menu) menu._targetPeer = _hostTargetPeer;
+        document.getElementById('mod-drawmute-btn')?.click();
+      });
+      document.getElementById('hact-audiomute').addEventListener('click', function() {
+        pop.classList.remove('open'); btn.classList.remove('active');
+        if (!requirePeer()) return;
+        if (typeof modAudioMute === 'function') modAudioMute(_hostTargetPeer);
+      });
+      document.getElementById('hact-promote').addEventListener('click', function() {
+        pop.classList.remove('open'); btn.classList.remove('active');
+        if (!requirePeer()) return;
+        var menu = document.getElementById('mod-menu');
+        if (menu) menu._targetPeer = _hostTargetPeer;
+        document.getElementById('mod-promote-btn')?.click();
+      });
+      document.getElementById('hact-kick').addEventListener('click', function() {
+        pop.classList.remove('open'); btn.classList.remove('active');
+        if (!requirePeer()) return;
+        var menu = document.getElementById('mod-menu');
+        if (menu) menu._targetPeer = _hostTargetPeer;
+        document.getElementById('mod-kick-btn')?.click();
+      });
+
+      function syncHostBtn() {
+        var isHost = typeof state !== 'undefined' && !!state.isBoardHost && !!state.currentBoard;
+        btn.style.display = isHost ? 'flex' : 'none';
+        if (!isHost) { pop.classList.remove('open'); btn.classList.remove('active'); }
+      }
+
+      // Hook into renderMembers to keep crown in sync
+      var _origRM = window.renderMembers;
+      window.renderMembers = function() {
+        if (_origRM) _origRM.apply(this, arguments);
+        syncHostBtn();
+        syncHostVis();
+      };
+
+      setInterval(syncHostBtn, 2500);
+    }, 500);
+  })();
+
+  // ── 29. EXTRA HOTKEYS ─────────────────────────────────────────────────────
+  document.addEventListener('keydown', function(e) {
+    var tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+    // Ctrl+S → save board
+    if (e.ctrlKey && !e.shiftKey && e.key === 's') {
+      e.preventDefault();
+      var saveBtn = document.getElementById('save-board-btn');
+      if (saveBtn && saveBtn.offsetParent !== null) {
+        saveBtn.click();
+        if (typeof toast === 'function') toast('Board saved ✓');
+      }
+    }
+    // Ctrl+E → export PNG
+    if (e.ctrlKey && !e.shiftKey && e.key === 'e') {
+      e.preventDefault();
+      var expBtn = document.getElementById('export-btn');
+      if (expBtn && expBtn.offsetParent !== null) expBtn.click();
+    }
+    // Ctrl+/ or Ctrl+? → shortcuts overlay
+    if (e.ctrlKey && (e.key === '/' || e.key === '?')) {
+      e.preventDefault();
+      var ov = document.getElementById('shortcuts-overlay');
+      if (ov) ov.classList.toggle('open');
+    }
+    // Ctrl+Shift+L → leave board
+    if (e.ctrlKey && e.shiftKey && e.key === 'L') {
+      e.preventDefault();
+      if (typeof leaveBoard === 'function' && typeof state !== 'undefined' && state.currentBoard) leaveBoard();
+    }
+    // Ctrl+Shift+B → toggle board visibility (host only)
+    if (e.ctrlKey && e.shiftKey && e.key === 'B') {
+      e.preventDefault();
+      if (typeof toggleBoardVisibility === 'function' &&
+          typeof state !== 'undefined' && state.isBoardHost && state.currentBoard) {
+        toggleBoardVisibility();
+      }
+    }
+    // Ctrl+Shift+M → toggle minimap
+    if (e.ctrlKey && e.shiftKey && e.key === 'M') {
+      e.preventDefault();
+      var mm = document.getElementById('minimap-wrap');
+      if (mm) mm.style.display = mm.style.display === 'none' ? 'block' : 'none';
+    }
+  }, true);
+
+  // ── 30. MOBILE LANDSCAPE: show hamburger + members btn, scrollable toolbar ─
+  (function() {
+    var s = document.createElement('style');
+    s.textContent = [
+      '@media (orientation:landscape) and (max-height:520px) {',
+        '#sidebar-toggle { display:flex !important; }',
+        '#members-toggle { display:flex !important; }',
+        '#board-header { height:38px !important; }',
+        '#draw-toolbar { height:40px !important; min-height:40px !important; }',
+        '#minimap-wrap { bottom:48px !important; right:6px !important; }',
+      '}',
+    ].join('\n');
+    document.head.appendChild(s);
+  })();
 
 })();

@@ -349,6 +349,122 @@
     line-height: 1.35;
     margin: 0;
   }
+  .ob-room-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .ob-room-row .ob-input { flex: 1; min-width: 0; }
+  .ob-random {
+    flex-shrink: 0;
+    padding: 0 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border2);
+    background: var(--bg3);
+    color: var(--text-mid);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .ob-random:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(139,124,247,0.08);
+  }
+  .ob-public-block {
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .ob-public-note {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    margin: 4px 0 10px;
+    line-height: 1.35;
+  }
+  .ob-public-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 28px;
+    align-items: flex-start;
+  }
+  .ob-board-pill {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border2);
+    background: var(--bg3);
+    color: var(--text-mid);
+    cursor: pointer;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .ob-board-pill:hover {
+    border-color: var(--accent);
+    color: var(--text);
+    background: rgba(139,124,247,0.1);
+  }
+  .ob-muted {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  .slate-access-toggle {
+    display: flex;
+    gap: 6px;
+  }
+  .slate-access-toggle button {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.1);
+    background: rgba(0,0,0,.25);
+    color: var(--text-mid);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .slate-access-toggle button:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .slate-access-toggle button.active {
+    border-color: rgba(139,124,247,.45);
+    color: var(--text);
+    background: rgba(139,124,247,.12);
+  }
+  .slate-members {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+  .slate-members li {
+    font-size: 11px;
+    color: var(--text-mid);
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .slate-members li:last-child { border-bottom: none; }
+  .slate-members .nm { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slate-members .role {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
 
   .slate-chip {
     display: inline-block;
@@ -488,7 +604,10 @@
     </div>
     <div class="ob-field">
       <label class="ob-label" for="ob-room">room</label>
-      <input class="ob-input" id="ob-room" type="text" placeholder="my-room" maxlength="64" autocomplete="off" spellcheck="false">
+      <div class="ob-room-row">
+        <input class="ob-input" id="ob-room" type="text" placeholder="my-room" maxlength="64" autocomplete="off" spellcheck="false">
+        <button type="button" class="ob-random" id="ob-random-room" title="Random room name">Random</button>
+      </div>
     </div>
     <div class="ob-row-inline">
       <input type="checkbox" id="ob-private" />
@@ -496,6 +615,11 @@
     </div>
     <p class="ob-private-hint">Private: guests must request access; only people you allow see the board. Share the full link (includes <code>?access=private</code>).</p>
     <button class="ob-join" id="ob-join">Join Room →</button>
+    <div class="ob-public-block">
+      <div class="ob-label">Public boards live now</div>
+      <p class="ob-public-note">Private boards never appear here (same idea as Chirp).</p>
+      <div id="ob-public-list" class="ob-public-list" aria-live="polite"></div>
+    </div>
   </div>
 </div>
 <div id="root"></div>
@@ -505,6 +629,7 @@
     <div class="slate-chrome__meta">
       <div class="slate-chrome__roomline">
         <span id="slate-access-chip" class="slate-chip" hidden>Private</span>
+        <span id="slate-access-chip-pub" class="slate-chip slate-chip--pub" hidden>Public</span>
         <span class="slate-chrome__room" id="slate-room"></span>
       </div>
       <span class="slate-chrome__peers" id="slate-peers"></span>
@@ -518,6 +643,17 @@
     <div class="slate-menu__section">
       <label class="slate-menu__label" for="slate-name">Display name</label>
       <input type="text" id="slate-name" class="slate-menu__input" maxlength="28" placeholder="Anonymous" autocomplete="nickname" spellcheck="false">
+    </div>
+    <div class="slate-menu__section" id="slate-room-access-wrap" hidden>
+      <span class="slate-menu__label">Room visibility (host)</span>
+      <div class="slate-access-toggle" id="slate-access-toggle">
+        <button type="button" id="slate-menu-pub" class="active">Public</button>
+        <button type="button" id="slate-menu-priv">Private</button>
+      </div>
+    </div>
+    <div class="slate-menu__section">
+      <span class="slate-menu__label">On this board</span>
+      <ul id="slate-members" class="slate-members" aria-label="Members"></ul>
     </div>
     <div class="slate-menu__section slate-menu__actions">
       <button type="button" id="slate-fit" class="slate-menu__action" role="menuitem">Fit to content</button>
@@ -669,6 +805,9 @@ function getRoomAccess() {
   return 'public';
 }
 
+/** Fixed PeerJS id for cross-room discovery (Chirp-style lobby; distinct from Chirp’s id). */
+const SLATE_LOBBY_ID = 'slate-lobby-0001';
+
 function roomToHostPeerId(room) {
   const compact = btoa(unescape(encodeURIComponent(room)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
@@ -749,12 +888,23 @@ document.getElementById('slate-wait-cancel')?.addEventListener('click', () => {
 function wireToolbar(roomName, peerLabel, roomAccess) {
   const wrap = document.getElementById('slate-ui');
   const chip = document.getElementById('slate-access-chip');
+  const chipPub = document.getElementById('slate-access-chip-pub');
   const roomEl = document.getElementById('slate-room');
   const peersEl = document.getElementById('slate-peers');
   const shareBtn = document.getElementById('slate-share');
   if (!wrap || !roomEl || !peersEl || !shareBtn) return;
   wrap.hidden = false;
-  if (chip) {
+  if (chip && chipPub) {
+    if (roomAccess === 'private') {
+      chip.hidden = false;
+      chip.textContent = 'Private';
+      chipPub.hidden = true;
+    } else {
+      chip.hidden = true;
+      chipPub.hidden = false;
+      chipPub.textContent = 'Public';
+    }
+  } else if (chip) {
     if (roomAccess === 'private') {
       chip.hidden = false;
       chip.textContent = 'Private';
@@ -807,6 +957,9 @@ function wireSlateChrome(editor, room) {
   const newBtn = document.getElementById('slate-new-room');
   const joinBtn = document.getElementById('slate-join-room');
   const nameEl = document.getElementById('slate-name');
+  const accessWrap = document.getElementById('slate-room-access-wrap');
+  const pubBtn = document.getElementById('slate-menu-pub');
+  const privBtn = document.getElementById('slate-menu-priv');
   if (!chrome || !menu || !menuBtn || !fit || !pngBtn || !jsonBtn || !newBtn || !joinBtn || !nameEl) return () => {};
 
   const safeSlug = (s) => String(s || 'room').replace(/[^\w-]+/g, '_').slice(0, 48) || 'room';
@@ -815,12 +968,32 @@ function wireSlateChrome(editor, room) {
     menu.hidden = true;
     menuBtn.setAttribute('aria-expanded', 'false');
   }
+  function syncAccessMenuUi() {
+    if (!accessWrap || !pubBtn || !privBtn) return;
+    const host = window.__slateNet?.isHost;
+    accessWrap.hidden = !host;
+    if (!host) return;
+    const acc = window.__slateNet?.access?.() === 'private' ? 'private' : 'public';
+    pubBtn.classList.toggle('active', acc !== 'private');
+    privBtn.classList.toggle('active', acc === 'private');
+  }
+
   function toggleMenu(ev) {
     ev.stopPropagation();
     const open = menu.hidden;
     menu.hidden = !open;
     menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) syncAccessMenuUi();
   }
+
+  const onMenuPub = () => {
+    try { window.__slateSyncAccess?.('public'); } catch (_) {}
+    syncAccessMenuUi();
+  };
+  const onMenuPriv = () => {
+    try { window.__slateSyncAccess?.('private'); } catch (_) {}
+    syncAccessMenuUi();
+  };
 
   const onDocClick = (ev) => {
     if (!chrome.contains(ev.target)) closeMenu();
@@ -894,6 +1067,8 @@ function wireSlateChrome(editor, room) {
   };
 
   menuBtn.addEventListener('click', toggleMenu);
+  pubBtn?.addEventListener('click', onMenuPub);
+  privBtn?.addEventListener('click', onMenuPriv);
   document.addEventListener('click', onDocClick);
   fit.addEventListener('click', onFit);
   pngBtn.addEventListener('click', onPng);
@@ -906,6 +1081,8 @@ function wireSlateChrome(editor, room) {
     closeMenu();
     nameEl.removeEventListener('input', applyName);
     menuBtn.removeEventListener('click', toggleMenu);
+    pubBtn?.removeEventListener('click', onMenuPub);
+    privBtn?.removeEventListener('click', onMenuPriv);
     document.removeEventListener('click', onDocClick);
     fit.removeEventListener('click', onFit);
     pngBtn.removeEventListener('click', onPng);
@@ -941,8 +1118,228 @@ function whenDataConnOpen(conn, fn) {
   else conn.on('open', fn);
 }
 
-function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, setPeerLabel, brokerRotate }) {
-  const roomAccess = roomAccessArg === 'private' ? 'private' : 'public';
+/** Ephemeral Peer + lobby host/client while the onboarding screen is visible (Chirp-style public room list). */
+const SlateLobbyOnboard = (() => {
+  const removalTimers = {};
+  let registry = {};
+  let discPeer = null;
+  let discConn = null;
+  let hostPeer = null;
+  let isHost = false;
+  let bIdx = 0;
+  const subs = new Set();
+
+  function brokerCfg() {
+    const b = BROKERS[bIdx % BROKERS.length] || {};
+    return {
+      debug: 0,
+      host: b.host || location.hostname,
+      port: b.port != null ? b.port : (location.protocol === 'https:' ? 443 : 80),
+      path: b.path || '/peerjs',
+      secure: !!b.secure,
+      key: b.key || 'peerjs',
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+        ],
+      },
+    };
+  }
+
+  function displayName() {
+    try { return (sessionStorage.getItem('slate_display_name') || '').trim().slice(0, 28) || 'Someone'; } catch (_) { return 'Someone'; }
+  }
+
+  function publicBoardsFromRegistry() {
+    const set = new Set();
+    Object.values(registry).forEach((r) => {
+      if (r && r.board && typeof r.board === 'string') set.add(r.board.slice(0, 64));
+    });
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+
+  function emit() {
+    const boards = publicBoardsFromRegistry();
+    subs.forEach((fn) => {
+      try { fn(boards); } catch (_) {}
+    });
+  }
+
+  function normalizeReg(reg) {
+    const out = {};
+    Object.entries(reg || {}).forEach(([k, v]) => {
+      if (!k || k === SLATE_LOBBY_ID) return;
+      out[k] = {
+        name: String(v?.name || '').slice(0, 28),
+        board: v?.board ? String(v.board).slice(0, 64) : null,
+        seenAt: Number(v?.seenAt) || 0,
+      };
+    });
+    return out;
+  }
+
+  function lobbyHostBroadcast(obj) {
+    if (!hostPeer?._connections) return;
+    const s = JSON.stringify(obj);
+    Object.values(hostPeer._connections || {}).forEach((conns) => {
+      conns.forEach((c) => {
+        try { if (c.open) c.send(s); } catch (_) {}
+      });
+    });
+  }
+
+  function handleClientMsg(conn, raw) {
+    let msg;
+    try {
+      msg = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw));
+    } catch (_) {
+      return;
+    }
+    if (msg.t !== 's-hello') return;
+    const id = msg.id || conn.peer;
+    clearTimeout(removalTimers[id]);
+    delete removalTimers[id];
+    registry[id] = {
+      name: String(msg.name || '').slice(0, 28),
+      board: msg.board ? String(msg.board).slice(0, 64) : null,
+      seenAt: Date.now(),
+    };
+    lobbyHostBroadcast({ t: 's-update', registry });
+    emit();
+  }
+
+  function scheduleRemoval(connPeer) {
+    const id = connPeer;
+    if (!id || id === SLATE_LOBBY_ID) return;
+    clearTimeout(removalTimers[id]);
+    removalTimers[id] = setTimeout(() => {
+      delete removalTimers[id];
+      if (registry[id]) {
+        delete registry[id];
+        lobbyHostBroadcast({ t: 's-update', registry });
+        emit();
+      }
+    }, 16000);
+  }
+
+  function tryBecomeHost() {
+    if (isHost || hostPeer) return;
+    const lp = new Peer(SLATE_LOBBY_ID, brokerCfg());
+    lp.on('error', (err) => {
+      if (err?.type === 'unavailable-id') {
+        try { lp.destroy(); } catch (_) {}
+        hostPeer = null;
+        connectClient();
+      }
+    });
+    lp.on('open', () => {
+      try { discConn?.close(); } catch (_) {}
+      discConn = null;
+      isHost = true;
+      hostPeer = lp;
+      lp.on('connection', (conn) => {
+        whenDataConnOpen(conn, () => {
+          try { conn.send(JSON.stringify({ t: 's-reg', registry })); } catch (_) {}
+          conn.on('data', (raw) => handleClientMsg(conn, raw));
+          conn.on('close', () => scheduleRemoval(conn.peer));
+        });
+      });
+      lp.on('disconnected', () => {
+        try { if (typeof lp.reconnect === 'function') lp.reconnect(); } catch (_) {}
+      });
+    });
+  }
+
+  function connectClient() {
+    if (isHost || discConn?.open || !discPeer?.open) return;
+    const conn = discPeer.connect(SLATE_LOBBY_ID, { reliable: true, serialization: 'json' });
+    discConn = conn;
+    conn.on('open', () => {
+      try {
+        conn.send(JSON.stringify({ t: 's-hello', id: discPeer.id, name: displayName(), board: null }));
+      } catch (_) {}
+    });
+    conn.on('data', (raw) => {
+      let msg;
+      try {
+        msg = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw));
+      } catch (_) {
+        return;
+      }
+      if ((msg.t === 's-reg' || msg.t === 's-update') && msg.registry) {
+        registry = normalizeReg(msg.registry);
+        emit();
+      }
+    });
+    conn.on('close', () => {
+      discConn = null;
+      setTimeout(() => {
+        if (!isHost && discPeer?.open && !discPeer.destroyed) connectClient();
+      }, 500 + Math.random() * 700);
+    });
+    conn.on('error', () => {
+      discConn = null;
+    });
+  }
+
+  function start() {
+    stop();
+    if (window.__peerjsLoadFailed || typeof Peer !== 'function') return;
+    discPeer = new Peer(undefined, brokerCfg());
+    discPeer.on('open', () => {
+      connectClient();
+      tryBecomeHost();
+    });
+    discPeer.on('error', () => {
+      try { discPeer?.destroy(); } catch (_) {}
+      discPeer = null;
+      bIdx++;
+      if (bIdx < 40) setTimeout(() => start(), 500);
+    });
+    discPeer.on('disconnected', () => {
+      try { if (discPeer && typeof discPeer.reconnect === 'function') discPeer.reconnect(); } catch (_) {}
+    });
+  }
+
+  function stop() {
+    Object.keys(removalTimers).forEach((k) => clearTimeout(removalTimers[k]));
+    Object.keys(removalTimers).forEach((k) => delete removalTimers[k]);
+    try { discConn?.close(); } catch (_) {}
+    discConn = null;
+    try { hostPeer?.destroy(); } catch (_) {}
+    hostPeer = null;
+    try { discPeer?.destroy(); } catch (_) {}
+    discPeer = null;
+    isHost = false;
+    registry = {};
+  }
+
+  function subscribe(fn) {
+    subs.add(fn);
+    return () => subs.delete(fn);
+  }
+
+  return { start, stop, subscribe, publicBoardsFromRegistry };
+})();
+
+function createPeerSync({
+  room,
+  accessRef,
+  setAccessUi,
+  store,
+  editorRef,
+  setPeerLabel,
+  brokerRotate,
+  onMembers,
+}) {
+  function roomAccess() {
+    return accessRef?.current === 'private' ? 'private' : 'public';
+  }
   const hostId = roomToHostPeerId(room);
   let peer = null;
   let mode = 'idle';
@@ -957,6 +1354,107 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
   const admittedPeers = new Set();
   const pendingAdmission = new Map();
   let clientHasSnapshot = false;
+  const guestNames = new Map();
+  let lobbySideConn = null;
+  let lobbySideHb = null;
+
+  function isPrivate() {
+    return roomAccess() === 'private';
+  }
+
+  function hostDisplayName() {
+    try { return (sessionStorage.getItem('slate_display_name') || '').trim().slice(0, 40) || 'Host'; } catch (_) { return 'Host'; }
+  }
+
+  function shortPeerId(pid) {
+    const s = String(pid || '');
+    return s.length > 8 ? `…${s.slice(-6)}` : s || 'Guest';
+  }
+
+  function publishNetMode() {
+    window.__slateNet = { isHost: mode === 'host', access: () => accessRef.current };
+  }
+
+  function shutdownLobbySide() {
+    if (lobbySideHb) {
+      clearInterval(lobbySideHb);
+      lobbySideHb = null;
+    }
+    if (lobbySideConn) {
+      try { lobbySideConn.close(); } catch (_) {}
+      lobbySideConn = null;
+    }
+  }
+
+  function connectHostLobbyIfNeeded() {
+    if (destroyed || mode !== 'host' || !peer?.open) return;
+    if (isPrivate()) {
+      shutdownLobbySide();
+      return;
+    }
+    if (lobbySideConn?.open) return;
+    shutdownLobbySide();
+    try {
+      lobbySideConn = peer.connect(SLATE_LOBBY_ID, { reliable: true, serialization: 'json' });
+    } catch (_) {
+      return;
+    }
+    whenDataConnOpen(lobbySideConn, () => {
+      const pulse = () => {
+        try {
+          if (!lobbySideConn?.open || destroyed || mode !== 'host' || isPrivate()) return;
+          lobbySideConn.send(JSON.stringify({
+            t: 's-hello',
+            id: peer.id,
+            name: hostDisplayName(),
+            board: room,
+          }));
+        } catch (_) {}
+      };
+      pulse();
+      lobbySideHb = setInterval(pulse, 14000);
+    });
+    lobbySideConn.on('close', () => {
+      shutdownLobbySide();
+      if (!destroyed && mode === 'host' && !isPrivate()) setTimeout(connectHostLobbyIfNeeded, 900);
+    });
+  }
+
+  function buildMemberList() {
+    const list = [{ id: 'host', role: 'host', name: hostDisplayName() }];
+    for (const [pid, c] of hostConns) {
+      if (!c.open) continue;
+      if (!isAdmittedConn(c)) continue;
+      list.push({
+        id: pid,
+        role: 'guest',
+        name: guestNames.get(pid) || shortPeerId(pid),
+      });
+    }
+    return list;
+  }
+
+  function broadcastMemberList() {
+    if (mode !== 'host') return;
+    broadcast({ t: 'mbr', members: buildMemberList() });
+  }
+
+  window.__slateSyncAccess = (next) => {
+    if (mode !== 'host') return;
+    const v = next === 'private' ? 'private' : 'public';
+    accessRef.current = v;
+    try { setAccessUi?.(v); } catch (_) {}
+    const url = new URL(location.href);
+    if (v === 'private') url.searchParams.set('access', 'private');
+    else url.searchParams.delete('access');
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    shutdownLobbySide();
+    if (v === 'public') queueMicrotask(connectHostLobbyIfNeeded);
+    publishNetMode();
+    try { window.__slateToolbarBump?.(); } catch (_) {}
+    toast(v === 'private' ? 'Room is now private — guests must knock.' : 'Room is now public — discoverable in the lobby.', false);
+    broadcastMemberList();
+  };
 
   function brokerConfig() {
     const b = BROKERS[brokerIdx % BROKERS.length] || {};
@@ -982,7 +1480,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
   }
 
   function isAdmittedConn(c) {
-    if (roomAccess !== 'private') return true;
+    if (!isPrivate()) return true;
     return admittedPeers.has(c.peer);
   }
 
@@ -1037,6 +1535,10 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
       }
 
       if (!isHostSide) {
+        if (msg.t === 'mbr' && Array.isArray(msg.members)) {
+          try { onMembers?.(msg.members); } catch (_) {}
+          return;
+        }
         if (msg.t === 'join-wait') {
           GuestWait.show();
           setPeerLabel('Guest · waiting for host…');
@@ -1057,14 +1559,17 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
       if (isHostSide) {
         if (msg.t === 'hello') {
           const name = String(msg.name || 'Guest').slice(0, 40);
-          if (roomAccess !== 'private') {
+          guestNames.set(conn.peer, name);
+          if (!isPrivate()) {
             admitConn(conn);
             broadcastPresence();
+            broadcastMemberList();
             return;
           }
           if (admittedPeers.has(conn.peer)) {
             admitConn(conn);
             broadcastPresence();
+            broadcastMemberList();
             return;
           }
           if (pendingAdmission.has(conn.peer)) {
@@ -1076,8 +1581,10 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
             try { conn.send(JSON.stringify({ t: 'join-denied', reason: 'timeout' })); } catch (_) {}
             try { conn.close(); } catch (_) {}
             hostConns.delete(conn.peer);
+            guestNames.delete(conn.peer);
             SlateGate.close();
             broadcastPresence();
+            broadcastMemberList();
           }, 30000);
           pendingAdmission.set(conn.peer, { conn, name, timer });
           try { conn.send(JSON.stringify({ t: 'join-wait' })); } catch (_) {}
@@ -1092,6 +1599,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
               sendFullSnapshotToConn(conn);
               SlateGate.close();
               broadcastPresence();
+              broadcastMemberList();
             },
             onDeny: () => {
               const p = pendingAdmission.get(conn.peer);
@@ -1102,13 +1610,15 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
               try { conn.send(JSON.stringify({ t: 'join-denied', reason: 'denied' })); } catch (_) {}
               try { conn.close(); } catch (_) {}
               hostConns.delete(conn.peer);
+              guestNames.delete(conn.peer);
               SlateGate.close();
               broadcastPresence();
+              broadcastMemberList();
             },
           });
           return;
         }
-        if (roomAccess === 'private' && !admittedPeers.has(conn.peer)) {
+        if (isPrivate() && !admittedPeers.has(conn.peer)) {
           return;
         }
         if (msg.t === 'chg') {
@@ -1162,9 +1672,11 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
           pendingAdmission.delete(conn.peer);
         }
         admittedPeers.delete(conn.peer);
+        guestNames.delete(conn.peer);
         hostConns.delete(conn.peer);
         SlateGate.close();
         broadcastPresence();
+        broadcastMemberList();
       } else if (conn === clientConn) {
         GuestWait.hide();
         clientHasSnapshot = false;
@@ -1221,6 +1733,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
   }
 
   function teardownPeer() {
+    shutdownLobbySide();
     GuestWait.hide();
     SlateGate.close();
     for (const [, p] of pendingAdmission) {
@@ -1228,6 +1741,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
     }
     pendingAdmission.clear();
     admittedPeers.clear();
+    guestNames.clear();
     clientHasSnapshot = false;
     if (unsubDoc) {
       unsubDoc();
@@ -1253,6 +1767,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
       peer = null;
     }
     mode = 'idle';
+    publishNetMode();
   }
 
   function startAsClient() {
@@ -1264,6 +1779,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
       netFailures = 0;
       peer = p;
       mode = 'client';
+      publishNetMode();
       setPeerLabel('Guest · finding host…');
       startListenLocal(store);
       const c = p.connect(hostId, { reliable: true, serialization: 'json' });
@@ -1292,7 +1808,7 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
         try {
           c.send(JSON.stringify({ t: 'hello', name: helloName.trim().slice(0, 40) }));
         } catch (_) {}
-        setPeerLabel(roomAccess === 'private' ? 'Guest · requesting…' : 'Guest · syncing…');
+        setPeerLabel(isPrivate() ? 'Guest · requesting…' : 'Guest · syncing…');
         window.__slateGuestLeaveWait = () => {
           clearTimeout(clientConnectTimer);
           clientConnectTimer = null;
@@ -1362,6 +1878,9 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
       mode = 'host';
       setPeerLabel('Host · 1 online');
       startListenLocal(store);
+      publishNetMode();
+      connectHostLobbyIfNeeded();
+      queueMicrotask(() => broadcastMemberList());
     });
 
     hostPeer.on('error', (err) => {
@@ -1406,6 +1925,8 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
     reconnectTimer = null;
     clearTimeout(clientConnectTimer);
     clientConnectTimer = null;
+    try { delete window.__slateSyncAccess; } catch (_) { window.__slateSyncAccess = undefined; }
+    try { onMembers?.([]); } catch (_) {}
     teardownPeer();
   };
 }
@@ -1413,29 +1934,71 @@ function createPeerSync({ room, roomAccess: roomAccessArg, store, editorRef, set
 function SlateApp({ room, roomAccess }) {
   const store = useMemo(() => createTLStore(), []);
   const editorRef = useRef(null);
+  const accessRef = useRef(roomAccess);
+  const [accessUi, setAccessUi] = useState(roomAccess);
   const [peerLabel, setPeerLabel] = useState('Connecting…');
   const [editorReady, setEditorReady] = useState(null);
+  const [toolbarBump, setToolbarBump] = useState(0);
 
   useEffect(() => {
-    wireToolbar(room, peerLabel, roomAccess);
-  }, [room, peerLabel, roomAccess]);
+    accessRef.current = roomAccess;
+    setAccessUi(roomAccess);
+  }, [roomAccess]);
+
+  useEffect(() => {
+    window.__slateToolbarBump = () => setToolbarBump((n) => n + 1);
+    return () => {
+      try { delete window.__slateToolbarBump; } catch (_) {}
+    };
+  }, []);
+
+  useEffect(() => {
+    wireToolbar(room, peerLabel, accessUi);
+  }, [room, peerLabel, accessUi, toolbarBump]);
 
   const onMount = useCallback((editor) => {
     editorRef.current = editor;
     setEditorReady(editor);
   }, []);
 
+  const onMembers = useCallback((members) => {
+    const ul = document.getElementById('slate-members');
+    if (!ul) return;
+    ul.replaceChildren();
+    const list = Array.isArray(members) ? members : [];
+    if (!list.length) {
+      const li = document.createElement('li');
+      li.textContent = '…';
+      ul.appendChild(li);
+      return;
+    }
+    list.forEach((m) => {
+      const li = document.createElement('li');
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = m.name || '…';
+      const role = document.createElement('span');
+      role.className = 'role';
+      role.textContent = m.role === 'host' ? 'Host' : 'Guest';
+      li.appendChild(nm);
+      li.appendChild(role);
+      ul.appendChild(li);
+    });
+  }, []);
+
   useEffect(() => {
     if (!editorReady) return undefined;
     return createPeerSync({
       room,
-      roomAccess,
+      accessRef,
+      setAccessUi,
       store,
       editorRef,
       setPeerLabel,
       brokerRotate: () => {},
+      onMembers,
     });
-  }, [editorReady, room, roomAccess, store]);
+  }, [editorReady, onMembers, room, store]);
 
   useEffect(() => {
     if (!editorReady) return undefined;
@@ -1452,6 +2015,30 @@ function bootstrap() {
   root.render(React.createElement(SlateApp, { room, roomAccess }));
 }
 
+function renderObPublicBoards(boards, roomInput, privateCb) {
+  const el = document.getElementById('ob-public-list');
+  if (!el) return;
+  el.replaceChildren();
+  if (!boards.length) {
+    const s = document.createElement('span');
+    s.className = 'ob-muted';
+    s.textContent = 'No public boards online — host one below';
+    el.appendChild(s);
+    return;
+  }
+  boards.forEach((name) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ob-board-pill';
+    b.textContent = name;
+    b.addEventListener('click', () => {
+      roomInput.value = name;
+      if (privateCb) privateCb.checked = false;
+    });
+    el.appendChild(b);
+  });
+}
+
 // ── Lobby ──────────────────────────────────────────────────────────────────
 (function setupLobby() {
   const ob      = document.getElementById('onboarding');
@@ -1460,6 +2047,39 @@ function bootstrap() {
   const joinBtn = document.getElementById('ob-join');
   const appRoot = document.getElementById('root');
   const privateEl = document.getElementById('ob-private');
+  const randomBtn = document.getElementById('ob-random-room');
+
+  let lobbyUnsub = null;
+  let lobbyBootTries = 0;
+
+  function paintPublicFromLobby(boards) {
+    renderObPublicBoards(boards, roomEl, privateEl);
+  }
+
+  function bootLobbyDiscovery() {
+    if (lobbyUnsub) return;
+    lobbyUnsub = SlateLobbyOnboard.subscribe(paintPublicFromLobby);
+    paintPublicFromLobby([]);
+    function tick() {
+      lobbyBootTries++;
+      if (window.__peerjsLoadFailed) {
+        paintPublicFromLobby([]);
+        return;
+      }
+      if (typeof Peer === 'function') {
+        SlateLobbyOnboard.start();
+        return;
+      }
+      if (lobbyBootTries < 100) setTimeout(tick, 120);
+      else paintPublicFromLobby([]);
+    }
+    tick();
+  }
+  bootLobbyDiscovery();
+
+  randomBtn?.addEventListener('click', () => {
+    roomEl.value = randomRoomId(7);
+  });
 
   // Pre-fill room from URL hash if present
   const hashRoom = (location.hash || '').replace(/^#/, '').trim();
@@ -1471,6 +2091,12 @@ function bootstrap() {
   if (privateEl && getRoomAccess() === 'private') privateEl.checked = true;
 
   function launch() {
+    if (lobbyUnsub) {
+      try { lobbyUnsub(); } catch (_) {}
+      lobbyUnsub = null;
+    }
+    SlateLobbyOnboard.stop();
+
     const name = nameEl.value.trim().slice(0, 28);
     const room = roomEl.value.trim().slice(0, 64) || randomRoomId();
 

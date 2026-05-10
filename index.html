@@ -11,8 +11,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Slate">
 <!-- PWA manifest as data URI — works with no extra files -->
-<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22Slate%22%2C%22short_name%22%3A%22Slate%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230c0c0e%22%2C%22theme_color%22%3A%22%230c0c0e%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%3Csvg+xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'+viewBox%3D'0+0+192+192'%3E%3Crect+width%3D'192'+height%3D'192'+rx%3D'40'+fill%3D'%230c0c0e'%2F%3E%3Crect+x%3D'32'+y%3D'32'+width%3D'128'+height%3D'128'+rx%3D'12'+fill%3D'none'+stroke%3D'%237c6aff'+stroke-width%3D'6'%2F%3E%3Cline+x1%3D'56'+y1%3D'96'+x2%3D'136'+y2%3D'96'+stroke%3D'%237c6aff'+stroke-width%3D'5'+stroke-linecap%3D'round'%2F%3E%3Cline+x1%3D'56'+y1%3D'72'+x2%3D'112'+y2%3D'72'+stroke%3D'%237c6aff'+stroke-width%3D'5'+stroke-linecap%3D'round'%2F%3E%3Cline+x1%3D'56'+y1%3D'120'+x2%3D'96'+y2%3D'120'+stroke%3D'%237c6aff'+stroke-width%3D'5'+stroke-linecap%3D'round'%2F%3E%3C%2Fsvg%3E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230c0c0e'/%3E%3Crect x='5' y='5' width='22' height='22' rx='3' fill='none' stroke='%237c6aff' stroke-width='1.8'/%3E%3Cline x1='9' y1='16' x2='23' y2='16' stroke='%237c6aff' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='9' y1='11' x2='19' y2='11' stroke='%237c6aff' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='9' y1='21' x2='16' y2='21' stroke='%237c6aff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22Slate%22%2C%22short_name%22%3A%22Slate%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230c0c0e%22%2C%22theme_color%22%3A%22%230c0c0e%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%3Csvg+xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'+viewBox%3D'0+0+192+192'%3E%3Crect+width%3D'192'+height%3D'192'+rx%3D'44'+fill%3D'%230c0c0e'%2F%3E%3Crect+x%3D'24'+y%3D'24'+width%3D'144'+height%3D'144'+rx%3D'16'+fill%3D'none'+stroke%3D'%237c6aff'+stroke-width%3D'7'%2F%3E%3Cpath+d%3D'M120+60+l12+12-40+40-15+3+3-15z'+fill%3D'none'+stroke%3D'%237c6aff'+stroke-width%3D'7'+stroke-linejoin%3D'round'+stroke-linecap%3D'round'%2F%3E%3Cline+x1%3D'55'+y1%3D'132'+x2%3D'95'+y2%3D'132'+stroke%3D'%237c6aff'+stroke-width%3D'6'+stroke-linecap%3D'round'+opacity%3D'.45'%2F%3E%3C%2Fsvg%3E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D">
+<!-- Pencil-on-board favicon — distinctive at small sizes -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c0c0e'/%3E%3Crect x='3' y='3' width='26' height='26' rx='4' fill='none' stroke='%237c6aff' stroke-width='1.8'/%3E%3Cpath d='M20 8l4 4-10 10-4.5 1 1-4.5z' fill='none' stroke='%237c6aff' stroke-width='1.7' stroke-linejoin='round' stroke-linecap='round'/%3E%3Cline x1='7' y1='25' x2='14' y2='25' stroke='%237c6aff' stroke-width='1.6' stroke-linecap='round' opacity='.5'/%3E%3C/svg%3E">
 <title>Slate</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
@@ -225,24 +226,36 @@ input, textarea { font-family: var(--sans); }
   color: var(--text);
 }
 .sidebar-logo svg { flex-shrink: 0; }
+/* Stealth when online — only surfaces when there's a problem */
 #conn-pill {
   margin-left: auto;
-  display: flex; align-items: center; gap: 5px;
+  display: none; /* hidden when online */
+  align-items: center; gap: 5px;
   font-size: 0.7rem; font-family: var(--mono);
   color: var(--text-dim); padding: 3px 7px;
   border-radius: 20px; background: var(--bg3);
   border: 1px solid var(--border);
   white-space: nowrap; cursor: default;
 }
+#conn-pill.visible { display: flex; }
 .conn-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--text-dim); flex-shrink: 0;
   transition: background 0.3s;
 }
-.conn-dot.online  { background: var(--green); }
-.conn-dot.error   { background: var(--danger); }
-.conn-dot.connecting { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+.conn-dot.error       { background: var(--danger); }
+.conn-dot.connecting  { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+/* Sidebar settings btn */
+#sidebar-settings-btn {
+  margin-left: auto;
+  padding: 5px; border-radius: var(--radius-sm);
+  background: transparent; border: none;
+  color: var(--text-dim); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+#sidebar-settings-btn:hover { background: var(--bg4); color: var(--text); }
 
 .sidebar-section { padding: 12px 16px 4px; }
 .sidebar-section-label {
@@ -636,17 +649,180 @@ input, textarea { font-family: var(--sans); }
    INSTALL PROMPT
 ═══════════════════════════════════════════ */
 #install-prompt {
-  position: fixed; bottom: 72px; left: 50%; z-index: 400;
-  transform: translateX(-50%);
-  background: var(--bg3); border: 1px solid var(--border2);
-  border-radius: var(--radius); padding: 14px 18px;
-  display: none; flex-direction: column; gap: 10px;
-  max-width: 320px; width: calc(100vw - 32px);
-  box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+  position: fixed; bottom: 24px; left: 50%; z-index: 400;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 16px 18px;
+  display: none; flex-direction: column; gap: 14px;
+  max-width: 340px; width: calc(100vw - 32px);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.5), 0 0 0 1px var(--accent-glow);
+  opacity: 0; transition: opacity 0.25s, transform 0.25s;
 }
-#install-prompt.show { display: flex; }
+#install-prompt.show {
+  display: flex; opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 .install-prompt-row { display: flex; gap: 8px; justify-content: flex-end; }
-.install-prompt-row .btn { padding: 8px 14px; font-size: 0.82rem; }
+.install-prompt-row .btn { padding: 9px 16px; font-size: 0.85rem; }
+
+/* ═══════════════════════════════════════════
+   SETTINGS OVERLAY
+═══════════════════════════════════════════ */
+#settings-overlay {
+  position: fixed; inset: 0; z-index: 600;
+  background: rgba(0,0,0,0.65);
+  display: none; align-items: flex-start; justify-content: flex-end;
+  padding: 12px;
+}
+#settings-overlay.show { display: flex; animation: fadeIn 0.18s ease; }
+@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+.settings-panel {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 14px; width: 320px; max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px); overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+  display: flex; flex-direction: column;
+}
+.settings-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--bg2); z-index: 1;
+}
+.settings-title { font-size: 1rem; font-weight: 700; }
+.settings-close {
+  padding: 5px; border-radius: var(--radius-sm);
+  background: transparent; border: none;
+  color: var(--text-dim); cursor: pointer; font-size: 1.1rem;
+}
+.settings-close:hover { color: var(--text); background: var(--bg4); }
+
+.settings-body { padding: 14px 18px 20px; display: flex; flex-direction: column; gap: 22px; }
+.settings-section { display: flex; flex-direction: column; gap: 10px; }
+.settings-section-title {
+  font-size: 0.62rem; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+/* Profile row */
+.profile-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px; background: var(--bg3);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.profile-preview {
+  width: 52px; height: 52px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem; font-weight: 700; flex-shrink: 0;
+  background-size: cover; background-position: center;
+  cursor: pointer; overflow: hidden;
+  border: 2px solid var(--border2);
+  transition: border-color 0.15s;
+}
+.profile-preview:hover { border-color: var(--accent); }
+.profile-actions { display: flex; flex-direction: column; gap: 6px; }
+.profile-upload-row { display: flex; gap: 6px; }
+.profile-upload-row .btn { padding: 7px 12px; font-size: 0.78rem; }
+
+/* Toggle row */
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; background: var(--bg3);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.setting-row-label { font-size: 0.88rem; font-weight: 500; }
+.setting-row-sub   { font-size: 0.75rem; color: var(--text-dim); margin-top: 2px; }
+.toggle-switch {
+  position: relative; width: 38px; height: 22px; flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: var(--border2); border-radius: 11px;
+  cursor: pointer; transition: background 0.2s;
+}
+.toggle-track::after {
+  content: ''; position: absolute;
+  top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: left 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+.toggle-switch input:checked + .toggle-track::after { left: 19px; }
+
+/* Crop modal */
+#crop-overlay {
+  position: fixed; inset: 0; z-index: 700;
+  background: rgba(0,0,0,0.8);
+  display: none; align-items: center; justify-content: center; padding: 24px;
+}
+#crop-overlay.show { display: flex; }
+.crop-card {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 14px; padding: 20px;
+  display: flex; flex-direction: column; gap: 14px;
+  width: 280px;
+}
+.crop-title { font-size: 0.95rem; font-weight: 700; }
+#crop-viewport {
+  width: 240px; height: 240px; overflow: hidden;
+  border-radius: 50%; border: 2px solid var(--accent);
+  position: relative; cursor: grab; margin: 0 auto;
+  background: var(--bg4);
+}
+#crop-img {
+  position: absolute; max-width: none;
+  user-select: none; pointer-events: none;
+}
+.crop-controls { display: flex; flex-direction: column; gap: 6px; }
+.crop-zoom-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text-dim); }
+#crop-zoom { flex: 1; accent-color: var(--accent); }
+.crop-btns { display: flex; gap: 8px; justify-content: flex-end; }
+.crop-btns .btn { padding: 9px 16px; font-size: 0.85rem; }
+
+/* Board item trash */
+.board-item__trash {
+  display: none; padding: 3px 5px;
+  border-radius: 4px; border: none;
+  background: transparent; color: var(--text-dim);
+  cursor: pointer; margin-left: 2px;
+}
+.board-item:hover .board-item__trash { display: flex; align-items: center; }
+.board-item__trash:hover { color: var(--danger); background: rgba(248,113,113,0.1); }
+
+/* Fill toggle in toolbar */
+#fill-toggle-wrap {
+  display: flex; align-items: center; gap: 4px; margin-left: 2px;
+}
+#fill-color {
+  width: 22px; height: 22px; border-radius: 4px;
+  border: 2px solid var(--border2); cursor: pointer;
+  padding: 0; background: none; overflow: hidden;
+}
+#fill-color::-webkit-color-swatch-wrapper { padding: 0; }
+#fill-color::-webkit-color-swatch { border: none; }
+.fill-none-btn {
+  font-size: 0.7rem; font-family: var(--mono);
+  padding: 3px 6px; border-radius: 4px;
+  background: transparent; border: 1px solid var(--border2);
+  color: var(--text-dim); cursor: pointer;
+}
+.fill-none-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Font size for text tool */
+#font-size-wrap {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; font-family: var(--mono); color: var(--text-dim);
+}
+#font-size-input {
+  width: 44px; background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 4px; color: var(--text); padding: 3px 5px;
+  font-family: var(--mono); font-size: 0.75rem; text-align: center;
+  outline: none;
+}
+#font-size-input:focus { border-color: var(--accent); }
 
 /* ═══════════════════════════════════════════
    MOBILE OVERRIDES
@@ -688,12 +864,9 @@ input, textarea { font-family: var(--sans); }
     <div class="onboard-logo">
       <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
         <rect width="36" height="36" rx="9" fill="#0c0c0e"/>
-        <rect x="5" y="5" width="26" height="26" rx="4" stroke="#7c6aff" stroke-width="2"/>
-        <line x1="10" y1="14" x2="26" y2="14" stroke="#7c6aff" stroke-width="2.2" stroke-linecap="round"/>
-        <line x1="10" y1="20" x2="20" y2="20" stroke="#7c6aff" stroke-width="2.2" stroke-linecap="round"/>
-        <circle cx="26" cy="25" r="5" fill="#7c6aff"/>
-        <line x1="24" y1="25" x2="28" y2="25" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
-        <line x1="26" y1="23" x2="26" y2="27" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+        <rect x="3" y="3" width="30" height="30" rx="5" stroke="#7c6aff" stroke-width="2"/>
+        <path d="M23 9l4 4-11 11-5 1.2 1.2-5z" fill="none" stroke="#7c6aff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        <line x1="6" y1="29" x2="14" y2="29" stroke="#7c6aff" stroke-width="1.8" stroke-linecap="round" opacity=".5"/>
       </svg>
       <span>Slate</span>
     </div>
@@ -738,10 +911,17 @@ input, textarea { font-family: var(--sans); }
         </svg>
         Slate
       </div>
-      <div id="conn-pill">
+      <!-- Only visible when NOT online -->
+      <div id="conn-pill" class="visible">
         <div class="conn-dot connecting" id="conn-dot"></div>
         <span id="conn-text">connecting</span>
       </div>
+      <button id="sidebar-settings-btn" title="Settings" aria-label="Settings">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="2.2"/>
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+        </svg>
+      </button>
     </div>
 
     <div class="sidebar-section">
@@ -851,6 +1031,12 @@ input, textarea { font-family: var(--sans); }
           <path d="M3 2l10 6-5 1.5L6 14 3 2z"/>
         </svg>
       </button>
+      <!-- Pan -->
+      <button class="tool-btn" data-tool="pan" title="Pan / Hand (H or Space)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 2v6M10 4v4M8 2v6M12 6v4M4 6v4c0 2.21 1.79 4 4 4h2a4 4 0 0 0 4-4V6"/>
+        </svg>
+      </button>
 
       <div class="toolbar-sep"></div>
 
@@ -887,10 +1073,32 @@ input, textarea { font-family: var(--sans); }
         <input id="stroke-size" type="range" min="1" max="40" value="4" title="Stroke size">
       </div>
 
-      <!-- Color -->
+      <!-- Stroke color -->
       <div id="color-picker-wrap">
-        <input id="color-picker" type="color" value="#7c6aff" title="Color">
+        <input id="color-picker" type="color" value="#7c6aff" title="Stroke / pen color">
       </div>
+
+      <!-- Fill (shapes only) -->
+      <div id="fill-toggle-wrap" title="Fill color (shapes)">
+        <input id="fill-color" type="color" value="#3d3580" title="Fill color">
+        <button class="fill-none-btn active" id="fill-none-btn" title="No fill">∅</button>
+      </div>
+
+      <!-- Font size (text tool) -->
+      <div id="font-size-wrap" style="display:none">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" style="opacity:0.5"><path d="M1 1h10v2H7v8H5V3H1V1z"/></svg>
+        <input id="font-size-input" type="number" value="18" min="8" max="120" title="Font size">
+      </div>
+
+      <div class="toolbar-sep"></div>
+
+      <!-- Export / Save as PNG -->
+      <button class="tool-btn" id="export-btn" title="Save board as PNG">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2v8M5 7l3 3 3-3"/>
+          <path d="M2 12h12v2H2z"/>
+        </svg>
+      </button>
 
       <div class="toolbar-spacer"></div>
 
@@ -985,17 +1193,131 @@ input, textarea { font-family: var(--sans); }
   </button>
 </div>
 
-<!-- Install prompt -->
+<!-- Install prompt (PWA) -->
 <div id="install-prompt">
-  <p style="font-size:0.88rem;color:var(--text-mid)">Add <strong style="color:var(--text)">Slate</strong> to your home screen for the best experience.</p>
+  <div style="display:flex;align-items:center;gap:12px">
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style="flex-shrink:0">
+      <rect width="36" height="36" rx="9" fill="#0c0c0e"/>
+      <rect x="3" y="3" width="30" height="30" rx="5" stroke="#7c6aff" stroke-width="2"/>
+      <path d="M23 9l4 4-11 11-5 1.2 1.2-5z" fill="none" stroke="#7c6aff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div style="font-weight:600;font-size:0.9rem">Install Slate</div>
+      <div style="font-size:0.78rem;color:var(--text-dim);margin-top:2px">Add to home screen for the best experience</div>
+    </div>
+  </div>
   <div class="install-prompt-row">
-    <button id="install-dismiss" class="btn btn-ghost">Dismiss</button>
+    <button id="install-dismiss" class="btn btn-ghost">Not now</button>
     <button id="install-ok" class="btn btn-primary">Install</button>
   </div>
 </div>
 
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
+
+<!-- ═══════════════════════════════════════════
+     SETTINGS OVERLAY
+═══════════════════════════════════════════ -->
+<div id="settings-overlay">
+  <div class="settings-panel">
+    <div class="settings-header">
+      <span class="settings-title">Settings</span>
+      <button class="settings-close" id="settings-close" aria-label="Close settings">✕</button>
+    </div>
+    <div class="settings-body">
+
+      <!-- Profile -->
+      <div class="settings-section">
+        <div class="settings-section-title">Profile</div>
+        <div class="profile-row">
+          <div class="profile-preview" id="settings-avatar" title="Click to change photo"></div>
+          <div class="profile-actions">
+            <div class="profile-upload-row">
+              <button class="btn btn-ghost" id="profile-photo-btn">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1" y="2" width="10" height="8" rx="1.5"/><circle cx="6" cy="6" r="2"/></svg>
+                Photo
+              </button>
+              <button class="btn btn-ghost" id="profile-camera-btn" style="display:none">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 4h2l1-2h4l1 2h2v6H1V4z"/><circle cx="6" cy="7" r="1.5"/></svg>
+                Camera
+              </button>
+              <button class="btn btn-ghost" id="profile-remove-btn" style="color:var(--danger)">✕</button>
+            </div>
+            <input type="file" id="profile-photo-input" accept="image/*" style="display:none">
+            <input type="file" id="profile-camera-input" accept="image/*" capture="user" style="display:none">
+          </div>
+        </div>
+        <div class="field-wrap" style="margin-top:4px">
+          <div class="field-label">Display name</div>
+          <div style="display:flex;gap:8px">
+            <input id="name-change-input" type="text" class="input-styled" placeholder="Your name" maxlength="20" autocomplete="off" spellcheck="false">
+            <button id="name-save-btn" class="btn btn-primary" style="white-space:nowrap">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Board management -->
+      <div class="settings-section">
+        <div class="settings-section-title">Boards</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Auto-remove empty boards</div>
+            <div class="setting-row-sub">Remove boards with no members on startup</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="autoclean-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <button class="btn btn-ghost" id="clean-boards-btn" style="font-size:0.83rem">
+          Remove all empty boards now
+        </button>
+      </div>
+
+      <!-- Connection -->
+      <div class="settings-section">
+        <div class="settings-section-title">Connection</div>
+        <div class="field-wrap">
+          <div class="field-label">Custom server host <span style="font-weight:400;color:var(--text-dim)">(optional)</span></div>
+          <input id="custom-peer-host" type="text" class="input-styled" placeholder="e.g. my-server.com" style="font-size:0.85rem" autocomplete="off" spellcheck="false">
+        </div>
+        <button class="btn btn-ghost" id="save-connection-btn" style="font-size:0.83rem">Save &amp; reconnect</button>
+        <button class="btn btn-ghost" id="reset-connection-btn" style="font-size:0.83rem;color:var(--text-dim)">Use default (clear custom host)</button>
+      </div>
+
+      <!-- About -->
+      <div class="settings-section">
+        <div class="settings-section-title">About</div>
+        <div style="font-size:0.83rem;color:var(--text-mid);line-height:1.6">
+          <strong style="color:var(--text)">Slate</strong> — real-time collaborative whiteboard.<br>
+          Peer-to-peer via WebRTC · no accounts · no server-side state.<br>
+          <span style="color:var(--text-dim);font-family:var(--mono);font-size:0.78rem">v1.0.0</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Image crop modal -->
+<div id="crop-overlay">
+  <div class="crop-card">
+    <div class="crop-title">Crop photo</div>
+    <div id="crop-viewport">
+      <img id="crop-img" alt="" draggable="false">
+    </div>
+    <div class="crop-controls">
+      <div class="crop-zoom-row">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5" cy="5" r="3"/><line x1="7.5" y1="7.5" x2="11" y2="11"/></svg>
+        <input id="crop-zoom" type="range" min="100" max="400" value="100">
+      </div>
+    </div>
+    <div class="crop-btns">
+      <button id="crop-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="crop-apply" class="btn btn-primary">Apply</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════════════
      PEERJS CDN LOADER (with fallbacks)
@@ -1315,12 +1637,18 @@ function syncInviteHash(board) {
 
 /* ═══════════════════════════════════════════
    CONNECTION UI
+   Stealth when online — only surfaces on problems.
 ═══════════════════════════════════════════ */
 function setConnUI(state_str, label) {
+  const pill = document.getElementById('conn-pill');
   const dot  = document.getElementById('conn-dot');
   const text = document.getElementById('conn-text');
-  if (dot)  { dot.className = 'conn-dot ' + state_str; }
-  if (text) { text.textContent = label || state_str; }
+  if (dot)  dot.className = 'conn-dot ' + (state_str === 'online' ? '' : state_str);
+  if (text) text.textContent = label || state_str;
+  if (pill) {
+    if (state_str === 'online') pill.classList.remove('visible');
+    else pill.classList.add('visible');
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -2212,9 +2540,14 @@ const ctx    = canvas.getContext('2d');
 const vp = { panX: 0, panY: 0, zoom: 1 };
 
 // Active tool
-let currentTool = 'pen';
-let strokeColor  = '#7c6aff';
-let strokeSize   = 4;
+let currentTool   = 'pen';
+let strokeColor   = '#7c6aff';
+let strokeSize    = 4;
+let fillColor     = '#3d3580';
+let useFill       = false;
+let fontSize      = 18;
+let isPanDragging = false;
+let panStart      = null;
 
 // In-progress drawing state
 let isDrawing   = false;
@@ -2448,6 +2781,13 @@ function onPointerDown(e) {
 
   if (pointers.size > 2) return;
 
+  if (currentTool === 'pan') {
+    isPanDragging = true;
+    panStart = { x: e.clientX, y: e.clientY, panX: vp.panX, panY: vp.panY };
+    document.getElementById('board-canvas').classList.add('tool-pan-drag');
+    return;
+  }
+
   if (!state.currentBoard || state.isDrawMuted) return;
 
   const { wx, wy } = getPos(e);
@@ -2492,6 +2832,12 @@ function onPointerMove(e) {
     return;
   }
 
+  if (currentTool === 'pan' && isPanDragging && panStart) {
+    vp.panX = panStart.panX + (e.clientX - panStart.x);
+    vp.panY = panStart.panY + (e.clientY - panStart.y);
+    scheduleRender(); return;
+  }
+
   if (!state.currentBoard) return;
 
   const { wx, wy } = getPos(e);
@@ -2527,6 +2873,13 @@ function onPointerUp(e) {
   e.preventDefault();
   pointers.delete(e.pointerId);
   lastPinchDist = null;
+
+  if (isPanDragging) {
+    isPanDragging = false;
+    panStart = null;
+    document.getElementById('board-canvas').classList.remove('tool-pan-drag');
+    return;
+  }
 
   if (!state.currentBoard || state.isDrawMuted) { isDrawing = false; return; }
 
@@ -2564,9 +2917,10 @@ function makeShape(wx, wy, preview = false) {
   const y = Math.min(shapeStart.wy, wy);
   const w = Math.abs(wx - shapeStart.wx) || 1;
   const h = Math.abs(wy - shapeStart.wy) || 1;
+  const fill = useFill ? fillColor : null;
   switch (currentTool) {
-    case 'rect':    return { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
-    case 'ellipse': return { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
+    case 'rect':    return { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
+    case 'ellipse': return { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
     case 'line':    return { id, type: 'line',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
   }
   return null;
@@ -2655,7 +3009,7 @@ function commitText() {
   textOverlay.style.display = 'none';
   textOverlay.value = '';
   if (!text) { textPos = null; return; }
-  const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy, color: strokeColor, fontSize: strokeSize * 4 + 10, text, peerId: state.myId, t: Date.now() };
+  const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy, color: strokeColor, fontSize, text, peerId: state.myId, t: Date.now() };
   doc.shapes.set(shape.id, shape);
   undoStack.push({ type: 'shape', id: shape.id });
   redoStack.length = 0;
@@ -2713,7 +3067,12 @@ function setTool(tool) {
   if (tool === 'select') cv.classList.add('tool-select');
   else if (tool === 'eraser') cv.classList.add('tool-eraser');
   else if (tool === 'text') cv.classList.add('tool-text');
+  else if (tool === 'pan') cv.classList.add('tool-pan');
   if (state.isDrawMuted) cv.classList.add('draw-muted');
+
+  // Show/hide font size for text tool
+  const fsWrap = document.getElementById('font-size-wrap');
+  if (fsWrap) fsWrap.style.display = (tool === 'text') ? 'flex' : 'none';
 }
 
 // Wire toolbar buttons
@@ -2739,6 +3098,94 @@ document.getElementById('color-picker').addEventListener('input', e => {
   strokeColor = e.target.value;
 });
 
+document.getElementById('fill-color').addEventListener('input', e => {
+  fillColor = e.target.value;
+  useFill = true;
+  document.getElementById('fill-none-btn').classList.remove('active');
+});
+
+document.getElementById('fill-none-btn').addEventListener('click', () => {
+  useFill = !useFill;
+  document.getElementById('fill-none-btn').classList.toggle('active', !useFill);
+});
+
+document.getElementById('font-size-input').addEventListener('change', e => {
+  fontSize = Math.max(8, Math.min(120, Number(e.target.value) || 18));
+  e.target.value = fontSize;
+});
+
+// Export as PNG
+document.getElementById('export-btn').addEventListener('click', exportAsPng);
+
+function exportAsPng() {
+  const boardName = state.currentBoard || 'slate-board';
+  // Create off-screen canvas at current viewport
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = canvas.width;
+  offscreen.height = canvas.height;
+  const offCtx = offscreen.getContext('2d');
+  offCtx.fillStyle = '#0c0c0e';
+  offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
+  offCtx.save();
+  offCtx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
+  doc.strokes.forEach(s => { const prev = ctx; drawStrokeOn(offCtx, s); });
+  doc.shapes.forEach(s  => { drawShapeOn(offCtx, s); });
+  offCtx.restore();
+  offscreen.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href = url;
+    a.download = `${boardName}-${new Date().toISOString().slice(0,10)}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('Board exported as PNG', 'green');
+  }, 'image/png');
+}
+
+// Render to a specific context (for export)
+function drawStrokeOn(c, s) {
+  if (!s.points || s.points.length < 2) {
+    if (s.points?.length === 1) {
+      c.beginPath();
+      c.arc(s.points[0][0], s.points[0][1], (s.size || 4) / 2, 0, Math.PI * 2);
+      c.fillStyle = s.color || '#fff'; c.fill();
+    }
+    return;
+  }
+  c.beginPath();
+  c.moveTo(s.points[0][0], s.points[0][1]);
+  for (let i = 1; i < s.points.length; i++) {
+    const mx = (s.points[i-1][0] + s.points[i][0]) / 2;
+    const my = (s.points[i-1][1] + s.points[i][1]) / 2;
+    c.quadraticCurveTo(s.points[i-1][0], s.points[i-1][1], mx, my);
+  }
+  c.lineTo(s.points[s.points.length-1][0], s.points[s.points.length-1][1]);
+  c.strokeStyle = s.color || '#fff'; c.lineWidth = s.size || 4;
+  c.lineCap = 'round'; c.lineJoin = 'round'; c.stroke();
+}
+
+function drawShapeOn(c, s) {
+  c.save();
+  c.strokeStyle = s.color || '#fff'; c.lineWidth = s.strokeWidth || 2; c.lineCap = 'round';
+  switch (s.type) {
+    case 'rect':
+      if (s.fill) { c.fillStyle = s.fill; c.fillRect(s.x, s.y, s.w, s.h); }
+      c.strokeRect(s.x, s.y, s.w, s.h); break;
+    case 'ellipse':
+      c.beginPath();
+      c.ellipse(s.x + s.w/2, s.y + s.h/2, Math.abs(s.w/2), Math.abs(s.h/2), 0, 0, Math.PI * 2);
+      if (s.fill) { c.fillStyle = s.fill; c.fill(); }
+      c.stroke(); break;
+    case 'line':
+      c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(s.x + s.w, s.y + s.h); c.stroke(); break;
+    case 'text':
+      c.font = `${s.fontSize || 18}px Inter,sans-serif`;
+      c.fillStyle = s.color || '#fff';
+      if (s.text) c.fillText(s.text, s.x, s.y); break;
+  }
+  c.restore();
+}
+
 document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(vp.zoom * 1.2));
 document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(vp.zoom / 1.2));
 document.getElementById('zoom-reset-btn').addEventListener('click', () => { vp.panX = 0; vp.panY = 0; setZoom(1); });
@@ -2759,6 +3206,23 @@ document.addEventListener('keydown', e => {
     case 'l': setTool('line'); break;
     case 't': setTool('text'); break;
     case 's': setTool('select'); break;
+    case 'h': setTool('pan'); break;
+  }
+});
+
+// Spacebar = temporary pan (hold to pan, release to restore)
+let _prevTool = null;
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.code === 'Space' && currentTool !== 'pan' && !e.repeat) {
+    _prevTool = currentTool;
+    setTool('pan');
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space' && _prevTool && currentTool === 'pan') {
+    setTool(_prevTool);
+    _prevTool = null;
   }
 });
 
@@ -2769,6 +3233,31 @@ let _rbTimer = null;
 function scheduleRenderBoards(filter) {
   clearTimeout(_rbTimer);
   _rbTimer = setTimeout(() => renderBoards(filter), 50);
+}
+
+function removeBoard(b) {
+  if (b === state.currentBoard) { toast("Can't remove the active board — leave it first", 'red'); return; }
+  liveBoards.delete(b);
+  delete boardVisibility[b];
+  delete boardTopics[b];
+  persistBoards();
+  persistBoardVisibility();
+  persistBoardTopics();
+  scheduleRenderBoards();
+}
+
+function pruneEmptyBoards() {
+  const counts = {};
+  Object.values(state.lobbyRegistry).forEach(info => {
+    if (info.board) counts[info.board] = (counts[info.board] || 0) + 1;
+  });
+  let pruned = 0;
+  [...liveBoards].forEach(b => {
+    if (b === state.currentBoard) return;
+    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardTopics[b]; pruned++; }
+  });
+  if (pruned) { persistBoards(); persistBoardVisibility(); persistBoardTopics(); scheduleRenderBoards(); }
+  return pruned;
 }
 
 function renderBoards(filter) {
@@ -2801,13 +3290,22 @@ function renderBoards(filter) {
     div.dataset.board = b;
     div.innerHTML = `
       <div class="board-item__icon">${b.charAt(0).toUpperCase()}</div>
-      <div class="board-item__name">${escHtml(b)}</div>
+      <div class="board-item__name" title="${escHtml(b)}">${escHtml(b)}</div>
       <div class="board-item__count">${count}</div>
+      <button class="board-item__trash" data-board="${escHtml(b)}" title="Remove board" aria-label="Remove ${escHtml(b)}">
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <line x1="2" y1="2" x2="9" y2="9"/><line x1="9" y1="2" x2="2" y2="9"/>
+        </svg>
+      </button>
     `;
-    div.addEventListener('click', () => {
+    div.addEventListener('click', e => {
+      if (e.target.closest('.board-item__trash')) return;
       if (b !== state.currentBoard) requestJoinBoard(b);
-      // Close sidebar on mobile
       if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
+    });
+    div.querySelector('.board-item__trash').addEventListener('click', e => {
+      e.stopPropagation();
+      removeBoard(b);
     });
     frag.appendChild(div);
   });
@@ -3039,6 +3537,218 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
 });
 
 /* ═══════════════════════════════════════════
+   SETTINGS PANEL
+═══════════════════════════════════════════ */
+(function setupSettings() {
+  const overlay    = document.getElementById('settings-overlay');
+  const openBtn    = document.getElementById('sidebar-settings-btn');
+  const closeBtn   = document.getElementById('settings-close');
+
+  function openSettings() {
+    const nameInput = document.getElementById('name-change-input');
+    if (nameInput) nameInput.value = state.myName || '';
+    const hostInput = document.getElementById('custom-peer-host');
+    if (hostInput) hostInput.value = localStorage.getItem('slate_peer_host') || '';
+    renderSettingsAvatar();
+    overlay.classList.add('show');
+  }
+  function closeSettings() { overlay.classList.remove('show'); }
+
+  openBtn?.addEventListener('click', openSettings);
+  closeBtn?.addEventListener('click', closeSettings);
+  overlay?.addEventListener('click', e => { if (e.target === overlay) closeSettings(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.classList.contains('show')) closeSettings(); });
+
+  // ── Name change ──
+  const nameInput = document.getElementById('name-change-input');
+  const nameSave  = document.getElementById('name-save-btn');
+  function saveName() {
+    const n = (nameInput?.value || '').trim().slice(0, 20);
+    if (!n) { nameInput?.focus(); return; }
+    if (n === state.myName) { closeSettings(); return; }
+    state.myName = n;
+    localStorage.setItem('slate_name', n);
+    announceProfile();
+    closeSettings();
+    toast(`Name: ${n}`, 'green');
+  }
+  nameSave?.addEventListener('click', saveName);
+  nameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+
+  // ── Avatar ──
+  function renderSettingsAvatar() {
+    const el = document.getElementById('settings-avatar');
+    if (!el) return;
+    if (state.myAvatar) {
+      el.style.backgroundImage = `url('${state.myAvatar}')`;
+      el.style.background = '';
+      el.textContent = '';
+    } else {
+      el.style.backgroundImage = '';
+      el.style.background = peerColor(state.myName || '');
+      el.textContent = avatarInitial(state.myName);
+    }
+  }
+
+  function announceProfile() {
+    renderSettingsAvatar();
+    renderMembers();
+    if (state.currentBoard) {
+      broadcastAll({ type: 'hello', name: state.myName, avatar: state.myAvatar, board: state.currentBoard, joinTime: state.myJoinTime || Date.now(), boards: publicBoards(), topics: boardTopics });
+    }
+  }
+  window.announceProfile = announceProfile;
+
+  // Show camera button only on mobile / devices with camera
+  if (navigator.mediaDevices?.enumerateDevices) {
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      if (devices.some(d => d.kind === 'videoinput')) {
+        const camBtn = document.getElementById('profile-camera-btn');
+        if (camBtn) camBtn.style.display = '';
+      }
+    }).catch(() => {});
+  }
+
+  document.getElementById('profile-photo-btn')?.addEventListener('click', () => {
+    document.getElementById('profile-photo-input')?.click();
+  });
+  document.getElementById('profile-camera-btn')?.addEventListener('click', () => {
+    document.getElementById('profile-camera-input')?.click();
+  });
+  document.getElementById('settings-avatar')?.addEventListener('click', () => {
+    document.getElementById('profile-photo-input')?.click();
+  });
+
+  function handleProfileFile(file, inputEl) {
+    if (!file || !file.type?.startsWith('image/')) { toast('Not an image file', 'red'); return; }
+    const reader = new FileReader();
+    reader.onload = e => showCropModal(e.target.result, inputEl);
+    reader.readAsDataURL(file);
+  }
+
+  document.getElementById('profile-photo-input')?.addEventListener('change', function() {
+    handleProfileFile(this.files?.[0], this); this.value = '';
+  });
+  document.getElementById('profile-camera-input')?.addEventListener('change', function() {
+    handleProfileFile(this.files?.[0], this); this.value = '';
+  });
+  document.getElementById('profile-remove-btn')?.addEventListener('click', () => {
+    state.myAvatar = null;
+    localStorage.removeItem('slate_avatar');
+    announceProfile();
+    toast('Profile picture removed');
+  });
+
+  // ── Crop modal ──
+  const cropOverlay  = document.getElementById('crop-overlay');
+  const cropImg      = document.getElementById('crop-img');
+  const cropZoom     = document.getElementById('crop-zoom');
+  const cropApply    = document.getElementById('crop-apply');
+  const cropCancel   = document.getElementById('crop-cancel');
+  const cropViewport = document.getElementById('crop-viewport');
+  let imgX = 0, imgY = 0, zoom = 1, natW = 0, natH = 0;
+  const VW = 240;
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function applyTransform() {
+    const w = natW * zoom, h = natH * zoom;
+    imgX = clamp(imgX, VW - w, 0); imgY = clamp(imgY, VW - h, 0);
+    cropImg.style.width  = w + 'px'; cropImg.style.height = h + 'px';
+    cropImg.style.left   = imgX + 'px'; cropImg.style.top = imgY + 'px';
+  }
+
+  function showCropModal(src) {
+    cropImg.src = src;
+    cropZoom.value = 100;
+    cropOverlay.classList.add('show');
+    cropImg.onload = () => {
+      natW = cropImg.naturalWidth; natH = cropImg.naturalHeight;
+      zoom = Math.max(VW / natW, VW / natH);
+      cropZoom.min = Math.round(zoom * 100);
+      cropZoom.value = Math.round(zoom * 100);
+      imgX = (VW - natW * zoom) / 2; imgY = (VW - natH * zoom) / 2;
+      applyTransform();
+    };
+  }
+
+  cropZoom?.addEventListener('input', () => {
+    const prev = zoom;
+    zoom = parseInt(cropZoom.value) / 100;
+    imgX -= (natW * (zoom - prev)) / 2; imgY -= (natH * (zoom - prev)) / 2;
+    applyTransform();
+  });
+
+  let dragging = false, dx0 = 0, dy0 = 0, ix0 = 0, iy0 = 0;
+  cropViewport?.addEventListener('pointerdown', e => {
+    dragging = true; cropViewport.setPointerCapture(e.pointerId);
+    dx0 = e.clientX; dy0 = e.clientY; ix0 = imgX; iy0 = imgY;
+    cropViewport.style.cursor = 'grabbing';
+  });
+  cropViewport?.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    imgX = ix0 + (e.clientX - dx0); imgY = iy0 + (e.clientY - dy0); applyTransform();
+  });
+  cropViewport?.addEventListener('pointerup', () => { dragging = false; cropViewport.style.cursor = 'grab'; });
+
+  cropCancel?.addEventListener('click', () => cropOverlay.classList.remove('show'));
+
+  cropApply?.addEventListener('click', () => {
+    const c = document.createElement('canvas'); c.width = c.height = 320;
+    const cx = c.getContext('2d');
+    const img = new Image(); img.src = cropImg.src;
+    const scale = 320 / VW;
+    const sx = -imgX / zoom, sy = -imgY / zoom;
+    const sw = VW / zoom;
+    cx.drawImage(img, sx, sy, sw, sw, 0, 0, 320, 320);
+    const avatar = c.toDataURL('image/jpeg', 0.82);
+    state.myAvatar = cleanAvatar(avatar);
+    if (state.myAvatar) {
+      localStorage.setItem('slate_avatar', state.myAvatar);
+      announceProfile();
+      toast('Profile picture updated', 'green');
+    }
+    cropOverlay.classList.remove('show');
+  });
+
+  // ── Board management ──
+  const autocleanToggle = document.getElementById('autoclean-toggle');
+  autocleanToggle.checked = localStorage.getItem('slate_autoclean') !== '0';
+
+  autocleanToggle?.addEventListener('change', () => {
+    localStorage.setItem('slate_autoclean', autocleanToggle.checked ? '1' : '0');
+  });
+
+  document.getElementById('clean-boards-btn')?.addEventListener('click', () => {
+    const n = pruneEmptyBoards();
+    toast(n ? `Removed ${n} empty board${n > 1 ? 's' : ''}` : 'No empty boards found');
+  });
+
+  // ── Connection override ──
+  document.getElementById('save-connection-btn')?.addEventListener('click', () => {
+    const h = (document.getElementById('custom-peer-host')?.value || '').trim();
+    if (h) localStorage.setItem('slate_peer_host', h);
+    else localStorage.removeItem('slate_peer_host');
+    closeSettings();
+    toast('Reconnecting…', 'info');
+    setTimeout(() => {
+      try { state.peer?.destroy(); } catch {}
+      state.peer = null; state.lobbyConn = null;
+      state.isLobbyHost = false; state.reconnectAttempts = 0;
+      initPeer();
+    }, 300);
+  });
+
+  document.getElementById('reset-connection-btn')?.addEventListener('click', () => {
+    localStorage.removeItem('slate_peer_host');
+    localStorage.removeItem('slate_peer_port');
+    localStorage.removeItem('slate_peer_path');
+    localStorage.removeItem('slate_peer_secure');
+    document.getElementById('custom-peer-host').value = '';
+    toast('Custom host cleared', 'green');
+  });
+})();
+
+/* ═══════════════════════════════════════════
    MOBILE SIDEBAR + MEMBERS TOGGLE
 ═══════════════════════════════════════════ */
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
@@ -3175,6 +3885,12 @@ function startApp() {
   document.getElementById('onboarding').style.display = 'none';
   const app = document.getElementById('app');
   app.classList.add('ready');
+
+  // Auto-prune empty boards on startup
+  if (localStorage.getItem('slate_autoclean') !== '0') {
+    // After a short delay so lobbyRegistry has time to populate
+    setTimeout(pruneEmptyBoards, 8000);
+  }
 
   // Size canvas
   resizeCanvas();

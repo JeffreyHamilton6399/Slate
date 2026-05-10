@@ -10,8 +10,9 @@
  *    Layers panel while in 3D mode.
  */
 import * as THREE from 'three';
-import { OrbitControls }    from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { OrbitControls }       from 'three/addons/controls/OrbitControls.js';
+import { TransformControls }   from 'three/addons/controls/TransformControls.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
 /* ─────────────────────────────────────────────────────────────────────────
    Module state
@@ -29,10 +30,25 @@ let raf = 0;
 let bound = false;
 let vvResizeBound = false;
 
-/** Selected scene object id (object mode). */
+/** Selected scene object id (object mode). The gizmo follows this id. */
 let selectedId = null;
+/** All selected ids — for multi-selection / box-select highlighting. */
+const selectedIds = new Set();
 /** Map from scene object id → THREE.Mesh */
 const objMeshes = new Map();
+/** Box-select state. */
+let boxSelect = null;   // { x0, y0, x1, y1 } in client coords
+let boxSelectEl = null; // overlay div for the rubber-band
+/** Fly camera state. */
+let flyEnabled  = false;
+let flyControls = null;
+let flyKeys     = new Set();
+let flyHint     = null;
+/** Peer camera markers. peerId -> { group, label, color } */
+const peerCams = new Map();
+/** Throttle for camera broadcasts. */
+let _lastCamBroadcast = 0;
+let _lastCamSent = null;
 
 /** Current top-level mode: 'object' | 'edit' */
 let editorMode    = 'object';
@@ -193,24 +209,116 @@ function pickObject(clientX, clientY) {
   return hits.length ? hits[0].object : null;
 }
 
-function selectById(id) {
-  selectedId = id || null;
+function selectById(id, additive = false) {
+  if (!id) {
+    if (!additive) {
+      selectedIds.clear();
+      selectedId = null;
+      transform?.detach();
+    }
+  } else if (additive) {
+    // Toggle membership; gizmo follows whichever was just clicked.
+    if (selectedIds.has(id)) { selectedIds.delete(id); if (selectedId === id) selectedId = [...selectedIds].pop() || null; }
+    else { selectedIds.add(id); selectedId = id; }
+  } else {
+    selectedIds.clear();
+    selectedIds.add(id);
+    selectedId = id;
+  }
   if (editorMode === 'object') {
-    if (id && objMeshes.has(id)) transform?.attach(objMeshes.get(id));
+    if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
     else transform?.detach();
   }
+  _refreshSelectionOutlines();
   renderHierarchy();
 }
 
+function selectAllObjects() {
+  const api = window.slateScene3d;
+  if (!api) return;
+  selectedIds.clear();
+  api.objects.forEach(o => { if (o.type !== 'folder') selectedIds.add(o.id); });
+  selectedId = [...selectedIds].pop() || null;
+  if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
+  _refreshSelectionOutlines();
+  renderHierarchy();
+}
+
+/* Apply a subtle emissive outline to every selected mesh so multi-select is
+   visually obvious without needing the gizmo to attach to multiple objects. */
+function _refreshSelectionOutlines() {
+  objMeshes.forEach((mesh, id) => {
+    if (!mesh.material) return;
+    if (mesh.material.emissive) {
+      if (selectedIds.has(id)) {
+        mesh.material.emissive.setHex(0x4a3aff);
+        mesh.material.emissiveIntensity = 0.35;
+      } else {
+        mesh.material.emissive.setHex(0x000000);
+        mesh.material.emissiveIntensity = 0;
+      }
+    }
+  });
+}
+
+/* Duplicate the currently selected object with a small world-space offset. */
+function duplicateSelected() {
+  const api = window.slateScene3d;
+  if (!api || !selectedId) return;
+  const src = api.find(selectedId);
+  if (!src || src.type === 'folder') return;
+  const spec = {
+    type: src.type,
+    name: src.name + ' copy',
+    position: [src.position[0] + 0.6, src.position[1], src.position[2] + 0.6],
+    rotation: [...src.rotation],
+    scale: [...src.scale],
+    visible: src.visible,
+    color: src.color,
+    params: { ...src.params },
+    parentId: src.parentId || null,
+    meshData: src.meshData ? { vertices: [...src.meshData.vertices], faces: [...src.meshData.faces] } : undefined,
+  };
+  const obj = api.add(spec);
+  if (obj) selectById(obj.id);
+}
+
 let _downX = 0, _downY = 0, _downAt = 0;
+let _boxArmed = false;
 function onPointerDown(e) {
-  if (e.button !== 0 || !orbit) return;
+  if (!orbit) return;
+  if (flyEnabled) return;
+  // In object mode, Shift+left-drag starts a Blender-style box select.
+  if (e.button === 0 && editorMode === 'object' && e.shiftKey) {
+    e.preventDefault();
+    _boxArmed = true;
+    orbit.enabled = false;
+    boxSelect = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, additive: true };
+    _showBoxSelectOverlay();
+    container.addEventListener('pointermove', _onBoxMove);
+    return;
+  }
+  if (e.button !== 0) return;
   if (transform?.dragging) return;
   _downX = e.clientX; _downY = e.clientY; _downAt = performance.now();
 }
 
 function onPointerUp(e) {
-  if (e.button !== 0 || !orbit) return;
+  if (!orbit) return;
+  if (flyEnabled) return;
+  // Finish box-select.
+  if (_boxArmed && boxSelect) {
+    _boxArmed = false;
+    container.removeEventListener('pointermove', _onBoxMove);
+    orbit.enabled = true;
+    _hideBoxSelectOverlay();
+    const w = Math.abs(boxSelect.x1 - boxSelect.x0);
+    const h = Math.abs(boxSelect.y1 - boxSelect.y0);
+    if (w > 4 || h > 4) _commitBoxSelect();
+    boxSelect = null;
+    return;
+  }
+  if (e.button !== 0) return;
   if (transform?.dragging) return;
   // Treat as a click only when pointer barely moved (i.e. not a drag-orbit).
   const moved = Math.hypot(e.clientX - _downX, e.clientY - _downY);
@@ -221,8 +329,281 @@ function onPointerUp(e) {
     return;
   }
   const hit = pickObject(e.clientX, e.clientY);
-  if (hit && hit.userData.objId) selectById(hit.userData.objId);
-  else                            selectById(null);
+  if (hit && hit.userData.objId) selectById(hit.userData.objId, e.shiftKey);
+  else if (!e.shiftKey)          selectById(null);
+}
+
+function _onBoxMove(e) {
+  if (!boxSelect) return;
+  boxSelect.x1 = e.clientX; boxSelect.y1 = e.clientY;
+  _updateBoxSelectOverlay();
+}
+
+function _showBoxSelectOverlay() {
+  if (!boxSelectEl) {
+    boxSelectEl = document.createElement('div');
+    boxSelectEl.className = 'box-select-overlay';
+    container.appendChild(boxSelectEl);
+  }
+  boxSelectEl.style.display = 'block';
+  _updateBoxSelectOverlay();
+}
+function _updateBoxSelectOverlay() {
+  if (!boxSelectEl || !boxSelect || !container) return;
+  const rect = container.getBoundingClientRect();
+  const x = Math.min(boxSelect.x0, boxSelect.x1) - rect.left;
+  const y = Math.min(boxSelect.y0, boxSelect.y1) - rect.top;
+  const w = Math.abs(boxSelect.x1 - boxSelect.x0);
+  const h = Math.abs(boxSelect.y1 - boxSelect.y0);
+  boxSelectEl.style.left = x + 'px';
+  boxSelectEl.style.top  = y + 'px';
+  boxSelectEl.style.width  = w + 'px';
+  boxSelectEl.style.height = h + 'px';
+}
+function _hideBoxSelectOverlay() {
+  if (boxSelectEl) boxSelectEl.style.display = 'none';
+}
+
+/* For every object whose screen-space center lies inside the rubber-band,
+   add it to the selection (additive, shift-style). */
+function _commitBoxSelect() {
+  if (!boxSelect || !container || !camera) return;
+  const rect = container.getBoundingClientRect();
+  const x0 = Math.min(boxSelect.x0, boxSelect.x1) - rect.left;
+  const y0 = Math.min(boxSelect.y0, boxSelect.y1) - rect.top;
+  const x1 = Math.max(boxSelect.x0, boxSelect.x1) - rect.left;
+  const y1 = Math.max(boxSelect.y0, boxSelect.y1) - rect.top;
+  const v = new THREE.Vector3();
+  let lastHit = null;
+  objMeshes.forEach((mesh, id) => {
+    if (!mesh.visible) return;
+    // Project the mesh's world-position into NDC then to screen.
+    const center = new THREE.Vector3();
+    mesh.updateWorldMatrix(true, false);
+    center.setFromMatrixPosition(mesh.matrixWorld);
+    v.copy(center).project(camera);
+    if (v.z > 1 || v.z < -1) return;
+    const sx = (v.x * 0.5 + 0.5) * rect.width;
+    const sy = (-v.y * 0.5 + 0.5) * rect.height;
+    if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) {
+      selectedIds.add(id);
+      lastHit = id;
+    }
+  });
+  if (lastHit) selectedId = lastHit;
+  if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
+  _refreshSelectionOutlines();
+  renderHierarchy();
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Free-fly camera (Blender Shift+`)
+   • PointerLockControls handles mouselook.
+   • WASD to strafe / forward-back, QE for down/up, Shift = boost.
+   • Esc or another Shift+` press exits.
+───────────────────────────────────────────────────────────────────────── */
+function toggleFlyCamera() {
+  if (flyEnabled) exitFlyCamera(); else enterFlyCamera();
+}
+
+function enterFlyCamera() {
+  if (!renderer || !camera || flyEnabled) return;
+  if (!flyControls) {
+    flyControls = new PointerLockControls(camera, renderer.domElement);
+    flyControls.addEventListener('unlock', () => { if (flyEnabled) exitFlyCamera(); });
+  }
+  orbit.enabled = false;
+  if (transform?.dragging) return;
+  flyControls.lock();
+  flyEnabled = true;
+  flyKeys.clear();
+  window.addEventListener('keydown', _onFlyKeyDown, true);
+  window.addEventListener('keyup',   _onFlyKeyUp,   true);
+  if (!flyHint) {
+    flyHint = document.createElement('div');
+    flyHint.className = 'fly-cam-hint';
+    flyHint.textContent = 'Fly mode — WASD move, QE up/down, Shift boost, Esc to exit';
+    container.appendChild(flyHint);
+  } else {
+    flyHint.style.display = '';
+  }
+}
+
+function exitFlyCamera() {
+  flyEnabled = false;
+  flyKeys.clear();
+  if (flyControls) flyControls.unlock();
+  if (flyHint) flyHint.style.display = 'none';
+  window.removeEventListener('keydown', _onFlyKeyDown, true);
+  window.removeEventListener('keyup',   _onFlyKeyUp,   true);
+  if (orbit && camera) {
+    // Snap orbit.target to a point along the camera's new forward direction
+    // so the next orbit doesn't whip back to the previous focus point.
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+    orbit.target.copy(camera.position).add(fwd.multiplyScalar(4));
+    orbit.enabled = true;
+    orbit.update();
+  }
+}
+
+function _onFlyKeyDown(e) {
+  if (!flyEnabled) return;
+  if (e.key === 'Escape') { e.preventDefault(); exitFlyCamera(); return; }
+  flyKeys.add(e.key.toLowerCase());
+  e.stopPropagation(); e.preventDefault();
+}
+function _onFlyKeyUp(e) {
+  if (!flyEnabled) return;
+  flyKeys.delete(e.key.toLowerCase());
+  e.stopPropagation();
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Peer cameras — broadcast my view, render others' views
+───────────────────────────────────────────────────────────────────────── */
+const CAM_BROADCAST_HZ = 6;            // 6 updates / second
+const CAM_CHANGE_EPS   = 0.02;         // skip if camera barely moved
+
+function _maybeBroadcastCamera(nowMs) {
+  if (!document.body.classList.contains('mode-3d')) return;
+  if (!camera || !orbit) return;
+  if (!window.slatePeers || typeof window.slatePeers.broadcast !== 'function') return;
+  if (nowMs - _lastCamBroadcast < 1000 / CAM_BROADCAST_HZ) return;
+  const cur = [
+    camera.position.x, camera.position.y, camera.position.z,
+    orbit.target.x,    orbit.target.y,    orbit.target.z,
+  ];
+  if (_lastCamSent) {
+    let moved = 0;
+    for (let i = 0; i < 6; i++) moved = Math.max(moved, Math.abs(cur[i] - _lastCamSent[i]));
+    if (moved < CAM_CHANGE_EPS) return;
+  }
+  _lastCamSent = cur;
+  _lastCamBroadcast = nowMs;
+  window.slatePeers.broadcast({
+    type: 'cam-3d',
+    pos: [cur[0], cur[1], cur[2]],
+    target: [cur[3], cur[4], cur[5]],
+  });
+}
+
+/** Called from the host page when a `cam-3d` message arrives. */
+function applyPeerCamera(peerId, msg, meta) {
+  if (!scene) return;
+  if (!peerId || !msg || !Array.isArray(msg.pos) || !Array.isArray(msg.target)) return;
+  let entry = peerCams.get(peerId);
+  if (!entry) {
+    const color = meta?.color || _peerColorFromId(peerId);
+    const group = _buildCamMarker(color);
+    scene.add(group);
+    const label = document.createElement('div');
+    label.className = 'peer-cam-tag';
+    label.style.background = `linear-gradient(${color}cc, ${color}99)`;
+    label.style.borderColor = color;
+    label.textContent = meta?.name || peerId.slice(0, 6);
+    if (container) container.appendChild(label);
+    entry = { group, label, color };
+    peerCams.set(peerId, entry);
+  } else if (meta?.name && entry.label && entry.label.textContent !== meta.name) {
+    entry.label.textContent = meta.name;
+  }
+  entry.group.position.set(msg.pos[0], msg.pos[1], msg.pos[2]);
+  entry.group.lookAt(msg.target[0], msg.target[1], msg.target[2]);
+}
+
+function removePeerCamera(peerId) {
+  const entry = peerCams.get(peerId);
+  if (!entry) return;
+  if (entry.group && scene) scene.remove(entry.group);
+  entry.label?.remove();
+  peerCams.delete(peerId);
+}
+
+function _peerColorFromId(id) {
+  // Deterministic color from the peer id so the marker matches their cursor.
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 70%, 60%)`;
+}
+
+function _buildCamMarker(color) {
+  const g = new THREE.Group();
+  // Tiny pyramid pointing along -Z (the camera forward).
+  const geo = new THREE.ConeGeometry(0.18, 0.36, 4);
+  geo.rotateX(Math.PI / 2);
+  geo.translate(0, 0, -0.18);
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.55,
+    roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide,
+  });
+  const cone = new THREE.Mesh(geo, mat);
+  cone.castShadow = false; cone.receiveShadow = false;
+  g.add(cone);
+  // Wire frustum so it reads as a camera not a generic pyramid.
+  const frustum = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 })
+  );
+  g.add(frustum);
+  return g;
+}
+
+/* Position the HTML labels above each peer camera every frame. */
+const _camLabelTmp = new THREE.Vector3();
+function _updatePeerCamMarkers() {
+  if (!camera || !container) return;
+  const rect = container.getBoundingClientRect();
+  peerCams.forEach(entry => {
+    if (!entry.group || !entry.label) return;
+    _camLabelTmp.copy(entry.group.position).project(camera);
+    if (_camLabelTmp.z > 1 || _camLabelTmp.z < -1) {
+      entry.label.style.display = 'none';
+      return;
+    }
+    entry.label.style.display = '';
+    const sx = (_camLabelTmp.x * 0.5 + 0.5) * rect.width;
+    const sy = (-_camLabelTmp.y * 0.5 + 0.5) * rect.height;
+    entry.label.style.left = sx + 'px';
+    entry.label.style.top  = (sy - 18) + 'px';
+  });
+}
+
+function _clearAllPeerCameras() {
+  peerCams.forEach(entry => {
+    if (entry.group && scene) scene.remove(entry.group);
+    entry.label?.remove();
+  });
+  peerCams.clear();
+}
+
+/* Expose the receive entry point so the host page can route incoming
+   cam-3d messages here. */
+window.slateScene3dRpc = Object.assign(window.slateScene3dRpc || {}, {
+  applyPeerCamera,
+  removePeerCamera,
+  clearAllPeerCameras: _clearAllPeerCameras,
+});
+
+const _flyTmp1 = new THREE.Vector3();
+const _flyTmp2 = new THREE.Vector3();
+function _stepFlyCamera(dt) {
+  if (!flyEnabled || !camera) return;
+  const boost = flyKeys.has('shift') ? 3.0 : 1.0;
+  const speed = 4.5 * boost * dt;
+  let f = 0, r = 0, u = 0;
+  if (flyKeys.has('w')) f += 1;
+  if (flyKeys.has('s')) f -= 1;
+  if (flyKeys.has('d')) r += 1;
+  if (flyKeys.has('a')) r -= 1;
+  if (flyKeys.has('e') || flyKeys.has(' ')) u += 1;
+  if (flyKeys.has('q')) u -= 1;
+  if (f === 0 && r === 0 && u === 0) return;
+  camera.getWorldDirection(_flyTmp1).normalize();
+  _flyTmp2.crossVectors(_flyTmp1, camera.up).normalize();
+  camera.position.addScaledVector(_flyTmp1, f * speed);
+  camera.position.addScaledVector(_flyTmp2, r * speed);
+  camera.position.y += u * speed;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -230,27 +611,36 @@ function onPointerUp(e) {
 ───────────────────────────────────────────────────────────────────────── */
 function onKeyDown(e) {
   if (!container || !container.isConnected) return;
+  // Only handle 3D shortcuts while the 3D viewport is the active workspace.
+  if (!document.body.classList.contains('mode-3d')) return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
 
-  if (e.key === 'Tab') { e.preventDefault(); toggleEditMode(); return; }
+  // 3D shortcuts swallow these keys so they don't also fire 2D shortcuts.
+  const swallow = () => { e.preventDefault(); e.stopPropagation(); };
 
-  if (e.key === 'g' || e.key === 'G') { setTransformMode('translate'); e.preventDefault(); return; }
-  if (e.key === 'r' || e.key === 'R') { setTransformMode('rotate');    e.preventDefault(); return; }
-  if (e.key === 's' || e.key === 'S') { setTransformMode('scale');     e.preventDefault(); return; }
-  if (e.key === 'f' || e.key === 'F') { frameSelected(); e.preventDefault(); return; }
+  if (e.key === 'Tab')        { swallow(); toggleEditMode(); return; }
+  if (e.key === 'g' || e.key === 'G') { swallow(); setTransformMode('translate'); return; }
+  if (e.key === 'r' || e.key === 'R') { swallow(); setTransformMode('rotate');    return; }
+  if (e.key === 's' || e.key === 'S') { swallow(); setTransformMode('scale');     return; }
+  if (e.key === 'f' || e.key === 'F') { swallow(); frameSelected(); return; }
+  if ((e.key === 'a' || e.key === 'A') && editorMode === 'object') { swallow(); selectAllObjects(); return; }
+  if ((e.key === 'd' || e.key === 'D') && (e.shiftKey) && editorMode === 'object' && selectedId) {
+    swallow(); duplicateSelected(); return;
+  }
+  if ((e.key === '`' || e.key === '~') && e.shiftKey) { swallow(); toggleFlyCamera(); return; }
 
   if (editorMode === 'edit') {
-    if (e.key === '1') { setEditSubMode('vertex'); e.preventDefault(); return; }
-    if (e.key === '2') { setEditSubMode('edge');   e.preventDefault(); return; }
-    if (e.key === '3') { setEditSubMode('face');   e.preventDefault(); return; }
+    if (e.key === '1') { swallow(); setEditSubMode('vertex'); return; }
+    if (e.key === '2') { swallow(); setEditSubMode('edge');   return; }
+    if (e.key === '3') { swallow(); setEditSubMode('face');   return; }
   }
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && editorMode === 'object' && selectedId) {
     window.slateScene3d?.remove(selectedId);
     selectedId = null;
     transform?.detach();
-    e.preventDefault();
+    swallow();
   }
 }
 
@@ -651,14 +1041,25 @@ function ensureScene() {
   const grid = new THREE.GridHelper(40, 40, 0x3a3a4d, 0x252530);
   grid.userData.helper = true;
   scene.add(grid);
+  _gridHelper = grid;
 
   // Axis helper at origin
   const axes = new THREE.AxesHelper(0.8);
   axes.userData.helper = true;
   scene.add(axes);
+  _axesHelper = axes;
 
   raycaster = new THREE.Raycaster();
   raycaster.params.Points.threshold = 0.06;
+}
+
+let _gridHelper = null;
+let _axesHelper = null;
+function toggleGrid() {
+  if (_gridHelper) _gridHelper.visible = !_gridHelper.visible;
+  if (_axesHelper) _axesHelper.visible = _gridHelper?.visible !== false;
+  const btn = document.getElementById('t3d-grid-btn');
+  if (btn) btn.classList.toggle('active', _gridHelper?.visible !== false);
 }
 
 function resize() {
@@ -671,10 +1072,17 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 
+let _lastLoopTs = 0;
 function loop() {
   raf = requestAnimationFrame(loop);
   if (!renderer || !scene || !camera || !container?.isConnected) return;
-  if (orbit) orbit.update();
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - (_lastLoopTs || now)) / 1000);
+  _lastLoopTs = now;
+  if (flyEnabled) _stepFlyCamera(dt);
+  if (orbit && !flyEnabled) orbit.update();
+  _updatePeerCamMarkers();
+  _maybeBroadcastCamera(now);
   renderer.render(scene, camera);
 }
 
@@ -736,9 +1144,19 @@ function bindToolbar() {
     btn.addEventListener('click', () => setEditSubMode(btn.dataset.sel));
   });
   document.getElementById('t3d-delete-btn')?.addEventListener('click', () => {
-    if (editorMode === 'object' && selectedId) window.slateScene3d?.remove(selectedId);
+    if (editorMode !== 'object') return;
+    const api = window.slateScene3d;
+    if (!api) return;
+    const ids = [...selectedIds];
+    if (!ids.length && selectedId) ids.push(selectedId);
+    ids.forEach(id => api.remove(id));
+    selectedIds.clear(); selectedId = null;
+    transform?.detach();
   });
   document.getElementById('t3d-frame-btn')?.addEventListener('click', frameSelected);
+  document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
+  document.getElementById('t3d-fly-btn')?.addEventListener('click', toggleFlyCamera);
+  document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
 }
 
 function addPrimitive(kind) {
@@ -825,7 +1243,7 @@ function _renderRow(obj, depth, hasChildren) {
     style="padding-left:${6 + depth * 14}px">
     ${expander}
     <span class="out-icon">${icon}</span>
-    <span class="out-name" data-oid="${obj.id}">${_escape(obj.name)}</span>
+    <span class="out-name" data-oid="${obj.id}" draggable="false" title="Double-click to rename">${_escape(obj.name)}</span>
     <button class="out-vis-btn" data-oid="${obj.id}" title="Toggle visibility">
       ${visible
         ? `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="6.5" cy="6.5" rx="5.5" ry="3.5"/><circle cx="6.5" cy="6.5" r="2"/></svg>`

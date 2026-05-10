@@ -116,9 +116,10 @@
       panels.push({ ...def, order: def.order ?? 100 });
       panels.sort((a, b) => (a.order || 0) - (b.order || 0));
       appendDockPanel(def);
-      // Restore floating state if it was floating before.
+      // Restore floating state if it was floating before — desktop only;
+      // on mobile, floating panels are confusing so we keep things docked.
       const savedFloats = _loadFloats();
-      if (savedFloats[def.id]) {
+      if (savedFloats[def.id] && !window.matchMedia('(max-width: 768px)').matches) {
         requestAnimationFrame(() => window.slateDock.detachPanel(def.id, savedFloats[def.id]));
       }
     },
@@ -334,11 +335,14 @@
   }
 
   /* A small drag-distance threshold on tab pointer events lets us tell apart
-     "click to activate" from "drag to detach". */
+     "click to activate" from "drag to detach". Detaching is disabled below
+     the mobile breakpoint where the dock slides in/out instead. */
+  function _isMobile() { return window.matchMedia('(max-width: 768px)').matches; }
   function _bindTabDetach(tab) {
     let downX = 0, downY = 0, isDown = false;
     tab.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
+      if (_isMobile()) return;
       isDown = true; downX = e.clientX; downY = e.clientY;
     });
     tab.addEventListener('pointermove', e => {
@@ -347,7 +351,6 @@
       if (Math.hypot(dx, dy) > 18) {
         isDown = false;
         const id = tab.dataset.panel;
-        const rect = tab.getBoundingClientRect();
         window.slateDock.detachPanel(id, {
           left: Math.max(20, e.clientX - 100),
           top:  Math.max(20, e.clientY - 14),

@@ -505,6 +505,30 @@ input, textarea { font-family: var(--sans); }
   display: block; width: 100% !important; height: 100% !important;
   touch-action: none;
 }
+.box-select-overlay {
+  position: absolute; display: none;
+  background: rgba(124,106,255,0.10);
+  border: 1px dashed var(--accent);
+  pointer-events: none;
+  z-index: 60;
+}
+.fly-cam-hint {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 70; pointer-events: none;
+  background: rgba(0,0,0,0.7); color: var(--text);
+  padding: 6px 12px; border-radius: 999px;
+  font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+  border: 1px solid rgba(124,106,255,0.5);
+  font-family: var(--mono);
+}
+.peer-cam-tag {
+  position: absolute; pointer-events: none; z-index: 50;
+  padding: 2px 7px; border-radius: 10px; font-size: 0.62rem;
+  font-family: var(--sans); white-space: nowrap;
+  background: rgba(0,0,0,0.65); color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  transform: translate(-50%, -100%);
+}
 
 /* ── Header ── */
 #board-header {
@@ -545,7 +569,10 @@ input, textarea { font-family: var(--sans); }
 #draw-toolbar {
   position: fixed;
   top: calc(var(--header-h) + 10px);
-  right: 10px;
+  /* Sit just to the left of the right dock so the two don't overlap. The
+     --dock-w CSS var is driven by layout-dock.js and is 0 when the dock
+     collapses, which puts the toolbar back at the screen edge. */
+  right: calc(var(--dock-w, 0px) + 10px);
   width: 44px;
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -649,7 +676,7 @@ input, textarea { font-family: var(--sans); }
 .outliner-row.selected { background: var(--bg4); border-left-color: var(--accent); }
 .outliner-row .out-icon { flex-shrink: 0; opacity: 0.7; color: var(--text-mid); }
 .outliner-row .out-name { flex: 1; min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
+  text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .outliner-row.hidden-obj .out-name { color: var(--text-dim); }
 .out-vis-btn, .out-del-btn {
   background: none; border: none; padding: 0 2px;
@@ -1426,7 +1453,11 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 /* (fill-toggle, font-size defined with toolbar above) */
 /* Highlighter cursor */
 #board-canvas.tool-highlighter { cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='24' viewBox='0 0 20 24'><rect x='5' y='2' width='10' height='16' rx='4' fill='rgba(250,204,21,0.6)' stroke='%23333' stroke-width='1.5'/><rect x='8' y='18' width='4' height='4' rx='1' fill='%23333'/></svg>") 10 22, crosshair; }
-#board-canvas.tool-arrow { cursor: crosshair; }
+#board-canvas.tool-arrow      { cursor: crosshair; }
+#board-canvas.tool-triangle   { cursor: crosshair; }
+#board-canvas.tool-sticky     { cursor: crosshair; }
+#board-canvas.tool-eyedropper { cursor: copy; }
+#board-canvas.tool-fill       { cursor: cell;  }
 
 /* ═══════════════════════════════════════════
    MOBILE OVERRIDES
@@ -1509,6 +1540,29 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 
   /* 3D toolbar fits on mobile (tighter primitive group). */
   body.mode-3d #toolbar-3d { left: 8px; right: 8px; transform: none; max-width: calc(100vw - 16px); overflow-x: auto; }
+  body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
+  body.mode-3d #toolbar-3d .t3d-btn { min-width: 32px; height: 32px; padding: 0 5px; }
+
+  /* Right dock collapses to a slide-in drawer on mobile so the tiny screen
+     isn't permanently chewed up by tabs. The new #panels-toggle button in
+     the header opens it. */
+  #right-dock {
+    position: fixed; top: var(--header-h); right: 0; bottom: 0;
+    width: min(280px, 86vw);
+    transform: translateX(110%);
+    transition: transform 0.25s ease;
+    z-index: 55; border-left: 1px solid var(--border);
+    box-shadow: -4px 0 24px rgba(0,0,0,0.45);
+  }
+  #right-dock.dock-open    { transform: translateX(0); }
+  #dock-resize-handle      { display: none; }
+  /* The fixed-position toolbar shouldn't try to dodge the dock. */
+  #draw-toolbar { right: 0 !important; }
+
+  /* Floating dock panels are noisy on phones; pin them inline instead. */
+  .panel-float { display: none !important; }
+
+  #panels-toggle { display: flex; }
 
   /* Voice bar compact on mobile */
   #voice-bar { gap: 4px; }
@@ -1756,6 +1810,12 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           <path d="M2 3h12v8H9l-3 2v-2H2z"/>
         </svg>
       </button>
+      <button id="panels-toggle" class="btn-icon" aria-label="Toggle panels" title="Toggle panels" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+          <rect x="2" y="3" width="12" height="10" rx="1.5"/>
+          <line x1="9" y1="3" x2="9" y2="13"/>
+        </svg>
+      </button>
       <button id="members-toggle" class="btn-icon" aria-label="Toggle members">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <circle cx="6" cy="5" r="2.5"/>
@@ -1793,6 +1853,12 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           <ellipse cx="8" cy="8" rx="6" ry="4"/>
         </svg>
       </button>
+      <!-- Triangle -->
+      <button class="tool-btn" data-tool="triangle" title="Triangle (G)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+          <path d="M8 2.5L14 13.5H2z"/>
+        </svg>
+      </button>
       <!-- Highlighter -->
       <button class="tool-btn" data-tool="highlighter" title="Highlighter (Y)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -1817,6 +1883,27 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <button class="tool-btn" data-tool="text" title="Text (T)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <path d="M2 3h12v2H9v8H7V5H2V3z"/>
+        </svg>
+      </button>
+      <!-- Sticky note -->
+      <button class="tool-btn" data-tool="sticky" title="Sticky note (N)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M2.5 2.5h8L13.5 5.5v8H2.5z" fill="rgba(250,204,21,0.35)"/>
+          <path d="M10.5 2.5v3h3"/>
+        </svg>
+      </button>
+      <!-- Eyedropper -->
+      <button class="tool-btn" data-tool="eyedropper" title="Eyedropper (I)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 2l3 3-2 2-3-3z"/>
+          <path d="M9 4l-6.5 6.5V13h2.5L11.5 6.5"/>
+        </svg>
+      </button>
+      <!-- Fill bucket -->
+      <button class="tool-btn" data-tool="fill" title="Fill bucket (K)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2L3 7l4 4 5-5z"/>
+          <path d="M7 11l5-5 1.5 2.5a1.7 1.7 0 1 1-3 0z"/>
         </svg>
       </button>
       <!-- Select -->
@@ -1992,11 +2079,26 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <div class="toolbar-spacer"></div>
 
       <div class="t3d-group">
+        <button class="t3d-btn" id="t3d-duplicate-btn" title="Duplicate selected (Shift+D)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+            <rect x="2" y="2" width="7" height="7" rx="1"/><rect x="5" y="5" width="7" height="7" rx="1"/>
+          </svg>
+        </button>
         <button class="t3d-btn" id="t3d-delete-btn" title="Delete selected (Del)">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h8M5 4V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1M4 4l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L10 4"/></svg>
         </button>
         <button class="t3d-btn" id="t3d-frame-btn" title="Frame selected (F)">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/></svg>
+        </button>
+        <button class="t3d-btn" id="t3d-fly-btn" title="Fly camera (Shift+`)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <path d="M2 11l5-9 5 9-5-3z"/>
+          </svg>
+        </button>
+        <button class="t3d-btn" id="t3d-grid-btn" title="Toggle grid (.)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
+            <path d="M2 5h10M2 9h10M5 2v10M9 2v10"/>
+          </svg>
         </button>
       </div>
     </div>
@@ -3446,6 +3548,7 @@ function handleData(peerId, data) {
 
     case 'leave':
       setLobbyBoard(peerId, null, data.name);
+      try { window.slateScene3dRpc?.removePeerCamera?.(peerId); } catch (_) {}
       removePeer(peerId, { reason: 'leave' });
       break;
 
@@ -3458,6 +3561,18 @@ function handleData(peerId, data) {
         if (state.connections[peerId]) state.connections[peerId].ping = Date.now() - data.t;
         delete state.pingTimes[peerId];
       }
+      break;
+
+    case 'cam-3d':
+      // Forward to the 3D editor module so it can render the peer's camera.
+      // Safe to ignore while in 2D mode; the editor checks for `mode-3d` itself.
+      try {
+        const meta = {
+          name:  state.connections[peerId]?.name  || data.name  || peerId.slice(0, 6),
+          color: state.connections[peerId]?.color || data.color || null,
+        };
+        window.slateScene3dRpc?.applyPeerCamera?.(peerId, data, meta);
+      } catch (_) {}
       break;
   }
 }
@@ -3477,6 +3592,12 @@ function broadcastToPeer(peerId, data) {
   try { state.connections[peerId]?.conn?.send(data); } catch {}
 }
 
+/* Lightweight broadcast API exposed to feature modules (editor3d.js, etc.). */
+window.slatePeers = {
+  broadcast(data) { broadcastAll(data); },
+  send(peerId, data) { broadcastToPeer(peerId, data); },
+};
+
 /* ═══════════════════════════════════════════
    REMOVE PEER
 ═══════════════════════════════════════════ */
@@ -3486,6 +3607,7 @@ function removePeer(peerId, opts = {}) {
   const wasInBoard = info.board === state.currentBoard;
   const peerName   = info.name || 'Someone';
   try { info.conn?.close(); } catch {}
+  try { window.slateScene3dRpc?.removePeerCamera?.(peerId); } catch (_) {}
   delete state.connections[peerId];
   state.mutedDrawers.delete(peerId);
   voiceState.speakingPeers.delete(peerId);
@@ -3740,6 +3862,7 @@ function leaveBoard() {
   const saveBoardBtn2 = document.getElementById('save-board-btn');
   if (saveBoardBtn2) saveBoardBtn2.style.display = 'none';
   syncInviteHash(null);
+  try { window.slateScene3dRpc?.clearAllPeerCameras?.(); } catch (_) {}
   applyWorkspaceMode(null);
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
@@ -4723,6 +4846,37 @@ function drawShape(s, preview = false) {
       if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(); }
       ctx.stroke();
       break;
+    case 'triangle':
+      ctx.beginPath();
+      ctx.moveTo(s.x + s.w / 2, s.y);
+      ctx.lineTo(s.x + s.w,     s.y + s.h);
+      ctx.lineTo(s.x,           s.y + s.h);
+      ctx.closePath();
+      if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(); }
+      ctx.stroke();
+      break;
+    case 'sticky': {
+      // Sticky = rounded rect with optional inset text; uses fill color as bg.
+      const rx = Math.min(8, Math.abs(s.w) / 6);
+      const bg = s.fill || '#fef3c7';
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(s.x, s.y, s.w, s.h, rx);
+      else ctx.rect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = bg; ctx.fill();
+      // Subtle dropshadow stripe along the bottom edge — Post-it feel.
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      ctx.fillRect(s.x, s.y + s.h - 4, s.w, 4);
+      if (s.text) {
+        ctx.fillStyle = s.color || '#1a1a2e';
+        const fs = s.fontSize || 16;
+        ctx.font = `${fs}px Inter, sans-serif`;
+        const lines = s.text.split('\n');
+        const lh = fs * 1.4;
+        const pad = 10;
+        lines.forEach((line, i) => ctx.fillText(line, s.x + pad, s.y + pad + (i + 0.85) * lh));
+      }
+      break;
+    }
     case 'line':
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
@@ -4916,9 +5070,37 @@ function onPointerDown(e) {
       }
     }
     scheduleRender();
-  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool)) {
+  } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle', 'sticky'].includes(currentTool)) {
     isDrawing = true;
     shapeStart = { wx, wy };
+  } else if (currentTool === 'eyedropper') {
+    /* Sample whatever shape/stroke is under the cursor and load it into the
+       FG colour. Fall back to BG colour if the user hits an empty spot. */
+    const hit = hitTestColorAt(wx, wy);
+    if (hit) {
+      strokeColor = hit;
+      const fg = document.getElementById('color-picker');
+      if (fg) fg.value = hit;
+      toast('Color sampled', 'green');
+    } else {
+      toast('Nothing to sample here', 'red');
+    }
+    setTool('pen'); // Photoshop pattern: snap back to the previous draw tool
+  } else if (currentTool === 'fill') {
+    /* Flood-fill of vector shapes: set the fill of the topmost shape under
+       cursor to the current BG (fill) colour. Strokes don't have a fill so
+       they're ignored. */
+    const shape = hitTestShapeAt(wx, wy);
+    if (shape) {
+      const next = { ...shape, fill: fillColor };
+      pushHistoryShapeUpdate(shape);
+      doc.shapes.set(shape.id, next);
+      pendingDiff.updated.push(next);
+      scheduleDiff();
+      scheduleRender();
+    } else {
+      toast('Click a shape to fill', 'red');
+    }
   } else if (currentTool === 'text') {
     // Start drag to define text box — release to open textarea
     if (textPos) { commitText(); } // commit any in-progress text first
@@ -5000,8 +5182,17 @@ function onPointerMove(e) {
     scheduleRender();
   } else if (currentTool === 'eraser' && isDrawing) {
     eraseAt(wx, wy);
-  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
+  } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle'].includes(currentTool) && isDrawing && shapeStart) {
     shapePreview = makeShape(wx, wy, true);
+    scheduleRender();
+  } else if (currentTool === 'sticky' && isDrawing && shapeStart) {
+    const sx = Math.min(shapeStart.wx, wx), sy = Math.min(shapeStart.wy, wy);
+    const sw = Math.abs(wx - shapeStart.wx) || 140, sh = Math.abs(wy - shapeStart.wy) || 140;
+    shapePreview = {
+      id: '__preview__', type: 'sticky', x: sx, y: sy, w: sw, h: sh,
+      color: '#1a1a2e', fill: '#fef3c7', strokeWidth: 1,
+      peerId: state.myId, t: Date.now(),
+    };
     scheduleRender();
   } else if (currentTool === 'select') {
     if (selBox) {
@@ -5069,7 +5260,7 @@ function onPointerUp(e) {
       invalidateStatic();
     }
     currentStroke = null;
-  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
+  } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle'].includes(currentTool) && isDrawing && shapeStart) {
     const { wx, wy } = getPos(e);
     const shape = makeShape(wx, wy);
     if (shape && (Math.abs(shape.w) > 2 || Math.abs(shape.h) > 2)) {
@@ -5082,6 +5273,35 @@ function onPointerUp(e) {
     }
     shapePreview = null;
     shapeStart   = null;
+  } else if (currentTool === 'sticky' && isDrawing && shapeStart) {
+    /* Sticky note: drop on click (no drag needed), with a sensible default
+       size. We always create the shape so a single click works on mobile. */
+    const { wx, wy } = getPos(e);
+    let w = wx - shapeStart.wx, h = wy - shapeStart.wy;
+    if (Math.abs(w) < 8 && Math.abs(h) < 8) { w = 140; h = 140; }
+    const x = Math.min(shapeStart.wx, shapeStart.wx + w);
+    const y = Math.min(shapeStart.wy, shapeStart.wy + h);
+    w = Math.abs(w); h = Math.abs(h);
+    const shape = {
+      id: genId(), type: 'sticky',
+      x, y, w, h,
+      color: '#1a1a2e',
+      fill: fillColor && fillColor !== '#ffffff' ? fillColor : '#fef3c7',
+      text: '',
+      fontSize: 16,
+      peerId: state.myId, t: Date.now(),
+    };
+    if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
+    doc.shapes.set(shape.id, shape);
+    undoStack.push({ action: 'add', kind: 'shape', id: shape.id });
+    redoStack.length = 0;
+    pendingDiff.added.push({ ...shape });
+    scheduleDiff();
+    invalidateStatic();
+    shapePreview = null;
+    shapeStart = null;
+    // Immediately let the user type into the sticky.
+    openStickyEditor(shape);
   } else if (currentTool === 'select') {
     if (selBox) {
       // Finalize rubber-band selection
@@ -5131,10 +5351,11 @@ function makeShape(wx, wy, preview = false) {
   const fill = useFill ? fillColor : null;
   let shape;
   switch (currentTool) {
-    case 'rect':    shape = { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
-    case 'ellipse': shape = { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
-    case 'line':    shape = { id, type: 'line',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
-    case 'arrow':   shape = { id, type: 'arrow',   x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    case 'rect':     shape = { id, type: 'rect',     x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'ellipse':  shape = { id, type: 'ellipse',  x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'triangle': shape = { id, type: 'triangle', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'line':     shape = { id, type: 'line',     x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    case 'arrow':    shape = { id, type: 'arrow',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
     default: return null;
   }
   if (shape && !preview && typeof window.__slateActiveLayerId === 'string') {
@@ -5336,6 +5557,41 @@ function hitTest(wx, wy) {
   return null;
 }
 
+/* Topmost shape under a world-space point — newest first.
+   Returns the shape object (mutable), or null. */
+function hitTestShapeAt(wx, wy) {
+  const arr = [...doc.shapes.values()];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const s = arr[i];
+    const minX = Math.min(s.x, s.x + (s.w || 0)) - 4;
+    const maxX = Math.max(s.x, s.x + (s.w || 0)) + 4;
+    const minY = Math.min(s.y, s.y + (s.h || 0)) - 4;
+    const maxY = Math.max(s.y, s.y + (s.h || 0)) + 4;
+    if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY) return s;
+  }
+  return null;
+}
+
+/* Eyedropper: return a hex color found at the world-space point, sampled
+   from the topmost shape/stroke under cursor. Prefers fill over stroke. */
+function hitTestColorAt(wx, wy) {
+  const shape = hitTestShapeAt(wx, wy);
+  if (shape) return shape.fill || shape.color || null;
+  const r = 12 / vp.zoom;
+  let best = null, bestDist = Infinity;
+  doc.strokes.forEach(s => {
+    for (const [px, py] of (s.points || [])) {
+      const d = Math.hypot(px - wx, py - wy);
+      if (d < r && d < bestDist) { best = s; bestDist = d; }
+    }
+  });
+  return best?.color || null;
+}
+
+/* Lightweight no-op history shim so the fill/eyedropper tools can hook
+   into an undo system later without breaking now. */
+function pushHistoryShapeUpdate(_shape) {}
+
 function onWheel(e) {
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
@@ -5402,6 +5658,58 @@ function commitText() {
   textPos = null;
 }
 
+/* ── Sticky-note editor: re-uses the text overlay textarea ── */
+let _editingStickyId = null;
+function openStickyEditor(shape) {
+  if (!shape) return;
+  _editingStickyId = shape.id;
+  const rect = canvas.getBoundingClientRect();
+  const sx = shape.x * vp.zoom + vp.panX + rect.left;
+  const sy = shape.y * vp.zoom + vp.panY + rect.top;
+  const sw = Math.max(40, shape.w * vp.zoom);
+  const sh = Math.max(40, shape.h * vp.zoom);
+  textOverlay.style.display    = 'block';
+  textOverlay.style.left       = sx + 'px';
+  textOverlay.style.top        = sy + 'px';
+  textOverlay.style.width      = sw + 'px';
+  textOverlay.style.height     = sh + 'px';
+  textOverlay.style.fontSize   = Math.max(12, (shape.fontSize || 16) * vp.zoom) + 'px';
+  textOverlay.style.lineHeight = '1.4';
+  textOverlay.style.padding    = '10px';
+  textOverlay.value = shape.text || '';
+  setTimeout(() => { textOverlay.focus(); textOverlay.select(); }, 30);
+}
+function commitSticky() {
+  if (!_editingStickyId) return;
+  const id = _editingStickyId; _editingStickyId = null;
+  const text = textOverlay.value;
+  textOverlay.style.display = 'none';
+  textOverlay.style.padding = '';
+  textOverlay.value = '';
+  const shape = doc.shapes.get(id);
+  if (!shape) return;
+  if ((shape.text || '') === text) return;
+  shape.text = text;
+  pendingDiff.updated.push({ ...shape });
+  scheduleDiff();
+  invalidateStatic(); scheduleRender();
+}
+/* Save sticky on blur or Escape (Enter inserts a newline in stickies). */
+textOverlay.addEventListener('blur',  () => { if (_editingStickyId) commitSticky(); });
+textOverlay.addEventListener('keydown', e => {
+  if (!_editingStickyId) return;
+  if (e.key === 'Escape') { e.preventDefault(); commitSticky(); }
+  e.stopPropagation();
+});
+/* Double-click an existing sticky to edit its text (works in select mode). */
+canvas.addEventListener('dblclick', e => {
+  if (currentTool === 'select' || currentTool === 'sticky') {
+    const { wx, wy } = getPos(e);
+    const hit = hitTestShapeAt(wx, wy);
+    if (hit && hit.type === 'sticky') openStickyEditor(hit);
+  }
+});
+
 // ── Undo / Redo ──
 // entry: { kind: 'stroke'|'shape', action: 'add', id, data? }
 function undo() {
@@ -5455,6 +5763,10 @@ function setTool(tool) {
   else if (tool === 'pan')    cv.classList.add('tool-pan');
   else if (tool === 'highlighter') cv.classList.add('tool-highlighter');
   else if (tool === 'arrow')  cv.classList.add('tool-arrow');
+  else if (tool === 'eyedropper') cv.classList.add('tool-eyedropper');
+  else if (tool === 'fill')   cv.classList.add('tool-fill');
+  else if (tool === 'sticky') cv.classList.add('tool-sticky');
+  else if (tool === 'triangle') cv.classList.add('tool-triangle');
   if (state.isDrawMuted) cv.classList.add('draw-muted');
 
   // Show/hide font size for text tool
@@ -5688,9 +6000,13 @@ document.addEventListener('keydown', e => {
     case 'e': setTool('eraser'); break;
     case 'r': setTool('rect'); break;
     case 'o': setTool('ellipse'); break;
+    case 'g': setTool('triangle'); break;
     case 'l': setTool('line'); break;
     case 'a': setTool('arrow'); break;
     case 't': setTool('text'); break;
+    case 'n': setTool('sticky'); break;
+    case 'i': setTool('eyedropper'); break;
+    case 'k': setTool('fill'); break;
     case 's': setTool('select'); break;
     case 'h': setTool('pan'); break;
     case 'Escape':
@@ -6413,6 +6729,13 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 document.getElementById('members-toggle').addEventListener('click', () => {
   document.getElementById('member-panel').classList.toggle('open');
   if (window.innerWidth <= 768) document.getElementById('chat-panel').classList.remove('open');
+});
+
+/* Mobile-only — slide the right dock (Layers / Hierarchy panels) in and out. */
+document.getElementById('panels-toggle')?.addEventListener('click', () => {
+  const dock = document.getElementById('right-dock');
+  if (!dock) return;
+  dock.classList.toggle('dock-open');
 });
 
 /* ═══════════════════════════════════════════

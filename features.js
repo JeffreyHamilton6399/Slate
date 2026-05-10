@@ -510,7 +510,7 @@ function renderLayersList() {
           : `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="2" y1="2" x2="11" y2="11"/><path d="M4.5 4.5a5 5 0 0 0-3 2 5.5 5.5 0 0 0 9 1M8 3.5A5.5 5.5 0 0 1 12 6.5"/></svg>`
         }
       </button>
-      <span class="layer-name" data-lid="${l.id}" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;user-select:none">${_escape(l.name)}</span>
+      <span class="layer-name" data-lid="${l.id}" draggable="false" title="Double-click to rename" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;user-select:none;cursor:text">${_escape(l.name)}</span>
       <button class="layer-del-btn" data-lid="${l.id}" title="Delete layer" style="background:none;border:none;color:var(--text-dim);cursor:pointer;padding:0 2px;opacity:0.55;line-height:1;flex-shrink:0">
         <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
       </button>

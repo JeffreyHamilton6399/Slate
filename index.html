@@ -73,23 +73,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-body::before {
-  content: '';
-  position: fixed; inset: 0; z-index: 0;
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 40px 40px;
-  opacity: 0.2;
-  pointer-events: none;
-}
-
-body::after {
-  content: '';
-  position: fixed; inset: 0; z-index: 0;
-  background: radial-gradient(ellipse 70% 55% at 50% 40%, rgba(124,106,255,0.06) 0%, transparent 60%);
-  pointer-events: none;
-}
 
 a { color: var(--accent); text-decoration: none; }
 button { cursor: pointer; font-family: var(--sans); }
@@ -652,93 +635,125 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 }
 
 /* ═══════════════════════════════════════════
-   MEMBERS PANEL
+   MEMBERS PANEL (Chirp-inspired, compact)
 ═══════════════════════════════════════════ */
 #member-panel {
-  width: 152px; flex-shrink: 0;
+  width: 132px; flex-shrink: 0;
   background: var(--bg2);
   border-left: 1px solid var(--border);
   display: flex; flex-direction: column;
   overflow: hidden; z-index: 5;
 }
 .member-panel-header {
-  padding: 8px 10px 6px;
+  padding: 6px 9px 5px;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
 }
 .member-panel-title {
-  font-size: 0.65rem; font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.12em;
+  font-size: 0.6rem; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.1em;
   color: var(--text-dim);
 }
 #member-count-badge {
-  font-size: 0.62rem; font-family: var(--mono);
+  font-size: 0.58rem; font-family: var(--mono);
   background: var(--bg4); color: var(--text-dim);
   padding: 1px 5px; border-radius: 8px;
 }
 #member-list {
   flex: 1; overflow-y: auto;
-  padding: 4px 6px;
+  padding: 3px 4px;
   display: flex; flex-direction: column; gap: 1px;
 }
 .member-row {
   display: flex; align-items: center;
   padding: 4px 6px; border-radius: var(--radius-sm);
-  gap: 6px; position: relative;
+  gap: 7px; position: relative; cursor: pointer;
+  transition: background 0.14s ease;
 }
 .member-row:hover { background: var(--bg3); }
+.member-row.is-self { cursor: default; }
 .member-avatar {
-  width: 26px; height: 26px; border-radius: 50%;
+  width: 22px; height: 22px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.68rem; font-weight: 700;
+  font-size: 0.6rem; font-weight: 700;
   flex-shrink: 0; overflow: hidden;
   background-size: cover; background-position: center;
+  border: 1.5px solid transparent; transition: border-color 0.18s, box-shadow 0.18s;
 }
-.member-info { flex: 1; min-width: 0; }
+.member-row.speaking .member-avatar {
+  border-color: var(--green);
+  box-shadow: 0 0 8px rgba(34,211,165,0.4);
+}
+.member-info {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px;
+}
 .member-name {
-  font-size: 0.76rem; font-weight: 500;
+  font-size: 0.7rem; font-weight: 500;
   color: var(--text); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
-}
-.member-name.is-you { color: var(--accent); }
-.member-badge {
-  font-size: 0.65rem; font-family: var(--mono);
-  color: var(--text-dim);
-}
-.member-actions { flex-shrink: 0; }
-.mod-btn {
-  padding: 3px 7px; border-radius: var(--radius-sm);
-  background: transparent; border: 1px solid var(--border);
-  color: var(--text-dim); font-size: 0.72rem;
-  cursor: pointer;
-}
-.mod-btn:hover { background: var(--bg4); color: var(--text); }
-.draw-muted-badge {
+  flex: 1; min-width: 0;
   display: inline-flex; align-items: center; gap: 3px;
-  font-size: 0.65rem; font-family: var(--mono);
-  color: var(--danger); padding: 1px 5px;
-  background: rgba(248,113,113,0.1); border-radius: 10px;
+}
+.member-host-badge,
+.member-muted-badge { font-size: 0.6rem; flex-shrink: 0; opacity: 0.85; }
+.member-you-hint {
+  font-family: var(--mono); font-size: 0.52rem;
+  color: var(--text-dim); font-weight: 400;
+  text-transform: lowercase; letter-spacing: 0.04em;
+}
+.member-reco {
+  font-size: 0.62rem; color: var(--warn);
+  font-family: var(--mono); flex-shrink: 0;
 }
 
-/* Mod dropdown */
+/* Mod menu — Chirp-style popup at click coords */
 #mod-menu {
-  position: fixed; z-index: 200;
-  background: var(--bg3); border: 1px solid var(--border2);
-  border-radius: var(--radius-sm); padding: 4px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  position: fixed; z-index: 800;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 10px; padding: 6px;
+  min-width: 200px; max-width: 240px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(124,106,255,0.07);
   display: none; flex-direction: column; gap: 2px;
-  min-width: 160px;
 }
 #mod-menu.open { display: flex; }
+.mod-menu-header {
+  font-family: var(--mono); font-size: 0.56rem; color: var(--text-dim);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 6px 10px 8px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.mod-menu-name {
+  color: var(--text); font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0; text-transform: none; font-family: var(--sans);
+  margin-bottom: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mod-menu-volume {
+  padding: 8px 10px 10px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.mod-menu-volume label {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--mono); font-size: 0.55rem; color: var(--text-dim);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px;
+}
+.mod-menu-volume input { width: 100%; accent-color: var(--accent); }
 .mod-menu-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px; border-radius: 4px;
-  font-size: 0.83rem; color: var(--text-mid);
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 6px;
+  font-family: var(--mono); font-size: 0.66rem;
+  letter-spacing: 0.06em; color: var(--text-mid);
   cursor: pointer; border: none; background: none;
   width: 100%; text-align: left;
+  transition: background 0.14s, color 0.14s;
 }
-.mod-menu-item:hover { background: var(--bg4); color: var(--text); }
-.mod-menu-item.danger:hover { color: var(--danger); }
+.mod-menu-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.mod-menu-item.danger { color: var(--danger); }
+.mod-menu-item.danger:hover { background: rgba(248,113,113,0.08); color: var(--danger); }
+.mod-menu-item svg { flex-shrink: 0; opacity: 0.7; }
+.host-action { display: flex; }
 
 /* ═══════════════════════════════════════════
    MODALS
@@ -979,32 +994,22 @@ button.visibility-chip { font: inherit; cursor: pointer; }
 }
 .fill-none-btn.active { border-color: var(--accent); color: var(--accent); }
 
-/* Visibility toggle button */
+/* Visibility toggle (icon-only, Chirp-style — sits at the bottom of the sidebar) */
 .vis-toggle {
-  padding: 5px 10px; border-radius: var(--radius-sm);
-  background: rgba(34,211,165,0.08); border: 1px solid rgba(34,211,165,0.3);
-  color: var(--green); cursor: pointer; flex-shrink: 0;
-  display: flex; align-items: center; gap: 5px;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-  font-size: 0.75rem; font-weight: 500;
+  width: 28px; height: 28px; flex-shrink: 0; padding: 0;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
+.vis-toggle:hover { border-color: var(--accent-dim); color: var(--accent); }
 .vis-toggle[aria-label="private"] {
-  color: var(--danger); border-color: rgba(248,113,113,0.3);
-  background: rgba(248,113,113,0.08);
+  border-color: rgba(124,106,255,0.35);
+  background: rgba(124,106,255,0.1);
+  color: var(--accent);
 }
-.vis-toggle:hover { filter: brightness(1.18); }
-.vis-label { line-height: 1; }
-
-/* Speaking ring on member avatar */
-.member-avatar.speaking {
-  box-shadow: 0 0 0 2.5px var(--green);
-  animation: speak-pulse 0.8s ease-in-out infinite;
-}
-@keyframes speak-pulse { 0%,100% { box-shadow: 0 0 0 2.5px var(--green); } 50% { box-shadow: 0 0 0 4px rgba(34,211,165,0.35); } }
-
-/* Member row clickable */
-.member-row { cursor: pointer; }
-.member-row:hover .member-avatar { outline: 1.5px solid var(--border2); }
+.vis-toggle .vis-label { display: none; }
 
 /* Voice bar in header */
 #voice-bar {
@@ -1016,11 +1021,17 @@ button.visibility-chip { font: inherit; cursor: pointer; }
   padding: 5px 8px; border-radius: var(--radius-sm);
   background: transparent; border: 1px solid var(--border);
   color: var(--text-dim); font-size: 0.78rem; font-family: var(--mono);
-  cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
 }
 #mute-btn:hover { background: var(--bg3); border-color: var(--border2); color: var(--text); }
-#mute-btn.muted  { background: rgba(248,113,113,0.1); border-color: var(--danger); color: var(--danger); }
-#mute-btn.no-mic { opacity: 0.45; pointer-events: all; } /* still clickable to request mic */
+#mute-btn.muted {
+  background: rgba(248,113,113,0.1);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+#mute-btn.no-mic { color: var(--text-dim); opacity: 0.7; }
+#mute-btn.no-mic:hover { color: var(--accent); border-color: var(--accent-dim); opacity: 1; }
 .mic-bar {
   display: flex; align-items: flex-end; gap: 1.5px; height: 12px;
 }
@@ -1434,8 +1445,20 @@ button.visibility-chip { font: inherit; cursor: pointer; }
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
         Leave
       </button>
-      <!-- Voice bar (empty — mute btn is in member list next to self) -->
-      <div id="voice-bar" style="display:none"></div>
+      <!-- Voice bar — mute button (always visible while in a board) -->
+      <div id="voice-bar" style="display:none">
+        <button id="mute-btn" class="no-mic" title="Click to enable microphone" aria-label="Microphone">
+          <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
+            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+          </svg>
+          <div class="mic-bar" id="mic-level-bar">
+            <div class="mic-bar-seg" style="height:3px"></div>
+            <div class="mic-bar-seg" style="height:5px"></div>
+            <div class="mic-bar-seg" style="height:3px"></div>
+          </div>
+        </button>
+      </div>
       <button id="chat-btn" class="btn-icon" aria-label="Toggle chat" title="Chat">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M2 3h12v8H9l-3 2v-2H2z"/>
@@ -1648,18 +1671,6 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     </div>
     <div id="member-list"></div>
   </aside>
-  <!-- Mute button: lives here until renderMembers() moves it into the self row -->
-  <button id="mute-btn" class="no-mic" title="Click to enable microphone" style="display:none">
-    <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="4" y="1" width="5" height="7" rx="2.5"/>
-      <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
-    </svg>
-    <div class="mic-bar" id="mic-level-bar">
-      <div class="mic-bar-seg" style="height:3px"></div>
-      <div class="mic-bar-seg" style="height:5px"></div>
-      <div class="mic-bar-seg" style="height:3px"></div>
-    </div>
-  </button>
 
   <!-- Chat panel -->
   <aside id="chat-panel">
@@ -1720,15 +1731,25 @@ button.visibility-chip { font: inherit; cursor: pointer; }
   </div>
 </div>
 
-<!-- Mod menu (host per-member actions) -->
+<!-- Mod menu (per-member actions, modeled on Chirp) -->
 <div id="mod-menu">
-  <div id="mod-menu-peer-name" style="padding:8px 12px 4px;font-size:0.75rem;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);margin-bottom:2px;pointer-events:none"></div>
-  <button class="mod-menu-item" id="mod-drawmute-btn">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
+  <div class="mod-menu-header">
+    <div class="mod-menu-name" id="mod-menu-peer-name">—</div>
+    <span>Member</span>
+  </div>
+  <div class="mod-menu-volume">
+    <label>
+      <span>Volume</span>
+      <span id="mod-volume-val">100%</span>
+    </label>
+    <input id="mod-volume" type="range" min="0" max="100" value="100">
+  </div>
+  <button class="mod-menu-item host-action" id="mod-drawmute-btn">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
     <span id="mod-drawmute-label">Mute drawing</span>
   </button>
-  <button class="mod-menu-item danger" id="mod-kick-btn">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
+  <button class="mod-menu-item danger host-action" id="mod-kick-btn">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
     Kick
   </button>
 </div>
@@ -2075,6 +2096,7 @@ const voiceState = {
   isMuted:       false,
   calls:         {},
   inbound:       {},
+  peerVolume:    {},   // peerId -> 0..1
   speakingPeers: new Set(),
   audioCtx:      null,
   analyser:      null,
@@ -2092,6 +2114,7 @@ function makePeerInfo(conn, opts = {}) {
     ping: null,
     lastSeen: Date.now(),
     reconnecting: false,
+    volume: 1,
   };
 }
 
@@ -2152,10 +2175,6 @@ function getPeersInBoard(board) {
   return Object.entries(state.lobbyRegistry)
     .filter(([id, info]) => id !== state.myId && info.board === board)
     .map(([id]) => id);
-}
-
-function peerInCurrentBoard(id, info) {
-  return Boolean(info?.board && info.board === state.currentBoard && state.connections[id]?.conn?.open);
 }
 
 /* ═══════════════════════════════════════════
@@ -2390,12 +2409,14 @@ function connectToLobby() {
   state.lobbyConn = conn;
 
   conn.on('open', () => {
-    conn.send({ type: 'lobby-hello', id: state.myId, name: state.myName, board: state.currentBoard, boards: publicBoards(), seenAt: Date.now() });
+    conn.send({ type: 'lobby-hello', id: state.myId, name: state.myName, board: state.currentBoard, boards: publicBoards(), docModes: boardDocModes, creators: { ...boardCreators }, seenAt: Date.now() });
   });
   conn.on('data', data => {
     if (data.type === 'lobby-registry') {
       state.lobbyRegistry = normalizeRegistry(data.registry);
       (data.boards || []).forEach(b => safeAddBoard(b));
+      mergeRemoteDocModes(data.docModes);
+      mergeRemoteCreators(data.creators);
       scheduleRenderBoards();
       syncBoardPeers();
     }
@@ -2403,6 +2424,8 @@ function connectToLobby() {
       if (data.registry) { state.lobbyRegistry = normalizeRegistry(data.registry); scheduleRenderBoards(); syncBoardPeers(); }
       if (data.board)   { safeAddBoard(data.board); scheduleRenderBoards(); }
       if (data.boards)  { data.boards.forEach(b => safeAddBoard(b)); scheduleRenderBoards(); }
+      if (data.docModes) mergeRemoteDocModes(data.docModes);
+      if (data.creators) mergeRemoteCreators(data.creators);
     }
     if (data.type === 'board-found') {
       const { board, peerId } = data;
@@ -2431,6 +2454,18 @@ function connectToLobby() {
         toast(`No private board "${data.board}" found`, 'red');
       }
     }
+    if (data.type === 'board-doc-mode' && data.board && (data.mode === '2d' || data.mode === '3d')) {
+      if (boardDocModes[data.board] !== data.mode) {
+        boardDocModes[data.board] = data.mode;
+        persistBoardDocModes();
+        if (data.board === state.currentBoard) applyWorkspaceMode(data.board);
+        scheduleRenderBoards();
+      }
+    }
+    if (data.type === 'board-creator-sync' && data.board && data.creatorId) {
+      mergeBoardCreatorFromPeer(data.board, data.creatorId);
+      if (data.board === state.currentBoard) syncBoardHostState();
+    }
   });
   conn.on('close', () => {
     state.lobbyConn = null;
@@ -2453,14 +2488,16 @@ function tryBecomeLobbyHost() {
     scheduleRenderBoards();
 
     lp.on('connection', conn => {
-      conn.on('open', () => conn.send({ type: 'lobby-registry', registry: state.lobbyRegistry, boards: publicBoards() }));
+      conn.on('open', () => conn.send({ type: 'lobby-registry', registry: state.lobbyRegistry, boards: publicBoards(), docModes: boardDocModes, creators: { ...boardCreators } }));
       conn.on('data', data => {
         if (data.type === 'lobby-hello') {
           clearTimeout(_lobbyHostRemovalTimers[data.id]);
           delete _lobbyHostRemovalTimers[data.id];
           setLobbyBoard(data.id, data.board || null, data.name);
           (data.boards || []).forEach(b => safeAddBoard(b));
-          lobbyBroadcast({ type: 'lobby-update', registry: state.lobbyRegistry, boards: publicBoards() });
+          mergeRemoteDocModes(data.docModes);
+          mergeRemoteCreators(data.creators);
+          lobbyBroadcast({ type: 'lobby-update', registry: state.lobbyRegistry, boards: publicBoards(), docModes: boardDocModes, creators: { ...boardCreators } });
           scheduleRenderBoards();
         }
         if (data.type === 'lobby-announce') {
@@ -2473,7 +2510,6 @@ function tryBecomeLobbyHost() {
           scheduleRenderBoards();
         }
         if (data.type === 'find-board') {
-          // Someone is looking for a private board — search registry and respond
           const boardName = data.board;
           const found = Object.entries(state.lobbyRegistry)
             .find(([id, info]) => info.board === boardName && id !== conn.peer);
@@ -2481,6 +2517,19 @@ function tryBecomeLobbyHost() {
             try { conn.send({ type: 'board-found', board: boardName, peerId: found[0] }); } catch {}
           } else {
             try { conn.send({ type: 'board-not-found', board: boardName }); } catch {}
+          }
+        }
+        if (data.type === 'board-doc-mode' && data.board && (data.mode === '2d' || data.mode === '3d')) {
+          if (boardDocModes[data.board] !== data.mode) {
+            boardDocModes[data.board] = data.mode;
+            persistBoardDocModes();
+            scheduleRenderBoards();
+          }
+          lobbyBroadcast({ type: 'board-doc-mode', board: data.board, mode: data.mode });
+        }
+        if (data.type === 'board-creator-sync' && data.board && data.creatorId) {
+          if (mergeBoardCreatorFromPeer(data.board, data.creatorId)) {
+            lobbyBroadcast({ type: 'board-creator-sync', board: data.board, creatorId: data.creatorId });
           }
         }
       });
@@ -2699,17 +2748,31 @@ function handleData(peerId, data) {
       setLobbyBoard(peerId, data.board, data.name);
       if (Array.isArray(data.boards)) data.boards.forEach(b => safeAddBoard(b));
       if (data.topics && typeof data.topics === 'object') { Object.assign(boardTopics, data.topics); persistBoardTopics(); }
-      // Send peer-list back
-      const peerList = Object.keys(state.connections)
-        .filter(id => id !== peerId)
-        .map(id => ({ id, joinTime: state.connections[id].joinTime || 0 }));
+      if (data.docModes && typeof data.docModes === 'object') {
+        let modeChanged = false;
+        Object.entries(data.docModes).forEach(([b, m]) => {
+          const norm = m === '3d' ? '3d' : '2d';
+          if (boardDocModes[b] !== norm) { boardDocModes[b] = norm; modeChanged = true; }
+        });
+        if (modeChanged) persistBoardDocModes();
+        if (modeChanged && state.currentBoard && data.docModes[state.currentBoard]) {
+          applyWorkspaceMode(state.currentBoard);
+        }
+      }
+      if (data.creators && typeof data.creators === 'object') {
+        Object.entries(data.creators).forEach(([b, cid]) => {
+          if (cid) mergeBoardCreatorFromPeer(b, cid);
+        });
+      }
       if (data.boardCreatorId && data.board) {
         mergeBoardCreatorFromPeer(data.board, data.boardCreatorId);
       }
+      const peerList = Object.keys(state.connections)
+        .filter(id => id !== peerId)
+        .map(id => ({ id, joinTime: state.connections[id].joinTime || 0 }));
       try { state.connections[peerId]?.conn.send({ type: 'peer-list', peers: peerList }); } catch {}
       syncBoardHostState(); renderMembers(); scheduleRenderBoards();
-      // If the new peer is in our board, call them
-      if (data.board === state.currentBoard && voiceState.localStream && shouldInitiateVoiceTo(peerId)) {
+      if (data.board === state.currentBoard && voiceState.localStream) {
         callPeer(peerId);
       }
       break;
@@ -2749,6 +2812,18 @@ function handleData(peerId, data) {
         boardTopics[data.board] = String(data.topic || '').slice(0, 80);
         persistBoardTopics();
         updateTopicInput();
+      }
+      break;
+
+    case 'board-doc-mode':
+      if (data.board && (data.mode === '2d' || data.mode === '3d')) {
+        const prev = boardDocModes[data.board];
+        if (prev !== data.mode) {
+          boardDocModes[data.board] = data.mode;
+          persistBoardDocModes();
+          if (data.board === state.currentBoard) applyWorkspaceMode(data.board);
+          scheduleRenderBoards();
+        }
       }
       break;
 
@@ -2918,40 +2993,72 @@ function removePeer(peerId, opts = {}) {
 /* ═══════════════════════════════════════════
    BOARD HOST (permanent creator — never transfers)
 ═══════════════════════════════════════════ */
-function mergeBoardCreatorFromPeer(board, creatorId) {
-  if (!board || !creatorId) return;
-  if (boardCreators[board] && boardCreators[board] !== creatorId) return;
-  if (!boardCreators[board]) {
-    boardCreators[board] = creatorId;
-    persistBoardCreators();
+/** Merge a remote `boardDocModes` map into ours; persist if anything changed. */
+function mergeRemoteDocModes(modes) {
+  if (!modes || typeof modes !== 'object') return;
+  let changed = false;
+  Object.entries(modes).forEach(([b, m]) => {
+    const norm = m === '3d' ? '3d' : '2d';
+    if (boardDocModes[b] !== norm) { boardDocModes[b] = norm; changed = true; }
+  });
+  if (changed) {
+    persistBoardDocModes();
+    if (state.currentBoard && modes[state.currentBoard]) applyWorkspaceMode(state.currentBoard);
   }
 }
 
+/** Merge a remote `boardCreators` map into ours; never overwrite existing entries. */
+function mergeRemoteCreators(creators) {
+  if (!creators || typeof creators !== 'object') return;
+  let changed = false;
+  Object.entries(creators).forEach(([b, cid]) => {
+    if (cid && !boardCreators[b]) { boardCreators[b] = cid; changed = true; }
+  });
+  if (changed) {
+    persistBoardCreators();
+    if (state.currentBoard) syncBoardHostState();
+  }
+}
+
+/**
+ * Merge a creator id from a peer. Creator is permanent (never overwrites).
+ * Returns true if anything changed.
+ */
+function mergeBoardCreatorFromPeer(board, creatorId) {
+  if (!board || !creatorId) return false;
+  if (boardCreators[board]) return false;
+  boardCreators[board] = creatorId;
+  persistBoardCreators();
+  return true;
+}
+
+/**
+ * Permanently bind a board to its creator. Broadcasts so all peers learn it.
+ * Once set, this never changes. Persisted in localStorage so refresh keeps host.
+ */
 function setPermanentBoardCreator(board, creatorPeerId) {
   if (!board || !creatorPeerId) return;
+  if (boardCreators[board] === creatorPeerId) return;
+  if (boardCreators[board] && boardCreators[board] !== creatorPeerId) return;
   boardCreators[board] = creatorPeerId;
   persistBoardCreators();
+  broadcastAll({ type: 'board-creator-sync', board, creatorId: creatorPeerId });
+  if (state.lobbyConn?.open) {
+    try { state.lobbyConn.send({ type: 'board-creator-sync', board, creatorId: creatorPeerId }); } catch {}
+  }
 }
 
+/** Recompute host flags strictly from boardCreators map. Never elects. */
 function syncBoardHostState() {
-  if (!state.currentBoard) return;
-  let creator = boardCreators[state.currentBoard];
-  if (!creator) {
-    const candidates = [
-      { id: state.myId, joinTime: state.myJoinTime || 0 },
-      ...Object.entries(state.connections)
-        .filter(([id, info]) => peerInCurrentBoard(id, info))
-        .map(([id, info]) => ({ id, joinTime: info.joinTime || 0 })),
-    ].sort((a, b) => (a.joinTime - b.joinTime) || String(a.id).localeCompare(String(b.id)));
-    creator = candidates[0]?.id || state.myId;
-    if (creator) {
-      boardCreators[state.currentBoard] = creator;
-      persistBoardCreators();
-      broadcastAll({ type: 'board-creator-sync', board: state.currentBoard, creatorId: creator });
-    }
+  if (!state.currentBoard) {
+    state.boardHostId = null;
+    state.isBoardHost = false;
+    updateBoardControls();
+    return;
   }
-  state.boardHostId = creator || state.myId;
-  state.isBoardHost = (state.boardHostId === state.myId);
+  const creator = boardCreators[state.currentBoard] || null;
+  state.boardHostId = creator;
+  state.isBoardHost = Boolean(creator) && creator === state.myId;
   updateBoardControls();
 }
 
@@ -2964,6 +3071,8 @@ function helloPayload() {
     joinTime: state.myJoinTime || Date.now(),
     boards: publicBoards(),
     topics: boardTopics,
+    docModes: boardDocModes,
+    creators: { ...boardCreators },
     boardCreatorId: state.currentBoard ? (boardCreators[state.currentBoard] || null) : null,
   };
 }
@@ -2987,10 +3096,17 @@ function joinBoard(board) {
   setLobbyBoard(state.myId, board, state.myName);
   syncInviteHash(board);
 
-  const peersInBoard = getPeersInBoard(board);
-  if (peersInBoard.length === 0 && !boardCreators[board]) {
-    setPermanentBoardCreator(board, state.myId || localStorage.getItem('slate_peer_id'));
-  }
+  // If this board has no known creator and we're alone after the lobby+hello settle,
+  // claim creator. This handles URL-only joins to truly fresh boards.
+  setTimeout(() => {
+    if (state.currentBoard !== board) return;
+    if (boardCreators[board]) return;
+    const peerInBoard = Object.values(state.connections).some(i => i?.board === board);
+    const lobbyKnowsBoard = Object.values(state.lobbyRegistry).some(r => r?.board === board && r !== state.lobbyRegistry[state.myId]);
+    if (peerInBoard || lobbyKnowsBoard) return;
+    const me = state.myId || localStorage.getItem('slate_peer_id');
+    if (me) setPermanentBoardCreator(board, me);
+  }, 2500);
 
   // Reset doc + viewport for new board
   docClear();
@@ -3012,12 +3128,13 @@ function joinBoard(board) {
   lobbyAnnounce(board);
   scheduleRenderBoards();
   renderMembers();
+  updateBoardControls();
   syncBoardPeers();
   syncBoardHostState();
   broadcastAll(helloPayload());
   requestWakeLock();
   scheduleRender();
-  // Join voice if mic already acquired
+  updateMuteBtn();
   if (voiceState.localStream) joinVoice();
 }
 
@@ -3318,34 +3435,13 @@ function ensureStaticCanvas() {
   c.clearRect(0, 0, _staticCanvas.width, _staticCanvas.height);
   c.save();
   c.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
-  // clip to paper
   c.clip(getPaperPath2D());
-  // draw grid
-  _drawGridOn(c);
-  // draw committed content
   doc.strokes.forEach(s => drawStrokeOn(c, s));
   doc.shapes.forEach(s  => drawShapeOn(c, s));
   c.restore();
 }
 
-function _drawGridOn(c) {
-  const dotStep = 40;
-  const hw = WORLD_W/2, hh = WORLD_H/2;
-  const r  = Math.max(0.6, 0.9 / vp.zoom);
-  c.fillStyle = 'rgba(0,0,0,0.10)';
-  const sx = -hw + ((-hw % dotStep) + dotStep) % dotStep;
-  const sy = -hh + ((-hh % dotStep) + dotStep) % dotStep;
-  // Only draw dots inside the viewport
-  const { wx: vx1, wy: vy1 } = { wx: -vp.panX/vp.zoom, wy: -vp.panY/vp.zoom };
-  const vx2 = vx1 + canvas.width/vp.zoom, vy2 = vy1 + canvas.height/vp.zoom;
-  for (let x = sx; x <= hw; x += dotStep) {
-    if (x < vx1 - dotStep || x > vx2 + dotStep) continue;
-    for (let y = sy; y <= hh; y += dotStep) {
-      if (y < vy1 - dotStep || y > vy2 + dotStep) continue;
-      c.beginPath(); c.arc(x, y, r, 0, Math.PI*2); c.fill();
-    }
-  }
-}
+function _drawGridOn(_c) { /* dot grid intentionally removed — clean paper */ }
 
 function fitViewport() {
   const padX = 80, padY = 80;
@@ -4662,43 +4758,41 @@ function renderMembers() {
   if (!list) return;
 
   const members = [];
-  members.push({ id: state.myId, name: state.myName, avatar: state.myAvatar, isMe: true, joinTime: state.myJoinTime || 0, board: state.currentBoard });
+  members.push({ id: state.myId, name: state.myName, avatar: state.myAvatar, isMe: true, joinTime: state.myJoinTime || 0 });
   Object.entries(state.connections).forEach(([pid, info]) => {
     if (info.board !== state.currentBoard) return;
-    members.push({ id: pid, name: info.name, avatar: info.avatar, isMe: false, joinTime: info.joinTime || 0, board: info.board, reconnecting: info.reconnecting });
+    members.push({ id: pid, name: info.name, avatar: info.avatar, isMe: false, joinTime: info.joinTime || 0, reconnecting: info.reconnecting });
   });
   members.sort((a, b) => a.joinTime - b.joinTime);
-
   if (badge) badge.textContent = members.length;
 
   const frag = document.createDocumentFragment();
   members.forEach(m => {
-    const isHost    = m.id === state.boardHostId;
-    const isMuted   = state.mutedDrawers.has(m.id);
+    const isHost     = m.id && m.id === state.boardHostId;
+    const isDrawMuted = state.mutedDrawers.has(m.id);
     const isSpeaking = voiceState.speakingPeers.has(m.id);
     const row = document.createElement('div');
-    row.className = 'member-row';
-    if (!m.isMe) row.dataset.peer = m.id;
+    row.className = `member-row${m.isMe ? ' is-self' : ''}${isSpeaking ? ' speaking' : ''}`;
+    row.dataset.peer = m.id || '';
 
-    const color   = peerColor(m.name || m.id);
+    const color = peerColor(m.name || m.id || '?');
     const initial = avatarInitial(m.name);
     const avatarStyle = m.avatar
       ? `background-image:url('${m.avatar}');background-size:cover;background-position:center`
       : `background:${color}`;
     const avatarContent = m.avatar ? '' : initial;
-    const speakingClass = isSpeaking ? ' speaking' : '';
 
-    const hostBadge = isHost ? ' 👑' : '';
-    const muteHtml  = isMuted ? `<span class="draw-muted-badge">muted</span>` : '';
-    const recoHtml  = m.reconnecting ? `<span style="font-size:0.62rem;color:var(--warn);font-family:var(--mono)">⟳</span>` : '';
+    const hostBadge = isHost ? ' <span class="member-host-badge" title="Host">👑</span>' : '';
+    const muteBadge = isDrawMuted ? ' <span class="member-muted-badge" title="Drawing muted">✏️</span>' : '';
+    const youHint   = m.isMe ? ' <span class="member-you-hint">you</span>' : '';
+    const reco      = m.reconnecting ? '<span class="member-reco" title="Reconnecting">⟳</span>' : '';
 
     row.innerHTML = `
-      <div class="member-avatar${speakingClass}" style="${avatarStyle}">${avatarContent}</div>
+      <div class="member-avatar" style="${avatarStyle}">${avatarContent}</div>
       <div class="member-info">
-        <div class="member-name${m.isMe ? ' is-you' : ''}">${escHtml(m.name || m.id)}${hostBadge}</div>
-        <div class="member-badge">${m.isMe ? 'you' : ''}${recoHtml}${muteHtml}</div>
+        <div class="member-name">${escHtml(m.name || m.id || '?')}${hostBadge}${muteBadge}${youHint}</div>
+        ${reco}
       </div>
-      ${m.isMe ? '<div class="member-mute-slot" style="margin-left:auto"></div>' : ''}
     `;
     frag.appendChild(row);
   });
@@ -4706,63 +4800,81 @@ function renderMembers() {
   list.innerHTML = '';
   list.appendChild(frag);
 
-  // Move the actual mute button element into the self row slot
-  const muteSlot = list.querySelector('.member-mute-slot');
-  const muteEl   = document.getElementById('mute-btn');
-  if (muteSlot && muteEl) {
-    muteEl.style.display = '';  // show it (was hidden until placed)
-    muteSlot.appendChild(muteEl);
-    muteSlot.style.cssText += ';display:flex;align-items:center';
-  }
-
-  // Clicking any non-self member row opens mod menu for hosts, or view-only popup for non-hosts
-  list.querySelectorAll('.member-row[data-peer]').forEach(row => {
-    row.addEventListener('click', () => showModMenu(row.dataset.peer, row));
+  list.querySelectorAll('.member-row').forEach(row => {
+    const pid = row.dataset.peer;
+    if (!pid || pid === state.myId) return;
+    row.addEventListener('click', e => showModMenu(e, pid));
   });
 }
 
-function showModMenu(peerId, anchorEl) {
+function showModMenu(e, peerId) {
+  e?.stopPropagation();
   const menu = document.getElementById('mod-menu');
-  menu._targetPeer = peerId;
-  const rect = anchorEl.getBoundingClientRect();
-  const top  = Math.min(rect.bottom + 4, window.innerHeight - 160);
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 190));
-  menu.style.top  = top + 'px';
-  menu.style.left = left + 'px';
-  menu.classList.add('open');
-
-  // Show/hide host-only actions based on role
-  const isHost = state.isBoardHost;
-  document.getElementById('mod-drawmute-btn').style.display = isHost ? '' : 'none';
-  document.getElementById('mod-kick-btn').style.display     = isHost ? '' : 'none';
-
-  const isMuted = state.mutedDrawers.has(peerId);
-  const lbl = document.getElementById('mod-drawmute-label');
-  if (lbl) lbl.textContent = isMuted ? 'Unmute drawing' : 'Mute drawing';
-
-  // Show peer name in menu header
+  if (!menu || !peerId || peerId === state.myId) return;
   const info = state.connections[peerId];
-  const nameEl = document.getElementById('mod-menu-peer-name');
-  if (nameEl) nameEl.textContent = info?.name || peerId.slice(0, 8);
+  if (!info) return;
+
+  menu._targetPeer = peerId;
+  const isHost = state.isBoardHost;
+  const name = info.name || peerId.slice(0, 8);
+
+  document.getElementById('mod-menu-peer-name').textContent = name;
+
+  const isDrawMuted = state.mutedDrawers.has(peerId);
+  const drawMuteLbl = document.getElementById('mod-drawmute-label');
+  if (drawMuteLbl) drawMuteLbl.textContent = isDrawMuted ? 'Unmute drawing' : 'Mute drawing';
+
+  menu.querySelectorAll('.host-action').forEach(btn => {
+    btn.style.display = isHost ? 'flex' : 'none';
+  });
+
+  const vol = Math.round((voiceState.peerVolume[peerId] ?? 1) * 100);
+  const volInput = document.getElementById('mod-volume');
+  const volLabel = document.getElementById('mod-volume-val');
+  if (volInput) volInput.value = vol;
+  if (volLabel) volLabel.textContent = `${vol}%`;
+
+  menu.classList.add('open');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const mw = menu.offsetWidth || 200, mh = menu.offsetHeight || 180;
+  const cx = e?.clientX ?? vw / 2;
+  const cy = e?.clientY ?? vh / 2;
+  let x = cx + 8, y = cy + 8;
+  if (x + mw > vw - 8) x = cx - mw - 8;
+  if (y + mh > vh - 8) y = cy - mh - 8;
+  menu.style.left = `${Math.max(8, x)}px`;
+  menu.style.top  = `${Math.max(8, y)}px`;
+}
+
+function hideModMenu() {
+  document.getElementById('mod-menu')?.classList.remove('open');
 }
 
 document.addEventListener('click', e => {
   const menu = document.getElementById('mod-menu');
-  if (!menu.contains(e.target)) menu.classList.remove('open');
+  if (!menu) return;
+  if (!menu.contains(e.target)) hideModMenu();
 });
 
-document.getElementById('mod-drawmute-btn').addEventListener('click', () => {
-  const menu = document.getElementById('mod-menu');
-  const pid = menu._targetPeer;
-  menu.classList.remove('open');
+document.getElementById('mod-drawmute-btn')?.addEventListener('click', () => {
+  const pid = document.getElementById('mod-menu')._targetPeer;
+  hideModMenu();
   if (pid) modDrawMute(pid);
 });
 
-document.getElementById('mod-kick-btn').addEventListener('click', () => {
-  const menu = document.getElementById('mod-menu');
-  const pid = menu._targetPeer;
-  menu.classList.remove('open');
+document.getElementById('mod-kick-btn')?.addEventListener('click', () => {
+  const pid = document.getElementById('mod-menu')._targetPeer;
+  hideModMenu();
   if (pid) modKick(pid);
+});
+
+document.getElementById('mod-volume')?.addEventListener('input', e => {
+  const pid = document.getElementById('mod-menu')._targetPeer;
+  if (!pid) return;
+  const v = Number(e.target.value) / 100;
+  setPeerVolume(pid, v);
+  const label = document.getElementById('mod-volume-val');
+  if (label) label.textContent = `${Math.round(v * 100)}%`;
 });
 
 function updateBoardChip() {
@@ -4790,6 +4902,8 @@ function updateBoardControls() {
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
   const leaveBtn = document.getElementById('leave-board-btn');
   if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
+  const voiceBar = document.getElementById('voice-bar');
+  if (voiceBar) voiceBar.style.display = state.currentBoard ? '' : 'none';
   updateHostControlsBar();
 }
 
@@ -4926,12 +5040,17 @@ function createBoard() {
   boardVisibility[name] = vis;
   persistBoardVisibility();
   const dim = document.querySelector('input[name="create-ws"]:checked')?.value || '2d';
-  boardDocModes[name] = dim === '3d' ? '3d' : '2d';
+  const mode = dim === '3d' ? '3d' : '2d';
+  boardDocModes[name] = mode;
   persistBoardDocModes();
   safeAddBoard(name);
   input.value = '';
   const creator = state.myId || localStorage.getItem('slate_peer_id');
   if (creator) setPermanentBoardCreator(name, creator);
+  broadcastAll({ type: 'board-doc-mode', board: name, mode });
+  if (state.lobbyConn?.open) {
+    try { state.lobbyConn.send({ type: 'board-doc-mode', board: name, mode }); } catch {}
+  }
   lobbyAnnounce(name);
   joinBoard(name);
 }
@@ -5431,18 +5550,18 @@ document.getElementById('vote-no-btn').addEventListener('click', () => {
 /* ═══════════════════════════════════════════
    VOICE CHAT (open mic)
 ═══════════════════════════════════════════ */
-/** Lexicographically lower peer id opens the media call so both sides never glare-call each other. */
-function shouldInitiateVoiceTo(peerId) {
-  if (!state.myId || !peerId) return true;
-  return String(state.myId) < String(peerId);
-}
-
 async function acquireMic() {
   if (voiceState.localStream) return true;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
     voiceState.localStream = stream;
     voiceState.isMuted = false;
+    if (voiceState.audioCtx?.state === 'suspended') {
+      try { await voiceState.audioCtx.resume(); } catch {}
+    }
     updateMuteBtn();
     startVAD(stream);
     return true;
@@ -5484,7 +5603,7 @@ function startVAD(stream) {
 }
 
 function callPeer(peerId) {
-  if (!voiceState.localStream || !state.peer || voiceState.calls[peerId] || voiceState.inbound[peerId]) return;
+  if (!voiceState.localStream || !state.peer || voiceState.calls[peerId]) return;
   try {
     const call = state.peer.call(peerId, voiceState.localStream);
     voiceState.calls[peerId] = call;
@@ -5498,20 +5617,36 @@ function attachAudio(peerId, stream) {
   removeAudio(peerId);
   const el = document.createElement('audio');
   el.id = `audio-${peerId}`;
-  el.setAttribute('playsinline', '');
-  el.setAttribute('webkit-playsinline', '');
+  el.dataset.peer = peerId;
   el.srcObject = stream;
   el.autoplay = true;
-  el.volume = 1;
+  el.playsInline = true;
+  el.setAttribute('playsinline', '');
+  el.setAttribute('webkit-playsinline', '');
+  el.volume = voiceState.peerVolume[peerId] ?? 1;
   el.style.display = 'none';
   document.body.appendChild(el);
-  const p = el.play();
-  if (p && typeof p.catch === 'function') p.catch(() => {});
+  const tryPlay = () => { try { el.play().catch(() => {}); } catch {} };
+  tryPlay();
+  const ac = new AbortController();
+  el._visAbort = ac;
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tryPlay(); }, { signal: ac.signal });
 }
 
 function removeAudio(peerId) {
   const el = document.getElementById(`audio-${peerId}`);
-  if (el) { el.srcObject = null; el.remove(); }
+  if (!el) return;
+  try { el._visAbort?.abort(); } catch {}
+  try { el.srcObject = null; } catch {}
+  el.remove();
+}
+
+function setPeerVolume(peerId, value) {
+  const v = Math.max(0, Math.min(1, value));
+  voiceState.peerVolume[peerId] = v;
+  if (state.connections[peerId]) state.connections[peerId].volume = v;
+  const el = document.getElementById(`audio-${peerId}`);
+  if (el) el.volume = v;
 }
 
 function hangupAll() {
@@ -5520,17 +5655,17 @@ function hangupAll() {
   voiceState.calls   = {};
   voiceState.inbound = {};
   voiceState.speakingPeers.clear();
-  // Remove all audio elements
-  document.querySelectorAll('audio[id^="audio-"]').forEach(el => { el.srcObject = null; el.remove(); });
+  document.querySelectorAll('audio[id^="audio-"]').forEach(el => {
+    try { el._visAbort?.abort(); el.srcObject = null; } catch {}
+    el.remove();
+  });
 }
 
 async function joinVoice() {
   const ok = await acquireMic();
   if (!ok) return;
   Object.entries(state.connections).forEach(([pid, info]) => {
-    if (info.board !== state.currentBoard) return;
-    if (!shouldInitiateVoiceTo(pid)) return;
-    callPeer(pid);
+    if (info.board === state.currentBoard) callPeer(pid);
   });
   updateMuteBtn();
 }
@@ -5548,14 +5683,13 @@ function toggleMute() {
 function updateMuteBtn() {
   const btn = document.getElementById('mute-btn');
   if (!btn) return;
-  btn.style.display = ''; // ensure visible once placed in member row
   if (!voiceState.localStream) {
     btn.className = 'no-mic';
     btn.title = 'Click to enable microphone';
-    return;
+  } else {
+    btn.className = voiceState.isMuted ? 'muted' : '';
+    btn.title = voiceState.isMuted ? 'Unmute mic' : 'Mute mic';
   }
-  btn.className = voiceState.isMuted ? 'muted' : '';
-  btn.title     = voiceState.isMuted ? 'Unmute mic' : 'Mute mic';
   const icon = document.getElementById('mic-icon');
   if (icon) {
     icon.innerHTML = voiceState.isMuted
@@ -5564,7 +5698,7 @@ function updateMuteBtn() {
   }
 }
 
-document.getElementById('mute-btn').addEventListener('click', toggleMute);
+document.getElementById('mute-btn')?.addEventListener('click', toggleMute);
 
 function slateVoiceIncomingCall(call) {
   const pid = call.peer;
@@ -5572,33 +5706,14 @@ function slateVoiceIncomingCall(call) {
     try { call.close(); } catch {}
     return;
   }
-  const inf = state.connections[pid];
-  if (inf && inf.board !== state.currentBoard) {
-    try { call.close(); } catch {}
-    return;
-  }
   voiceState.inbound[pid] = call;
 
-  const answerWith = stream => {
-    const inf2 = state.connections[pid];
-    if (!state.currentBoard || (inf2 && inf2.board !== state.currentBoard)) {
-      try { call.close(); } catch {}
-      delete voiceState.inbound[pid];
-      return;
-    }
-    try {
-      if (stream) call.answer(stream);
-      else call.answer();
-    } catch {}
+  const finish = stream => {
+    try { call.answer(stream || undefined); } catch {}
   };
 
-  if (voiceState.localStream) answerWith(voiceState.localStream);
-  else {
-    acquireMic().then(ok => {
-      if (ok) answerWith(voiceState.localStream);
-      else answerWith(null);
-    });
-  }
+  if (voiceState.localStream) finish(voiceState.localStream);
+  else acquireMic().then(ok => finish(ok ? voiceState.localStream : null));
 
   call.on('stream', remoteStream => attachAudio(pid, remoteStream));
   call.on('close', () => {
@@ -5617,8 +5732,7 @@ function slateVoiceIncomingCall(call) {
 
 function setupVoiceCallHandler() {
   if (!state.peer) return;
-  try { state.peer.removeListener('call', slateVoiceIncomingCall); } catch {}
-  if (typeof state.peer.off === 'function') state.peer.off('call', slateVoiceIncomingCall);
+  try { state.peer.off?.('call', slateVoiceIncomingCall); } catch {}
   state.peer.on('call', slateVoiceIncomingCall);
 }
 

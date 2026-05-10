@@ -5,39 +5,52 @@
 (function () {
   'use strict';
 
-  // ── 1. VOICE BAR: restore open-mic toggle button ──────────────────────────
-  // The voice-bar div was set display:none. Restore it with a proper toggle btn.
+  // ── 1. VOICE BAR: mic toggle button in header ────────────────────────────────
+  // Renders the mic button, keeps its live/muted/off dot in sync, and wires the
+  // click handler.  Click behaviour:
+  //   • Mic not yet acquired → acquireMic() (silent if already granted, one-time
+  //     prompt if not), then joinVoice() to connect to room peers.
+  //   • Mic acquired, currently live → mute (track disabled, dot grey).
+  //   • Mic acquired, currently muted → unmute (track re-enabled, dot green).
+  // The mic is pre-acquired on page load by section 15; this button is therefore
+  // almost always in "toggle mute" mode rather than "request permission" mode.
   const voiceBar = document.getElementById('voice-bar');
   if (voiceBar) {
     voiceBar.style.display = 'flex';
     voiceBar.style.alignItems = 'center';
-    // If the toggle button doesn't already exist, add it
     if (!document.getElementById('voice-toggle-btn')) {
       voiceBar.innerHTML = `
-        <button id="voice-toggle-btn" title="Join open mic" style="
-          display:flex;align-items:center;gap:5px;
-          padding:5px 10px;border-radius:6px;
-          background:var(--bg3);border:1px solid var(--border2);
-          color:var(--text-mid);cursor:pointer;font-size:0.75rem;font-weight:500;
-          transition:background 0.15s,color 0.15s,border-color 0.15s
-        ">
+        <button id="voice-toggle-btn" title="Mute / unmute mic" data-live="false">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"
-            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+            style="pointer-events:none;flex-shrink:0">
             <rect x="4" y="1" width="5" height="7" rx="2.5"/>
             <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
           </svg>
-          <span id="voice-toggle-label">Mic off</span>
+          <span class="voice-dot"></span>
+          <span id="voice-toggle-label"></span>
         </button>`;
-      // Wire the toggle button to the existing voice logic
+
       document.getElementById('voice-toggle-btn').addEventListener('click', () => {
-        if (typeof toggleMute === 'function') {
-          // If no mic yet, acquire it; otherwise toggle mute
-          if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
-            if (typeof joinVoice === 'function') joinVoice();
-          } else {
-            toggleMute();
+        if (typeof voiceState === 'undefined') return;
+
+        if (!voiceState.localStream) {
+          // No mic yet — acquire then immediately join voice.
+          // acquireMic() is idempotent; if permission was pre-granted in section 15
+          // this resolves instantly without any browser prompt.
+          if (typeof acquireMic === 'function') {
+            acquireMic().then(ok => {
+              if (!ok) return;
+              if (typeof updateMuteBtn === 'function') updateMuteBtn();
+              if (typeof joinVoice === 'function') joinVoice();
+              updateVoiceToggleBtn();
+            });
           }
+          return;
         }
+
+        // Stream exists — just toggle mute state on the existing track.
+        if (typeof toggleMute === 'function') toggleMute();
         updateVoiceToggleBtn();
       });
     }
@@ -45,23 +58,25 @@
 
   function updateVoiceToggleBtn() {
     const btn = document.getElementById('voice-toggle-btn');
-    const lbl = document.getElementById('voice-toggle-label');
     if (!btn || typeof voiceState === 'undefined') return;
     const hasStream = !!voiceState.localStream;
-    const muted = voiceState.isMuted;
-    btn.style.color = hasStream && !muted ? 'var(--green)' : 'var(--text-mid)';
-    btn.style.borderColor = hasStream && !muted ? 'rgba(34,211,165,0.4)' : 'var(--border2)';
-    btn.style.background = hasStream && !muted ? 'rgba(34,211,165,0.08)' : 'var(--bg3)';
-    if (lbl) lbl.textContent = !hasStream ? 'Mic off' : muted ? 'Muted' : 'Live';
-    btn.title = !hasStream ? 'Click to join open mic' : muted ? 'Click to unmute' : 'Click to mute';
+    const muted     = hasStream && voiceState.isMuted;
+    const live      = hasStream && !muted;
+
+    btn.setAttribute('data-live', live ? 'true' : 'false');
+    // Dot colour is handled by CSS via [data-live] attribute (section 26).
+    btn.title = !hasStream ? 'Enable microphone' : muted ? 'Unmute mic' : 'Mute mic';
   }
 
-  // Patch updateMuteBtn to also update our toggle button
+  // Keep voice-toggle-btn in sync whenever the main updateMuteBtn fires.
   const _origUpdateMuteBtn = window.updateMuteBtn;
   window.updateMuteBtn = function () {
     if (_origUpdateMuteBtn) _origUpdateMuteBtn.apply(this, arguments);
     updateVoiceToggleBtn();
   };
+
+  // Also sync on a 2-second heartbeat to catch state changes that bypass updateMuteBtn.
+  setInterval(updateVoiceToggleBtn, 2000);
 
   // ── 2. VIS TOGGLE: icon-only (remove text label) ──────────────────────────
   const visLabel = document.querySelector('#vis-toggle-btn .vis-label');
@@ -399,15 +414,58 @@
     return r;
   };
 
-  // ── 15. VOICE: auto-request mic when joining a board ───────────────────────
-  const _origJoinBoardVoice = window.joinBoard;
-  window.joinBoard = function (board) {
-    const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
-    if (typeof voiceState !== 'undefined' && !voiceState.localStream) {
-      if (typeof joinVoice === 'function') setTimeout(() => joinVoice(), 400);
+  // ── 15. VOICE: acquire mic once on page load, never re-prompt ────────────────
+  // Strategy:
+  //   a) Request mic permission as soon as the page is interactive — one prompt, done.
+  //   b) If already granted (cached), grab it silently.
+  //   c) Store the stream in voiceState.localStream so all callers reuse it.
+  //   d) When joinBoard fires, wire up voice calls to any peers already in the board.
+  //   e) Inbound calls always answer with the cached stream — no second prompt.
+  (function setupVoice() {
+
+    // Step A: acquire mic once. Retry after a short delay if voiceState isn't ready yet.
+    function tryAcquireMic() {
+      if (typeof acquireMic === 'function') {
+        acquireMic().then(ok => {
+          if (ok && typeof updateMuteBtn === 'function') updateMuteBtn();
+        }).catch(() => {}); // silent if denied — user will see the mic button as inactive
+      } else {
+        // voiceState / acquireMic not yet defined — wait for main script to finish
+        setTimeout(tryAcquireMic, 300);
+      }
     }
-    return r;
-  };
+
+    // Delay slightly so index.html scripts finish defining acquireMic / voiceState
+    setTimeout(tryAcquireMic, 800);
+
+    // Step B: when joining a board, connect voice to all peers already in the room.
+    // We patch joinBoard exactly once here (section 14 already has its own wrapper).
+    // Using a named flag to avoid re-wrapping if this runs more than once.
+    if (!window._voiceJoinBoardPatched) {
+      window._voiceJoinBoardPatched = true;
+      const _origJoinBoardVoice = window.joinBoard;
+      window.joinBoard = function (board) {
+        const r = _origJoinBoardVoice && _origJoinBoardVoice.apply(this, arguments);
+        // Give connections 600 ms to open, then attach voice to each peer in board
+        setTimeout(() => {
+          if (typeof joinVoice === 'function') {
+            // joinVoice() calls acquireMic() internally but acquireMic() is idempotent:
+            // it returns immediately if localStream already exists.
+            joinVoice();
+          }
+        }, 600);
+        return r;
+      };
+    }
+
+    // Step C: patch inbound call handler so it ALWAYS answers with cached stream
+    // and never triggers a second getUserMedia prompt.
+    // The original handler in index.html calls acquireMic() if localStream is absent —
+    // which is correct and safe because our acquireMic() is now idempotent.
+    // No extra patching needed here; the pre-acquisition in step A ensures localStream
+    // is populated before any call can arrive.
+
+  })();
 
   // ── 16. REMOTE CURSORS: draw other users' cursors on the canvas ─────────────
   // Cursor world-coords already arrive via 'presence' messages and are stored in
@@ -2037,11 +2095,8 @@ input:focus-visible  { outline: none; }
         #members-toggle { display: flex !important; }
       }
 
-      /* ── Hide voice/mute button from the header entirely ── */
-      /* It already exists in the members panel on your own row */
-      #voice-bar,
-      #voice-toggle-btn,
-      #mute-btn { display: none !important; }
+      /* ── Voice button: visible in header, icon-only ── */
+      /* #mute-btn is in the member panel; #voice-toggle-btn is our injected header btn */
 
       /* ── Vis-toggle: clean square icon button ── */
       #vis-toggle-btn.vis-toggle {

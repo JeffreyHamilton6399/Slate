@@ -11,9 +11,108 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f12'/%3E%3Cpath d='M6 24l8-16 4 8 8-8' stroke='%238b7cf7' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tldraw@3.6.0/tldraw.css">
 <style>
+  :root {
+    --bg:          #0f0f12;
+    --bg2:         #13131a;
+    --bg3:         #1a1a22;
+    --border:      #252530;
+    --border2:     #2e2e3a;
+    --accent:      #8b7cf7;
+    --accent-dim:  #3d3580;
+    --accent-glow: rgba(139,124,247,0.18);
+    --text:        #eceaf4;
+    --text-dim:    #6c6a78;
+    --text-mid:    #9d9baf;
+    --mono:        ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
+    --sans:        ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    --radius:      10px;
+    --radius-sm:   6px;
+  }
   *, *::before, *::after { box-sizing: border-box; }
-  html, body, #root { height: 100%; margin: 0; overflow: hidden; background: #0f0f12; }
-  #root { position: fixed; inset: 0; }
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); }
+  #root { position: fixed; inset: 0; height: 100%; display: none; }
+
+  /* ── Lobby ── */
+  #onboarding {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 36px; padding: 32px;
+    background: var(--bg);
+  }
+  #onboarding.gone { display: none; }
+
+  body::before {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px; opacity: 0.22;
+    animation: bgDrift 28s linear infinite;
+  }
+  @keyframes bgDrift {
+    0%   { background-position: 0 0, 0 0; }
+    100% { background-position: 40px 40px, -40px 40px; }
+  }
+
+  .ob-logo {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    animation: fadeUp 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+    position: relative; z-index: 1;
+  }
+  .ob-logo-icon {
+    width: 68px; height: 68px; border-radius: 18px;
+    background: linear-gradient(135deg, var(--accent-dim), #111118);
+    border: 1px solid var(--accent-dim);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 40px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .ob-logo h1 {
+    font-family: var(--sans); font-size: 2.8rem; font-weight: 800;
+    letter-spacing: -0.02em; margin: 0;
+    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .ob-logo p {
+    font-family: var(--mono); font-size: 0.65rem; color: var(--text-dim);
+    letter-spacing: 0.22em; text-transform: uppercase; margin: 0;
+  }
+
+  .ob-card {
+    width: 100%; max-width: 340px; position: relative; z-index: 1;
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px;
+    padding: 28px; display: flex; flex-direction: column; gap: 18px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    animation: fadeUp 0.5s 0.08s cubic-bezier(0.34,1.56,0.64,1) both;
+  }
+  .ob-field { display: flex; flex-direction: column; gap: 6px; }
+  .ob-label {
+    font-family: var(--mono); font-size: 0.62rem; color: var(--text-dim);
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .ob-input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); padding: 12px 14px;
+    font-family: var(--mono); font-size: 0.95rem; color: var(--text); outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .ob-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .ob-input::placeholder { color: var(--text-dim); }
+  .ob-join {
+    width: 100%; background: var(--accent); color: #fff; border: none;
+    border-radius: var(--radius-sm); padding: 14px;
+    font-family: var(--sans); font-size: 0.95rem; font-weight: 700;
+    letter-spacing: 0.04em; cursor: pointer;
+    box-shadow: 0 4px 20px rgba(139,124,247,0.35);
+    transition: opacity 0.15s, box-shadow 0.2s;
+  }
+  .ob-join:hover  { opacity: 0.88; box-shadow: 0 4px 30px rgba(139,124,247,0.5); }
+  .ob-join:active { opacity: 0.72; transform: scale(0.98); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
   .slate-ui {
     position: fixed;
     top: 10px;
@@ -104,6 +203,28 @@
 </style>
 </head>
 <body>
+<div id="onboarding">
+  <div class="ob-logo">
+    <div class="ob-logo-icon">
+      <svg width="36" height="36" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 24l8-16 4 8 8-8" stroke="#8b7cf7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1>Slate</h1>
+    <p>collaborative whiteboard</p>
+  </div>
+  <div class="ob-card">
+    <div class="ob-field">
+      <label class="ob-label" for="ob-name">your name</label>
+      <input class="ob-input" id="ob-name" type="text" placeholder="Anonymous" maxlength="28" autocomplete="nickname" spellcheck="false">
+    </div>
+    <div class="ob-field">
+      <label class="ob-label" for="ob-room">room</label>
+      <input class="ob-input" id="ob-room" type="text" placeholder="my-room" maxlength="64" autocomplete="off" spellcheck="false">
+    </div>
+    <button class="ob-join" id="ob-join">Join Room →</button>
+  </div>
+</div>
 <div id="root"></div>
 <div id="slate-ui" class="slate-ui" hidden>
   <span class="room" id="slate-room"></span>
@@ -771,7 +892,52 @@ function bootstrap() {
   root.render(React.createElement(SlateApp, { room }));
 }
 
-bootstrap();
+// ── Lobby ──────────────────────────────────────────────────────────────────
+(function setupLobby() {
+  const ob      = document.getElementById('onboarding');
+  const nameEl  = document.getElementById('ob-name');
+  const roomEl  = document.getElementById('ob-room');
+  const joinBtn = document.getElementById('ob-join');
+  const appRoot = document.getElementById('root');
+
+  // Pre-fill room from URL hash if present
+  const hashRoom = (location.hash || '').replace(/^#/, '').trim();
+  roomEl.value = hashRoom ? decodeURIComponent(hashRoom) : randomRoomId();
+
+  // Pre-fill name from previous session
+  try { nameEl.value = sessionStorage.getItem('slate_display_name') || ''; } catch (_) {}
+
+  function launch() {
+    const name = nameEl.value.trim().slice(0, 28);
+    const room = roomEl.value.trim().slice(0, 64) || randomRoomId();
+
+    // Persist name so the toolbar input inherits it
+    try { sessionStorage.setItem('slate_display_name', name); } catch (_) {}
+
+    // Set canonical URL hash
+    history.replaceState(null, '', `#${encodeURIComponent(room)}`);
+
+    // Swap screens
+    ob.classList.add('gone');
+    appRoot.style.display = 'block';
+
+    bootstrap();
+  }
+
+  joinBtn.addEventListener('click', launch);
+  [nameEl, roomEl].forEach(el => el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') launch();
+  }));
+
+  // If URL already has a hash that looks like a direct share link, skip straight in
+  // (user clicked a "Share" link — no need to stop them at the lobby)
+  if (hashRoom && hashRoom.length >= 4) {
+    // Still show lobby briefly so they can set a name; auto-focus the name field
+    nameEl.focus();
+  } else {
+    roomEl.focus();
+  }
+})();
 </script>
 </body>
 </html>

@@ -393,8 +393,9 @@ input, textarea { font-family: var(--sans); }
   display: flex; align-items: center;
   padding: 0 10px; gap: 4px;
   flex-shrink: 0; z-index: 4;
-  overflow-x: auto;
+  overflow-x: auto; scrollbar-width: none;
 }
+#draw-toolbar::-webkit-scrollbar { display: none; }
 #draw-toolbar .tool-btn {
   padding: 7px 9px; border-radius: var(--radius-sm);
   background: transparent; border: 1px solid transparent;
@@ -440,7 +441,21 @@ input, textarea { font-family: var(--sans); }
 /* ── Canvas area ── */
 #canvas-area {
   flex: 1; position: relative; overflow: hidden;
-  background: var(--bg);
+  background: #16161b; /* dark desk/stage behind the paper */
+}
+/* Drop overlay for images */
+#canvas-drop-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  background: rgba(124,106,255,0.18);
+  border: 3px dashed var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none; border-radius: 0;
+}
+.drop-hint {
+  background: var(--bg2); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 18px 32px;
+  font-size: 1rem; font-weight: 600; color: var(--accent);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
 }
 #board-canvas {
   position: absolute; inset: 0;
@@ -963,6 +978,30 @@ input, textarea { font-family: var(--sans); }
 .vote-clear-btns .btn { flex: 1; padding: 9px; font-size: 0.85rem; }
 .vote-progress { font-size: 0.78rem; font-family: var(--mono); color: var(--text-dim); }
 
+/* Color swatches */
+#color-swatches {
+  display: flex; align-items: center; gap: 3px;
+  flex-shrink: 0;
+}
+.swatch {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer;
+  flex-shrink: 0; transition: transform 0.12s, border-color 0.12s;
+}
+.swatch:hover { transform: scale(1.2); }
+.swatch.active { border-color: var(--text); transform: scale(1.1); }
+#color-picker {
+  width: 22px; height: 22px; border: none; background: none;
+  padding: 0; cursor: pointer; border-radius: 50%;
+  outline: 2px solid var(--border2); outline-offset: 1px;
+}
+#color-picker::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
+#color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+/* Highlighter cursor */
+#board-canvas.tool-highlighter { cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='24' viewBox='0 0 20 24'><rect x='5' y='2' width='10' height='16' rx='4' fill='rgba(250,204,21,0.6)' stroke='%23333' stroke-width='1.5'/><rect x='8' y='18' width='4' height='4' rx='1' fill='%23333'/></svg>") 10 22, crosshair; }
+#board-canvas.tool-arrow { cursor: crosshair; }
+
 /* Font size for text tool */
 #font-size-wrap {
   display: flex; align-items: center; gap: 4px;
@@ -1188,10 +1227,24 @@ input, textarea { font-family: var(--sans); }
           <ellipse cx="8" cy="8" rx="6" ry="4"/>
         </svg>
       </button>
+      <!-- Highlighter -->
+      <button class="tool-btn" data-tool="highlighter" title="Highlighter (Y)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 13h10"/>
+          <rect x="4" y="2" width="8" height="9" rx="3" fill="rgba(250,204,21,0.35)" stroke="currentColor"/>
+        </svg>
+      </button>
       <!-- Line -->
       <button class="tool-btn" data-tool="line" title="Line (L)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
           <line x1="2" y1="13" x2="14" y2="3"/>
+        </svg>
+      </button>
+      <!-- Arrow -->
+      <button class="tool-btn" data-tool="arrow" title="Arrow (A)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="2" y1="14" x2="13" y2="3"/>
+          <polyline points="7,3 13,3 13,9"/>
         </svg>
       </button>
       <!-- Text -->
@@ -1248,14 +1301,21 @@ input, textarea { font-family: var(--sans); }
         <input id="stroke-size" type="range" min="1" max="40" value="4" title="Stroke size">
       </div>
 
-      <!-- Stroke color -->
-      <div id="color-picker-wrap">
-        <input id="color-picker" type="color" value="#7c6aff" title="Stroke / pen color">
+      <!-- Color swatches + picker -->
+      <div id="color-swatches">
+        <button class="swatch active" data-color="#1a1a2e" style="background:#1a1a2e" title="Ink (dark)"></button>
+        <button class="swatch" data-color="#dc2626" style="background:#dc2626" title="Red"></button>
+        <button class="swatch" data-color="#d97706" style="background:#d97706" title="Amber"></button>
+        <button class="swatch" data-color="#16a34a" style="background:#16a34a" title="Green"></button>
+        <button class="swatch" data-color="#2563eb" style="background:#2563eb" title="Blue"></button>
+        <button class="swatch" data-color="#7c3aed" style="background:#7c3aed" title="Violet"></button>
+        <button class="swatch" data-color="#db2777" style="background:#db2777" title="Pink"></button>
+        <input id="color-picker" type="color" value="#1a1a2e" title="Custom color">
       </div>
 
       <!-- Fill (shapes only) -->
       <div id="fill-toggle-wrap" title="Fill color (shapes)">
-        <input id="fill-color" type="color" value="#3d3580" title="Fill color">
+        <input id="fill-color" type="color" value="#e8e6ff" title="Fill color">
         <button class="fill-none-btn active" id="fill-none-btn" title="No fill">∅</button>
       </div>
 
@@ -1267,6 +1327,15 @@ input, textarea { font-family: var(--sans); }
 
       <div class="toolbar-sep"></div>
 
+      <!-- Insert image -->
+      <button class="tool-btn" id="insert-image-btn" title="Insert image">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="1" y="3" width="14" height="10" rx="1.5"/>
+          <circle cx="5.5" cy="7" r="1.5"/>
+          <path d="M1 11l4-4 3 3 2-2 5 5"/>
+        </svg>
+      </button>
+      <input id="insert-image-input" type="file" accept="image/*" style="display:none">
       <!-- Export / Save as PNG -->
       <button class="tool-btn" id="export-btn" title="Save board as PNG">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -1302,6 +1371,7 @@ input, textarea { font-family: var(--sans); }
     <!-- Canvas area -->
     <div id="canvas-area">
       <canvas id="board-canvas"></canvas>
+      <div id="canvas-drop-overlay" hidden><div class="drop-hint">📷 Drop image here</div></div>
       <div id="no-board-hint">
         <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
           <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
@@ -2487,13 +2557,24 @@ function broadcastToPeer(peerId, data) {
 function removePeer(peerId, opts = {}) {
   const info = state.connections[peerId];
   if (!info) return;
+  const wasInBoard = info.board === state.currentBoard;
+  const peerName   = info.name || 'Someone';
   try { info.conn?.close(); } catch {}
   delete state.connections[peerId];
   state.mutedDrawers.delete(peerId);
+  voiceState.speakingPeers.delete(peerId);
+  removeAudio(peerId);
+  try { voiceState.calls[peerId]?.close(); } catch {}
+  delete voiceState.calls[peerId];
+  try { voiceState.inbound[peerId]?.close(); } catch {}
+  delete voiceState.inbound[peerId];
   clearPeerReconnect(peerId);
   ensureBoardHost();
   renderMembers();
   scheduleRenderBoards();
+  if (wasInBoard && opts.reason === 'leave') {
+    toast(`${peerName} left the board`);
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -2537,9 +2618,7 @@ function joinBoard(board) {
 
   // Reset doc + viewport for new board
   docClear();
-  vp.panX = canvas.width / 2;
-  vp.panY = canvas.height / 2;
-  vp.zoom = 1;
+  fitViewport();
   updateZoomLabel();
 
   const nameEl  = document.getElementById('board-name-display');
@@ -2799,11 +2878,40 @@ const ctx    = canvas.getContext('2d');
 // Viewport: world → screen  screen_xy = world_xy * zoom + pan
 const vp = { panX: 0, panY: 0, zoom: 1 };
 
+// World / canvas bounds
+const WORLD_W = 9600;  // px in world space
+const WORLD_H = 6400;
+const PAPER_COLOR  = '#f8f7f4';
+const PAPER_RADIUS = 16;  // corner radius
+
+function fitViewport() {
+  // Fit the world into the canvas at the best zoom that shows the whole page
+  const padX = 60, padY = 60;
+  const scaleX = (canvas.width  - padX * 2) / WORLD_W;
+  const scaleY = (canvas.height - padY * 2) / WORLD_H;
+  vp.zoom = Math.min(1, Math.max(0.15, Math.min(scaleX, scaleY)));
+  vp.panX = canvas.width  / 2;
+  vp.panY = canvas.height / 2;
+  clampViewport();
+}
+
+function clampViewport() {
+  // Keep at least a band of the world visible — prevents infinite panning off-canvas
+  const margin  = 120;
+  const halfW   = WORLD_W / 2 * vp.zoom;
+  const halfH   = WORLD_H / 2 * vp.zoom;
+  // worldLeft screen pos = vp.panX - halfW
+  if (vp.panX - halfW > canvas.width  - margin) vp.panX = canvas.width  - margin + halfW;
+  if (vp.panX + halfW < margin)                  vp.panX = margin - halfW;
+  if (vp.panY - halfH > canvas.height - margin)  vp.panY = canvas.height - margin + halfH;
+  if (vp.panY + halfH < margin)                  vp.panY = margin - halfH;
+}
+
 // Active tool
 let currentTool   = 'pen';
-let strokeColor   = '#7c6aff';
+let strokeColor   = '#1a1a2e'; // dark ink on light paper (matches first swatch)
 let strokeSize    = 4;
-let fillColor     = '#3d3580';
+let fillColor     = '#e8e6ff';
 let useFill       = false;
 let fontSize      = 18;
 let isPanDragging = false;
@@ -2849,6 +2957,51 @@ function genId() {
   return state.myId + '_' + Date.now() + '_' + (Math.random() * 0xfffff | 0).toString(16);
 }
 
+// ── Image cache ──
+const imgCache = new Map();
+function getCachedImage(src) {
+  if (!imgCache.has(src)) {
+    const img = new Image();
+    img.onload = () => scheduleRender();
+    img.src = src;
+    imgCache.set(src, img);
+  }
+  return imgCache.get(src);
+}
+
+function resizeImageToDataURL(file, maxW = 1200, maxH = 900) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        const scale = Math.min(1, maxW / w, maxH / h);
+        w = Math.round(w * scale); h = Math.round(h * scale);
+        const off = document.createElement('canvas');
+        off.width = w; off.height = h;
+        off.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve({ dataUrl: off.toDataURL('image/jpeg', 0.82), w, h });
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function placeImage(file, wx, wy) {
+  if (!state.currentBoard) return;
+  resizeImageToDataURL(file).then(({ dataUrl, w, h }) => {
+    const shape = { id: genId(), type: 'image', x: wx - w/2, y: wy - h/2, w, h, src: dataUrl, peerId: state.myId, t: Date.now() };
+    doc.shapes.set(shape.id, shape);
+    pendingDiff.added.push(shape);
+    scheduleDiff();
+    undoStack.push({ action: 'add', id: shape.id, kind: 'shape' });
+    redoStack.length = 0;
+    scheduleRender();
+  });
+}
+
 // World ↔ screen helpers
 function screenToWorld(sx, sy) {
   return { wx: (sx - vp.panX) / vp.zoom, wy: (sy - vp.panY) / vp.zoom };
@@ -2859,11 +3012,12 @@ function worldToScreen(wx, wy) {
 }
 
 function setZoom(z, cx, cy) {
-  const clamped = Math.max(0.1, Math.min(8, z));
+  const clamped = Math.max(0.15, Math.min(6, z));
   const { wx, wy } = screenToWorld(cx ?? canvas.width / 2, cy ?? canvas.height / 2);
   vp.zoom = clamped;
   vp.panX = (cx ?? canvas.width / 2) - wx * vp.zoom;
   vp.panY = (cy ?? canvas.height / 2) - wy * vp.zoom;
+  clampViewport();
   updateZoomLabel();
   scheduleRender();
 }
@@ -2883,6 +3037,7 @@ function resizeCanvas() {
   const area = document.getElementById('canvas-area');
   canvas.width  = area.clientWidth;
   canvas.height = area.clientHeight;
+  clampViewport();
   scheduleRender();
 }
 
@@ -2893,22 +3048,37 @@ function renderFrame() {
   ctx.save();
   ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
 
-  // Draw grid (faint)
+  // ── Paper shadow (drawn before clipping) ──
+  ctx.save();
+  ctx.shadowColor   = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur    = 40 / vp.zoom;
+  ctx.shadowOffsetY = 6 / vp.zoom;
+  ctx.fillStyle = PAPER_COLOR;
+  paperPath();
+  ctx.fill();
+  ctx.restore();
+
+  // ── Clip everything to the paper ──
+  paperPath();
+  ctx.clip();
+
+  // ── Paper fill ──
+  ctx.fillStyle = PAPER_COLOR;
+  paperPath(); ctx.fill();
+
+  // ── Grid ──
   drawGrid();
 
-  // Committed strokes
+  // ── Content ──
   doc.strokes.forEach(s => drawStroke(s));
+  doc.shapes.forEach(s  => drawShape(s));
+  if (currentStroke)  drawStroke(currentStroke);
+  if (shapePreview)   drawShape(shapePreview, true);
 
-  // Committed shapes
-  doc.shapes.forEach(s => drawShape(s));
-
-  // In-progress stroke (ours)
-  if (currentStroke) drawStroke(currentStroke);
-
-  // Shape preview (ours)
-  if (shapePreview) drawShape(shapePreview, true);
-
-  // Remote cursors
+  // ── Remote cursors (outside clip so they show at paper edge) ──
+  ctx.restore();
+  ctx.save();
+  ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
   Object.entries(state.connections).forEach(([pid, info]) => {
     if (info.cursor && info.board === state.currentBoard) {
       drawCursor(info.cursor.x, info.cursor.y, info.name, peerDrawColor(info.name));
@@ -2918,16 +3088,29 @@ function renderFrame() {
   ctx.restore();
 }
 
+// Reusable paper rounded-rect path
+function paperPath() {
+  const hw = WORLD_W / 2, hh = WORLD_H / 2;
+  const r  = PAPER_RADIUS;
+  ctx.beginPath();
+  ctx.moveTo(-hw + r, -hh);
+  ctx.lineTo( hw - r, -hh); ctx.arcTo( hw, -hh,  hw, -hh + r, r);
+  ctx.lineTo( hw,  hh - r); ctx.arcTo( hw,  hh,  hw - r,  hh, r);
+  ctx.lineTo(-hw + r,  hh); ctx.arcTo(-hw,  hh, -hw,  hh - r, r);
+  ctx.lineTo(-hw, -hh + r); ctx.arcTo(-hw, -hh, -hw + r, -hh, r);
+  ctx.closePath();
+}
+
 function drawGrid() {
   const dotStep = 40;
-  const w = canvas.width / vp.zoom;
-  const h = canvas.height / vp.zoom;
-  const offX = ((-vp.panX) % (dotStep * vp.zoom)) / vp.zoom;
-  const offY = ((-vp.panY) % (dotStep * vp.zoom)) / vp.zoom;
-  const r = Math.max(0.6, 0.8 / vp.zoom);
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  for (let x = -offX; x < w + dotStep; x += dotStep) {
-    for (let y = -offY; y < h + dotStep; y += dotStep) {
+  const hw = WORLD_W / 2, hh = WORLD_H / 2;
+  const r  = Math.max(0.6, 0.9 / vp.zoom);
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  // Snap grid to world origin so dots don't move with pan
+  const startX = -hw + ((-hw % dotStep) + dotStep) % dotStep;
+  const startY = -hh + ((-hh % dotStep) + dotStep) % dotStep;
+  for (let x = startX; x <= hw; x += dotStep) {
+    for (let y = startY; y <= hh; y += dotStep) {
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -2936,14 +3119,17 @@ function drawGrid() {
 }
 
 function drawStroke(s) {
+  const isHL = s.highlighter;
+  ctx.save();
+  if (isHL) { ctx.globalAlpha = 0.38; ctx.globalCompositeOperation = 'multiply'; }
   if (!s.points || s.points.length < 2) {
     if (s.points?.length === 1) {
       ctx.beginPath();
       ctx.arc(s.points[0][0], s.points[0][1], (s.size || 4) / 2, 0, Math.PI * 2);
-      ctx.fillStyle = s.color || '#fff';
+      ctx.fillStyle = s.color || '#1a1a2e';
       ctx.fill();
     }
-    return;
+    ctx.restore(); return;
   }
   ctx.beginPath();
   ctx.moveTo(s.points[0][0], s.points[0][1]);
@@ -2953,30 +3139,32 @@ function drawStroke(s) {
     ctx.quadraticCurveTo(s.points[i-1][0], s.points[i-1][1], mx, my);
   }
   ctx.lineTo(s.points[s.points.length-1][0], s.points[s.points.length-1][1]);
-  ctx.strokeStyle = s.color || '#fff';
+  ctx.strokeStyle = s.color || '#1a1a2e';
   ctx.lineWidth   = s.size || 4;
-  ctx.lineCap     = 'round';
+  ctx.lineCap     = isHL ? 'square' : 'round';
   ctx.lineJoin    = 'round';
   ctx.stroke();
+  ctx.restore();
 }
 
 function drawShape(s, preview = false) {
   ctx.save();
-  ctx.strokeStyle = s.color || '#fff';
+  ctx.strokeStyle = s.color || '#1a1a2e';
   ctx.lineWidth   = s.strokeWidth || 2;
   ctx.lineCap     = 'round';
-  if (preview) { ctx.globalAlpha = 0.7; ctx.setLineDash([5, 4]); }
+  ctx.lineJoin    = 'round';
+  if (preview) { ctx.globalAlpha = 0.7; ctx.setLineDash([6, 4]); }
 
   switch (s.type) {
     case 'rect':
-      ctx.strokeRect(s.x, s.y, s.w, s.h);
       if (s.fill) { ctx.fillStyle = s.fill; ctx.fillRect(s.x, s.y, s.w, s.h); }
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
       break;
     case 'ellipse':
       ctx.beginPath();
       ctx.ellipse(s.x + s.w/2, s.y + s.h/2, Math.abs(s.w/2), Math.abs(s.h/2), 0, 0, Math.PI * 2);
-      ctx.stroke();
       if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(); }
+      ctx.stroke();
       break;
     case 'line':
       ctx.beginPath();
@@ -2984,11 +3172,49 @@ function drawShape(s, preview = false) {
       ctx.lineTo(s.x + s.w, s.y + s.h);
       ctx.stroke();
       break;
+    case 'arrow': {
+      const x1 = s.x, y1 = s.y, x2 = s.x + s.w, y2 = s.y + s.h;
+      const dx  = x2 - x1, dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      if (len < 2) break;
+      const ux = dx / len, uy = dy / len;
+      const hw  = Math.max(10, (s.strokeWidth || 2) * 3.5);
+      const spread = 0.42;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - hw * (ux * Math.cos(spread) + uy * Math.sin(spread)),
+                 y2 - hw * (uy * Math.cos(spread) - ux * Math.sin(spread)));
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - hw * (ux * Math.cos(spread) - uy * Math.sin(spread)),
+                 y2 - hw * (uy * Math.cos(spread) + ux * Math.sin(spread)));
+      ctx.stroke();
+      break;
+    }
     case 'text':
       ctx.font = `${s.fontSize || 18}px Inter, sans-serif`;
-      ctx.fillStyle = s.color || '#fff';
-      if (s.text) ctx.fillText(s.text, s.x, s.y);
+      ctx.fillStyle = s.color || '#1a1a2e';
+      if (s.text) {
+        // Support multi-line
+        const lines = s.text.split('\n');
+        const lh = (s.fontSize || 18) * 1.35;
+        lines.forEach((line, i) => ctx.fillText(line, s.x, s.y + i * lh));
+      }
       break;
+    case 'image': {
+      const img = getCachedImage(s.src);
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, s.x, s.y, s.w, s.h);
+        if (preview) { ctx.strokeStyle = 'var(--accent)'; ctx.strokeRect(s.x, s.y, s.w, s.h); }
+      } else {
+        ctx.fillStyle = 'rgba(0,0,0,0.07)';
+        ctx.fillRect(s.x, s.y, s.w, s.h);
+        ctx.strokeStyle = '#aaa'; ctx.setLineDash([4,4]);
+        ctx.strokeRect(s.x, s.y, s.w, s.h);
+      }
+      break;
+    }
   }
   ctx.restore();
 }
@@ -3026,6 +3252,35 @@ canvas.addEventListener('pointerup',   onPointerUp);
 canvas.addEventListener('pointercancel', onPointerUp);
 canvas.addEventListener('wheel', onWheel, { passive: false });
 canvas.addEventListener('contextmenu', e => e.preventDefault()); // block right-click menu
+
+// Image drag & drop
+const canvasArea = document.getElementById('canvas-area');
+const dropOverlay = document.getElementById('canvas-drop-overlay');
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); dropOverlay.hidden = false; });
+canvasArea.addEventListener('dragleave', e => { if (!canvasArea.contains(e.relatedTarget)) dropOverlay.hidden = true; });
+canvasArea.addEventListener('drop', e => {
+  e.preventDefault(); dropOverlay.hidden = true;
+  if (!state.currentBoard) return;
+  const files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const { wx, wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+  // Place up to 4 images
+  files.slice(0, 4).forEach((f, i) => placeImage(f, wx + i * 30, wy + i * 30));
+});
+
+// Insert image button (mobile/click)
+document.getElementById('insert-image-btn').addEventListener('click', () => {
+  document.getElementById('insert-image-input').click();
+});
+document.getElementById('insert-image-input').addEventListener('change', e => {
+  const files = [...e.target.files].filter(f => f.type.startsWith('image/'));
+  e.target.value = '';
+  if (!state.currentBoard) { toast('Join a board first', 'red'); return; }
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const { wx, wy } = screenToWorld(cx, cy);
+  files.slice(0, 4).forEach((f, i) => placeImage(f, wx + i * 30, wy + i * 30));
+});
 
 // Track last pinch center for simultaneous pan+zoom
 let lastPinchCenter = null;
@@ -3067,9 +3322,11 @@ function onPointerDown(e) {
 
   const { wx, wy } = getPos(e);
 
-  if (currentTool === 'pen') {
+  if (currentTool === 'pen' || currentTool === 'highlighter') {
     isDrawing = true;
-    currentStroke = { id: genId(), peerId: state.myId, color: strokeColor, size: strokeSize, points: [[wx, wy]], t: Date.now() };
+    const size = currentTool === 'highlighter' ? Math.max(strokeSize, 16) : strokeSize;
+    const color = currentTool === 'highlighter' ? (strokeColor === '#1a1a2e' ? '#facc15' : strokeColor) : strokeColor;
+    currentStroke = { id: genId(), peerId: state.myId, color, size, points: [[wx, wy]], t: Date.now(), highlighter: currentTool === 'highlighter' };
     scheduleRender();
   } else if (currentTool === 'eraser') {
     isDrawing = true;
@@ -3079,7 +3336,7 @@ function onPointerDown(e) {
     if (hit) { selected = hit; selOffset = { dx: wx - (hit.x || 0), dy: wy - (hit.y || 0) }; }
     else selected = null;
     scheduleRender();
-  } else if (['rect', 'ellipse', 'line'].includes(currentTool)) {
+  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool)) {
     isDrawing = true;
     shapeStart = { wx, wy };
   } else if (currentTool === 'text') {
@@ -3115,15 +3372,16 @@ function onPointerMove(e) {
     }
     lastPinchDist   = dist;
     lastPinchCenter = { x: cx, y: cy };
+    clampViewport();
     updateZoomLabel();
     scheduleRender();
     return;
   }
 
-  if (currentTool === 'pan' && isPanDragging && panStart) {
+  if (isPanDragging && panStart) {
     vp.panX = panStart.panX + (e.clientX - panStart.x);
     vp.panY = panStart.panY + (e.clientY - panStart.y);
-    scheduleRender(); return;
+    clampViewport(); scheduleRender(); return;
   }
 
   if (!state.currentBoard) return;
@@ -3144,7 +3402,7 @@ function onPointerMove(e) {
     scheduleRender();
   } else if (currentTool === 'eraser' && isDrawing) {
     eraseAt(wx, wy);
-  } else if (['rect', 'ellipse', 'line'].includes(currentTool) && isDrawing && shapeStart) {
+  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
     shapePreview = makeShape(wx, wy, true);
     scheduleRender();
   } else if (currentTool === 'select' && selected && selOffset) {
@@ -3180,7 +3438,7 @@ function onPointerUp(e) {
       scheduleDiff();
     }
     currentStroke = null;
-  } else if (['rect', 'ellipse', 'line'].includes(currentTool) && isDrawing && shapeStart) {
+  } else if (['rect', 'ellipse', 'line', 'arrow'].includes(currentTool) && isDrawing && shapeStart) {
     const { wx, wy } = getPos(e);
     const shape = makeShape(wx, wy);
     if (shape && (Math.abs(shape.w) > 2 || Math.abs(shape.h) > 2)) {
@@ -3210,6 +3468,7 @@ function makeShape(wx, wy, preview = false) {
     case 'rect':    return { id, type: 'rect',    x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
     case 'ellipse': return { id, type: 'ellipse', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() };
     case 'line':    return { id, type: 'line',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
+    case 'arrow':   return { id, type: 'arrow',   x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() };
   }
   return null;
 }
@@ -3352,10 +3611,12 @@ function setTool(tool) {
   });
   const cv = document.getElementById('board-canvas');
   cv.className = '';
-  if (tool === 'select') cv.classList.add('tool-select');
+  if (tool === 'select')      cv.classList.add('tool-select');
   else if (tool === 'eraser') cv.classList.add('tool-eraser');
-  else if (tool === 'text') cv.classList.add('tool-text');
-  else if (tool === 'pan') cv.classList.add('tool-pan');
+  else if (tool === 'text')   cv.classList.add('tool-text');
+  else if (tool === 'pan')    cv.classList.add('tool-pan');
+  else if (tool === 'highlighter') cv.classList.add('tool-highlighter');
+  else if (tool === 'arrow')  cv.classList.add('tool-arrow');
   if (state.isDrawMuted) cv.classList.add('draw-muted');
 
   // Show/hide font size for text tool
@@ -3379,8 +3640,19 @@ document.getElementById('stroke-size').addEventListener('input', e => {
   strokeSize = Number(e.target.value);
 });
 
+// Color swatches
+document.querySelectorAll('#color-swatches .swatch').forEach(btn => {
+  btn.addEventListener('click', () => {
+    strokeColor = btn.dataset.color;
+    document.getElementById('color-picker').value = strokeColor;
+    document.querySelectorAll('#color-swatches .swatch').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
 document.getElementById('color-picker').addEventListener('input', e => {
   strokeColor = e.target.value;
+  // Deactivate swatches when custom color is picked
+  document.querySelectorAll('#color-swatches .swatch').forEach(b => b.classList.remove('active'));
 });
 
 document.getElementById('fill-color').addEventListener('input', e => {
@@ -3404,17 +3676,19 @@ document.getElementById('export-btn').addEventListener('click', exportAsPng);
 
 function exportAsPng() {
   const boardName = state.currentBoard || 'slate-board';
-  // Create off-screen canvas at current viewport
+  // Export at the full world size for crisp output
+  const scale = 2; // 2x for retina
   const offscreen = document.createElement('canvas');
-  offscreen.width  = canvas.width;
-  offscreen.height = canvas.height;
+  offscreen.width  = WORLD_W * scale;
+  offscreen.height = WORLD_H * scale;
   const offCtx = offscreen.getContext('2d');
-  offCtx.fillStyle = '#0c0c0e';
+  offCtx.fillStyle = PAPER_COLOR;
   offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
   offCtx.save();
-  offCtx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
-  doc.strokes.forEach(s => { const prev = ctx; drawStrokeOn(offCtx, s); });
-  doc.shapes.forEach(s  => { drawShapeOn(offCtx, s); });
+  // Center: world (0,0) → center of offscreen
+  offCtx.setTransform(scale, 0, 0, scale, WORLD_W * scale / 2, WORLD_H * scale / 2);
+  doc.strokes.forEach(s => drawStrokeOn(offCtx, s));
+  doc.shapes.forEach(s  => drawShapeOn(offCtx, s));
   offCtx.restore();
   offscreen.toBlob(blob => {
     const url = URL.createObjectURL(blob);
@@ -3429,13 +3703,15 @@ function exportAsPng() {
 
 // Render to a specific context (for export)
 function drawStrokeOn(c, s) {
+  c.save();
+  if (s.highlighter) { c.globalAlpha = 0.38; c.globalCompositeOperation = 'multiply'; }
   if (!s.points || s.points.length < 2) {
     if (s.points?.length === 1) {
       c.beginPath();
       c.arc(s.points[0][0], s.points[0][1], (s.size || 4) / 2, 0, Math.PI * 2);
-      c.fillStyle = s.color || '#fff'; c.fill();
+      c.fillStyle = s.color || '#1a1a2e'; c.fill();
     }
-    return;
+    c.restore(); return;
   }
   c.beginPath();
   c.moveTo(s.points[0][0], s.points[0][1]);
@@ -3445,13 +3721,17 @@ function drawStrokeOn(c, s) {
     c.quadraticCurveTo(s.points[i-1][0], s.points[i-1][1], mx, my);
   }
   c.lineTo(s.points[s.points.length-1][0], s.points[s.points.length-1][1]);
-  c.strokeStyle = s.color || '#fff'; c.lineWidth = s.size || 4;
-  c.lineCap = 'round'; c.lineJoin = 'round'; c.stroke();
+  c.strokeStyle = s.color || '#1a1a2e'; c.lineWidth = s.size || 4;
+  c.lineCap = s.highlighter ? 'square' : 'round';
+  c.lineJoin = 'round'; c.stroke();
+  c.restore();
 }
 
 function drawShapeOn(c, s) {
   c.save();
-  c.strokeStyle = s.color || '#fff'; c.lineWidth = s.strokeWidth || 2; c.lineCap = 'round';
+  c.strokeStyle = s.color || '#1a1a2e';
+  c.lineWidth   = s.strokeWidth || 2;
+  c.lineCap = 'round'; c.lineJoin = 'round';
   switch (s.type) {
     case 'rect':
       if (s.fill) { c.fillStyle = s.fill; c.fillRect(s.x, s.y, s.w, s.h); }
@@ -3463,17 +3743,37 @@ function drawShapeOn(c, s) {
       c.stroke(); break;
     case 'line':
       c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(s.x + s.w, s.y + s.h); c.stroke(); break;
+    case 'arrow': {
+      const x1 = s.x, y1 = s.y, x2 = s.x + s.w, y2 = s.y + s.h;
+      const len = Math.hypot(x2 - x1, y2 - y1); if (len < 2) break;
+      const ux = (x2-x1)/len, uy = (y2-y1)/len;
+      const hw = Math.max(10, (s.strokeWidth||2)*3.5), sp = 0.42;
+      c.beginPath(); c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke();
+      c.beginPath();
+      c.moveTo(x2,y2); c.lineTo(x2-hw*(ux*Math.cos(sp)+uy*Math.sin(sp)), y2-hw*(uy*Math.cos(sp)-ux*Math.sin(sp)));
+      c.moveTo(x2,y2); c.lineTo(x2-hw*(ux*Math.cos(sp)-uy*Math.sin(sp)), y2-hw*(uy*Math.cos(sp)+ux*Math.sin(sp)));
+      c.stroke(); break;
+    }
     case 'text':
       c.font = `${s.fontSize || 18}px Inter,sans-serif`;
-      c.fillStyle = s.color || '#fff';
-      if (s.text) c.fillText(s.text, s.x, s.y); break;
+      c.fillStyle = s.color || '#1a1a2e';
+      if (s.text) {
+        const lines = s.text.split('\n'), lh = (s.fontSize || 18) * 1.35;
+        lines.forEach((ln, i) => c.fillText(ln, s.x, s.y + i * lh));
+      }
+      break;
+    case 'image': {
+      const img = getCachedImage(s.src);
+      if (img.complete && img.naturalWidth > 0) c.drawImage(img, s.x, s.y, s.w, s.h);
+      break;
+    }
   }
   c.restore();
 }
 
 document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(vp.zoom * 1.2));
 document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(vp.zoom / 1.2));
-document.getElementById('zoom-reset-btn').addEventListener('click', () => { vp.panX = 0; vp.panY = 0; setZoom(1); });
+document.getElementById('zoom-reset-btn').addEventListener('click', () => { fitViewport(); updateZoomLabel(); scheduleRender(); });
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {
@@ -3485,10 +3785,12 @@ document.addEventListener('keydown', e => {
   }
   switch (e.key.toLowerCase()) {
     case 'p': setTool('pen'); break;
+    case 'y': setTool('highlighter'); break;
     case 'e': setTool('eraser'); break;
     case 'r': setTool('rect'); break;
     case 'o': setTool('ellipse'); break;
     case 'l': setTool('line'); break;
+    case 'a': setTool('arrow'); break;
     case 't': setTool('text'); break;
     case 's': setTool('select'); break;
     case 'h': setTool('pan'); break;

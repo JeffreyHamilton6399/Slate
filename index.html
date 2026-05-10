@@ -144,7 +144,6 @@ function configuredPeerBrokers() {
     : ['1', 'true', 'yes'].includes(String(secureSetting).toLowerCase());
   const cloudBrokers = [
     { name: 'PeerJS cloud', host: '0.peerjs.com', port: 443, path: '/', secure: true, key: 'peerjs' },
-    { name: 'PeerJS default cloud' },
   ];
   const brokers = [];
 
@@ -159,9 +158,8 @@ function configuredPeerBrokers() {
     });
   }
 
-  if (!explicitHost) brokers.push(...cloudBrokers);
-
-  if (/^https?:$/.test(location.protocol) && location.hostname) {
+  // Prefer this origin’s /peerjs first so self-hosted Slate matches the page (avoids cloud vs local split).
+  if (!explicitHost && /^https?:$/.test(location.protocol) && location.hostname) {
     brokers.push({
       name: isPrivateNetworkHost(location.hostname) ? 'Slate local server' : 'Slate hosted server',
       host: location.hostname,
@@ -171,6 +169,8 @@ function configuredPeerBrokers() {
       key: 'peerjs',
     });
   }
+
+  if (!explicitHost) brokers.push(...cloudBrokers);
 
   if (explicitHost) brokers.push(...cloudBrokers);
   return brokers;
@@ -270,16 +270,24 @@ function applyRemoteDiff(store, msg) {
   });
 }
 
+/** PeerJS DataConnections can already be .open when the connection callback runs — always run setup. */
+function whenDataConnOpen(conn, fn) {
+  if (conn.open) queueMicrotask(fn);
+  else conn.on('open', fn);
+}
+
 function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) {
   const hostId = roomToHostPeerId(room);
   let peer = null;
   let mode = 'idle';
   let hostConns = new Map();
   let clientConn = null;
-  let unsubStore = null;
+  let unsubDoc = null;
+  let unsubPre = null;
   let brokerIdx = 0;
   let netFailures = 0;
   let destroyed = false;
+  let clientConnectTimer = null;
 
   function brokerConfig() {
     const b = BROKERS[brokerIdx % BROKERS.length] || {};
@@ -322,16 +330,31 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
 
       if (isHostSide) {
         if (msg.t === 'hello') {
-          try {
-            const snap = editor.store.getStoreSnapshot('document');
-            conn.send(JSON.stringify({ t: 'full', snap }));
-          } catch (e) {
-            console.warn('[Slate] snapshot send failed', e);
-          }
-          broadcastPresence();
+          const sendSnap = () => {
+            const ed = editorRef.current;
+            if (!ed) return false;
+            try {
+              const snap = ed.store.getStoreSnapshot('document');
+              const payload = { t: 'full', snap };
+              try {
+                payload.pres = ed.store.getStoreSnapshot('presence');
+              } catch (_) {}
+              conn.send(JSON.stringify(payload));
+            } catch (e) {
+              console.warn('[Slate] snapshot send failed', e);
+            }
+            return true;
+          };
+          if (!sendSnap()) queueMicrotask(() => { if (sendSnap()) broadcastPresence(); });
+          else broadcastPresence();
           return;
         }
         if (msg.t === 'chg') {
+          applyRemoteDiff(editor.store, msg);
+          broadcast(msg, conn);
+          return;
+        }
+        if (msg.t === 'pch') {
           applyRemoteDiff(editor.store, msg);
           broadcast(msg, conn);
           return;
@@ -343,9 +366,20 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
         editor.store.mergeRemoteChanges(() => {
           editor.store.loadStoreSnapshot(msg.snap);
         });
+        if (msg.pres) {
+          try {
+            editor.store.mergeRemoteChanges(() => {
+              editor.store.loadStoreSnapshot(msg.pres);
+            });
+          } catch (_) {}
+        }
         return;
       }
       if (msg.t === 'chg') {
+        applyRemoteDiff(editor.store, msg);
+        return;
+      }
+      if (msg.t === 'pch') {
         applyRemoteDiff(editor.store, msg);
         return;
       }
@@ -377,13 +411,15 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   }
 
   function startListenLocal(storeInst) {
-    if (unsubStore) unsubStore();
-    unsubStore = storeInst.listen(
+    if (unsubDoc) unsubDoc();
+    if (unsubPre) unsubPre();
+    unsubDoc = storeInst.listen(
       (entry) => {
         const editor = editorRef.current;
         if (!editor || destroyed) return;
         const msg = diffMessageFromEntry(entry);
         if (!msg.added.length && !msg.updated.length && !msg.removed.length) return;
+        msg.t = 'chg';
         if (mode === 'host') {
           broadcast(msg, null);
         } else if (mode === 'client' && clientConn?.open) {
@@ -392,13 +428,34 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       },
       { source: 'user', scope: 'document' },
     );
+    unsubPre = storeInst.listen(
+      (entry) => {
+        const editor = editorRef.current;
+        if (!editor || destroyed) return;
+        const msg = diffMessageFromEntry(entry);
+        if (!msg.added.length && !msg.updated.length && !msg.removed.length) return;
+        msg.t = 'pch';
+        if (mode === 'host') {
+          broadcast(msg, null);
+        } else if (mode === 'client' && clientConn?.open) {
+          try { clientConn.send(JSON.stringify(msg)); } catch (_) {}
+        }
+      },
+      { source: 'user', scope: 'presence' },
+    );
   }
 
   function teardownPeer() {
-    if (unsubStore) {
-      unsubStore();
-      unsubStore = null;
+    if (unsubDoc) {
+      unsubDoc();
+      unsubDoc = null;
     }
+    if (unsubPre) {
+      unsubPre();
+      unsubPre = null;
+    }
+    clearTimeout(clientConnectTimer);
+    clientConnectTimer = null;
     if (clientConn) {
       try { clientConn.close(); } catch (_) {}
       clientConn = null;
@@ -425,14 +482,29 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
       mode = 'client';
       setPeerLabel('Finding host…');
       startListenLocal(store);
-      const c = p.connect(hostId, { reliable: true });
+      const c = p.connect(hostId, { reliable: true, serialization: 'json' });
       clientConn = c;
-      c.on('open', () => {
+      c.on('error', () => {
+        clearTimeout(clientConnectTimer);
+        if (c.open) return;
+        setPeerLabel('Data channel failed');
+        scheduleReconnect();
+      });
+      clearTimeout(clientConnectTimer);
+      clientConnectTimer = setTimeout(() => {
+        if (destroyed || !clientConn || clientConn.open) return;
+        setPeerLabel('Host timeout');
+        toast('No host answered — open this room in one tab first, or retry.', true);
+        scheduleReconnect();
+      }, 14_000);
+      whenDataConnOpen(c, () => {
+        clearTimeout(clientConnectTimer);
+        clientConnectTimer = null;
+        if (destroyed) return;
         attachConnHandlers(c, false);
         try { c.send(JSON.stringify({ t: 'hello' })); } catch (_) {}
         setPeerLabel('Syncing…');
       });
-      c.on('error', () => setPeerLabel('Sync error'));
     });
 
     p.on('error', () => {
@@ -470,7 +542,8 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
     const hostPeer = new Peer(hostId, cfg);
 
     hostPeer.on('connection', (conn) => {
-      conn.on('open', () => {
+      whenDataConnOpen(conn, () => {
+        if (destroyed) return;
         hostConns.set(conn.peer, conn);
         attachConnHandlers(conn, true);
         broadcastPresence();
@@ -519,6 +592,8 @@ function createPeerSync({ room, store, editorRef, setPeerLabel, brokerRotate }) 
   return () => {
     destroyed = true;
     clearTimeout(reconnectTimer);
+    clearTimeout(clientConnectTimer);
+    clientConnectTimer = null;
     teardownPeer();
   };
 }
@@ -527,6 +602,7 @@ function SlateApp({ room }) {
   const store = useMemo(() => createTLStore(), []);
   const editorRef = useRef(null);
   const [peerLabel, setPeerLabel] = useState('Connecting…');
+  const [editorReady, setEditorReady] = useState(null);
 
   useEffect(() => {
     wireToolbar(room, peerLabel);
@@ -534,18 +610,19 @@ function SlateApp({ room }) {
 
   const onMount = useCallback((editor) => {
     editorRef.current = editor;
+    setEditorReady(editor);
   }, []);
 
   useEffect(() => {
-    const cleanup = createPeerSync({
+    if (!editorReady) return undefined;
+    return createPeerSync({
       room,
       store,
       editorRef,
       setPeerLabel,
       brokerRotate: () => {},
     });
-    return cleanup;
-  }, [room, store]);
+  }, [editorReady, room, store]);
 
   return React.createElement(Tldraw, { store, onMount });
 }

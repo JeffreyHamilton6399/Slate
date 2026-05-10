@@ -1888,6 +1888,10 @@ button.visibility-chip { font: inherit; cursor: pointer; }
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><line x1="2" y1="2" x2="11" y2="11"/></svg>
     <span id="mod-drawmute-label">Mute drawing</span>
   </button>
+  <button class="mod-menu-item host-action" id="mod-transfer-btn">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="4.5" r="2"/><path d="M2.5 11c0-2.2 1.8-4 4-4s4 1.8 4 4"/><polyline points="9.5,1.5 11,3 9.5,4.5"/></svg>
+    Make host
+  </button>
   <button class="mod-menu-item danger host-action" id="mod-kick-btn">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="5" y1="6.5" x2="11" y2="6.5"/><polyline points="7,4 5,6.5 7,9"/></svg>
     Kick
@@ -2610,6 +2614,18 @@ function connectToLobby() {
       mergeBoardCreatorFromPeer(data.board, data.creatorId);
       if (data.board === state.currentBoard) syncBoardHostState();
     }
+    if (data.type === 'host-transfer' && data.board && data.fromId && data.toId) {
+      const currentCreator = boardCreators[data.board];
+      if (currentCreator && data.fromId === currentCreator && currentCreator !== data.toId) {
+        boardCreators[data.board] = data.toId;
+        persistBoardCreators();
+        if (data.board === state.currentBoard) {
+          syncBoardHostState();
+          const newName = data.toName || state.connections[data.toId]?.name || (data.toId === state.myId ? state.myName : data.toId.slice(0, 8));
+          toast(`Host transferred to ${newName}`, 'info');
+        }
+      }
+    }
   });
   conn.on('close', () => {
     state.lobbyConn = null;
@@ -2674,6 +2690,15 @@ function tryBecomeLobbyHost() {
         if (data.type === 'board-creator-sync' && data.board && data.creatorId) {
           if (mergeBoardCreatorFromPeer(data.board, data.creatorId)) {
             lobbyBroadcast({ type: 'board-creator-sync', board: data.board, creatorId: data.creatorId });
+          }
+        }
+        if (data.type === 'host-transfer' && data.board && data.fromId && data.toId) {
+          const currentCreator = boardCreators[data.board];
+          if (currentCreator && data.fromId === currentCreator && currentCreator !== data.toId) {
+            boardCreators[data.board] = data.toId;
+            persistBoardCreators();
+            if (data.board === state.currentBoard) syncBoardHostState();
+            lobbyBroadcast({ type: 'host-transfer', board: data.board, fromId: data.fromId, toId: data.toId, toName: data.toName || '' });
           }
         }
       });
@@ -2828,11 +2853,15 @@ function setupDataConn(conn, incoming = false) {
     if (!isCurrentDataConn(peerId, conn)) return;
     notePeerSeen(peerId);
     conn.send(helloPayload());
-    if (state.isBoardHost) {
-      // Send current doc snapshot to new joiner
-      if (state.currentBoard) {
+    // Any peer with content shares it with the newcomer (Google-Docs-style:
+    // host being offline doesn't prevent the board from staying alive).
+    if (state.currentBoard) {
+      const hasContent = doc.shapes.size > 0 || doc.strokes.size > 0 || (doc.layers && doc.layers.length > 1);
+      if (hasContent) {
         try { conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
       }
+      // Also ask the new peer to share what they have, in case we just rejoined.
+      try { conn.send({ type: 'doc-req' }); } catch {}
     }
   });
 
@@ -2998,10 +3027,37 @@ function handleData(peerId, data) {
       }
       break;
 
+    case 'host-transfer':
+      // Manual ownership change. Only honored if the message comes from the
+      // current creator (Google-Docs style transfer of ownership).
+      if (data.board && data.fromId && data.toId) {
+        const currentCreator = boardCreators[data.board];
+        if (currentCreator && data.fromId === currentCreator && currentCreator !== data.toId) {
+          boardCreators[data.board] = data.toId;
+          persistBoardCreators();
+          if (data.board === state.currentBoard) {
+            syncBoardHostState();
+            const newName = data.toName || state.connections[data.toId]?.name || (data.toId === state.myId ? state.myName : data.toId.slice(0, 8));
+            toast(`Host transferred to ${newName}`, 'info');
+          }
+        }
+      }
+      break;
+
     case 'doc-snap':
       if (data.doc && state.currentBoard) {
-        docApplySnapshot(data.doc);
+        // Merge instead of replace: lets concurrent local edits survive a remote rejoin snapshot.
+        docMergeRemoteSnapshot(data.doc);
         scheduleRender();
+      }
+      break;
+
+    case 'doc-req':
+      if (state.currentBoard && state.connections[peerId]?.board === state.currentBoard) {
+        const hasContent = doc.shapes.size > 0 || doc.strokes.size > 0 || (doc.layers && doc.layers.length > 1);
+        if (hasContent) {
+          try { state.connections[peerId]?.conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
+        }
       }
       break;
 
@@ -3012,6 +3068,16 @@ function handleData(peerId, data) {
       if (data.removed)    data.removed.forEach(id   => doc.shapes.delete(id));
       if (data.strokes)    data.strokes.forEach(s    => doc.strokes.set(s.id, s));
       if (data.delStrokes) data.delStrokes.forEach(id => doc.strokes.delete(id));
+      if (Array.isArray(data.layers)) {
+        doc.layers = data.layers.map(l => ({
+          id: String(l.id),
+          name: String(l.name || 'Layer'),
+          visible: l.visible !== false,
+        }));
+        if (typeof window.slateLayers?._onLayersReplaced === 'function') {
+          window.slateLayers._onLayersReplaced();
+        }
+      }
       invalidateStatic();
       scheduleRender();
       markBoardActivity(peerId);
@@ -3190,6 +3256,25 @@ function setPermanentBoardCreator(board, creatorPeerId) {
   if (state.lobbyConn?.open) {
     try { state.lobbyConn.send({ type: 'board-creator-sync', board, creatorId: creatorPeerId }); } catch {}
   }
+}
+
+/**
+ * Manually transfer host ownership to another peer (Google-Docs style).
+ * Only callable by the current creator. All peers learn the new owner.
+ */
+function transferHostTo(newCreatorId, newCreatorName) {
+  if (!state.currentBoard || !state.isBoardHost) return;
+  if (!newCreatorId || newCreatorId === state.myId) return;
+  const board = state.currentBoard;
+  const fromId = state.myId;
+  boardCreators[board] = newCreatorId;
+  persistBoardCreators();
+  syncBoardHostState();
+  const msg = { type: 'host-transfer', board, fromId, toId: newCreatorId, toName: newCreatorName || '' };
+  broadcastAll(msg);
+  if (state.lobbyConn?.open) { try { state.lobbyConn.send(msg); } catch {} }
+  const name = newCreatorName || state.connections[newCreatorId]?.name || newCreatorId.slice(0, 8);
+  toast(`Host transferred to ${name}`, 'green');
 }
 
 /** Recompute host flags strictly from boardCreators map. Never elects. */
@@ -3490,14 +3575,24 @@ function markBoardActivity(peerId) {
 // The document is a flat map of shapes and strokes.
 // A "shape" covers rects, ellipses, lines.
 // A "stroke" is a free-pen path (list of points).
+// Default layer stack (top-to-bottom in UI = first element rendered last/on top).
+function _defaultLayers() {
+  return [{ id: 'l1', name: 'Layer 1', visible: true }];
+}
+
 const doc = {
   shapes:  new Map(),  // id -> Shape
   strokes: new Map(),  // id -> Stroke
+  layers:  _defaultLayers(),
 };
 
 function docClear() {
   doc.shapes.clear();
   doc.strokes.clear();
+  doc.layers = _defaultLayers();
+  if (typeof window.slateLayers?._onLayersReplaced === 'function') {
+    window.slateLayers._onLayersReplaced();
+  }
   invalidateStatic();
 }
 
@@ -3511,6 +3606,42 @@ function docApplySnapshot(snap) {
   docClear();
   if (snap.shapes)  snap.shapes.forEach(s  => doc.shapes.set(s.id, s));
   if (snap.strokes) snap.strokes.forEach(s  => doc.strokes.set(s.id, s));
+  if (Array.isArray(snap.layers) && snap.layers.length) {
+    doc.layers = snap.layers.map(l => ({
+      id: String(l.id),
+      name: String(l.name || 'Layer'),
+      visible: l.visible !== false,
+    }));
+  }
+  if (typeof window.slateLayers?._onLayersReplaced === 'function') {
+    window.slateLayers._onLayersReplaced();
+  }
+  invalidateStatic();
+}
+
+/**
+ * Merge a remote snapshot into the local doc (Google-Docs-style rejoin).
+ * Adds items by id without clobbering local changes already present.
+ * Layers: replaces only if local has the default single-layer stack.
+ */
+function docMergeRemoteSnapshot(snap) {
+  if (!snap) return;
+  if (snap.shapes)  snap.shapes.forEach(s  => { if (s && s.id && !doc.shapes.has(s.id))  doc.shapes.set(s.id, s); });
+  if (snap.strokes) snap.strokes.forEach(s => { if (s && s.id && !doc.strokes.has(s.id)) doc.strokes.set(s.id, s); });
+  if (Array.isArray(snap.layers) && snap.layers.length) {
+    const isLocalDefault =
+      doc.layers.length === 1 && doc.layers[0].id === 'l1' && doc.layers[0].name === 'Layer 1';
+    if (isLocalDefault) {
+      doc.layers = snap.layers.map(l => ({
+        id: String(l.id),
+        name: String(l.name || 'Layer'),
+        visible: l.visible !== false,
+      }));
+      if (typeof window.slateLayers?._onLayersReplaced === 'function') {
+        window.slateLayers._onLayersReplaced();
+      }
+    }
+  }
   invalidateStatic();
 }
 
@@ -3518,8 +3649,101 @@ function docSerialize() {
   return {
     shapes:  [...doc.shapes.values()],
     strokes: [...doc.strokes.values()],
+    layers:  doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible })),
   };
 }
+
+/* ═══════════════════════════════════════════
+   LAYER API (used by features.js for the
+   Photoshop-style layers panel + sync)
+═══════════════════════════════════════════ */
+function _broadcastLayers() {
+  pendingDiff.layers = doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible }));
+  scheduleDiff();
+}
+
+function _genLayerId() {
+  return 'l_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+window.slateLayers = {
+  get list() { return doc.layers; },
+  get activeId() { return window.__slateActiveLayerId || (doc.layers[0] && doc.layers[0].id) || null; },
+  setActive(id) {
+    if (doc.layers.some(l => l.id === id)) {
+      window.__slateActiveLayerId = id;
+      return true;
+    }
+    return false;
+  },
+  add() {
+    const usedNumbers = doc.layers
+      .map(l => /^Layer (\d+)$/.exec(l.name))
+      .filter(Boolean)
+      .map(m => parseInt(m[1], 10));
+    const next = (usedNumbers.length ? Math.max(...usedNumbers) : doc.layers.length) + 1;
+    const layer = { id: _genLayerId(), name: 'Layer ' + next, visible: true };
+    doc.layers.unshift(layer);
+    window.__slateActiveLayerId = layer.id;
+    invalidateStatic(); scheduleRender();
+    _broadcastLayers();
+    return layer;
+  },
+  remove(id) {
+    if (doc.layers.length <= 1) return false;
+    const idx = doc.layers.findIndex(l => l.id === id);
+    if (idx < 0) return false;
+    doc.layers.splice(idx, 1);
+    // Strip _layer ref from items pointing at the removed layer.
+    let touched = false;
+    doc.shapes.forEach(s => { if (s._layer === id) { delete s._layer; touched = true; } });
+    doc.strokes.forEach(s => { if (s._layer === id) { delete s._layer; touched = true; } });
+    if (window.__slateActiveLayerId === id) {
+      window.__slateActiveLayerId = doc.layers[Math.min(idx, doc.layers.length - 1)].id;
+    }
+    invalidateStatic(); scheduleRender();
+    _broadcastLayers();
+    return true;
+  },
+  rename(id, name) {
+    const layer = doc.layers.find(l => l.id === id);
+    if (!layer) return false;
+    const clean = String(name || '').trim().slice(0, 32) || layer.name;
+    if (clean === layer.name) return false;
+    layer.name = clean;
+    _broadcastLayers();
+    return true;
+  },
+  setVisible(id, visible) {
+    const layer = doc.layers.find(l => l.id === id);
+    if (!layer) return false;
+    const next = visible !== false;
+    if (layer.visible === next) return false;
+    layer.visible = next;
+    invalidateStatic(); scheduleRender();
+    _broadcastLayers();
+    return true;
+  },
+  /** Reorder a layer to a new position (0 = top of stack). */
+  move(id, toIndex) {
+    const from = doc.layers.findIndex(l => l.id === id);
+    if (from < 0) return false;
+    const clamped = Math.max(0, Math.min(doc.layers.length - 1, toIndex));
+    if (clamped === from) return false;
+    const [item] = doc.layers.splice(from, 1);
+    doc.layers.splice(clamped, 0, item);
+    invalidateStatic(); scheduleRender();
+    _broadcastLayers();
+    return true;
+  },
+  /** Internal hook invoked when doc.layers is replaced (snapshot / diff). */
+  _onLayersReplaced() {
+    if (!doc.layers.some(l => l.id === window.__slateActiveLayerId)) {
+      window.__slateActiveLayerId = doc.layers[0]?.id || null;
+    }
+    if (typeof window.renderLayersList === 'function') window.renderLayersList();
+  },
+};
 
 /* ═══════════════════════════════════════════
    DRAWING ENGINE
@@ -3582,9 +3806,36 @@ function ensureStaticCanvas() {
   c.save();
   c.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
   c.clip(getPaperPath2D());
-  doc.strokes.forEach(s => drawStrokeOn(c, s));
-  doc.shapes.forEach(s  => drawShapeOn(c, s));
+  drawDocInLayerOrder(c);
   c.restore();
+}
+
+/**
+ * Render doc respecting layer stacking. doc.layers is top-to-bottom in UI,
+ * so we draw bottom-to-top (last entry first, first entry last/on top).
+ * Items without a `_layer` (or with an unknown id) belong to the bottom-most layer.
+ * Within a layer, shapes render below strokes (matches legacy behaviour).
+ */
+function drawDocInLayerOrder(c) {
+  const layers = (doc.layers && doc.layers.length) ? doc.layers : _defaultLayers();
+  const bottomId = layers[layers.length - 1].id;
+  const knownIds = new Set(layers.map(l => l.id));
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i];
+    if (!layer || layer.visible === false) continue;
+    const lid = layer.id;
+    const isBottom = lid === bottomId;
+    doc.shapes.forEach(s => {
+      const sl = s._layer;
+      const itemLayer = sl && knownIds.has(sl) ? sl : null;
+      if (itemLayer ? itemLayer === lid : isBottom) drawShapeOn(c, s);
+    });
+    doc.strokes.forEach(s => {
+      const sl = s._layer;
+      const itemLayer = sl && knownIds.has(sl) ? sl : null;
+      if (itemLayer ? itemLayer === lid : isBottom) drawStrokeOn(c, s);
+    });
+  }
 }
 
 function _drawGridOn(_c) { /* dot grid intentionally removed — clean paper */ }
@@ -3646,17 +3897,19 @@ const undoStack = [];
 const redoStack = [];
 
 // Deferred diff to batch changes
-let pendingDiff = { added: [], updated: [], removed: [], strokes: [], delStrokes: [] };
+let pendingDiff = { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null };
 let diffTimer   = null;
 
 function flushDiff() {
   diffTimer = null;
   const d = pendingDiff;
-  pendingDiff = { added: [], updated: [], removed: [], strokes: [], delStrokes: [] };
-  const empty = !d.added.length && !d.updated.length && !d.removed.length && !d.strokes.length && !d.delStrokes.length;
+  pendingDiff = { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null };
+  const empty = !d.added.length && !d.updated.length && !d.removed.length && !d.strokes.length && !d.delStrokes.length && !d.layers;
   if (empty) return;
   if (state.isDrawMuted) return;
-  broadcastAll({ type: 'doc-diff', ...d });
+  const msg = { type: 'doc-diff', added: d.added, updated: d.updated, removed: d.removed, strokes: d.strokes, delStrokes: d.delStrokes };
+  if (d.layers) msg.layers = d.layers;
+  broadcastAll(msg);
 }
 
 function scheduleDiff() {
@@ -4668,8 +4921,7 @@ function exportAsPng() {
   offCtx.save();
   // Center: world (0,0) → center of offscreen
   offCtx.setTransform(scale, 0, 0, scale, WORLD_W * scale / 2, WORLD_H * scale / 2);
-  doc.strokes.forEach(s => drawStrokeOn(offCtx, s));
-  doc.shapes.forEach(s  => drawShapeOn(offCtx, s));
+  drawDocInLayerOrder(offCtx);
   offCtx.restore();
   offscreen.toBlob(blob => {
     const url = URL.createObjectURL(blob);
@@ -4824,8 +5076,9 @@ function removeBoard(b) {
   liveBoards.delete(b);
   delete boardVisibility[b];
   delete boardDocModes[b];
-  delete boardCreators[b];
   delete boardTopics[b];
+  // NOTE: boardCreators[b] is intentionally preserved so re-creating / re-joining
+  // the same-named board restores the original owner (Google-Docs-style ownership).
   persistBoards();
   persistBoardVisibility();
   persistBoardTopics();
@@ -4840,9 +5093,11 @@ function pruneEmptyBoards() {
   let pruned = 0;
   [...liveBoards].forEach(b => {
     if (b === state.currentBoard) return;
-    if (!counts[b]) { liveBoards.delete(b); delete boardVisibility[b]; delete boardDocModes[b]; delete boardCreators[b]; delete boardTopics[b]; pruned++; }
+    // Drop the live board only; keep creator/visibility/topic so ownership and
+    // settings persist across rejoins. Reduces churn on transient empty windows.
+    if (!counts[b]) { liveBoards.delete(b); pruned++; }
   });
-  if (pruned) { persistBoards(); persistBoardVisibility(); persistBoardTopics(); scheduleRenderBoards(); }
+  if (pruned) { persistBoards(); scheduleRenderBoards(); }
   return pruned;
 }
 
@@ -5007,6 +5262,15 @@ document.getElementById('mod-drawmute-btn')?.addEventListener('click', () => {
   const pid = document.getElementById('mod-menu')._targetPeer;
   hideModMenu();
   if (pid) modDrawMute(pid);
+});
+
+document.getElementById('mod-transfer-btn')?.addEventListener('click', () => {
+  const pid = document.getElementById('mod-menu')._targetPeer;
+  hideModMenu();
+  if (!pid || !state.isBoardHost) return;
+  const name = state.connections[pid]?.name || pid.slice(0, 8);
+  if (!confirm(`Transfer host to ${name}? They will become the new owner of this board.`)) return;
+  transferHostTo(pid, name);
 });
 
 document.getElementById('mod-kick-btn')?.addEventListener('click', () => {

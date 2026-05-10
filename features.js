@@ -35,9 +35,14 @@ featureCSS.textContent = `
     border-top: 1px solid var(--border);
   }
   .layer-row { display:flex;align-items:center;gap:6px;padding:6px 10px;cursor:pointer;
-    font-size:0.78rem;border-left:2px solid transparent;transition:background .1s,border-color .1s; }
+    font-size:0.78rem;border-left:2px solid transparent;transition:background .1s,border-color .1s;
+    border-top:2px solid transparent; }
   .layer-row:hover { background:var(--bg3); }
+  .layer-row:hover .layer-del-btn { opacity: 1 !important; }
+  .layer-row.layer-drop-target { border-top-color: var(--accent) !important; }
   .layer-vis-btn { background:none;border:none;padding:0;cursor:pointer;flex-shrink:0;line-height:1; }
+  .layer-del-btn { transition: opacity .12s, color .12s; }
+  .layer-del-btn:hover { color: var(--danger) !important; opacity:1 !important; }
 
   #shortcuts-overlay { position:fixed;inset:0;z-index:9000;
     background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
@@ -102,6 +107,13 @@ document.getElementById('board-canvas')?.addEventListener('pointerdown', () => {
   }
 }, false);
 
+// Look up a layer by id from the canonical doc.layers (synced across peers).
+function _findLayer(id) {
+  const layers = (typeof doc !== 'undefined' && doc.layers) ? doc.layers : null;
+  if (!layers) return null;
+  return layers.find(l => l.id === id) || null;
+}
+
 // Patch drawStroke: layer visibility check (outermost) → opacity → Catmull-Rom smoothing
 // Layer check MUST be outermost so hidden-layer strokes never reach the render path.
 const _drawStrokeBase = window.drawStroke;
@@ -142,7 +154,7 @@ if (_drawStrokeBase) {
   // Outer wrapper: layer gate (checked first, every time)
   window.drawStroke = function (s) {
     if (s && s._layer) {
-      const layer = _layers.find(l => l.id === s._layer);
+      const layer = _findLayer(s._layer);
       if (layer && !layer.visible) return; // hidden layer → skip entirely
     }
     _drawStrokeOpacity.call(this, s);
@@ -155,7 +167,7 @@ const _drawShapeBase = window.drawShape;
 if (_drawShapeBase) {
   window.drawShape = function (s, preview) {
     if (s && s._layer) {
-      const layer = _layers.find(l => l.id === s._layer);
+      const layer = _findLayer(s._layer);
       if (layer && !layer.visible) return;
     }
     const op = (s && s._opacity != null) ? s._opacity : 1;
@@ -167,7 +179,7 @@ if (_drawShapeBase) {
 
 function _layerGate(s) {
   if (!s || !s._layer) return true;
-  const layer = _layers.find(l => l.id === s._layer);
+  const layer = _findLayer(s._layer);
   return !layer || layer.visible;
 }
 
@@ -417,7 +429,7 @@ function renderMinimap() {
 
   doc.strokes.forEach(s => {
     if (s._layer) {
-      const layer = _layers.find(l => l.id === s._layer);
+      const layer = _findLayer(s._layer);
       if (layer && !layer.visible) return;
     }
     if (!s.points?.length) return;
@@ -435,7 +447,7 @@ function renderMinimap() {
   mc.globalAlpha = 1;
   doc.shapes.forEach(s => {
     if (s._layer) {
-      const layer = _layers.find(l => l.id === s._layer);
+      const layer = _findLayer(s._layer);
       if (layer && !layer.visible) return;
     }
     if (s.type === 'image' || s.type === 'text') return;
@@ -465,21 +477,18 @@ function renderMinimap() {
 
 
 /* ─────────────────────────────────────────────────────────────────────────
-   LAYERS  — 5 layers, visibility toggle, active layer
+   LAYERS — Photoshop-style panel: add, rename (dblclick), reorder (drag),
+   delete (trash), visibility toggle, active layer. Backed by doc.layers
+   (synced across all peers via doc-snap + doc-diff).
 ───────────────────────────────────────────────────────────────────────── */
-const _layers = [
-  { id: 'l5', name: 'Layer 5', visible: true },
-  { id: 'l4', name: 'Layer 4', visible: true },
-  { id: 'l3', name: 'Layer 3', visible: true },
-  { id: 'l2', name: 'Layer 2', visible: true },
-  { id: 'l1', name: 'Layer 1', visible: true },
-];
-let _activeLayerId = 'l1';
-
-function _syncActiveLayerGlobal() {
-  window.__slateActiveLayerId = _activeLayerId;
+function _initActiveLayer() {
+  const layers = (typeof doc !== 'undefined' && doc.layers) ? doc.layers : null;
+  if (!layers || !layers.length) return;
+  if (!layers.some(l => l.id === window.__slateActiveLayerId)) {
+    window.__slateActiveLayerId = layers[0].id;
+  }
 }
-_syncActiveLayerGlobal();
+_initActiveLayer();
 
 function injectLayersPanel() {
   if (document.getElementById('layers-panel')) return;
@@ -495,17 +504,14 @@ function injectLayersPanel() {
       display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
       Layers
       <button id="layers-add-btn" title="Add layer" style="background:none;border:none;
-        color:var(--text-mid);cursor:pointer;font-size:15px;padding:0 2px;line-height:1">+</button>
+        color:var(--text-mid);cursor:pointer;font-size:15px;padding:0 4px;line-height:1">+</button>
     </div>
     <div id="layers-list" style="flex:1;min-height:0;overflow-y:auto"></div>
   `;
     parentEl.appendChild(panel);
     renderLayersList();
     document.getElementById('layers-add-btn').addEventListener('click', () => {
-      const id = 'l' + Date.now();
-      _layers.unshift({ id, name: 'Layer ' + (_layers.length + 1), visible: true });
-      _activeLayerId = id;
-      _syncActiveLayerGlobal();
+      window.slateLayers?.add();
       renderLayersList();
     });
   }
@@ -532,9 +538,13 @@ function injectLayersPanel() {
 function renderLayersList() {
   const list = document.getElementById('layers-list');
   if (!list) return;
-  list.innerHTML = _layers.map(l => {
-    const active = l.id === _activeLayerId;
-    return `<div class="layer-row" data-lid="${l.id}" style="
+  const api = window.slateLayers;
+  const layers = api?.list || [];
+  const activeId = api?.activeId;
+
+  list.innerHTML = layers.map(l => {
+    const active = l.id === activeId;
+    return `<div class="layer-row" draggable="true" data-lid="${l.id}" style="
       background:${active ? 'var(--bg4)' : 'transparent'};
       border-left-color:${active ? 'var(--accent)' : 'transparent'};
       color:${l.visible ? 'var(--text)' : 'var(--text-dim)'};
@@ -546,31 +556,121 @@ function renderLayersList() {
           : `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="2" y1="2" x2="11" y2="11"/><path d="M4.5 4.5a5 5 0 0 0-3 2 5.5 5.5 0 0 0 9 1M8 3.5A5.5 5.5 0 0 1 12 6.5"/></svg>`
         }
       </button>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem">${l.name}</span>
+      <span class="layer-name" data-lid="${l.id}" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;user-select:none">${_escape(l.name)}</span>
+      <button class="layer-del-btn" data-lid="${l.id}" title="Delete layer" style="background:none;border:none;color:var(--text-dim);cursor:pointer;padding:0 2px;opacity:0.55;line-height:1;flex-shrink:0">
+        <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
+      </button>
     </div>`;
   }).join('');
 
   list.querySelectorAll('.layer-row').forEach(row => {
     row.addEventListener('click', e => {
-      if (e.target.closest('.layer-vis-btn')) return;
-      _activeLayerId = row.dataset.lid;
-      _syncActiveLayerGlobal();
+      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn')) return;
+      if (row.querySelector('.layer-name input')) return;
+      window.slateLayers?.setActive(row.dataset.lid);
       renderLayersList();
     });
+    _bindLayerDragEvents(row);
   });
+
   list.querySelectorAll('.layer-vis-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      const layer = _layers.find(l => l.id === btn.dataset.lid);
-      if (layer) {
-        layer.visible = !layer.visible;
-        renderLayersList();
-        if (typeof invalidateStatic === 'function') invalidateStatic();
-        if (typeof scheduleRender === 'function') scheduleRender();
-      }
+      const id = btn.dataset.lid;
+      const layer = api?.list.find(l => l.id === id);
+      if (layer) api.setVisible(id, !layer.visible);
+      renderLayersList();
     });
   });
-  _syncActiveLayerGlobal();
+
+  list.querySelectorAll('.layer-del-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const id = btn.dataset.lid;
+      if (!api) return;
+      if (api.list.length <= 1) {
+        if (typeof showToast === 'function') showToast('At least one layer required');
+        return;
+      }
+      api.remove(id);
+      renderLayersList();
+    });
+  });
+
+  list.querySelectorAll('.layer-name').forEach(span => {
+    span.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      _beginLayerRename(span);
+    });
+  });
+}
+window.renderLayersList = renderLayersList;
+
+function _escape(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+  );
+}
+
+function _beginLayerRename(span) {
+  const id = span.dataset.lid;
+  const original = span.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = original;
+  input.maxLength = 32;
+  input.style.cssText = 'flex:1;min-width:0;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:3px;padding:1px 4px;outline:none';
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let committed = false;
+  const commit = () => {
+    if (committed) return;
+    committed = true;
+    const val = input.value.trim();
+    if (val && val !== original) {
+      window.slateLayers?.rename(id, val);
+    }
+    renderLayersList();
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); committed = true; renderLayersList(); }
+  });
+}
+
+let _dragLayerId = null;
+function _bindLayerDragEvents(row) {
+  row.addEventListener('dragstart', e => {
+    _dragLayerId = row.dataset.lid;
+    row.style.opacity = '0.4';
+    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', _dragLayerId); } catch {}
+  });
+  row.addEventListener('dragend', () => {
+    row.style.opacity = '';
+    _dragLayerId = null;
+    document.querySelectorAll('.layer-row').forEach(r => r.style.borderTopColor = '');
+  });
+  row.addEventListener('dragover', e => {
+    if (!_dragLayerId || _dragLayerId === row.dataset.lid) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'move'; } catch {}
+    row.style.borderTop = '2px solid var(--accent)';
+  });
+  row.addEventListener('dragleave', () => { row.style.borderTop = ''; });
+  row.addEventListener('drop', e => {
+    e.preventDefault();
+    row.style.borderTop = '';
+    if (!_dragLayerId || _dragLayerId === row.dataset.lid) return;
+    const api = window.slateLayers;
+    if (!api) return;
+    const list = api.list;
+    const dropIdx = list.findIndex(l => l.id === row.dataset.lid);
+    if (dropIdx < 0) return;
+    api.move(_dragLayerId, dropIdx);
+    renderLayersList();
+  });
 }
 
 function toggleLayersPanel() {

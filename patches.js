@@ -1046,93 +1046,11 @@
   `;
   document.head.appendChild(uiCSS);
 
-  // ── 20. IOS TOGGLE for visibility picker ──────────────────────────────────
-  (function patchVisToggle() {
-    const btn = document.getElementById('vis-toggle-btn');
-    if (!btn) return;
-    // Replace inner content keeping .vis-pub-icon / .vis-priv-icon for compat
-    btn.innerHTML = `
-      <span class="vt-knob"></span>
-      <svg class="vis-pub-icon" width="10" height="10" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="pointer-events:none">
-        <circle cx="6.5" cy="6.5" r="5.5"/><path d="M6.5 1C6.5 1 4 4 4 6.5s2.5 5.5 2.5 5.5M6.5 1c0 0 2.5 3 2.5 5.5S6.5 12 6.5 12M1 6.5h11"/>
-      </svg>
-      <svg class="vis-priv-icon" width="10" height="10" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;pointer-events:none">
-        <rect x="2" y="5.5" width="9" height="6.5" rx="1.5"/><path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5"/>
-      </svg>
-      <span class="vis-label" style="display:none"></span>
-    `;
-  })();
+  // ── 20. VIS TOGGLE DOM patch moved to section 27 (sprite-swap square) ──────
 
-  const visToggleCSS = document.createElement('style');
-  visToggleCSS.textContent = `
-    /* Vis toggle: iOS pill switch */
-    #vis-toggle-btn.vis-toggle {
-      position: relative; width: 50px; height: 26px;
-      border-radius: 13px; padding: 0;
-      display: inline-flex; align-items: center; justify-content: flex-end;
-      padding-right: 6px; gap: 0; overflow: hidden; flex-shrink: 0;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    #vis-toggle-btn[aria-label="public"] {
-      background: rgba(34,211,165,0.12);
-      border: 1px solid rgba(34,211,165,0.28);
-    }
-    #vis-toggle-btn[aria-label="private"] {
-      background: rgba(248,113,113,0.1);
-      border: 1px solid rgba(248,113,113,0.28);
-    }
-    /* Knob */
-    #vis-toggle-btn .vt-knob {
-      position: absolute; left: 3px; top: 3px;
-      width: 18px; height: 18px; border-radius: 50%;
-      background: #fff;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.28);
-      transition: transform 0.18s ease, background 0.18s;
-      pointer-events: none; z-index: 1;
-    }
-    #vis-toggle-btn[aria-label="private"] .vt-knob {
-      transform: translateX(22px);
-      background: #f87171;
-    }
-    /* Icon: right-side of track */
-    #vis-toggle-btn .vis-pub-icon,
-    #vis-toggle-btn .vis-priv-icon {
-      position: relative; z-index: 2; pointer-events: none;
-      color: currentColor; opacity: 0.7; flex-shrink: 0;
-    }
-    #vis-toggle-btn[aria-label="public"]  { color: var(--green); }
-    #vis-toggle-btn[aria-label="private"] { color: var(--danger); }
-  `;
-  document.head.appendChild(visToggleCSS);
+  // Section 20 vis-toggle CSS intentionally removed — replaced by section 27 sprite-swap square.
 
-  // ── 21. COMPACT MIC / LIVE BUTTON ─────────────────────────────────────────
-  // Make the voice-toggle-btn in the header a tiny icon-only pill
-  (function compactVoiceBtn() {
-    // wait a tick for existing patches to create the button
-    setTimeout(() => {
-      const vBtn = document.getElementById('voice-toggle-btn');
-      if (!vBtn) return;
-      // Replace label-based display with icon dot
-      const lbl = vBtn.querySelector('span, .voice-lbl');
-      if (lbl) lbl.style.display = 'none';
-      vBtn.style.cssText += `
-        width:30px;height:30px;padding:6px;border-radius:7px;
-        font-size:0;gap:0;position:relative;flex-shrink:0;
-      `;
-      // State dot
-      if (!vBtn.querySelector('.voice-dot')) {
-        const dot = document.createElement('span');
-        dot.className = 'voice-dot';
-        dot.style.cssText = `
-          position:absolute;top:5px;right:5px;
-          width:6px;height:6px;border-radius:3px;
-          background:var(--text-dim);
-          transition:background 0.2s;pointer-events:none;
-        `;
-        vBtn.appendChild(dot);
-      }
-    }, 600);
-  })();
+  // ── 21. COMPACT MIC BUTTON — hidden in header by section 27 ────────────────
 
   // ── 22. LEAVE BUTTON: always icon-only ────────────────────────────────────
   (function compactLeave() {
@@ -1496,9 +1414,8 @@
     });
   })();
 
-  // ── 26. COMPREHENSIVE UI POLISH ───────────────────────────────────────────
-  // Overrides section 19 with a more complete, tightly structured redesign.
-  // Goals: grouped toolbar, clean header, professional sidebar bottom.
+  // ── 26. COMPREHENSIVE UI POLISH (CSS) ────────────────────────────────────
+  // See section 27 below for DOM / behaviour changes.
   (function applyUIPolish() {
     const css = document.createElement('style');
     css.id = 'slate-ui-polish';
@@ -2095,21 +2012,183 @@ input:focus-visible  { outline: none; }
 }
     `;
     document.head.appendChild(css);
+  })(); // end applyUIPolishCSS
 
-    // Inject a flex spacer between vis-chip and the right-hand action buttons
-    // so the board name stays left and icons cluster right.
+  // ── 27. DOM & BEHAVIOUR OVERHAUL ──────────────────────────────────────────
+  // Addresses screenshot feedback:
+  //  a) Hide hamburger + MEMBERS button on desktop (show on mobile)
+  //  b) Hide the voice/mute button in header (it lives in the members panel)
+  //  c) Replace the iOS vis-toggle pill with a clean square sprite-swap button
+  //  d) Move visibility into the header as a small inline icon toggle (not pill)
+  //  e) Fast board list refresh + fast vis-change broadcast to all peers
+  (function domOverhaul() {
+
+    /* ── a. Hide hamburger & members toggle on desktop ── */
+    const hideOnDesktopCSS = document.createElement('style');
+    hideOnDesktopCSS.textContent = `
+      /* Desktop: sidebar is always visible, no need for hamburger or members btn */
+      @media (min-width: 769px) {
+        #sidebar-toggle  { display: none !important; }
+        #members-toggle  { display: none !important; }
+      }
+      /* Mobile: show them */
+      @media (max-width: 768px) {
+        #sidebar-toggle { display: flex !important; }
+        #members-toggle { display: flex !important; }
+      }
+
+      /* ── Hide voice/mute button from the header entirely ── */
+      /* It already exists in the members panel on your own row */
+      #voice-bar,
+      #voice-toggle-btn,
+      #mute-btn { display: none !important; }
+
+      /* ── Vis-toggle: clean square icon button ── */
+      #vis-toggle-btn.vis-toggle {
+        width: 30px !important; height: 30px !important;
+        padding: 0 !important; border-radius: 8px !important;
+        display: inline-flex !important; align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        transition: background 0.12s, border-color 0.12s !important;
+        overflow: visible !important; gap: 0 !important;
+        flex-shrink: 0 !important;
+        position: relative !important;
+      }
+      #vis-toggle-btn[aria-label="public"] {
+        border: 1px solid rgba(34,211,165,0.35) !important;
+        color: var(--green) !important;
+        background: rgba(34,211,165,0.08) !important;
+      }
+      #vis-toggle-btn[aria-label="private"] {
+        border: 1px solid rgba(248,113,113,0.35) !important;
+        color: var(--danger) !important;
+        background: rgba(248,113,113,0.08) !important;
+      }
+      #vis-toggle-btn .vt-knob { display: none !important; }
+      #vis-toggle-btn .vis-label { display: none !important; }
+      #vis-toggle-btn .vis-pub-icon,
+      #vis-toggle-btn .vis-priv-icon {
+        position: static !important; width: 14px !important; height: 14px !important;
+        display: block !important; pointer-events: none; flex-shrink: 0;
+      }
+      /* Tooltip hover */
+      #vis-toggle-btn:hover { filter: brightness(1.15) !important; }
+
+      /* ── Header: flex spacer so actions cluster right ── */
+      #header-spacer {
+        flex: 1; min-width: 4px; pointer-events: none;
+      }
+
+      /* ── Header: remove the stand-alone public/private chip pill ── */
+      #vis-chip { display: none !important; }
+
+      /* ── Fast-update: make board-list re-render animation instant ── */
+      .board-item { transition: background 0.08s, border-color 0.08s !important; }
+    `;
+    document.head.appendChild(hideOnDesktopCSS);
+
+    /* ── b. Replace iOS vis-toggle with sprite-swap square ── */
+    (function fixVisToggle() {
+      const btn = document.getElementById('vis-toggle-btn');
+      if (!btn) return;
+      const currentLabel = btn.getAttribute('aria-label') || 'public';
+      btn.innerHTML = `
+        <svg class="vis-pub-icon" width="14" height="14" viewBox="0 0 14 14"
+          fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+          style="${currentLabel === 'private' ? 'display:none' : ''}; pointer-events:none">
+          <circle cx="7" cy="7" r="5.5"/>
+          <path d="M7 1.5S5 4.5 5 7s2 5.5 2 5.5M7 1.5s2 3 2 5.5S7 12.5 7 12.5M1.5 7h11"/>
+        </svg>
+        <svg class="vis-priv-icon" width="14" height="14" viewBox="0 0 14 14"
+          fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+          style="${currentLabel === 'private' ? '' : 'display:none'}; pointer-events:none">
+          <rect x="2.5" y="6" width="9" height="7" rx="1.5"/>
+          <path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6"/>
+        </svg>
+        <span class="vis-label" style="display:none"></span>
+      `;
+      // Keep the original click handler — it calls toggleBoardVisibility() internally
+      // but also intercept to broadcast immediately to all peers (see fast-sync below)
+    })();
+
+    /* ── c. Header flex spacer (board name left, actions right) ── */
     setTimeout(() => {
       const header = document.getElementById('board-header');
       if (!header || header.querySelector('#header-spacer')) return;
-      // Find the share button — insert spacer just before it
       const shareBtn = document.getElementById('share-board-btn');
       if (shareBtn) {
         const spacer = document.createElement('div');
         spacer.id = 'header-spacer';
-        spacer.style.cssText = 'flex:1;min-width:4px;pointer-events:none;';
         header.insertBefore(spacer, shareBtn);
       }
-    }, 50);
-  })();
+    }, 30);
+
+    /* ── d. Fast board-list refresh: poll every 1.5 s instead of 10 s ── */
+    // The lobby sync interval is set inside initPeer/setupLobby — we patch the
+    // window-level scheduleRenderBoards to also fire immediately when called.
+    let _lastRender = 0;
+    const _origSched = window.scheduleRenderBoards;
+    window.scheduleRenderBoards = function () {
+      const now = Date.now();
+      if (now - _lastRender > 200) { // debounce 200 ms
+        _lastRender = now;
+        if (typeof renderBoards === 'function') renderBoards();
+      }
+      if (_origSched) _origSched.apply(this, arguments);
+    };
+
+    // Kick a fast re-poll for lobby registry updates every 1.5 s
+    setInterval(() => {
+      if (typeof scheduleRenderBoards === 'function') scheduleRenderBoards();
+    }, 1500);
+
+    /* ── e. Fast vis-change: broadcast immediately when toggled ── */
+    // Patch the existing toggleBoardVisibility to call lobbyBroadcast right away
+    setTimeout(() => {
+      const _origToggleVis = window.toggleBoardVisibility;
+      if (_origToggleVis) {
+        window.toggleBoardVisibility = function () {
+          const r = _origToggleVis.apply(this, arguments);
+          // Immediately tell lobby about the change
+          try {
+            if (typeof lobbyBroadcast === 'function' && typeof state !== 'undefined') {
+              lobbyBroadcast({
+                type: 'lobby-reg',
+                id: state.myId,
+                board: state.currentBoard,
+                name: state.myName,
+                visibility: typeof boardVisibility !== 'undefined'
+                  ? (boardVisibility[state.currentBoard] || 'public')
+                  : 'public',
+              });
+            }
+          } catch (e) {}
+          return r;
+        };
+      }
+    }, 800);
+
+    /* ── f. Keep vis-toggle sprites in sync after original click handler runs ── */
+    setTimeout(() => {
+      const btn = document.getElementById('vis-toggle-btn');
+      if (!btn) return;
+      const obs = new MutationObserver(() => {
+        const label = btn.getAttribute('aria-label');
+        const pub  = btn.querySelector('.vis-pub-icon');
+        const priv = btn.querySelector('.vis-priv-icon');
+        if (!pub || !priv) return;
+        if (label === 'private') {
+          pub.style.display  = 'none';
+          priv.style.display = 'block';
+        } else {
+          pub.style.display  = 'block';
+          priv.style.display = 'none';
+        }
+      });
+      obs.observe(btn, { attributes: true, attributeFilter: ['aria-label'] });
+    }, 400);
+
+  })(); // end domOverhaul
 
 })();

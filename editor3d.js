@@ -246,12 +246,12 @@ function _cloneMeshDataDeep(md) {
 function _onContainerPointerTrack(e) {
   _lastMouseClientX = e.clientX;
   _lastMouseClientY = e.clientY;
-  // If user is mid-RMB-hold and has moved beyond a small threshold while fly
-  // is armed, trigger fly mode early instead of waiting out the full 200ms
-  // hold timer.
-  if (_rmbArmed && flyArmed && !flyEnabled && !_rmbFlyTriggered) {
+  // Movement during an RMB hold → enter fly mode early instead of waiting for
+  // the full hold timer. Keeps the gesture feeling instant when you start
+  // dragging right away.
+  if (_rmbArmed && !flyEnabled && !_rmbFlyTriggered) {
     const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
-    if (moved > 4) {
+    if (moved > RMB_FLY_MOVE_PX) {
       _cancelRmbFlyTimer();
       _rmbFlyTriggered = true;
       enterFlyCamera();
@@ -508,69 +508,46 @@ function _onViewportContextMenu(e) {
 
 /* ─────────────────────────────────────────────────────────────────────────
    Free-look (fly) camera
-   The fly button arms the gesture; once armed, holding right-mouse enters
-   fly mode and WASD navigates. Releasing right-mouse exits. A quick RMB tap
-   (no hold) still falls through to the add-object context menu via
-   onPointerUp, so the same button does both jobs unambiguously.
+   Press-and-hold right-mouse to enter fly mode (with PointerLock + WASD).
+   Release right-mouse to exit. A quick right-click without hold / movement
+   falls through to the add-object context menu via onPointerUp.
 ───────────────────────────────────────────────────────────────────────── */
-let flyArmed = false;
-try {
-  if (typeof localStorage !== 'undefined' && localStorage.getItem('slate_fly_armed') === '1') {
-    flyArmed = true;
-  }
-} catch (_) {}
+const RMB_FLY_HOLD_MS = 160; // hold beyond this triggers fly mode
+const RMB_FLY_MOVE_PX = 5;   // or move beyond this while held
 let _rmbHoldTimer = null;
 let _rmbFlyTriggered = false;
 
-function _persistFlyArmed() {
-  try { localStorage.setItem('slate_fly_armed', flyArmed ? '1' : '0'); } catch (_) {}
-}
-function _updateFlyArmedUI() {
-  const btn = document.getElementById('t3d-fly-btn');
-  if (btn) {
-    btn.classList.toggle('active', flyArmed);
-    btn.title = flyArmed
-      ? 'Fly view armed — hold right-mouse to fly, release to exit (click to disarm)'
-      : 'Fly view — click to arm, then hold right-mouse to fly';
-  }
-}
-function setFlyArmed(on) {
-  flyArmed = !!on;
-  _persistFlyArmed();
-  _updateFlyArmedUI();
-  if (!flyArmed && flyEnabled) exitFlyCamera();
-}
-function toggleFlyArmed() { setFlyArmed(!flyArmed); }
-
-function _onFreeLookHoldKeyDown(e) {
-  if (!document.body.classList.contains('mode-3d')) return;
-  if (!container?.isConnected) return;
-  const ae = document.activeElement;
-  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
-  if (e.code !== 'Backquote' || e.repeat) return;
-  if (transform?.dragging) return;
-  e.preventDefault();
-  toggleFlyArmed();
-  try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
-}
-
-function _onFlyCamBtnDown(e) {
-  // Toggle arm state — gesture is now driven by right-mouse hold.
-  e.preventDefault();
-  toggleFlyArmed();
-  try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
-}
 function _cancelRmbFlyTimer() {
   if (_rmbHoldTimer) { clearTimeout(_rmbHoldTimer); _rmbHoldTimer = null; }
 }
-function _maybeStartRmbFlyOnHold(clientX, clientY) {
-  if (!flyArmed || flyEnabled) return;
+function _maybeStartRmbFlyOnHold() {
+  if (flyEnabled) return;
   _rmbFlyTriggered = false;
   _cancelRmbFlyTimer();
   _rmbHoldTimer = setTimeout(() => {
     _rmbHoldTimer = null;
-    if (_rmbArmed) { _rmbFlyTriggered = true; enterFlyCamera(); }
-  }, 200);
+    if (_rmbArmed && !flyEnabled && !transform?.dragging) {
+      _rmbFlyTriggered = true;
+      enterFlyCamera();
+    }
+  }, RMB_FLY_HOLD_MS);
+}
+
+/* The fly button is no longer required — RMB-hold is the primary gesture.
+   The button remains as a touch-friendly entry point: click → enter fly,
+   click again (or press Esc) → exit. */
+function _onFlyCamBtnDown(e) {
+  e.preventDefault();
+  if (flyEnabled) { exitFlyCamera(); return; }
+  enterFlyCamera();
+}
+function _updateFlyButtonUI() {
+  const btn = document.getElementById('t3d-fly-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', !!flyEnabled);
+  btn.title = flyEnabled
+    ? 'Fly view active — click to exit'
+    : 'Fly view — hold right-mouse to fly, release to exit';
 }
 function makeGeometryFor(obj) {
   const p = obj.params || {};
@@ -828,18 +805,17 @@ function onPointerDown(e) {
     }
     return;
   }
-  // Track right-button presses so onPointerUp can decide between three
+  // Track right-button presses so onPointerUp can decide between two
   // gestures:
-  //   1. Quick tap (no movement) → open the add-object menu / nothing if a
-  //      mesh is under the cursor.
-  //   2. Drag → Orbit's pan (kept for users who don't want fly-mode).
-  //   3. Hold ≥ 200ms while flyArmed → enter free-look (WASD navigation);
-  //      releasing exits.
+  //   1. Quick tap (no movement, released before the hold timer fires) →
+  //      open the add-object menu on empty space.
+  //   2. Hold ≥ RMB_FLY_HOLD_MS or drag > RMB_FLY_MOVE_PX → enter free-look
+  //      (PointerLock + WASD navigation); releasing exits.
   if (e.button === 2) {
     _rmbArmed = true;
     _rmbDownX = e.clientX;
     _rmbDownY = e.clientY;
-    _maybeStartRmbFlyOnHold(e.clientX, e.clientY);
+    _maybeStartRmbFlyOnHold();
     return;
   }
   // In object mode, Shift+left-drag starts a Blender-style box select.
@@ -993,7 +969,7 @@ function enterFlyCamera() {
     flyControls.addEventListener('unlock', () => { if (flyEnabled) exitFlyCamera(); });
   }
   orbit.enabled = false;
-  flyControls.lock();
+  try { flyControls.lock(); } catch (_) { /* may fail if user-gesture timing is off */ }
   flyEnabled = true;
   flyKeys.clear();
   window.addEventListener('keydown', _onFlyKeyDown, true);
@@ -1001,11 +977,13 @@ function enterFlyCamera() {
   if (!flyHint) {
     flyHint = document.createElement('div');
     flyHint.className = 'fly-cam-hint';
-    flyHint.textContent = 'WASD move · release right-mouse or Esc to exit';
+    flyHint.textContent = 'WASD move · release right-mouse to exit';
     container.appendChild(flyHint);
   } else {
+    flyHint.textContent = 'WASD move · release right-mouse to exit';
     flyHint.style.display = '';
   }
+  _updateFlyButtonUI();
 }
 
 function exitFlyCamera() {
@@ -1024,6 +1002,7 @@ function exitFlyCamera() {
     orbit.enabled = true;
     orbit.update();
   }
+  _updateFlyButtonUI();
 }
 
 function _onFlyKeyDown(e) {
@@ -1440,6 +1419,11 @@ function setTransformMode(mode) {
     transform.setMode(mode);
     transform.setSpace(transformSpace);
     transform.showX = transform.showY = transform.showZ = true;
+    // Re-apply our gizmo customization. Three.js' TransformControls toggles
+    // visibility of whole sub-groups when switching modes; our hidden
+    // children stay hidden but re-running is cheap and survives any future
+    // internal rebuild.
+    _customizeTransformGizmo();
   }
   document.querySelectorAll('#toolbar-3d .t3d-tool-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tt === mode);
@@ -1595,12 +1579,17 @@ function buildEditHelpers() {
   group.scale.copy(mesh.scale);
   scene.add(group);
 
-  // Feature-edges overlay (hides triangulation diagonals on coplanar faces
-  // so quads look like single faces, not split pairs of triangles).
+  // Feature-edges overlay — a SUBTLE structural hint so users can see the
+  // polygon outline without it visually competing with the selection overlay.
+  // Welding by position before EdgesGeometry hides triangulation diagonals on
+  // coplanar quads. depthTest:true so edges don't bleed through the mesh.
   const weldGeoForEdges = _weldedGeometryFor(geo);
   const edgesGeo = new THREE.EdgesGeometry(weldGeoForEdges, 1);
   weldGeoForEdges.dispose();
-  const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3a5, depthTest: false, transparent: true, opacity: 0.9 });
+  const edgesMat = new THREE.LineBasicMaterial({
+    color: 0xffffff, depthTest: true,
+    transparent: true, opacity: 0.18,
+  });
   const edges = new THREE.LineSegments(edgesGeo, edgesMat);
   edges.renderOrder = 2;
   group.add(edges);
@@ -1820,8 +1809,11 @@ function _triNormalLogical(logical3) {
   return new THREE.Vector3().crossVectors(e1, e2).normalize();
 }
 
-/** Return the logical vertices forming the face under the cursor, walking
-    coplanar neighbours so quads come back as 4 verts instead of 3. */
+/** Return the ordered logical vertices forming the face under the cursor.
+ *  Flood-fills across coplanar-connected triangles so an n-gon split into N-2
+ *  triangles is reported as a single polygon. Curved surfaces (sphere/cylinder
+ *  walls) stop at the coplanarity boundary so each rendered quad stays its
+ *  own face. */
 function pickFaceLogical(clientX, clientY) {
   const mesh = objMeshes.get(editTargetId);
   if (!mesh || !editHelpers) return null;
@@ -1831,43 +1823,137 @@ function pickFaceLogical(clientX, clientY) {
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObject(mesh, false);
   if (!hits.length || !hits[0].face) return null;
-  const f = hits[0].face;
-  const weld = editHelpers.weldMap;
-  const baseTri = [weld.logicalForIdx[f.a], weld.logicalForIdx[f.b], weld.logicalForIdx[f.c]];
-  if (baseTri[0] === baseTri[1] || baseTri[1] === baseTri[2] || baseTri[0] === baseTri[2]) {
-    return [...new Set(baseTri)];
-  }
-  const baseSet = new Set(baseTri);
-  const baseNormal = _triNormalLogical(baseTri);
-  if (!baseNormal) return [...baseSet];
 
+  const weld = editHelpers.weldMap;
   const indexAttr = mesh.geometry.getIndex();
-  const triCount = indexAttr ? (indexAttr.count / 3) : (mesh.geometry.getAttribute('position').count / 3);
-  const hitTri = hits[0].faceIndex;
-  for (let t = 0; t < triCount; t++) {
-    if (t === hitTri) continue;
-    let la, lb, lc;
+  const triCount = indexAttr
+    ? (indexAttr.count / 3)
+    : (mesh.geometry.getAttribute('position').count / 3);
+
+  // Read a triangle as a logical-vert triple, dedup'd.
+  const readTri = (t) => {
+    let a, b, c;
     if (indexAttr) {
-      la = weld.logicalForIdx[indexAttr.getX(t * 3)];
-      lb = weld.logicalForIdx[indexAttr.getX(t * 3 + 1)];
-      lc = weld.logicalForIdx[indexAttr.getX(t * 3 + 2)];
+      a = weld.logicalForIdx[indexAttr.getX(t * 3)];
+      b = weld.logicalForIdx[indexAttr.getX(t * 3 + 1)];
+      c = weld.logicalForIdx[indexAttr.getX(t * 3 + 2)];
     } else {
-      la = weld.logicalForIdx[t * 3];
-      lb = weld.logicalForIdx[t * 3 + 1];
-      lc = weld.logicalForIdx[t * 3 + 2];
+      a = weld.logicalForIdx[t * 3];
+      b = weld.logicalForIdx[t * 3 + 1];
+      c = weld.logicalForIdx[t * 3 + 2];
     }
-    if (la === lb || lb === lc || la === lc) continue;
-    const cand = [la, lb, lc];
-    const shared = cand.filter(v => baseSet.has(v)).length;
-    if (shared !== 2) continue;
-    const n2 = _triNormalLogical(cand);
-    if (!n2) continue;
-    if (Math.abs(baseNormal.dot(n2)) > 0.999) {
-      cand.forEach(v => baseSet.add(v));
+    if (a === b || b === c || a === c) return null;
+    return [a, b, c];
+  };
+
+  const startTri = hits[0].faceIndex;
+  const baseTri  = readTri(startTri);
+  if (!baseTri) {
+    const f = hits[0].face;
+    return [...new Set([
+      weld.logicalForIdx[f.a],
+      weld.logicalForIdx[f.b],
+      weld.logicalForIdx[f.c],
+    ])];
+  }
+
+  const baseNormal = _triNormalLogical(baseTri);
+  if (!baseNormal) return [...new Set(baseTri)];
+
+  // Edge -> [triIndices] adjacency, built lazily once per pick.
+  const edgeMap = new Map();
+  const edgeKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+  for (let t = 0; t < triCount; t++) {
+    const tri = readTri(t);
+    if (!tri) continue;
+    const ek1 = edgeKey(tri[0], tri[1]);
+    const ek2 = edgeKey(tri[1], tri[2]);
+    const ek3 = edgeKey(tri[2], tri[0]);
+    [ek1, ek2, ek3].forEach(k => {
+      let arr = edgeMap.get(k);
+      if (!arr) { arr = []; edgeMap.set(k, arr); }
+      arr.push(t);
+    });
+  }
+
+  // Flood-fill across coplanar neighbours. An edge is a boundary edge of the
+  // polygon ONLY if it has no coplanar same-facing neighbour at all. Edges
+  // that lead to a coplanar tri (visited or not) are interior.
+  const visited = new Set([startTri]);
+  const queue = [startTri];
+  const member = new Set(baseTri);
+  const boundaryEdges = []; // [a, b] tuples — half-edges in walk order
+  const triEdges = (tri) => [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]];
+
+  while (queue.length) {
+    const t = queue.shift();
+    const tri = readTri(t);
+    if (!tri) continue;
+    for (const [a, b] of triEdges(tri)) {
+      const k = edgeKey(a, b);
+      const others = (edgeMap.get(k) || []).filter(o => o !== t);
+      let connectsToCoplanar = false;
+      for (const o of others) {
+        const otri = readTri(o);
+        if (!otri) continue;
+        const n2 = _triNormalLogical(otri);
+        if (!n2) continue;
+        // Require same-facing AND nearly parallel (≈ <3° dihedral).
+        // Use signed dot so a backface (opposite normal) doesn't merge.
+        if (baseNormal.dot(n2) <= 0.9985) continue;
+        connectsToCoplanar = true;
+        if (visited.has(o)) continue;
+        visited.add(o);
+        queue.push(o);
+        otri.forEach(v => member.add(v));
+      }
+      if (!connectsToCoplanar) boundaryEdges.push([a, b]);
+    }
+  }
+
+  // Walk the boundary half-edges to produce an ordered polygon ring.
+  // boundaryEdges may contain duplicate undirected edges (shared between two
+  // triangles whose third vertex is in the same plane on opposite sides — rare
+  // but defensive). Drop edges whose undirected key appears twice.
+  const undirCount = new Map();
+  boundaryEdges.forEach(([a, b]) => {
+    const k = edgeKey(a, b);
+    undirCount.set(k, (undirCount.get(k) || 0) + 1);
+  });
+  const cleanEdges = boundaryEdges.filter(([a, b]) => undirCount.get(edgeKey(a, b)) === 1);
+
+  if (cleanEdges.length < 3) return [...member];
+
+  // Build a next-vertex lookup. Some edges may go in reverse — accept either
+  // direction; we'll greedily walk.
+  const next = new Map();
+  cleanEdges.forEach(([a, b]) => {
+    if (!next.has(a)) next.set(a, []);
+    next.get(a).push(b);
+  });
+  const start = cleanEdges[0][0];
+  const ring  = [start];
+  let cur = start;
+  const used = new Set();
+  for (let safety = 0; safety < cleanEdges.length + 1; safety++) {
+    const opts = next.get(cur) || [];
+    let chosen = null;
+    for (const n of opts) {
+      const k = `${cur}->${n}`;
+      if (used.has(k)) continue;
+      // Avoid going back to ring[ring.length - 2] if there's another option.
+      if (ring.length >= 2 && n === ring[ring.length - 2] && opts.length > 1) continue;
+      chosen = n;
+      used.add(k);
       break;
     }
+    if (chosen == null) break;
+    if (chosen === start) break;
+    ring.push(chosen);
+    cur = chosen;
   }
-  return [...baseSet];
+  if (ring.length < 3) return [...member];
+  return ring;
 }
 
 function handleEditClick(e) {
@@ -2054,6 +2140,72 @@ function _editFreshMeshData() {
   };
 }
 
+/** Small ephemeral hint shown bottom-center of the viewport when a mesh tool
+ *  needs a different selection. Avoids silent failures. */
+let _editHintEl = null;
+let _editHintTimer = null;
+function _showEditHint(msg) {
+  if (!container) return;
+  if (!_editHintEl) {
+    _editHintEl = document.createElement('div');
+    _editHintEl.style.cssText = `
+      position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+      background: rgba(15, 15, 22, 0.92); color: #f1f1f5;
+      border: 1px solid rgba(124, 106, 255, 0.4);
+      padding: 6px 14px; border-radius: 8px;
+      font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.15s;
+      z-index: 30; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    `;
+    container.appendChild(_editHintEl);
+  }
+  _editHintEl.textContent = msg;
+  _editHintEl.style.opacity = '1';
+  if (_editHintTimer) clearTimeout(_editHintTimer);
+  _editHintTimer = setTimeout(() => {
+    if (_editHintEl) _editHintEl.style.opacity = '0';
+  }, 1800);
+}
+
+/** Derive a face selection from the current selection when face mode is
+ *  expected but the user is in vertex/edge mode or face mode has no entries.
+ *  Returns an array of vert-index arrays (each a face). Returns [] if nothing
+ *  reasonable can be derived. */
+function _deriveFaceSelection(md) {
+  if (!md || !Array.isArray(md.faces)) return [];
+  const polys = md.faces.filter(f => Array.isArray(f));
+
+  // Face mode with explicit selection — easy.
+  if (editSubMode === 'face' && editFaceSelection.size) {
+    return [...editFaceSelection.values()].map(v => [...v]);
+  }
+  // Edge mode: every face that contains the selected edge.
+  if (editSubMode === 'edge' && editEdgeSelection.size) {
+    const wantPairs = [...editEdgeSelection].map(_edgeKeyToVerts);
+    const seen = new Set();
+    const out = [];
+    polys.forEach(f => {
+      for (const [a, b] of wantPairs) {
+        for (let i = 0; i < f.length; i++) {
+          const x = f[i], y = f[(i + 1) % f.length];
+          if ((x === a && y === b) || (x === b && y === a)) {
+            const k = _faceKey(f);
+            if (!seen.has(k)) { seen.add(k); out.push([...f]); }
+            return;
+          }
+        }
+      }
+    });
+    return out;
+  }
+  // Vertex mode: every face whose every vertex is in the selection.
+  if (editSubMode === 'vertex' && editSelection.size) {
+    const sel = editSelection;
+    return polys.filter(f => f.every(v => sel.has(v))).map(f => [...f]);
+  }
+  return [];
+}
+
 function _vecFromArr(verts, i) {
   return new THREE.Vector3(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2]);
 }
@@ -2117,55 +2269,56 @@ function _editApplyMeshData(meshData, nextSel) {
 /** Extrude — for each selected face, duplicate its corners, push the duplicates
  *  along the face normal, and connect the perimeter with side quads. */
 function extrudeSelectedFaces(distance = 0.3) {
-  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to extrude — select a face first'); return; }
+  const targets = _deriveFaceSelection(md);
+  if (!targets.length) {
+    _showEditHint('Select a face to extrude (press 3 for face mode)');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
   window.slateScene3dBeginAction?.();
-  const md = _editFreshMeshData();
-  if (!md) return;
   const verts = md.vertices.slice();
-  const faces = md.faces.map(f => [...f]);
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const newFaceSelections = [];
-  // Iterate snapshot of the selection — face indices may shift as we splice.
-  const targets = [...editFaceSelection.values()];
   for (const sel of targets) {
     const fi = _findFaceIndex(faces, sel);
     if (fi < 0) continue;
     const face = faces[fi];
     const normal = _faceNormalFromVerts(verts, face).multiplyScalar(distance);
-    // Duplicate each corner into a new vert.
     const newIdxs = face.map(oldIdx => {
       const p = _vecFromArr(verts, oldIdx).add(normal);
       verts.push(p.x, p.y, p.z);
       return (verts.length / 3) - 1;
     });
-    // Replace the face with the new polygon (top of extrusion).
     faces[fi] = newIdxs.slice();
     newFaceSelections.push(newIdxs.slice());
-    // Side quads: (face[i], face[i+1], newIdxs[i+1], newIdxs[i]).
     for (let i = 0; i < face.length; i++) {
       const j = (i + 1) % face.length;
       faces.push([face[i], face[j], newIdxs[j], newIdxs[i]]);
     }
   }
+  setEditSubMode('face');
   _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 /** Inset — shrink each selected face inward, surround it with a quad ring. */
 function insetSelectedFaces(factor = 0.25) {
-  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to inset — select a face first'); return; }
+  const targets = _deriveFaceSelection(md);
+  if (!targets.length) {
+    _showEditHint('Select a face to inset (press 3 for face mode)');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
   window.slateScene3dBeginAction?.();
-  const md = _editFreshMeshData();
-  if (!md) return;
   const verts = md.vertices.slice();
-  const faces = md.faces.map(f => [...f]);
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const newFaceSelections = [];
-  const targets = [...editFaceSelection.values()];
   for (const sel of targets) {
     const fi = _findFaceIndex(faces, sel);
     if (fi < 0) continue;
@@ -2183,22 +2336,31 @@ function insetSelectedFaces(factor = 0.25) {
       faces.push([face[i], face[j], innerIdxs[j], innerIdxs[i]]);
     }
   }
+  setEditSubMode('face');
   _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 /** Subdivide each selected face into N quads (one per corner, meeting in the
- *  centroid). Tris become 3 quads, quads → 4 quads, etc. */
+ *  centroid). Tris become 3 quads, quads → 4 quads, etc. When no face is
+ *  selected, subdivides EVERY face — Blender-style "Subdivide all". */
 function subdivideSelectedFaces() {
-  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to subdivide'); return; }
+  let targets = _deriveFaceSelection(md);
+  if (!targets.length) {
+    // Subdivide everything — useful with no selection to add resolution.
+    targets = md.faces.filter(f => Array.isArray(f) && f.length >= 3).map(f => [...f]);
+  }
+  if (!targets.length) {
+    _showEditHint('Mesh has no polygonal faces yet — enter edit mode first');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
   window.slateScene3dBeginAction?.();
-  const md = _editFreshMeshData();
-  if (!md) return;
   const verts = md.vertices.slice();
-  const faces = md.faces.map(f => [...f]);
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   // Cache shared edge midpoints by edgeKey so neighbour faces share verts.
   const edgeMid = new Map();
   function getEdgeMid(a, b) {
@@ -2211,7 +2373,6 @@ function subdivideSelectedFaces() {
     edgeMid.set(k, idx);
     return idx;
   }
-  const targets = [...editFaceSelection.values()];
   const removeAt = new Set();
   const newFaceSelections = [];
   for (const sel of targets) {
@@ -2231,6 +2392,7 @@ function subdivideSelectedFaces() {
     }
   }
   const compact = faces.filter((_, i) => !removeAt.has(i));
+  setEditSubMode('face');
   _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
@@ -2239,15 +2401,18 @@ function subdivideSelectedFaces() {
  *  along the longer pair of edges into two quads. For tris splits into a tri
  *  and a quad along the longest edge. Works on multiple selected faces. */
 function loopCutSelectedFaces() {
-  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to cut — select a face first'); return; }
+  const targets = _deriveFaceSelection(md);
+  if (!targets.length) {
+    _showEditHint('Select a face to loop-cut (press 3 for face mode)');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
   window.slateScene3dBeginAction?.();
-  const md = _editFreshMeshData();
-  if (!md) return;
   const verts = md.vertices.slice();
-  const faces = md.faces.map(f => [...f]);
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const edgeMid = new Map();
   function getEdgeMid(a, b) {
     const k = _edgeKey(a, b);
@@ -2259,7 +2424,6 @@ function loopCutSelectedFaces() {
     edgeMid.set(k, idx);
     return idx;
   }
-  const targets = [...editFaceSelection.values()];
   const removeAt = new Set();
   const newFaceSelections = [];
   for (const sel of targets) {
@@ -2307,23 +2471,43 @@ function loopCutSelectedFaces() {
     }
   }
   const compact = faces.filter((_, i) => !removeAt.has(i));
+  setEditSubMode('face');
   _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 /** Vertex bevel — for each selected vertex, push it apart along its connected
- *  edges by `amount`, replacing the vertex with a small polygon (chamfer). */
+ *  edges by `amount`, replacing the vertex with a small polygon (chamfer).
+ *  Auto-derives a vertex selection from edge / face selections so the tool
+ *  works regardless of submode. */
 function bevelSelectedVerts(amount = 0.18) {
-  if (editorMode !== 'edit' || editSubMode !== 'vertex' || !editSelection.size) {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to bevel — select a vertex first'); return; }
+  // Derive vertex selection from whichever submode the user is in.
+  let vertTargets = [...editSelection];
+  if (!vertTargets.length && editSubMode === 'edge' && editEdgeSelection.size) {
+    const seen = new Set();
+    editEdgeSelection.forEach(k => {
+      const [a, b] = _edgeKeyToVerts(k);
+      if (!seen.has(a)) { seen.add(a); vertTargets.push(a); }
+      if (!seen.has(b)) { seen.add(b); vertTargets.push(b); }
+    });
+  } else if (!vertTargets.length && editSubMode === 'face' && editFaceSelection.size) {
+    const seen = new Set();
+    editFaceSelection.forEach(verts => verts.forEach(v => {
+      if (!seen.has(v)) { seen.add(v); vertTargets.push(v); }
+    }));
+  }
+  if (!vertTargets.length) {
+    _showEditHint('Select something to bevel (press 1 for vertices)');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
   window.slateScene3dBeginAction?.();
-  const md = _editFreshMeshData();
-  if (!md) return;
   const verts = md.vertices.slice();
-  const faces = md.faces.map(f => [...f]);
-  const targets = [...editSelection];
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+  const targets = vertTargets;
   const newVertSel = new Set();
 
   for (const targetIdx of targets) {
@@ -2407,13 +2591,16 @@ function bevelSelectedVerts(amount = 0.18) {
   // Remove the original vertices from the verts array? That's tricky because
   // other faces may still reference unrelated indices — leave them as orphans
   // (the commit pass strips degenerate/unreachable verts on next save).
+  setEditSubMode('vertex');
   _editApplyMeshData({ vertices: verts, faces }, { verts: [...newVertSel] });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 /** Move all selected vertices to their shared centroid. */
 function mergeSelectedToCenter() {
-  if (editorMode !== 'edit' || !editSelection.size) {
+  if (editorMode !== 'edit') return;
+  if (!editSelection.size) {
+    _showEditHint('Select vertices to merge (press 1 for vertex mode)');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
@@ -2882,11 +3069,14 @@ function bindEvents() {
   if (bound || !container) return;
   bound = true;
   window.addEventListener('resize', resize);
-  window.addEventListener('keydown', _onFreeLookHoldKeyDown, true);
   window.addEventListener('keydown', onKeyDown, true);
   container.addEventListener('pointerdown', onPointerDown);
   container.addEventListener('pointerup',   onPointerUp);
   container.addEventListener('pointermove', _onContainerPointerTrack);
+  // Catch pointerup outside the canvas (e.g. when PointerLock has the cursor
+  // captured) so releasing RMB always exits fly mode even if the up event
+  // doesn't bubble to the container.
+  window.addEventListener('pointerup', _onWindowPointerUp, true);
   if (window.visualViewport && !vvResizeBound) {
     vvResizeBound = true;
     window.visualViewport.addEventListener('resize', onVisualViewportChange);
@@ -2897,17 +3087,30 @@ function unbindEvents() {
   if (!bound) return;
   bound = false;
   window.removeEventListener('resize', resize);
-  window.removeEventListener('keydown', _onFreeLookHoldKeyDown, true);
   window.removeEventListener('keydown', onKeyDown, true);
   if (container) {
     container.removeEventListener('pointerdown', onPointerDown);
     container.removeEventListener('pointerup',   onPointerUp);
     container.removeEventListener('pointermove', _onContainerPointerTrack);
   }
+  window.removeEventListener('pointerup', _onWindowPointerUp, true);
   if (window.visualViewport && vvResizeBound) {
     vvResizeBound = false;
     window.visualViewport.removeEventListener('resize', onVisualViewportChange);
     window.visualViewport.removeEventListener('scroll', onVisualViewportChange);
+  }
+}
+
+/* Window-level RMB-up handler: ensures fly mode exits even if PointerLock
+   captured the cursor and the canvas didn't see the pointerup. */
+function _onWindowPointerUp(e) {
+  if (e.button !== 2) return;
+  if (!_rmbArmed && !flyEnabled) return;
+  _rmbArmed = false;
+  _cancelRmbFlyTimer();
+  if (flyEnabled) {
+    _rmbFlyTriggered = false;
+    exitFlyCamera();
   }
 }
 
@@ -2953,7 +3156,7 @@ function bindToolbar() {
   document.getElementById('t3d-frame-btn')?.addEventListener('click', frameSelected);
   document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
   document.getElementById('t3d-fly-btn')?.addEventListener('click', _onFlyCamBtnDown);
-  _updateFlyArmedUI();
+  _updateFlyButtonUI();
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
   document.getElementById('t3d-snap-btn')?.addEventListener('click', toggleSnap);
   document.getElementById('t3d-space-btn')?.addEventListener('click', cycleTransformSpace);
@@ -3017,32 +3220,59 @@ function _openMirrorMenu(clientX, clientY) {
 /**
  * Customize the TransformControls gizmo to match Blender's single-direction look:
  *   • Hide the negative-direction arrows for X / Y / Z (translate)
- *   • Hide the long thin axis-line shafts (lineGeometry2 cylinders)
- *   • Hide the negative-direction pickers so they aren't draggable either
- * Visibility flags are flipped on the gizmo's own internal hierarchy, so the
- * customization survives mode switches (the helper just toggles whole groups).
+ *   • Hide the long thin axis-line shafts so each axis is one clean arrow
+ *   • Hide the negative-direction arrows AND their pickers
+ *   • Hide the planar handles (XY / YZ / XZ) — Blender doesn't show these
+ *   • Keep the center XYZ omni handle for free-translation
+ *
+ * Runs once after the helper is added to the scene. The visible flags are
+ * persisted on the internal gizmo children, so they survive mode switches.
  */
 function _customizeTransformGizmo() {
   if (!transform) return;
   const gz = transform._gizmo;
   if (!gz) return;
+
+  // The translate gizmo is the one with axis arrows. Customise both the
+  // visible gizmo group AND the picker group (so hidden directions also
+  // become non-grabbable).
   const groups = [gz.gizmo?.translate, gz.picker?.translate].filter(Boolean);
+
   for (const group of groups) {
     for (const child of group.children) {
-      if (!child || !child.name) continue;
-      const axis = child.name;
-      if (axis !== 'X' && axis !== 'Y' && axis !== 'Z') continue;
-      const p  = child.position;
-      const gp = child.geometry?.parameters || {};
-      // Axis line shaft: thin cylinder spanning ~0.5 units from origin.
-      const isLineShaft = gp.radiusTop === 0.0075 && gp.height === 0.5;
-      // Negative-direction handle / picker.
-      const isNeg = (
-        (axis === 'X' && p.x < -1e-4) ||
-        (axis === 'Y' && p.y < -1e-4) ||
-        (axis === 'Z' && p.z < -1e-4)
+      if (!child) continue;
+      const name = child.name || '';
+      const p    = child.position;
+      const gp   = child.geometry?.parameters || {};
+
+      // 1. Negative-direction arrows / pickers (named like "X_negate").
+      if (/_negate$/.test(name)) { child.visible = false; continue; }
+
+      // 2. Planar handles — Blender hides these. Name is a 2-axis combo.
+      if (name === 'XY' || name === 'YZ' || name === 'XZ' ||
+          name === 'YX' || name === 'ZY' || name === 'ZX') {
+        child.visible = false; continue;
+      }
+
+      // 3. The thin shaft cylinder that runs along each axis. In r170 it's
+      //    a CylinderGeometry with radiusTop/Bottom ≈ 0.0075 and height 0.5.
+      //    Some patch versions use 0.005 — accept anything < 0.015.
+      const isLineShaft = (
+        (name === 'X' || name === 'Y' || name === 'Z') &&
+        gp.radiusTop !== undefined && gp.radiusTop < 0.02 &&
+        gp.height    !== undefined && gp.height < 1.2 &&
+        Math.abs(p.x) < 1e-4 && Math.abs(p.y) < 1e-4 && Math.abs(p.z) < 1e-4
       );
-      if (isLineShaft || isNeg) child.visible = false;
+      if (isLineShaft) { child.visible = false; continue; }
+
+      // 4. Fallback: any child whose name is a single axis letter but whose
+      //    position component is negative (older three.js variants used a
+      //    naming convention without `_negate`).
+      if ((name === 'X' && p.x < -1e-4) ||
+          (name === 'Y' && p.y < -1e-4) ||
+          (name === 'Z' && p.z < -1e-4)) {
+        child.visible = false;
+      }
     }
   }
 }
@@ -3405,7 +3635,10 @@ export function initEditor3D(rootEl) {
   orbit = new OrbitControls(camera, renderer.domElement);
   // Right-mouse drags the viewport (pan); a right-click *without* drag opens
   // the add-object context menu — see onPointerDown / onPointerUp below.
-  orbit.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+  // RMB is reserved for fly-mode (press-and-hold) / context menu (quick tap).
+  // Disable OrbitControls' right-button pan so it doesn't fight our gesture.
+  // Middle-mouse-button still pans (default MOUSE.PAN).
+  orbit.mouseButtons.RIGHT = null;
   orbit.enableDamping = true;
   orbit.dampingFactor = 0.06;
   orbit.target.set(0, 0.4, 0);

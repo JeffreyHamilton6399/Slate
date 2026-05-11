@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background: rounded square with safe-area padding for maskable icons -->
+  <rect width="512" height="512" rx="96" fill="#0c0c0e"/>
+  <!-- Inner content sits within an ~80% safe zone (matches maskable spec) -->
+  <g transform="translate(64 64)">
+    <!-- Document outline -->
+    <rect x="0" y="0" width="384" height="384" rx="40" fill="none"
+          stroke="#7c6aff" stroke-width="18"/>
+    <!-- Pencil mark -->
+    <path d="M 256 96 L 288 128 L 176 240 L 136 252 L 144 212 Z"
+          fill="none" stroke="#7c6aff" stroke-width="18"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- Underline (suggests writing/note) -->
+    <line x1="80" y1="296" x2="208" y2="296"
+          stroke="#7c6aff" stroke-width="14" stroke-linecap="round"
+          opacity=".45"/>
+  </g>
+</svg>

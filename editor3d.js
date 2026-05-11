@@ -788,6 +788,11 @@ function syncSceneFromDoc() {
   const api = window.slateScene3d;
   const objects = api?.objects || [];
   const seen = new Set();
+  // Track whether the geometry under the edit target was just rebuilt — if
+  // so we have to rebuild edit helpers from the new posAttr, otherwise stale
+  // vertex dots / wireframe haunt the previous state (the "ghost geometry
+  // after undo" bug).
+  let editTargetGeomChanged = false;
 
   objects.forEach(obj => {
     seen.add(obj.id);
@@ -799,6 +804,7 @@ function syncSceneFromDoc() {
       mesh = buildMesh(obj);
       objMeshes.set(obj.id, mesh);
       scene.add(mesh);
+      if (obj.id === editTargetId) editTargetGeomChanged = true;
     } else {
       // If the type/params/meshData changed, rebuild geometry.
       const cachedType = mesh.userData.objType;
@@ -811,6 +817,7 @@ function syncSceneFromDoc() {
         mesh.geometry = newGeo;
         // Wireframe overlay (if enabled) needs to rebuild against new geometry.
         if (_wireframeOverlay) { _removeWireOverlayFor(mesh); _addWireOverlayFor(mesh); }
+        if (obj.id === editTargetId) editTargetGeomChanged = true;
       }
       mesh.userData.objType = obj.type;
       mesh.userData.paramsHash = newHash;
@@ -840,10 +847,20 @@ function syncSceneFromDoc() {
     transform?.detach();
   }
 
-  // Refresh edit helpers if we're in edit mode on a mesh that just changed
+  // Refresh edit helpers if we're in edit mode on a mesh that just changed.
+  // Without this, undo would leave the OLD vertex dots / wireframe behind,
+  // pointing at indices that no longer exist on the rebuilt geometry.
   if (editorMode === 'edit' && editTargetId) {
     const m = objMeshes.get(editTargetId);
-    if (!m) leaveEditMode();
+    if (!m) {
+      leaveEditMode();
+    } else if (editTargetGeomChanged) {
+      editSelection.clear();
+      editEdgeSelection.clear();
+      editFaceSelection.clear();
+      buildEditHelpers();
+      attachGizmoToEditSelection();
+    }
   }
 
   renderHierarchy();
@@ -2607,14 +2624,20 @@ function insetSelectedFaces(factor = 0.25) {
 
 /** Subdivide each selected face into N quads (one per corner, meeting in the
  *  centroid). Tris become 3 quads, quads → 4 quads, etc. When no face is
- *  selected, subdivides EVERY face — Blender-style "Subdivide all". */
+ *  selected, subdivides EVERY face — Blender-style "Subdivide all".
+ *
+ *  For partial subdivisions, neighbouring (un-subdivided) faces that share an
+ *  edge with a subdivided face would normally end up with a T-junction —
+ *  their edge AB stays whole while their neighbour's edge has a new midpoint.
+ *  We fix this by edge-splitting the neighbour: inserting the midpoint into
+ *  the neighbour's ring so the mesh stays manifold. */
 function subdivideSelectedFaces() {
   if (editorMode !== 'edit') return;
   const md = _editFreshMeshData();
   if (!md) { _showEditHint('Nothing to subdivide'); return; }
   let targets = _deriveFaceSelection(md);
-  if (!targets.length) {
-    // Subdivide everything — useful with no selection to add resolution.
+  const subdivideAll = !targets.length;
+  if (subdivideAll) {
     targets = md.faces.filter(f => Array.isArray(f) && f.length >= 3).map(f => [...f]);
   }
   if (!targets.length) {
@@ -2625,6 +2648,7 @@ function subdivideSelectedFaces() {
   window.slateScene3dBeginAction?.();
   const verts = md.vertices.slice();
   const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+
   // Cache shared edge midpoints by edgeKey so neighbour faces share verts.
   const edgeMid = new Map();
   function getEdgeMid(a, b) {
@@ -2637,11 +2661,17 @@ function subdivideSelectedFaces() {
     edgeMid.set(k, idx);
     return idx;
   }
+
+  // First pass: emit the subdivided quads for each target face and mark the
+  // original index for removal. We touch `getEdgeMid` here so subsequent
+  // passes see all the new midpoints.
   const removeAt = new Set();
   const newFaceSelections = [];
+  const targetFaceIdxs = new Set();
   for (const sel of targets) {
     const fi = _findFaceIndex(faces, sel);
     if (fi < 0) continue;
+    targetFaceIdxs.add(fi);
     const face = faces[fi];
     removeAt.add(fi);
     const centroid = _faceCentroidFromVerts(verts, face);
@@ -2655,6 +2685,30 @@ function subdivideSelectedFaces() {
       newFaceSelections.push(quad.slice());
     }
   }
+
+  // Second pass: walk every UN-subdivided face and edge-split any of its edges
+  // that gained a midpoint in pass 1. Without this the mesh ends up with
+  // T-junctions where one side has [A, M, B] and the other still has [A, B].
+  if (!subdivideAll) {
+    for (let fi = 0; fi < faces.length; fi++) {
+      if (removeAt.has(fi) || targetFaceIdxs.has(fi)) continue;
+      const f = faces[fi];
+      if (!Array.isArray(f) || f.length < 3) continue;
+      const out = [];
+      let split = false;
+      for (let i = 0; i < f.length; i++) {
+        out.push(f[i]);
+        const a = f[i], b = f[(i + 1) % f.length];
+        const k = _edgeKey(a, b);
+        if (edgeMid.has(k)) {
+          out.push(edgeMid.get(k));
+          split = true;
+        }
+      }
+      if (split) faces[fi] = out;
+    }
+  }
+
   const compact = faces.filter((_, i) => !removeAt.has(i));
   setEditSubMode('face');
   _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
@@ -2746,8 +2800,15 @@ function loopCutSelectedFaces() {
  *  works regardless of submode. */
 /** Pure: compute the bevelled mesh data for `amount` without touching state.
  *  Used by both the one-shot bevel and the interactive modal so dragging
- *  the bevel amount in real-time produces consistent results. */
-function _computeBevel(md, vertTargets, amount) {
+ *  the bevel amount in real-time produces consistent results.
+ *
+ *  Two non-obvious bits that prevent face-inversion bugs:
+ *   1. The amount is clamped per-vertex to ~45% of the SHORTEST adjacent edge
+ *      length so the pulled-back verts never cross the next vertex.
+ *   2. The cap polygon is oriented so its normal points along the AVERAGE of
+ *      the adjacent face normals at the target vertex — otherwise the cap
+ *      can flip inward on convex/concave corners and disappear from view. */
+function _computeBevel(md, vertTargets, amountRequested) {
   const verts = md.vertices.slice();
   const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const newVertSel = new Set();
@@ -2761,10 +2822,38 @@ function _computeBevel(md, vertTargets, amount) {
     });
     if (incidentFaces.length === 0) continue;
 
+    const center = _vecFromArr(verts, targetIdx);
+
+    // ── Safety clamp ──
+    // The pulled-back vert moves `amount` units along each adjacent edge from
+    // `center`. If amount exceeds half the edge length it crosses the next
+    // corner and produces a self-intersecting (inverted) face. 0.45 leaves a
+    // small margin and matches Blender's "clamp overlap" default.
+    let maxSafe = Infinity;
+    for (const { fi, p } of incidentFaces) {
+      const f = faces[fi];
+      const prevV = f[(p - 1 + f.length) % f.length];
+      const nextV = f[(p + 1) % f.length];
+      const dPrev = _vecFromArr(verts, prevV).distanceTo(center);
+      const dNext = _vecFromArr(verts, nextV).distanceTo(center);
+      if (dPrev > 1e-6) maxSafe = Math.min(maxSafe, dPrev * 0.45);
+      if (dNext > 1e-6) maxSafe = Math.min(maxSafe, dNext * 0.45);
+    }
+    const amount = Math.max(0.001, Math.min(amountRequested, maxSafe));
+
+    // ── Compute the OUTWARD direction at this vertex ──
+    // Average of adjacent face normals. We use this both to orient the cap
+    // and to sort the cap verts so winding is consistent.
+    const outward = new THREE.Vector3();
+    for (const { fi } of incidentFaces) {
+      const n = _faceNormalFromVerts(verts, faces[fi]);
+      if (n.lengthSq() > 1e-12) outward.add(n);
+    }
+    if (outward.lengthSq() > 1e-10) outward.normalize();
+
     // For each incident face: replace targetIdx with two NEW verts pulled
     // along the two adjacent edges by `amount`.
-    const replacements = []; // { fi, leftIdx, rightIdx, neighborLeft, neighborRight }
-    const center = _vecFromArr(verts, targetIdx);
+    const replacements = []; // { fi, p, leftIdx, rightIdx, prevV, nextV }
     for (const { fi, p } of incidentFaces) {
       const f = faces[fi];
       const prevV = f[(p - 1 + f.length) % f.length];
@@ -2779,9 +2868,8 @@ function _computeBevel(md, vertTargets, amount) {
       const rightIdx = (verts.length / 3) - 1;
       replacements.push({ fi, p, leftIdx, rightIdx, prevV, nextV });
     }
-    // Apply the replacements: swap targetIdx in each face with [leftIdx, rightIdx]
-    // (in winding order so the bevel face inserts cleanly).
-    // We iterate in reverse insertion order to keep indices valid.
+    // Apply the replacements: swap targetIdx with [leftIdx, rightIdx]
+    // in each face's vertex ring (in winding order).
     replacements.sort((a, b) => b.fi - a.fi);
     for (const r of replacements) {
       const f = faces[r.fi];
@@ -2792,42 +2880,50 @@ function _computeBevel(md, vertTargets, amount) {
       }
       faces[r.fi] = out;
     }
-    // Build a new polygon connecting the inner ring (rightIdx -> leftIdx of next
-    // face going around the vertex). We don't have a robust topological walk,
-    // so for the common case (closed manifold around the vert) we just collect
-    // all the new verts and let triangulation fill them.
-    const beforeLen = newVertSel.size;
     replacements.forEach(r => { newVertSel.add(r.leftIdx); newVertSel.add(r.rightIdx); });
+
+    // ── Build the cap polygon connecting all new verts ──
     if (replacements.length >= 3) {
-      // Order new verts by angle around the centroid normal so the cap polygon
-      // is convex.
       const ringIdxs = [];
       replacements.forEach(r => { ringIdxs.push(r.leftIdx, r.rightIdx); });
       const cap = new THREE.Vector3();
       ringIdxs.forEach(i => cap.add(_vecFromArr(verts, i)));
       cap.divideScalar(ringIdxs.length);
-      const normal = new THREE.Vector3();
+      // Sort the cap verts by angle around the OUTWARD normal so the resulting
+      // polygon is convex and its winding matches the rest of the mesh.
+      // If `outward` is degenerate (e.g. flat planar cluster), fall back to
+      // a per-cap Newell normal.
+      let n = outward.clone();
+      if (n.lengthSq() < 1e-10) {
+        for (let i = 0; i < ringIdxs.length; i++) {
+          const a = _vecFromArr(verts, ringIdxs[i]).sub(cap);
+          const b = _vecFromArr(verts, ringIdxs[(i + 1) % ringIdxs.length]).sub(cap);
+          n.add(a.cross(b));
+        }
+        if (n.lengthSq() > 1e-10) n.normalize(); else continue;
+      }
+      const ref = _vecFromArr(verts, ringIdxs[0]).sub(cap);
+      const refLen = ref.length();
+      if (refLen < 1e-6) continue;
+      ref.divideScalar(refLen);
+      // CCW around `n` so the cap's normal ends up pointing along +n (outward).
+      const right = new THREE.Vector3().crossVectors(n, ref).normalize();
+      const angleOf = i => {
+        const v = _vecFromArr(verts, i).sub(cap);
+        return Math.atan2(v.dot(right), v.dot(ref));
+      };
+      ringIdxs.sort((a, b) => angleOf(a) - angleOf(b));
+      // Double-check winding: if the resulting polygon normal points OPPOSITE
+      // to `n` we reverse the ring so the cap faces outward.
+      let polyN = new THREE.Vector3();
       for (let i = 0; i < ringIdxs.length; i++) {
-        const a = _vecFromArr(verts, ringIdxs[i]).sub(cap);
-        const b = _vecFromArr(verts, ringIdxs[(i + 1) % ringIdxs.length]).sub(cap);
-        normal.add(a.cross(b));
+        const a = _vecFromArr(verts, ringIdxs[i]);
+        const b = _vecFromArr(verts, ringIdxs[(i + 1) % ringIdxs.length]);
+        polyN.add(new THREE.Vector3().crossVectors(a.clone().sub(cap), b.clone().sub(cap)));
       }
-      if (normal.lengthSq() > 1e-10) {
-        normal.normalize();
-        const ref = _vecFromArr(verts, ringIdxs[0]).sub(cap).normalize();
-        const right = new THREE.Vector3().crossVectors(normal, ref).normalize();
-        const angleOf = i => {
-          const v = _vecFromArr(verts, i).sub(cap);
-          const x = v.dot(ref);
-          const y = v.dot(right);
-          return Math.atan2(y, x);
-        };
-        ringIdxs.sort((a, b) => angleOf(a) - angleOf(b));
-        faces.push(ringIdxs);
-      }
+      if (polyN.dot(n) < 0) ringIdxs.reverse();
+      faces.push(ringIdxs);
     }
-    // Suppress unused-var warning.
-    void beforeLen;
   }
 
   // Original verts are left as orphans — the next commit prunes them.
@@ -2896,32 +2992,45 @@ function _enterModalBevel(snapshot, vertTargets) {
     snapshot,
     vertTargets,
     startX: _lastMouseClientX ?? 0,
-    amount: 0.001,
+    // Track the wheel-driven offset separately from the drag offset so they
+    // compose: dragging adds to the wheel-set base and vice versa.
+    wheelOffset: 0,
+    amount: 0.05,
   };
   window.slateScene3dBeginAction?.();
   if (orbit) orbit.enabled = false;
   if (transform) { transform.enabled = false; transform.detach(); }
   if (transformHelper) transformHelper.visible = false;
   container.addEventListener('pointermove', _onBevelPointerMove, true);
+  container.addEventListener('wheel',       _onBevelWheel,       { capture: true, passive: false });
   _showBevelHint();
   try { window.slateSfx?.play('grab-start'); } catch (_) {}
-  _applyBevelFromMouse(_lastMouseClientX ?? bevelState.startX);
+  _applyBevel();
 }
 function _onBevelPointerMove(e) {
   if (!bevelState) return;
   _lastMouseClientX = e.clientX;
   _lastMouseClientY = e.clientY;
-  _applyBevelFromMouse(e.clientX);
+  _applyBevel();
 }
-function _applyBevelFromMouse(clientX) {
+function _onBevelWheel(e) {
   if (!bevelState) return;
+  // Block OrbitControls' wheel zoom while bevelling.
+  e.preventDefault(); e.stopPropagation();
+  // Normalize delta direction (`deltaY < 0` = scroll up = grow).
+  const step = e.deltaY < 0 ? 0.04 : -0.04;
+  bevelState.wheelOffset += step;
+  _applyBevel();
+}
+function _applyBevel() {
+  if (!bevelState) return;
+  const clientX = _lastMouseClientX ?? bevelState.startX;
   const dx = clientX - bevelState.startX;
-  // 200 pixels of drag → about 0.5 units of bevel; clamped to a reasonable range.
-  bevelState.amount = Math.max(0.001, Math.min(2, dx * 0.0025));
+  // Combined amount: drag offset + wheel-driven offset, clamped sanely.
+  const raw = dx * 0.0025 + bevelState.wheelOffset;
+  bevelState.amount = Math.max(0.001, Math.min(2, raw));
   const result = _computeBevel(bevelState.snapshot, bevelState.vertTargets, bevelState.amount);
   if (!result) return;
-  // Stash the latest result so _bevelConfirm can keep the freshly-created
-  // ring selected without recomputing.
   bevelState.lastResult = result;
   _editApplyMeshData(
     { vertices: result.vertices, faces: result.faces },
@@ -2932,8 +3041,9 @@ function _applyBevelFromMouse(clientX) {
 function _bevelConfirm() {
   if (!bevelState) return;
   container.removeEventListener('pointermove', _onBevelPointerMove, true);
-  // _applyBevelFromMouse already applied the latest result through
-  // _editApplyMeshData, so the scene is up-to-date. Just clean up modal state.
+  container.removeEventListener('wheel',       _onBevelWheel,       { capture: true });
+  // _applyBevel already pushed the latest result through _editApplyMeshData,
+  // so the scene is up-to-date. Just clean up modal state.
   bevelState = null;
   if (orbit) orbit.enabled = true;
   if (transform) transform.enabled = true;
@@ -2945,6 +3055,7 @@ function _bevelCancel() {
   if (!bevelState) return;
   const snap = bevelState.snapshot;
   container.removeEventListener('pointermove', _onBevelPointerMove, true);
+  container.removeEventListener('wheel',       _onBevelWheel,       { capture: true });
   bevelState = null;
   // Restore original mesh data — selection follows the snapshot exactly.
   _editApplyMeshData(snap, {});
@@ -2968,7 +3079,7 @@ function _showBevelHint() {
 function _updateBevelHint() {
   if (!_bevelHintEl || !bevelState) return;
   _bevelHintEl.textContent =
-    `Bevel · ${bevelState.amount.toFixed(2)} · drag to adjust · click confirm · RMB / Esc cancel`;
+    `Bevel · ${bevelState.amount.toFixed(3)} · drag / scroll to adjust · click confirm · RMB / Esc cancel`;
 }
 function _hideBevelHint() {
   if (_bevelHintEl) _bevelHintEl.style.display = 'none';

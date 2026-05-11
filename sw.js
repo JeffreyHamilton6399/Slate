@@ -3,7 +3,7 @@
    collaborative bits run live over WebRTC, so we only cache the static
    shell and let everything else fall through to the network. */
 
-const CACHE_VERSION = 'slate-shell-v4';
+const CACHE_VERSION = 'slate-shell-v5';
 const SHELL = [
   './',
   './index.html',
@@ -15,6 +15,7 @@ const SHELL = [
   './notes.js',
   './editor3d.js',
   './fbx-export.js',
+  './model-io.js',
 ];
 
 self.addEventListener('install', event => {

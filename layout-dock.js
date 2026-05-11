@@ -29,7 +29,8 @@
     if (mobile) {
       v = clamp(px, 0, Math.min(420, Math.floor(window.innerWidth * 0.5)));
     } else {
-      v = clamp(px, 120, Math.min(520, Math.floor(window.innerHeight * 0.62)));
+      /* Right-side dock: limit by viewport width (was height — wrong once dock is vertical). */
+      v = clamp(px, 120, Math.min(520, Math.floor(window.innerWidth * 0.5)));
     }
     document.documentElement.style.setProperty('--dock-w', v + 'px');
     try { localStorage.setItem(LS_DOCK, String(v)); } catch (_) {}
@@ -67,7 +68,7 @@
   function initDockResize() {
     const handle = document.getElementById('dock-resize-handle');
     if (!handle) return;
-    let startX, startY, startW;
+    let startX, startW;
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
       const root = getComputedStyle(document.documentElement);
@@ -76,7 +77,7 @@
         startX = e.clientX;
         startW = cur;
       } else {
-        startY = e.clientY;
+        startX = e.clientX;
         startW = cur;
       }
       handle.setPointerCapture(e.pointerId);
@@ -88,8 +89,9 @@
         const dx = startX - e.clientX;
         applyDockW(startW + dx);
       } else {
-        const dy = startY - e.clientY;
-        applyDockW(startW + dy);
+        /* Desktop: dock on the right — drag handle left/right to change width. */
+        const dx = startX - e.clientX;
+        applyDockW(startW + dx);
       }
     });
     handle.addEventListener('pointerup', e => {

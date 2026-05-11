@@ -502,8 +502,50 @@ input, textarea { font-family: var(--sans); }
 .split-handle-h:hover::after, .split-handle-h.dragging::after {
   background: var(--accent); opacity: 1;
 }
-#dock-resize-handle.split-handle-h {
+#dock-resize-handle.split-handle-v {
   order: 2;
+}
+/* Desktop / tablet: editor + vertical splitter + right dock (not under viewport). */
+@media (min-width: 769px) {
+  #workspace-split {
+    flex-direction: row;
+    align-items: stretch;
+    min-height: 0;
+  }
+  #editor-pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+  #dock-resize-handle.split-handle-v {
+    order: 2;
+    width: 5px;
+    height: auto !important;
+    min-height: 0;
+    flex-shrink: 0;
+    align-self: stretch;
+    cursor: col-resize !important;
+  }
+  #dock-resize-handle.split-handle-v::after {
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    right: auto;
+    width: 1px;
+    height: auto;
+  }
+  #right-dock {
+    order: 3;
+    width: var(--dock-w, 220px) !important;
+    min-width: 120px;
+    max-width: min(520px, 50vw);
+    height: auto !important;
+    min-height: 0 !important;
+    flex: 0 0 auto;
+    align-self: stretch;
+    border-top: none !important;
+    border-left: 1px solid var(--border);
+  }
 }
 #right-dock {
   order: 3;
@@ -1111,6 +1153,8 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 }
 body.mode-3d #left-dock {
   display: flex;
+  align-self: stretch;
+  min-height: 0;
 }
 .left-dock-tabs {
   display: flex;
@@ -2179,7 +2223,7 @@ body.mode-3d #canvas-area-3d {
 
   /* Bottom dock on desktop becomes a side drawer again on narrow screens. */
   #workspace-split { flex-direction: row; }
-  #dock-resize-handle.split-handle-h { display: none !important; }
+  #dock-resize-handle.split-handle-v { display: none !important; }
 
   #sidebar {
     position: fixed; top: 0; left: 0; bottom: 0;
@@ -3036,7 +3080,7 @@ body.mode-3d #canvas-area-3d {
           <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
         </div>
       </div>
-      <div id="dock-resize-handle" class="split-handle split-handle-h" title="Drag to resize panel height" role="separator" aria-orientation="horizontal"></div>
+      <div id="dock-resize-handle" class="split-handle split-handle-v" title="Drag to resize side panel" role="separator" aria-orientation="vertical"></div>
       <aside id="right-dock" aria-label="Tool panels">
         <div class="dock-tabs" id="dock-tabs"></div>
         <div id="dock-body"></div>
@@ -8211,9 +8255,18 @@ window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
   if (workspaceMode === '3d') {
     mount.appendChild(panel);
     panel.style.display = 'flex';
+    panel.style.flex = '1';
+    panel.style.flexDirection = 'column';
+    panel.style.minHeight = '0';
+    panel.style.overflow = 'hidden';
+    try { window.slateRefreshHierarchy?.(); } catch (_) {}
   } else {
     body.appendChild(panel);
     panel.style.display = 'none';
+    panel.style.flex = '';
+    panel.style.flexDirection = '';
+    panel.style.minHeight = '';
+    panel.style.overflow = '';
   }
 };
 

@@ -4712,6 +4712,7 @@ function renderHierarchy() {
     bindOutlinerDrag(row);
   });
 }
+window.slateRefreshHierarchy = renderHierarchy;
 
 /* Remove an object and all of its descendants. */
 function _removeWithChildren(id) {

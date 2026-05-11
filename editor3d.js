@@ -470,9 +470,23 @@ function _maybeBroadcastCamera(nowMs) {
   if (!camera || !orbit) return;
   if (!window.slatePeers || typeof window.slatePeers.broadcast !== 'function') return;
   if (nowMs - _lastCamBroadcast < 1000 / CAM_BROADCAST_HZ) return;
+
+  /* In fly mode orbit.target is stale, so derive a point along the camera's
+     forward axis instead. Either way, peers receive a target the marker can
+     look at to show direction. */
+  let tx, ty, tz;
+  if (flyEnabled) {
+    const f = new THREE.Vector3();
+    camera.getWorldDirection(f).normalize();
+    tx = camera.position.x + f.x * 4;
+    ty = camera.position.y + f.y * 4;
+    tz = camera.position.z + f.z * 4;
+  } else {
+    tx = orbit.target.x; ty = orbit.target.y; tz = orbit.target.z;
+  }
   const cur = [
     camera.position.x, camera.position.y, camera.position.z,
-    orbit.target.x,    orbit.target.y,    orbit.target.z,
+    tx, ty, tz,
   ];
   if (_lastCamSent) {
     let moved = 0;
@@ -529,23 +543,65 @@ function _peerColorFromId(id) {
 
 function _buildCamMarker(color) {
   const g = new THREE.Group();
-  // Tiny pyramid pointing along -Z (the camera forward).
-  const geo = new THREE.ConeGeometry(0.18, 0.36, 4);
-  geo.rotateX(Math.PI / 2);
-  geo.translate(0, 0, -0.18);
-  const mat = new THREE.MeshStandardMaterial({
-    color, emissive: color, emissiveIntensity: 0.55,
-    roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide,
+  /* Camera body — a small box positioned at the marker origin. The whole
+     group is reoriented every frame via lookAt(targetVec), so we model the
+     marker in local space with -Z = forward, matching THREE.PerspectiveCamera
+     and Blender's convention. */
+  const bodyGeo = new THREE.BoxGeometry(0.18, 0.14, 0.22);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.45,
+    roughness: 0.5, metalness: 0.2,
   });
-  const cone = new THREE.Mesh(geo, mat);
-  cone.castShadow = false; cone.receiveShadow = false;
-  g.add(cone);
-  // Wire frustum so it reads as a camera not a generic pyramid.
-  const frustum = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 })
-  );
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.set(0, 0, 0.08);
+  g.add(body);
+
+  /* View frustum — a proper pyramid with a rectangular base, apex at the
+     camera origin and base out in -Z. Clearly shows the look direction. */
+  const apex = new THREE.Vector3(0, 0, 0);
+  const fNear = 0.0;
+  const fFar  = 0.85;
+  const halfW = 0.45, halfH = 0.30;
+  const farTL = new THREE.Vector3(-halfW,  halfH, -fFar);
+  const farTR = new THREE.Vector3( halfW,  halfH, -fFar);
+  const farBL = new THREE.Vector3(-halfW, -halfH, -fFar);
+  const farBR = new THREE.Vector3( halfW, -halfH, -fFar);
+  const segs = [
+    apex, farTL,  apex, farTR,  apex, farBL,  apex, farBR,
+    farTL, farTR, farTR, farBR, farBR, farBL, farBL, farTL,
+  ];
+  const fGeo = new THREE.BufferGeometry().setFromPoints(segs);
+  const fMat = new THREE.LineBasicMaterial({
+    color, transparent: true, opacity: 0.85, depthTest: false,
+  });
+  const frustum = new THREE.LineSegments(fGeo, fMat);
+  frustum.renderOrder = 2;
   g.add(frustum);
+
+  /* A thin solid "look" ray cuts through the center of the frustum so even
+     at distance you can tell which way they're facing. */
+  const rayGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -fFar - 0.3),
+  ]);
+  const rayMat = new THREE.LineBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false,
+  });
+  const ray = new THREE.Line(rayGeo, rayMat);
+  ray.renderOrder = 3;
+  g.add(ray);
+
+  /* Up-vector indicator — a tiny tick above the body so users can also see
+     roll, just like Blender shows the camera's up axis. */
+  const upGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, halfH * 0.55, -fFar * 0.45),
+    new THREE.Vector3(0, halfH * 1.05, -fFar * 0.45),
+  ]);
+  const upMat = new THREE.LineBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.7, depthTest: false,
+  });
+  g.add(new THREE.Line(upGeo, upMat));
+
   return g;
 }
 

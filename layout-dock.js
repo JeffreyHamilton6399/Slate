@@ -169,9 +169,11 @@
       if (dock.classList.contains('dock-user-collapsed')) {
         dock.classList.remove('dock-user-collapsed');
         applyDockW(readNum(LS_DOCK, 220));
+        try { window.slateSfx?.play('panel-open'); } catch (_) {}
       } else {
         dock.classList.add('dock-user-collapsed');
         document.documentElement.style.setProperty('--dock-w', '0px');
+        try { window.slateSfx?.play('panel-close'); } catch (_) {}
       }
     },
     /** Pop a docked panel out into a floating window (Photoshop-style). */
@@ -217,6 +219,7 @@
       _bindFloatDrag(win);
       _bindFloatResize(win);
       win.querySelector('.panel-float-close').addEventListener('click', () => window.slateDock.dockPanel(id));
+      try { window.slateSfx?.play('panel-open'); } catch (_) {}
 
       // If detached panel was active, switch the dock to a different one.
       const stillVisible = [...tabs.children].find(t => t.style.display !== 'none' && t.dataset.panel !== id);
@@ -237,6 +240,7 @@
       const tab = tabs?.querySelector(`.dock-tab[data-panel="${id}"]`);
       if (tab) tab.style.display = '';
       window.slateDock.setActive(id);
+      try { window.slateSfx?.play('panel-close'); } catch (_) {}
       _saveFloats();
     },
   };

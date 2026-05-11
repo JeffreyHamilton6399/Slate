@@ -512,6 +512,120 @@ input, textarea { font-family: var(--sans); }
   pointer-events: none;
   z-index: 60;
 }
+#save-flash-indicator {
+  position: fixed; right: 18px; bottom: 18px; z-index: 9999;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(34, 211, 165, 0.18);
+  border: 1px solid rgba(34, 211, 165, 0.45);
+  color: var(--accent-green, #22d3a5);
+  font-size: 0.72rem; font-family: var(--mono); letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0; transform: translateY(8px) scale(0.92);
+  transition: opacity .22s ease, transform .22s ease;
+  box-shadow: 0 6px 22px rgba(34, 211, 165, 0.18);
+}
+#save-flash-indicator.show {
+  opacity: 1; transform: translateY(0) scale(1);
+}
+
+/* ── Board loading overlay ─────────────────────────────────────────────── */
+#board-loading-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(12, 12, 18, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .35s ease;
+}
+#board-loading-overlay.show {
+  opacity: 1; pointer-events: auto;
+}
+.board-loading-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 28px 36px;
+  background: rgba(20, 18, 30, 0.7);
+  border: 1px solid rgba(124, 106, 255, 0.35);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45),
+              0 0 60px rgba(124, 106, 255, 0.18);
+  min-width: 220px;
+  transform: scale(0.92);
+  opacity: 0;
+  transition: transform .35s cubic-bezier(.2, .8, .3, 1.2), opacity .35s ease;
+}
+#board-loading-overlay.show .board-loading-card { transform: scale(1); opacity: 1; }
+.board-loading-logo {
+  display: grid; grid-template-columns: repeat(2, 12px);
+  grid-template-rows: repeat(2, 12px);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.board-loading-block {
+  display: inline-block; width: 12px; height: 12px;
+  background: var(--accent, #7c6aff);
+  border-radius: 3px;
+  opacity: 0.25;
+  animation: slate-loading-pulse 1.05s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(124, 106, 255, 0.55);
+}
+.board-loading-block.b1 { animation-delay: 0s; }
+.board-loading-block.b2 { animation-delay: 0.12s; }
+.board-loading-block.b3 { animation-delay: 0.36s; }
+.board-loading-block.b4 { animation-delay: 0.24s; }
+@keyframes slate-loading-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.05); }
+}
+.board-loading-name {
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.board-loading-sub {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+/* ── Global polish: gentle transitions on common interactive elements ── */
+@media (prefers-reduced-motion: no-preference) {
+  .tool-btn, .t3d-btn, .btn-icon, .btn, .dock-tab {
+    transition: background .15s ease, color .15s ease, border-color .15s ease,
+                transform .12s ease, opacity .15s ease;
+  }
+  .tool-btn:active, .t3d-btn:active, .btn-icon:active, .btn:active,
+  .dock-tab:active { transform: scale(0.94); }
+  .tool-btn.active, .t3d-btn.active {
+    animation: slate-tool-pop .22s ease;
+  }
+  @keyframes slate-tool-pop {
+    0%   { transform: scale(0.85); }
+    60%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+  /* Mode-switch fade for the canvas areas */
+  #canvas-area, #canvas-area-3d {
+    transition: opacity .25s ease;
+  }
+  body.mode-switching #canvas-area,
+  body.mode-switching #canvas-area-3d { opacity: 0; }
+
+  /* Slide-in for the right dock on mobile and floating panels everywhere. */
+  .panel-float { animation: slate-panel-pop .22s ease; }
+  @keyframes slate-panel-pop {
+    from { opacity: 0; transform: scale(0.92) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .modal-card { animation: slate-modal-in .22s cubic-bezier(.2, .8, .3, 1.2); }
+  @keyframes slate-modal-in {
+    from { opacity: 0; transform: translateY(8px) scale(.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+}
 .fly-cam-hint {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
   z-index: 70; pointer-events: none;
@@ -2247,6 +2361,20 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   </div>
 </div>
 
+<!-- Board loading overlay (shown briefly when entering a board) -->
+<div id="board-loading-overlay" aria-hidden="true">
+  <div class="board-loading-card">
+    <div class="board-loading-logo">
+      <span class="board-loading-block b1"></span>
+      <span class="board-loading-block b2"></span>
+      <span class="board-loading-block b3"></span>
+      <span class="board-loading-block b4"></span>
+    </div>
+    <div class="board-loading-name" id="board-loading-name">Loading board</div>
+    <div class="board-loading-sub" id="board-loading-sub">Syncing with peers…</div>
+  </div>
+</div>
+
 <!-- Unsaved-changes prompt (shown when leaving a board with local edits) -->
 <div id="unsaved-prompt-overlay" class="overlay-backdrop" style="display:none">
   <div class="modal-card" style="width:340px">
@@ -2322,6 +2450,28 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
             <input id="name-change-input" type="text" class="input-styled" placeholder="Your name" maxlength="20" autocomplete="off" spellcheck="false">
             <button id="name-save-btn" class="btn btn-primary" style="white-space:nowrap">Save</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Sounds & feedback -->
+      <div class="settings-section">
+        <div class="settings-section-title">Sounds & feedback</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Interface sounds</div>
+            <div class="setting-row-sub">Subtle airy clicks for buttons, panels, saves</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="sfx-enabled-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Volume</div>
+            <div class="setting-row-sub">How loud the interface sounds play</div>
+          </div>
+          <input id="sfx-volume-slider" type="range" min="0" max="1" step="0.05" value="0.45" style="width:120px">
         </div>
       </div>
 
@@ -3745,11 +3895,20 @@ function updateHostControlsBar() {
 function joinBoard(board) {
   if (state.currentBoard === board) return;
   if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    // If the board was already saved once, silently re-save and move on.
+    if (currentBoardHasManualSave()) {
+      const folder = currentBoardSaveFolder();
+      if (folder) {
+        saveBoardSnapshot(folder, { silent: true });
+        leaveBoard();
+        joinBoard(board);
+        return;
+      }
+    }
     const target = board;
     showUnsavedBoardPrompt(state.currentBoard, choice => {
       if (choice === 'cancel') return;
       if (choice === 'save') triggerSaveBoardDialog();
-      // Whether they saved or discarded, proceed with the join.
       if (choice !== 'cancel') {
         leaveBoard();
         joinBoard(target);
@@ -3796,6 +3955,8 @@ function joinBoard(board) {
   applyWorkspaceMode(board);
   lobbyAnnounce(board);
   scheduleRenderBoards();
+  try { window.slateSfx?.play('join'); } catch (_) {}
+  showBoardLoadingOverlay(board);
   renderMembers();
   updateBoardControls();
   syncBoardPeers();
@@ -3820,6 +3981,18 @@ function leaveBoardWithSavePrompt(andThen) {
     if (typeof andThen === 'function') andThen();
     return;
   }
+  // If the board has already been manually saved at least once, silently
+  // save to the same folder instead of prompting again — matches the user's
+  // expectation of "prompt only the first time".
+  if (currentBoardHasManualSave()) {
+    const folder = currentBoardSaveFolder();
+    if (folder) {
+      saveBoardSnapshot(folder, { silent: true });
+      leaveBoard();
+      if (typeof andThen === 'function') andThen();
+      return;
+    }
+  }
   showUnsavedBoardPrompt(board, choice => {
     if (choice === 'cancel') return;
     if (choice === 'save')   triggerSaveBoardDialog();
@@ -3833,6 +4006,7 @@ function leaveBoardWithSavePrompt(andThen) {
 function leaveBoard() {
   if (!state.currentBoard) return;
   const leftBoard = state.currentBoard;
+  try { window.slateSfx?.play('leave'); } catch (_) {}
   broadcastAll({ type: 'leave', board: leftBoard, name: state.myName });
 
   Object.keys(state.connections).forEach(pid => {
@@ -4631,6 +4805,24 @@ function flushDiff() {
 function scheduleDiff() {
   if (state.currentBoard) state.dirtyBoards.add(state.currentBoard);
   if (!diffTimer) diffTimer = setTimeout(flushDiff, DIFF_THROTTLE_MS);
+  scheduleSilentAutoSave();
+}
+
+/* Once a board has been manually saved at least once we never prompt again
+   — every change just trickles into the same save folder, debounced. */
+let _silentSaveTimer = null;
+const SILENT_SAVE_DEBOUNCE_MS = 1500;
+function scheduleSilentAutoSave() {
+  if (!state.currentBoard) return;
+  if (!currentBoardHasManualSave()) return;
+  if (_silentSaveTimer) clearTimeout(_silentSaveTimer);
+  _silentSaveTimer = setTimeout(() => {
+    _silentSaveTimer = null;
+    if (!state.currentBoard) return;
+    if (!boardHasUnsavedChanges(state.currentBoard)) return;
+    const folder = currentBoardSaveFolder();
+    if (folder) saveBoardSnapshot(folder, { silent: true });
+  }, SILENT_SAVE_DEBOUNCE_MS);
 }
 
 function boardHasUnsavedChanges(board) {
@@ -5991,7 +6183,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-    if (e.key === 's') { e.preventDefault(); if (state.currentBoard) openSaveDialog(); }
+    if (e.key === 's') { e.preventDefault(); if (state.currentBoard) quickSaveCurrent({ silent: false }); }
     return;
   }
   switch (e.key) {
@@ -6307,6 +6499,13 @@ function applyWorkspaceMode(board) {
   const tb = document.getElementById('draw-toolbar');
   const tb3 = document.getElementById('toolbar-3d');
   if (!area2 || !area3) return;
+  const prevMode = document.body.classList.contains('mode-3d') ? '3d' : '2d';
+  if (prevMode !== mode && board) {
+    try { window.slateSfx?.play('mode-switch'); } catch (_) {}
+    // Brief fade-out / fade-in so the canvas swap doesn't snap.
+    document.body.classList.add('mode-switching');
+    setTimeout(() => document.body.classList.remove('mode-switching'), 220);
+  }
   document.body.classList.toggle('mode-3d', mode === '3d');
   document.body.classList.toggle('mode-2d', mode !== '3d');
   const exportBtn = document.getElementById('export-btn');
@@ -6544,9 +6743,30 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     const nameInput = document.getElementById('name-change-input');
     if (nameInput) nameInput.value = state.myName || '';
     renderSettingsAvatar();
+    // Sync SFX controls to the current state.
+    const sfxToggle = document.getElementById('sfx-enabled-toggle');
+    const sfxVol    = document.getElementById('sfx-volume-slider');
+    if (sfxToggle && window.slateSfx) sfxToggle.checked = window.slateSfx.isEnabled();
+    if (sfxVol    && window.slateSfx) sfxVol.value      = String(window.slateSfx.getVolume());
     overlay.classList.add('show');
+    try { window.slateSfx?.play('panel-open'); } catch (_) {}
   }
-  function closeSettings() { overlay.classList.remove('show'); }
+  function closeSettings() {
+    overlay.classList.remove('show');
+    try { window.slateSfx?.play('panel-close'); } catch (_) {}
+  }
+
+  // SFX controls — bind once on script load (independent of open/close).
+  document.getElementById('sfx-enabled-toggle')?.addEventListener('change', e => {
+    window.slateSfx?.setEnabled(!!e.target.checked);
+    if (e.target.checked) try { window.slateSfx?.play('toggle'); } catch (_) {}
+  });
+  document.getElementById('sfx-volume-slider')?.addEventListener('input', e => {
+    window.slateSfx?.setVolume(parseFloat(e.target.value));
+  });
+  document.getElementById('sfx-volume-slider')?.addEventListener('change', () => {
+    try { window.slateSfx?.play('click'); } catch (_) {}
+  });
 
   openBtn?.addEventListener('click', openSettings);
   closeBtn?.addEventListener('click', closeSettings);
@@ -7371,10 +7591,54 @@ function currentBoardHasManualSave() {
   );
 }
 
+/* Find the folder containing the most-recent save for the current board, or
+   the remembered last-used folder. Used to make quick-save and silent
+   auto-save target the right slot without bothering the user. */
+const LS_LAST_FOLDER = 'slate_last_save_folders';
+function _loadLastFolders() {
+  try { return JSON.parse(localStorage.getItem(LS_LAST_FOLDER) || '{}'); } catch { return {}; }
+}
+function _persistLastFolders(map) {
+  try { localStorage.setItem(LS_LAST_FOLDER, JSON.stringify(map)); } catch {}
+}
+let _boardLastFolder = _loadLastFolders();
+
+function currentBoardSaveFolder() {
+  const board = state.currentBoard;
+  if (!board) return null;
+  if (_boardLastFolder[board] && savedBoards[_boardLastFolder[board]]) return _boardLastFolder[board];
+  // Otherwise scan saved entries and pick the folder of the newest save.
+  let bestFolder = null, bestTs = 0;
+  for (const [folder, items] of Object.entries(savedBoards)) {
+    if (!Array.isArray(items)) continue;
+    for (const s of items) {
+      if (s.name === board && s.ts > bestTs) { bestTs = s.ts; bestFolder = folder; }
+    }
+  }
+  if (bestFolder) {
+    _boardLastFolder[board] = bestFolder;
+    _persistLastFolders(_boardLastFolder);
+  }
+  return bestFolder;
+}
+
+/* Quick save: silent if we already know the target folder, dialog otherwise.
+   Wired to Ctrl+S so users never see a prompt after the first save. */
+function quickSaveCurrent({ silent = false } = {}) {
+  if (!state.currentBoard) return false;
+  const folder = currentBoardSaveFolder();
+  if (folder) {
+    saveBoardSnapshot(folder, { silent });
+    return true;
+  }
+  openSaveDialog();
+  return false;
+}
+
 // { folderName: [ { id, name, ts, snapshot: { shapes, strokes } } ] }
 let savedBoards = loadSavedBoards();
 
-function saveBoardSnapshot(folderName) {
+function saveBoardSnapshot(folderName, opts = {}) {
   const board = state.currentBoard;
   if (!board) return;
   const alreadySaved = currentBoardHasManualSave();
@@ -7386,23 +7650,80 @@ function saveBoardSnapshot(folderName) {
     snapshot: docSerialize(),
   };
   savedBoards[folderName].unshift(snap);
-  // Cap folder at 20 saves
   if (savedBoards[folderName].length > 20) savedBoards[folderName].length = 20;
   persistSavedBoards(savedBoards);
   renderSavedBoards();
   _manuallySavedBoards.add(board);
   state.dirtyBoards.delete(board);
-  // Show confirmation toast — differentiate first save from re-save
+  _boardLastFolder[board] = folderName;
+  _persistLastFolders(_boardLastFolder);
+  if (opts.silent) {
+    // Tiny audible cue + brief floating indicator instead of a toast so it
+    // doesn't pile up during rapid edits.
+    try { window.slateSfx?.play('save-silent'); } catch (_) {}
+    flashSaveIndicator();
+    return;
+  }
+  try { window.slateSfx?.play('save'); } catch (_) {}
+  flashSaveIndicator();
   if (alreadySaved) {
-    toast(`Board saved ✓`, 'green');
+    toast(`Board saved`, 'green');
   } else {
     toast(`Saved to "${folderName}"`, 'green');
   }
 }
 
+/* Briefly show a loading overlay when entering a board. Auto-hides on the
+   next animation frame after a short minimum so the fade feels intentional
+   rather than a flash. */
+let _loadingTimer = null;
+function showBoardLoadingOverlay(board) {
+  const overlay = document.getElementById('board-loading-overlay');
+  if (!overlay) return;
+  const nameEl = document.getElementById('board-loading-name');
+  const subEl  = document.getElementById('board-loading-sub');
+  if (nameEl) nameEl.textContent = board || 'Loading board';
+  if (subEl)  subEl.textContent  = 'Syncing with peers…';
+  overlay.classList.add('show');
+  clearTimeout(_loadingTimer);
+  _loadingTimer = setTimeout(() => {
+    overlay.classList.remove('show');
+  }, 700);
+}
+function hideBoardLoadingOverlay() {
+  document.getElementById('board-loading-overlay')?.classList.remove('show');
+}
+
+/* Show a small floating "Saved" pill in the corner; auto-fades. */
+let _saveFlashEl = null;
+function flashSaveIndicator() {
+  if (!_saveFlashEl) {
+    _saveFlashEl = document.createElement('div');
+    _saveFlashEl.id = 'save-flash-indicator';
+    document.body.appendChild(_saveFlashEl);
+  }
+  _saveFlashEl.textContent = 'Saved';
+  _saveFlashEl.classList.remove('show');
+  // Force a reflow so the transition triggers reliably on rapid saves.
+  // eslint-disable-next-line no-unused-expressions
+  void _saveFlashEl.offsetWidth;
+  _saveFlashEl.classList.add('show');
+  clearTimeout(_saveFlashEl._t);
+  _saveFlashEl._t = setTimeout(() => _saveFlashEl?.classList.remove('show'), 900);
+}
+
 function loadSavedSnapshot(snap) {
   if (!state.peer) { toast('Connect first', 'red'); return; }
   if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    if (currentBoardHasManualSave()) {
+      const folder = currentBoardSaveFolder();
+      if (folder) {
+        saveBoardSnapshot(folder, { silent: true });
+        leaveBoard();
+        loadSavedSnapshot(snap);
+        return;
+      }
+    }
     const snapRef = snap;
     showUnsavedBoardPrompt(state.currentBoard, choice => {
       if (choice === 'cancel') return;
@@ -7520,6 +7841,7 @@ function showUnsavedBoardPrompt(board, cb) {
   if (body) body.textContent = `Save changes to "${board}" before leaving?`;
   const overlay = document.getElementById('unsaved-prompt-overlay');
   if (overlay) overlay.style.display = 'flex';
+  try { window.slateSfx?.play('notify'); } catch (_) {}
 }
 function _resolveUnsavedPrompt(choice) {
   const overlay = document.getElementById('unsaved-prompt-overlay');
@@ -7537,6 +7859,15 @@ document.getElementById('unsaved-prompt-overlay')?.addEventListener('click', e =
 /* Browser-level guard for refresh / tab close on dirty boards. */
 window.addEventListener('beforeunload', e => {
   if (state.currentBoard && boardHasUnsavedChanges(state.currentBoard)) {
+    // Boards that have been manually saved at least once auto-save on tab
+    // close instead of bothering the user with the native "leave?" prompt.
+    if (currentBoardHasManualSave()) {
+      const folder = currentBoardSaveFolder();
+      if (folder) {
+        try { saveBoardSnapshot(folder, { silent: true }); } catch (_) {}
+        return;
+      }
+    }
     e.preventDefault();
     e.returnValue = '';
     return '';
@@ -7631,6 +7962,7 @@ renderSavedBoards();
 })();
 </script>
 
+<script src="sfx.js"></script>
 <script src="layout-dock.js"></script>
 <script src="features.js"></script>
 <script>

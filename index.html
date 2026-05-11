@@ -819,7 +819,7 @@ body.compact-ui .panel-body { padding: 6px 8px; }
      --dock-w CSS var is driven by layout-dock.js and is 0 when the dock
      collapses, which puts the toolbar back at the screen edge. */
   right: calc(var(--dock-w, 0px) + 10px);
-  width: 44px;
+  width: var(--draw-toolbar-w, 44px);
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -833,24 +833,28 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   max-height: calc(100dvh - var(--header-h) - 100px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
-#draw-toolbar.toolbar-floating {
-  max-height: calc(100dvh - 24px);
-  z-index: 45;
+#draw-toolbar .toolbar-resize-edge-2d {
+  position: absolute;
+  left: 0; top: 0; bottom: 0; width: 6px;
+  cursor: ew-resize;
+  z-index: 4;
+  border-radius: 10px 0 0 10px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.06), transparent);
 }
-.toolbar-drag-handle {
-  flex-shrink: 0; width: 100%; height: 9px; margin: 0 0 3px;
-  border-radius: 5px; cursor: grab; opacity: 0.55;
-  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+#draw-toolbar .toolbar-resize-edge-2d:hover {
+  background: linear-gradient(90deg, rgba(124,106,255,0.2), transparent);
 }
-.toolbar-drag-handle:active, #draw-toolbar.dragging-toolbar .toolbar-drag-handle { cursor: grabbing; }
-#draw-toolbar.dragging-toolbar { opacity: 0.97; }
-.t3d-toolbar-drag-handle {
-  flex-shrink: 0; width: 10px; min-height: 26px; margin: 0 4px 0 0;
-  border-radius: 5px; cursor: grab; opacity: 0.55;
-  background: linear-gradient(180deg, transparent, var(--border2), transparent);
+#toolbar-3d .toolbar-resize-edge-3d {
+  position: absolute;
+  left: 0; right: 0; bottom: 0; height: 6px;
+  cursor: ns-resize;
+  z-index: 5;
+  border-radius: 0 0 10px 10px;
+  background: linear-gradient(180deg, transparent, rgba(255,255,255,0.06));
 }
-.t3d-toolbar-drag-handle:active, #toolbar-3d.dragging-toolbar .t3d-toolbar-drag-handle { cursor: grabbing; }
-#toolbar-3d.dragging-toolbar { opacity: 0.97; }
+#toolbar-3d .toolbar-resize-edge-3d:hover {
+  background: linear-gradient(180deg, transparent, rgba(124,106,255,0.22));
+}
 #draw-toolbar::-webkit-scrollbar { display: none; }
 #draw-toolbar .tool-btn {
   width: 34px; height: 34px;
@@ -907,10 +911,12 @@ body.compact-ui .panel-body { padding: 6px 8px; }
 
 /* ── 3D toolbar (horizontal strip across top of workspace) ── */
 #toolbar-3d {
+  --t3d-toolbar-h: 40px;
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   z-index: 30;
   background: var(--bg2); border: 1px solid var(--border2); border-radius: 10px;
-  padding: 4px 6px;
+  padding: 4px 6px 10px;
+  min-height: var(--t3d-toolbar-h, 40px);
   display: flex; align-items: center; gap: 4px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
   max-width: calc(100% - 24px); overflow-x: auto;
@@ -1736,10 +1742,11 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   pointer-events: none;
 }
 
-/* Chat: floating card in 2D; docked under the 3D viewport in 3D mode */
+/* Chat — floating card (2D + 3D); default bottom-left near sidebar Create/Join */
 #chat-panel {
   position: fixed;
-  right: 14px;
+  left: calc(var(--sidebar-w, 260px) + 10px);
+  right: auto;
   bottom: 14px;
   width: 280px; height: 340px;
   background: var(--bg2);
@@ -1750,29 +1757,14 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   box-shadow: 0 8px 28px rgba(0,0,0,0.45);
   overflow: hidden;
 }
-body.mode-3d #chat-panel {
-  position: relative;
-  right: auto;
-  bottom: auto;
-  left: auto;
-  top: auto;
-  width: 100%;
-  height: min(240px, 36vh);
-  flex-shrink: 0;
-  border-radius: 0;
-  border-left: none;
-  border-right: none;
-  border-bottom: none;
-  box-shadow: none;
-  z-index: 6;
-}
 #chat-panel.open { display: flex; }
 #chat-panel.dragging { transition: none; user-select: none; }
 
 /* Notes — floating panel (same interaction model as chat) */
 .notes-popout {
   position: fixed;
-  right: 14px;
+  left: calc(var(--sidebar-w, 260px) + 10px);
+  right: auto;
   bottom: calc(14px + 340px + 10px);
   width: 300px;
   height: min(380px, 42vh);
@@ -1817,7 +1809,8 @@ body.mode-3d #chat-panel {
   .notes-popout {
     width: min(300px, calc(100vw - 20px));
     height: min(360px, 50vh);
-    right: 10px;
+    left: 10px;
+    right: auto;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 8px);
   }
 }
@@ -1921,7 +1914,6 @@ body.mode-3d #chat-panel {
 #board-canvas.tool-ellipse,
 #board-canvas.tool-line       { cursor: crosshair; }
 #board-canvas.tool-triangle   { cursor: crosshair; }
-#board-canvas.tool-sticky     { cursor: crosshair; }
 #board-canvas.tool-eyedropper { cursor: copy; }
 #board-canvas.tool-fill       { cursor: cell;  }
 
@@ -1981,8 +1973,11 @@ body.mode-3d #chat-panel {
   /* ── 2D drawing toolbar — horizontal strip pinned to bottom ───────── */
   #draw-toolbar {
     position: fixed; bottom: 0; left: 0; right: 0; top: auto;
-    width: auto; max-height: 56px;
+    width: auto;
+    max-height: var(--draw-toolbar-strip-h, 56px);
+    min-height: 48px;
     flex-direction: row; padding: 4px 6px;
+    padding-top: 8px;
     padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
     border-radius: 0; border-top: 1px solid var(--border);
     border-bottom: none; border-left: none; border-right: none;
@@ -1995,9 +1990,12 @@ body.mode-3d #chat-panel {
     box-shadow: 0 -4px 18px rgba(0,0,0,0.35);
   }
   #draw-toolbar::-webkit-scrollbar { display: none; }
-  #draw-toolbar .toolbar-drag-handle {
-    width: 12px; height: auto; min-height: 40px; margin: 0 4px 0 0;
-    background: linear-gradient(180deg, transparent, var(--border2), transparent);
+  #draw-toolbar .toolbar-resize-edge-2d {
+    left: 0; right: 0; top: 0; bottom: auto;
+    width: 100%; height: 6px;
+    cursor: ns-resize;
+    border-radius: 10px 10px 0 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.06), transparent);
   }
   #draw-toolbar .tool-btn { width: 40px; height: 40px; flex-shrink: 0; }
   #draw-toolbar .toolbar-sep { width: 1px; height: 28px; margin: 0 2px; }
@@ -2012,7 +2010,7 @@ body.mode-3d #chat-panel {
   #zoom-wrap { flex-direction: row; align-items: center; }
   #zoom-label { writing-mode: horizontal-tb; font-size: 0.72rem; min-width: 36px; }
   /* The canvas pushes up to clear the bottom toolbar + iOS safe area. */
-  #canvas-area { margin-right: 0; margin-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
+  #canvas-area { margin-right: 0; margin-bottom: calc(var(--draw-toolbar-strip-h, 56px) + env(safe-area-inset-bottom, 0px)); }
   .toolbar-spacer { display: flex; flex: 1; }
 
   /* iOS Safari auto-zooms when focusing inputs whose font-size is < 16px.
@@ -2035,7 +2033,7 @@ body.mode-3d #chat-panel {
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-x;
-    padding: 4px 6px;
+    padding: 4px 6px 12px;
     padding-top: max(4px, env(safe-area-inset-top, 0px));
   }
   body.mode-3d #toolbar-3d::-webkit-scrollbar { display: none; }
@@ -2055,8 +2053,9 @@ body.mode-3d #chat-panel {
   #chat-panel {
     width: min(300px, calc(100vw - 20px));
     height: min(360px, 55vh);
-    right: 10px;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    left: 10px;
+    right: auto;
+    bottom: calc(var(--draw-toolbar-strip-h, 56px) + 8px + env(safe-area-inset-bottom, 0px));
     z-index: 60;
   }
   /* Chat header hit target slightly larger so the drag handle is reachable. */
@@ -2103,18 +2102,6 @@ body.mode-3d #chat-panel {
     box-shadow: -4px 0 24px rgba(0,0,0,0.45);
   }
   #right-dock.dock-open { transform: translateX(0); }
-  body.mode-3d #chat-panel {
-    position: fixed;
-    right: 10px;
-    left: auto;
-    width: min(300px, calc(100vw - 20px));
-    height: min(360px, 55vh);
-    flex-shrink: 0;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-    box-shadow: 0 8px 28px rgba(0,0,0,0.45);
-    z-index: 80;
-  }
   /* When the dock drawer is open, the small floating cards sit awkwardly
      on top of the panel. Hide them so the drawer is unambiguously the
      foreground. The JS auto-closes them as well; this is just a backup
@@ -2169,8 +2156,9 @@ body.mode-3d #chat-panel {
      the bottom toolbar remains visible underneath. */
   #chat-panel {
     width: calc(100vw - 16px);
-    right: 8px;
-    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    left: 8px;
+    right: auto;
+    bottom: calc(var(--draw-toolbar-strip-h, 56px) + 6px + env(safe-area-inset-bottom, 0px));
     height: min(340px, 52vh);
   }
   #member-panel {
@@ -2201,7 +2189,7 @@ body.mode-3d #chat-panel {
      small enough that it doesn't shove the toolbar off-screen. */
   #chat-panel {
     width: min(260px, 70vw); height: min(220px, 60vh);
-    right: 10px; bottom: 50px; z-index: 60;
+    left: 10px; right: auto; bottom: 50px; z-index: 60;
   }
   #member-panel { bottom: 50px; right: 10px; }
 
@@ -2446,7 +2434,7 @@ body.mode-3d #chat-panel {
 
     <!-- Drawing toolbar -->
     <div id="draw-toolbar" role="toolbar" aria-label="Drawing tools">
-      <div class="toolbar-drag-handle" title="Drag to move toolbar" aria-hidden="true"></div>
+      <div class="toolbar-resize-edge toolbar-resize-edge-2d" title="Drag to resize toolbar" aria-hidden="true"></div>
       <!-- Pen tool -->
       <button class="tool-btn active" data-tool="pen" title="Pen (P)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -2488,13 +2476,6 @@ body.mode-3d #chat-panel {
       <button class="tool-btn" data-tool="text" title="Text (T)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <path d="M2 3h12v2H9v8H7V5H2V3z"/>
-        </svg>
-      </button>
-      <!-- Sticky note -->
-      <button class="tool-btn" data-tool="sticky" title="Sticky note (N)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
-          <path d="M2.5 2.5h8L13.5 5.5v8H2.5z" fill="rgba(250,204,21,0.35)"/>
-          <path d="M10.5 2.5v3h3"/>
         </svg>
       </button>
       <!-- Eyedropper -->
@@ -2633,7 +2614,7 @@ body.mode-3d #chat-panel {
 
     <!-- 3D toolbar -->
     <div id="toolbar-3d" role="toolbar" aria-label="3D tools" style="display:none">
-      <div class="t3d-toolbar-drag-handle" title="Drag to move 3D toolbar" aria-hidden="true"></div>
+      <div class="toolbar-resize-edge toolbar-resize-edge-3d" title="Drag to resize toolbar" aria-hidden="true"></div>
       <div class="t3d-group" id="t3d-mode-group">
         <button type="button" class="t3d-btn t3d-mode-toggle-btn" id="t3d-mode-toggle-btn" title="Toggle Object / Edit mode (Tab)" aria-pressed="false">
           <span class="t3d-mode-toggle-dot" aria-hidden="true"></span>
@@ -2797,19 +2778,6 @@ body.mode-3d #chat-panel {
           </div>
           <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
         </div>
-        <aside id="chat-panel">
-          <div class="chat-header">
-            <span class="chat-header-title">Chat</span>
-            <button id="chat-close-btn" class="btn-icon" style="padding:4px" aria-label="Close chat">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
-            </button>
-          </div>
-          <div id="chat-messages"></div>
-          <div class="chat-input-row">
-            <textarea id="chat-input" rows="1" placeholder="Message…" maxlength="500"></textarea>
-            <button id="chat-send-btn">Send</button>
-          </div>
-        </aside>
       </div>
       <div id="dock-resize-handle" class="split-handle split-handle-h" title="Drag to resize panel height" role="separator" aria-orientation="horizontal"></div>
       <aside id="right-dock" aria-label="Tool panels">
@@ -2820,6 +2788,20 @@ body.mode-3d #chat-panel {
            Tapping it closes the dock; managed in the panels-toggle handler. -->
       <div id="mobile-dock-backdrop" aria-hidden="true"></div>
     </div>
+
+    <aside id="chat-panel">
+      <div class="chat-header">
+        <span class="chat-header-title">Chat</span>
+        <button id="chat-close-btn" class="btn-icon" style="padding:4px" aria-label="Close chat">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
+        </button>
+      </div>
+      <div id="chat-messages"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" rows="1" placeholder="Message…" maxlength="500"></textarea>
+        <button id="chat-send-btn">Send</button>
+      </div>
+    </aside>
 
     <aside id="member-panel">
       <div class="member-panel-header">
@@ -6384,7 +6366,7 @@ function onPointerDown(e) {
       }
     }
     scheduleRender();
-  } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle', 'sticky'].includes(currentTool)) {
+  } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle'].includes(currentTool)) {
     isDrawing = true;
     shapeStart = { wx, wy };
   } else if (currentTool === 'eyedropper') {
@@ -6512,15 +6494,6 @@ function onPointerMove(e) {
   } else if (['rect', 'ellipse', 'line', 'arrow', 'triangle'].includes(currentTool) && isDrawing && shapeStart) {
     shapePreview = makeShape(wx, wy, true);
     scheduleRender();
-  } else if (currentTool === 'sticky' && isDrawing && shapeStart) {
-    const sx = Math.min(shapeStart.wx, wx), sy = Math.min(shapeStart.wy, wy);
-    const sw = Math.abs(wx - shapeStart.wx) || 140, sh = Math.abs(wy - shapeStart.wy) || 140;
-    shapePreview = {
-      id: '__preview__', type: 'sticky', x: sx, y: sy, w: sw, h: sh,
-      color: SLATE_STICKY_INK, fill: SLATE_STICKY_BG, strokeWidth: 1,
-      peerId: state.myId, t: Date.now(),
-    };
-    scheduleRender();
   } else if (currentTool === 'select') {
     if (selBox) {
       selBox.x2 = wx; selBox.y2 = wy;
@@ -6608,35 +6581,6 @@ function onPointerUp(e) {
     }
     shapePreview = null;
     shapeStart   = null;
-  } else if (currentTool === 'sticky' && isDrawing && shapeStart) {
-    /* Sticky note: drop on click (no drag needed), with a sensible default
-       size. We always create the shape so a single click works on mobile. */
-    const { wx, wy } = getPos(e);
-    let w = wx - shapeStart.wx, h = wy - shapeStart.wy;
-    if (Math.abs(w) < 8 && Math.abs(h) < 8) { w = 140; h = 140; }
-    const x = Math.min(shapeStart.wx, shapeStart.wx + w);
-    const y = Math.min(shapeStart.wy, shapeStart.wy + h);
-    w = Math.abs(w); h = Math.abs(h);
-    const shape = {
-      id: genId(), type: 'sticky',
-      x, y, w, h,
-      color: SLATE_STICKY_INK,
-      fill: SLATE_STICKY_BG,
-      text: '',
-      fontSize: 18,
-      peerId: state.myId, t: Date.now(),
-    };
-    if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
-    doc.shapes.set(shape.id, shape);
-    undoStack.push({ action: 'add', kind: 'shape', id: shape.id });
-    redoStack.length = 0;
-    pendingDiff.added.push({ ...shape });
-    scheduleDiff();
-    invalidateStatic();
-    shapePreview = null;
-    shapeStart = null;
-    // Immediately let the user type into the sticky.
-    openStickyEditor(shape);
   } else if (currentTool === 'select') {
     if (selBox) {
       // Finalize rubber-band selection
@@ -7070,58 +7014,12 @@ function commitText() {
   textPos = null;
 }
 
-/* ── Sticky-note editor: re-uses the text overlay textarea ── */
-let _editingStickyId = null;
-function openStickyEditor(shape) {
-  if (!shape) return;
-  _editingStickyId = shape.id;
-  const cont = _overlayContainerRect();
-  // Sticky world coords → canvas-area-local px (offsetParent of the overlay).
-  const sx = shape.x * vp.zoom + vp.panX;
-  const sy = shape.y * vp.zoom + vp.panY;
-  const sw = Math.max(40, shape.w * vp.zoom);
-  const sh = Math.max(40, shape.h * vp.zoom);
-  textOverlay.style.display    = 'block';
-  textOverlay.style.left       = sx + 'px';
-  textOverlay.style.top        = sy + 'px';
-  textOverlay.style.width      = sw + 'px';
-  textOverlay.style.height     = sh + 'px';
-  textOverlay.style.fontSize   = Math.max(14, (shape.fontSize || 18) * vp.zoom) + 'px';
-  textOverlay.style.lineHeight = '1.4';
-  textOverlay.style.padding    = '10px';
-  void cont; // reserved for future positioning offsets
-  textOverlay.value = shape.text || '';
-  setTimeout(() => { textOverlay.focus(); textOverlay.select(); }, 30);
-}
-function commitSticky() {
-  if (!_editingStickyId) return;
-  const id = _editingStickyId; _editingStickyId = null;
-  const text = textOverlay.value;
-  textOverlay.style.display = 'none';
-  textOverlay.style.padding = '';
-  textOverlay.value = '';
-  const shape = doc.shapes.get(id);
-  if (!shape) return;
-  if ((shape.text || '') === text) return;
-  shape.text = text;
-  pendingDiff.updated.push({ ...shape });
-  scheduleDiff();
-  invalidateStatic(); scheduleRender();
-}
-/* Save sticky on blur or Escape (Enter inserts a newline in stickies). */
-textOverlay.addEventListener('blur',  () => { if (_editingStickyId) commitSticky(); });
-textOverlay.addEventListener('keydown', e => {
-  if (!_editingStickyId) return;
-  if (e.key === 'Escape') { e.preventDefault(); commitSticky(); }
-  e.stopPropagation();
-});
 /* ── Text editor: re-uses the overlay to edit an EXISTING text shape ── */
 let _editingTextId = null;
 function openTextEditor(shape) {
   if (!shape || shape.type !== 'text') return;
   _editingTextId = shape.id;
   textPos = null;            // disambiguate from new-text mode
-  _editingStickyId = null;
   const sx = shape.x * vp.zoom + vp.panX;
   const sy = shape.y * vp.zoom + vp.panY;
   const sw = Math.max(40, (shape.w || 200) * vp.zoom);
@@ -7160,15 +7058,13 @@ textOverlay.addEventListener('keydown', e => {
   e.stopPropagation();
 });
 
-/* Double-click an existing text or sticky to edit it (works in select + the
-   matching tool mode). */
+/* Double-click an existing text shape to edit it (select or text tool). */
 canvas.addEventListener('dblclick', e => {
-  if (currentTool === 'select' || currentTool === 'sticky' || currentTool === 'text') {
+  if (currentTool === 'select' || currentTool === 'text') {
     const { wx, wy } = getPos(e);
     const hit = hitTestShapeAt(wx, wy);
     if (!hit) return;
-    if (hit.type === 'sticky') { openStickyEditor(hit); return; }
-    if (hit.type === 'text')   { openTextEditor(hit);   return; }
+    if (hit.type === 'text') { openTextEditor(hit); return; }
   }
 });
 
@@ -7244,7 +7140,6 @@ function setTool(tool) {
   else if (tool === 'line')   cv.classList.add('tool-line');
   else if (tool === 'eyedropper') cv.classList.add('tool-eyedropper');
   else if (tool === 'fill')   cv.classList.add('tool-fill');
-  else if (tool === 'sticky') cv.classList.add('tool-sticky');
   else if (tool === 'triangle') cv.classList.add('tool-triangle');
   if (state.isDrawMuted) cv.classList.add('draw-muted');
 
@@ -7700,7 +7595,6 @@ document.addEventListener('keydown', e => {
     case 'l': setTool('line'); break;
     case 'a': setTool('arrow'); break;
     case 't': setTool('text'); break;
-    case 'n': setTool('sticky'); break;
     case 'i': setTool('eyedropper'); break;
     case 'k': setTool('fill'); break;
     case 's': setTool('select'); break;
@@ -9474,7 +9368,6 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
 
   function applyStoredPos(panel, storageKey) {
     try {
-      if (panel?.id === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       const raw = localStorage.getItem(storageKey);
       if (!raw) return;
       const { x, y } = JSON.parse(raw);
@@ -9516,7 +9409,6 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
 
     panel.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
-      if (panelId === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       const handle = panel.querySelector(handleSel);
       if (!handle || !handle.contains(e.target)) return;
       // Buttons inside the header (e.g. chat-close-btn) should not drag.
@@ -9558,89 +9450,100 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
 
   panels.forEach(p => wire(p.panelId, p.handleSel, p.storageKey));
 
-  function wireFloatingToolbar(panelId, handleSel, storageKey) {
+  function wireToolbarResize(panelId, handleSel, storageKeyW, storageKeyH) {
     const panel = document.getElementById(panelId);
     const handle = panel?.querySelector(handleSel);
     if (!panel || !handle) return;
-    const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
-    function clearFloat() {
-      panel.classList.remove('toolbar-floating', 'dragging-toolbar');
-      panel.style.position = '';
-      panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = '';
-    }
-
-    function applyStoredToolbar() {
-      if (isMobile()) { clearFloat(); return; }
+    function applyStored() {
       try {
-        const raw = localStorage.getItem(storageKey);
-        if (!raw) return;
-        const { x, y } = JSON.parse(raw);
-        if (typeof x !== 'number' || typeof y !== 'number') return;
-        const rect = panel.getBoundingClientRect();
-        const w = rect.width || 80;
-        const h = rect.height || 80;
-        const c = clampToViewport(x, y, w, h);
-        panel.classList.add('toolbar-floating');
-        panel.style.position = 'fixed';
-        panel.style.left = c.x + 'px';
-        panel.style.top = c.y + 'px';
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
+        const row = getComputedStyle(panel).flexDirection === 'row';
+        if (panelId === 'draw-toolbar') {
+          if (row) {
+            const h = parseInt(localStorage.getItem(storageKeyH), 10);
+            if (Number.isFinite(h)) {
+              const v = Math.max(48, Math.min(120, h));
+              document.documentElement.style.setProperty('--draw-toolbar-strip-h', v + 'px');
+            }
+          } else {
+            const w = parseInt(localStorage.getItem(storageKeyW), 10);
+            if (Number.isFinite(w)) {
+              const v = Math.max(40, Math.min(120, w));
+              document.documentElement.style.setProperty('--draw-toolbar-w', v + 'px');
+            }
+          }
+        } else if (panelId === 'toolbar-3d') {
+          const h = parseInt(localStorage.getItem(storageKeyH), 10);
+          if (Number.isFinite(h)) {
+            const v = Math.max(36, Math.min(96, h));
+            panel.style.setProperty('--t3d-toolbar-h', v + 'px');
+          }
+        }
       } catch (_) {}
     }
-
-    applyStoredToolbar();
-    window.addEventListener('resize', () => {
-      if (isMobile()) clearFloat();
-      else applyStoredToolbar();
-    });
+    applyStored();
+    window.addEventListener('resize', applyStored);
 
     handle.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || isMobile()) return;
+      if (e.button !== 0) return;
       e.preventDefault();
-      if (e.target.closest('button, input, textarea, select')) return;
-
-      let rect = panel.getBoundingClientRect();
-      if (!panel.classList.contains('toolbar-floating')) {
-        panel.classList.add('toolbar-floating');
-        panel.style.position = 'fixed';
-        panel.style.left = rect.left + 'px';
-        panel.style.top = rect.top + 'px';
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
+      e.stopPropagation();
+      const row = getComputedStyle(panel).flexDirection === 'row';
+      const rect = panel.getBoundingClientRect();
+      let startVal;
+      let startPrimary;
+      if (panelId === 'draw-toolbar') {
+        if (row) {
+          startVal = rect.height;
+          startPrimary = e.clientY;
+        } else {
+          startVal = rect.width;
+          startPrimary = e.clientX;
+        }
+      } else {
+        startVal = parseInt(getComputedStyle(panel).getPropertyValue('--t3d-toolbar-h'), 10) || rect.height;
+        startPrimary = e.clientY;
       }
-
-      rect = panel.getBoundingClientRect();
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const origX = rect.left;
-      const origY = rect.top;
-      const w = rect.width;
-      const h = rect.height;
-      let moved = false;
-      panel.classList.add('dragging-toolbar');
+      handle.classList.add('dragging');
       try { handle.setPointerCapture(e.pointerId); } catch (_) {}
 
       function onMove(ev) {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
-        if (!moved && Math.hypot(dx, dy) < 4) return;
-        moved = true;
-        const c = clampToViewport(origX + dx, origY + dy, w, h);
-        panel.style.left = c.x + 'px';
-        panel.style.top = c.y + 'px';
+        if (panelId === 'draw-toolbar') {
+          if (row) {
+            const dy = ev.clientY - startPrimary;
+            const nh = Math.max(48, Math.min(120, startVal + dy));
+            document.documentElement.style.setProperty('--draw-toolbar-strip-h', nh + 'px');
+          } else {
+            const dx = startPrimary - ev.clientX;
+            const nw = Math.max(40, Math.min(120, startVal + dx));
+            document.documentElement.style.setProperty('--draw-toolbar-w', nw + 'px');
+          }
+        } else {
+          const dy = ev.clientY - startPrimary;
+          const nh = Math.max(36, Math.min(96, startVal + dy));
+          panel.style.setProperty('--t3d-toolbar-h', nh + 'px');
+        }
       }
       function onUp(ev) {
-        panel.classList.remove('dragging-toolbar');
+        handle.classList.remove('dragging');
         handle.removeEventListener('pointermove', onMove);
         handle.removeEventListener('pointerup', onUp);
         handle.removeEventListener('pointercancel', onUp);
         try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
-        if (moved) {
-          const r = panel.getBoundingClientRect();
-          try { localStorage.setItem(storageKey, JSON.stringify({ x: r.left, y: r.top })); } catch (_) {}
-        }
+        try {
+          if (panelId === 'draw-toolbar') {
+            if (getComputedStyle(panel).flexDirection === 'row') {
+              const h = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--draw-toolbar-strip-h'), 10);
+              if (Number.isFinite(h)) localStorage.setItem(storageKeyH, String(h));
+            } else {
+              const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--draw-toolbar-w'), 10);
+              if (Number.isFinite(w)) localStorage.setItem(storageKeyW, String(w));
+            }
+          } else {
+            const h = parseInt(getComputedStyle(panel).getPropertyValue('--t3d-toolbar-h'), 10);
+            if (Number.isFinite(h)) localStorage.setItem(storageKeyH, String(h));
+          }
+        } catch (_) {}
       }
       handle.addEventListener('pointermove', onMove);
       handle.addEventListener('pointerup', onUp);
@@ -9648,15 +9551,14 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
     });
   }
 
-  wireFloatingToolbar('draw-toolbar', '.toolbar-drag-handle', 'slate_toolbar_2d_pos');
-  wireFloatingToolbar('toolbar-3d', '.t3d-toolbar-drag-handle', 'slate_toolbar_3d_pos');
+  wireToolbarResize('draw-toolbar', '.toolbar-resize-edge-2d', 'slate_toolbar_2d_w', 'slate_toolbar_2d_h');
+  wireToolbarResize('toolbar-3d', '.toolbar-resize-edge-3d', '', 'slate_toolbar_3d_h');
 
   // Re-clamp on window resize so panels don't end up off-screen.
   window.addEventListener('resize', () => {
     panels.forEach(({ panelId }) => {
       const panel = document.getElementById(panelId);
       if (!panel) return;
-      if (panelId === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       if (panelId === 'notes-popout' && !panel.classList.contains('open')) return;
       const rect = panel.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;

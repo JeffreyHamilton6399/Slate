@@ -500,7 +500,7 @@ function injectLayersPanel() {
     window.slateDock.registerPanel({
       id: 'layers',
       title: 'Layers',
-      order: 10,
+      order: 100,
       mount(el) {
         buildPanel(el);
       },
@@ -902,7 +902,7 @@ function injectPropsDockPlaceholder() {
   window.slateDock.registerPanel({
     id: 'props',
     title: 'Properties',
-    order: 30,
+    order: 98,
     mount(el) {
       el.innerHTML = '<p style="margin:12px 14px;font-size:0.78rem;line-height:1.45;color:var(--text-dim)">Selection and tool options will appear here. Register panels with <code style="font-size:0.7rem;font-family:var(--mono,monospace)">slateDock.registerPanel()</code>.</p>';
     },

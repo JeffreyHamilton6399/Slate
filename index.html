@@ -2290,7 +2290,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <!-- Font size (text tool) -->
       <div id="font-size-wrap" style="display:none">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" style="opacity:0.5"><path d="M1 1h10v2H7v8H5V3H1V1z"/></svg>
-        <input id="font-size-input" type="number" value="18" min="8" max="120" title="Font size">
+        <input id="font-size-input" type="number" value="28" min="8" max="200" title="Font size">
       </div>
 
       <div class="toolbar-sep"></div>
@@ -5453,7 +5453,7 @@ let strokeColor   = '#1a1a2e'; // dark ink on light paper (matches first swatch)
 let strokeSize    = 4;
 let fillColor     = '#e8e6ff';
 let useFill       = false;
-let fontSize      = 18;
+let fontSize      = 28;
 let strokeOpacity = 1;        // 0..1 — appended to FG hex as alpha for new strokes
 function _alphaHexSuffix(opacity) {
   if (!Number.isFinite(opacity) || opacity >= 0.999) return '';
@@ -5974,7 +5974,7 @@ function onPointerDown(e) {
       selHandleOriginBox = getSelectionBounds();
       selResizeItems = selItems.map(it => {
         const obj = it.kind === 'shape' ? doc.shapes.get(it.id) : null;
-        return obj ? { ...it, snap: { x: obj.x, y: obj.y, w: obj.w, h: obj.h } } : it;
+        return obj ? { ...it, snap: { x: obj.x, y: obj.y, w: obj.w, h: obj.h, fontSize: obj.fontSize } } : it;
       });
     } else {
       // Check if clicking inside an existing selection to move it
@@ -6031,8 +6031,10 @@ function onPointerDown(e) {
     textDragStart = { sx: e.clientX, sy: e.clientY, wx, wy };
     isDrawing = true;
     const g = textDragGuide;
+    const cont = _overlayContainerRect();
     g.style.display = 'block';
-    g.style.left = e.clientX + 'px'; g.style.top = e.clientY + 'px';
+    g.style.left = (e.clientX - cont.left) + 'px';
+    g.style.top  = (e.clientY - cont.top)  + 'px';
     g.style.width = '0px'; g.style.height = '0px';
   }
 }
@@ -6088,8 +6090,9 @@ function onPointerMove(e) {
   if (currentTool === 'text' && isDrawing && textDragStart) {
     const dx = e.clientX - textDragStart.sx, dy = e.clientY - textDragStart.sy;
     const g = textDragGuide;
-    const lx = dx < 0 ? e.clientX : textDragStart.sx;
-    const ty = dy < 0 ? e.clientY : textDragStart.sy;
+    const cont = _overlayContainerRect();
+    const lx = (dx < 0 ? e.clientX : textDragStart.sx) - cont.left;
+    const ty = (dy < 0 ? e.clientY : textDragStart.sy) - cont.top;
     g.style.left = lx + 'px'; g.style.top = ty + 'px';
     g.style.width = Math.abs(dx) + 'px'; g.style.height = Math.abs(dy) + 'px';
     return;
@@ -6212,7 +6215,7 @@ function onPointerUp(e) {
       color: '#1a1a2e',
       fill: fillColor && fillColor !== '#ffffff' ? fillColor : '#fef3c7',
       text: '',
-      fontSize: 16,
+      fontSize: 18,
       peerId: state.myId, t: Date.now(),
     };
     if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
@@ -6372,6 +6375,17 @@ function applyHandleResize(wx, wy) {
     s.y = newY + (it.snap.y - ob.y) * sy;
     s.w = (it.snap.w || 1) * sx;
     s.h = (it.snap.h || 1) * sy;
+    // Text needs its font size scaled too — otherwise the box grows but the
+    // letters stay small. Use the smaller axis so non-uniform stretches don't
+    // make the glyphs spill out of the box.
+    if (s.type === 'text' && it.snap.fontSize) {
+      const factor = Math.min(Math.abs(sx), Math.abs(sy));
+      s.fontSize = Math.max(6, it.snap.fontSize * factor);
+    }
+    if (s.type === 'sticky' && it.snap.fontSize) {
+      const factor = Math.min(Math.abs(sx), Math.abs(sy));
+      s.fontSize = Math.max(8, it.snap.fontSize * factor);
+    }
   });
 }
 
@@ -6538,12 +6552,20 @@ let textPos  = null;
 let textDragStart = null; // { sx, sy } screen px when drag started
 let textBoxSx = 0, textBoxSy = 0, textBoxSw = 200, textBoxSh = 80; // screen-space box
 
+// The overlay is `position: absolute` inside #canvas-area, so style.left/top
+// must be in canvas-area-local px, not viewport-relative clientX/Y.
+function _overlayContainerRect() {
+  const host = textOverlay.offsetParent || canvas?.parentElement || document.body;
+  return host.getBoundingClientRect();
+}
+
 function openTextInput(wx, wy, sx, sy, sw, sh) {
   textPos = { wx, wy };
-  const pxFontSize = Math.max(12, fontSize * vp.zoom);
+  const pxFontSize = Math.max(14, fontSize * vp.zoom);
+  const cont = _overlayContainerRect();
   textOverlay.style.display    = 'block';
-  textOverlay.style.left       = sx + 'px';
-  textOverlay.style.top        = sy + 'px';
+  textOverlay.style.left       = (sx - cont.left) + 'px';
+  textOverlay.style.top        = (sy - cont.top)  + 'px';
   textOverlay.style.width      = (sw || 200) + 'px';
   textOverlay.style.height     = (sh || 80) + 'px';
   textOverlay.style.fontSize   = pxFontSize + 'px';
@@ -6588,9 +6610,10 @@ let _editingStickyId = null;
 function openStickyEditor(shape) {
   if (!shape) return;
   _editingStickyId = shape.id;
-  const rect = canvas.getBoundingClientRect();
-  const sx = shape.x * vp.zoom + vp.panX + rect.left;
-  const sy = shape.y * vp.zoom + vp.panY + rect.top;
+  const cont = _overlayContainerRect();
+  // Sticky world coords → canvas-area-local px (offsetParent of the overlay).
+  const sx = shape.x * vp.zoom + vp.panX;
+  const sy = shape.y * vp.zoom + vp.panY;
   const sw = Math.max(40, shape.w * vp.zoom);
   const sh = Math.max(40, shape.h * vp.zoom);
   textOverlay.style.display    = 'block';
@@ -6598,9 +6621,10 @@ function openStickyEditor(shape) {
   textOverlay.style.top        = sy + 'px';
   textOverlay.style.width      = sw + 'px';
   textOverlay.style.height     = sh + 'px';
-  textOverlay.style.fontSize   = Math.max(12, (shape.fontSize || 16) * vp.zoom) + 'px';
+  textOverlay.style.fontSize   = Math.max(14, (shape.fontSize || 18) * vp.zoom) + 'px';
   textOverlay.style.lineHeight = '1.4';
   textOverlay.style.padding    = '10px';
+  void cont; // reserved for future positioning offsets
   textOverlay.value = shape.text || '';
   setTimeout(() => { textOverlay.focus(); textOverlay.select(); }, 30);
 }
@@ -6857,7 +6881,7 @@ document.addEventListener('keydown', e => {
 });
 
 document.getElementById('font-size-input').addEventListener('change', e => {
-  fontSize = Math.max(8, Math.min(120, Number(e.target.value) || 18));
+  fontSize = Math.max(8, Math.min(200, Number(e.target.value) || 28));
   e.target.value = fontSize;
 });
 
@@ -7014,10 +7038,14 @@ document.getElementById('zoom-out-btn').addEventListener('click', () => {
   try { window.slateSfx?.play('zoom-tick'); } catch (_) {}
 });
 
-// Keyboard shortcuts
+// Keyboard shortcuts (2D-mode only — the 3D editor has its own keymap which
+// runs in capture phase and stopImmediatePropagation-s before us when in 3D).
 document.addEventListener('keydown', e => {
   if (e.target === document.getElementById('text-input-overlay')) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Don't let 2D tool letters (e, r, g, i, ...) silently retarget the toolbar
+  // while the user is in the 3D editor.
+  if (document.body.classList.contains('mode-3d')) return;
   if (e.ctrlKey && e.shiftKey && e.key === 'B') {
     e.preventDefault();
     if (typeof toggleBoardVisibility === 'function' && state.isBoardHost && state.currentBoard) {
@@ -7925,32 +7953,39 @@ document.getElementById('panels-toggle')?.addEventListener('click', () => {
   const dismissBtn  = document.getElementById('install-dismiss');
   if (!promptEl || !installBtn || !dismissBtn) return;
 
-  // Cooling-off period after a dismissal — don't pester users repeatedly.
-  const DISMISS_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
-  const DISMISS_KEY  = 'slate_install_dismissed_at';
-  const INSTALLED_KEY = 'slate_installed';
+  // Show the prompt every Nth open instead of dismissing forever. Resets when
+  // it's actually been shown so users get a steady-but-not-noisy reminder.
+  const OPENS_BETWEEN_PROMPTS = 3;
+  const OPEN_COUNT_KEY = 'slate_open_count';
+  const INSTALLED_KEY  = 'slate_installed';
 
   function isStandalone() {
     return window.matchMedia?.('(display-mode: standalone)').matches
       || window.matchMedia?.('(display-mode: minimal-ui)').matches
       || window.navigator.standalone === true; // iOS Safari
   }
-  function recentlyDismissed() {
-    const at = parseInt(localStorage.getItem(DISMISS_KEY) || '0', 10);
-    if (!at) return false;
-    return Date.now() - at < DISMISS_COOLDOWN_MS;
+  function getOpenCount() {
+    return parseInt(localStorage.getItem(OPEN_COUNT_KEY) || '0', 10) || 0;
   }
-  function markDismissed() {
-    try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch (_) {}
+  function bumpOpenCount() {
+    try { localStorage.setItem(OPEN_COUNT_KEY, String(getOpenCount() + 1)); } catch (_) {}
+  }
+  function resetOpenCount() {
+    try { localStorage.setItem(OPEN_COUNT_KEY, '0'); } catch (_) {}
+  }
+  function dueForPrompt() {
+    // Show on the 1st open and then every Nth open after.
+    const n = getOpenCount();
+    return n === 0 || (n > 0 && n % OPENS_BETWEEN_PROMPTS === 0);
   }
   function markInstalled() {
-    try {
-      localStorage.setItem(INSTALLED_KEY, '1');
-      localStorage.removeItem(DISMISS_KEY);
-    } catch (_) {}
+    try { localStorage.setItem(INSTALLED_KEY, '1'); } catch (_) {}
   }
   function show()  { promptEl.classList.add('show');    try { window.slateSfx?.play('panel-open'); } catch (_) {} }
   function hide()  { promptEl.classList.remove('show'); }
+
+  // Tick the open counter once per page load (not per route change).
+  bumpOpenCount();
 
   let deferredInstallEvent = null;
   window.slateShowInstallPrompt = function () {
@@ -7982,10 +8017,15 @@ document.getElementById('panels-toggle')?.addEventListener('click', () => {
     e.preventDefault();
     deferredInstallEvent = e;
     if (isStandalone() || localStorage.getItem(INSTALLED_KEY) === '1') return;
-    if (recentlyDismissed()) return;
+    if (!dueForPrompt()) return;
     // Delay so it doesn't fight with the first-paint splash / join modal.
     setTimeout(() => {
-      if (!promptEl.classList.contains('show')) show();
+      if (!promptEl.classList.contains('show')) {
+        show();
+        // After showing, reset the counter so the next reminder happens N
+        // opens from now, not relative to the very first launch.
+        resetOpenCount();
+      }
     }, 3500);
   });
 
@@ -7998,33 +8038,33 @@ document.getElementById('panels-toggle')?.addEventListener('click', () => {
 
   installBtn.addEventListener('click', async () => {
     if (!deferredInstallEvent) {
-      // No native prompt available — close the manual hint banner.
       hide();
       return;
     }
     hide();
     try {
       deferredInstallEvent.prompt();
-      const choice = await deferredInstallEvent.userChoice;
-      if (choice?.outcome === 'dismissed') markDismissed();
+      await deferredInstallEvent.userChoice;
     } catch (_) {}
     deferredInstallEvent = null;
   });
 
   dismissBtn.addEventListener('click', () => {
     hide();
-    markDismissed();
+    // Don't dismiss forever — just reset the counter so we wait N opens.
+    resetOpenCount();
     try { window.slateSfx?.play('panel-close'); } catch (_) {}
   });
 
-  // iOS fallback — beforeinstallprompt never fires there. If the user is on
-  // iOS Safari and hasn't been shown the hint yet, surface it once.
-  if (isIos() && !isStandalone() && !recentlyDismissed()
-      && localStorage.getItem(INSTALLED_KEY) !== '1') {
+  // iOS fallback — beforeinstallprompt never fires there. Show the hint on
+  // the same every-N-opens cadence.
+  if (isIos() && !isStandalone()
+      && localStorage.getItem(INSTALLED_KEY) !== '1'
+      && dueForPrompt()) {
     const hint = promptEl.querySelector('.install-hint-text');
     if (hint) hint.textContent = 'Tap the Share button, then “Add to Home Screen”.';
     installBtn.textContent = 'Got it';
-    setTimeout(() => show(), 4000);
+    setTimeout(() => { show(); resetOpenCount(); }, 4000);
   }
 })();
 

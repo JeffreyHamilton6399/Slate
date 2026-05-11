@@ -574,8 +574,19 @@ function makeGeometryFor(obj) {
       }
       const idx = _triangulatedIndicesFromMeshFaces(md.faces);
       if (idx.length) geo.setIndex(idx);
-      geo.computeVertexNormals();
-      return geo;
+      // Convert to non-indexed so each triangle gets its own verts, giving
+      // FLAT (per-face) shading — same look as the primitives that ship with
+      // split corners. Editor helpers re-weld by position on their side so
+      // logical-vert editing still treats coincident corners as one.
+      let final = geo;
+      if (idx.length > 0) {
+        try {
+          final = geo.toNonIndexed();
+          geo.dispose();
+        } catch (_) { /* fall back to indexed smooth shading */ }
+      }
+      final.computeVertexNormals();
+      return final;
     }
     case 'folder': return null;  // folders are outliner-only, no mesh
     default: return new THREE.BoxGeometry(1, 1, 1);
@@ -1349,18 +1360,32 @@ function onKeyDown(e) {
   // because Ctrl+R / Ctrl+B should not get eaten by setTransformMode('rotate')
   // and the topology delete should beat the object-mode 'x' handler below).
   if (editorMode === 'edit') {
-    if ((e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey) { swallow(); loopCutSelectedFaces();  return; }
-    if ((e.key === 'b' || e.key === 'B') && e.ctrlKey && !e.metaKey) { swallow(); bevelSelectedVerts();    return; }
-    if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey) { swallow(); extrudeSelectedFaces(); return; }
-    if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey) { swallow(); insetSelectedFaces();   return; }
-    if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) { swallow(); mergeSelectedToCenter();return; }
+    // Blender-style hotkeys. Use stopImmediatePropagation so the 2D
+    // keyboard handlers (e/r/i/etc. for picking tools) don't fire when
+    // we're driving the 3D editor.
+    const swallowHard = () => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); };
+    if ((e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey) {
+      swallowHard(); _runMeshOp('Loop cut', () => loopCutSelectedFaces()); return;
+    }
+    if ((e.key === 'b' || e.key === 'B') && e.ctrlKey && !e.metaKey) {
+      swallowHard(); _runMeshOp('Bevel', () => bevelSelectedVerts()); return;
+    }
+    if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey) {
+      swallowHard(); _runMeshOp('Extrude', () => extrudeSelectedFaces()); return;
+    }
+    if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey) {
+      swallowHard(); _runMeshOp('Inset', () => insetSelectedFaces()); return;
+    }
+    if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) {
+      swallowHard(); _runMeshOp('Merge', () => mergeSelectedToCenter()); return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace' ||
          ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey))) {
-      swallow(); deleteSelectedTopology(); return;
+      swallowHard(); _runMeshOp('Delete', () => deleteSelectedTopology()); return;
     }
-    if (e.key === '1') { swallow(); setEditSubMode('vertex'); return; }
-    if (e.key === '2') { swallow(); setEditSubMode('edge');   return; }
-    if (e.key === '3') { swallow(); setEditSubMode('face');   return; }
+    if (e.key === '1') { swallowHard(); setEditSubMode('vertex'); return; }
+    if (e.key === '2') { swallowHard(); setEditSubMode('edge');   return; }
+    if (e.key === '3') { swallowHard(); setEditSubMode('face');   return; }
   }
 
   if (e.key === 'g' || e.key === 'G') {
@@ -2140,6 +2165,22 @@ function _editFreshMeshData() {
   };
 }
 
+/** Wraps a mesh operator so any thrown error surfaces as a visible hint and
+ *  the rest of the editor stays usable. Without this, a typo in one operator
+ *  silently kills the keystroke and the user can't tell what's wrong. */
+function _runMeshOp(name, fn) {
+  if (!editTargetId) {
+    _showEditHint(`${name}: enter edit mode first (Tab)`);
+    return;
+  }
+  try {
+    fn();
+  } catch (err) {
+    console.error(`[slate3d] ${name} failed:`, err);
+    _showEditHint(`${name} error: ${err?.message || err}`);
+  }
+}
+
 /** Small ephemeral hint shown bottom-center of the viewport when a mesh tool
  *  needs a different selection. Avoids silent failures. */
 let _editHintEl = null;
@@ -2229,15 +2270,35 @@ function _faceCentroidFromVerts(verts, face) {
 }
 
 /** Find the index in `faces` of any polygon whose vertex set equals `targetSet`.
- *  Used to look up "the same" face that was selected before the rebuild. */
+ *  Used to look up "the same" face that was selected before the rebuild.
+ *  Falls back to a "best overlap" match if no perfect match exists — handy
+ *  when the picker reports a slightly different polygon than what's stored
+ *  (e.g. a quad picked as 3 verts because a coplanar diagonal is missing). */
 function _findFaceIndex(faces, targetVerts) {
+  if (!Array.isArray(targetVerts) || targetVerts.length < 3) return -1;
   const want = new Set(targetVerts);
+
+  // Exact match first.
   for (let i = 0; i < faces.length; i++) {
     const f = faces[i];
     if (!Array.isArray(f) || f.length !== targetVerts.length) continue;
     if (f.every(v => want.has(v))) return i;
   }
-  return -1;
+
+  // Fallback: pick the polygon with the most shared verts (>=3 overlap and
+  // the overlap covers the majority of the stored polygon).
+  let bestIdx = -1, bestShare = 0;
+  for (let i = 0; i < faces.length; i++) {
+    const f = faces[i];
+    if (!Array.isArray(f) || f.length < 3) continue;
+    let shared = 0;
+    for (const v of f) if (want.has(v)) shared++;
+    if (shared > bestShare && shared >= 3 && shared >= f.length - 1) {
+      bestShare = shared;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
 }
 
 /** Apply new mesh data, then rebuild edit helpers and restore the structural
@@ -3175,13 +3236,13 @@ function bindToolbar() {
   });
   document.getElementById('t3d-object-color')?.addEventListener('input', _onObjectColorInput);
   // Mesh-editing operators (only enabled while in edit mode).
-  document.getElementById('t3d-extrude-btn')  ?.addEventListener('click', () => extrudeSelectedFaces());
-  document.getElementById('t3d-inset-btn')    ?.addEventListener('click', () => insetSelectedFaces());
-  document.getElementById('t3d-bevel-btn')    ?.addEventListener('click', () => bevelSelectedVerts());
-  document.getElementById('t3d-loopcut-btn')  ?.addEventListener('click', () => loopCutSelectedFaces());
-  document.getElementById('t3d-subdivide-btn')?.addEventListener('click', () => subdivideSelectedFaces());
-  document.getElementById('t3d-merge-btn')    ?.addEventListener('click', () => mergeSelectedToCenter());
-  document.getElementById('t3d-delete-btn-edit')?.addEventListener('click', () => deleteSelectedTopology());
+  document.getElementById('t3d-extrude-btn')  ?.addEventListener('click', () => _runMeshOp('Extrude',   () => extrudeSelectedFaces()));
+  document.getElementById('t3d-inset-btn')    ?.addEventListener('click', () => _runMeshOp('Inset',     () => insetSelectedFaces()));
+  document.getElementById('t3d-bevel-btn')    ?.addEventListener('click', () => _runMeshOp('Bevel',     () => bevelSelectedVerts()));
+  document.getElementById('t3d-loopcut-btn')  ?.addEventListener('click', () => _runMeshOp('Loop cut',  () => loopCutSelectedFaces()));
+  document.getElementById('t3d-subdivide-btn')?.addEventListener('click', () => _runMeshOp('Subdivide', () => subdivideSelectedFaces()));
+  document.getElementById('t3d-merge-btn')    ?.addEventListener('click', () => _runMeshOp('Merge',     () => mergeSelectedToCenter()));
+  document.getElementById('t3d-delete-btn-edit')?.addEventListener('click', () => _runMeshOp('Delete',  () => deleteSelectedTopology()));
 }
 
 function _openMirrorMenu(clientX, clientY) {

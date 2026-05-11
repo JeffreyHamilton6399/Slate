@@ -519,6 +519,7 @@ function renderLayersList() {
 
   list.querySelectorAll('.layer-row').forEach(row => {
     row.addEventListener('click', e => {
+      if (e.detail > 1) return;
       if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn')) return;
       if (row.querySelector('.layer-name input')) return;
       window.slateLayers?.setActive(row.dataset.lid);
@@ -568,7 +569,8 @@ function _escape(s) {
 
 function _beginLayerRename(span) {
   const id = span.dataset.lid;
-  const original = span.textContent;
+  const layer = window.slateLayers?.list?.find(l => l.id === id);
+  const original = layer ? layer.name : span.textContent.trim();
   const input = document.createElement('input');
   input.type = 'text';
   input.value = original;

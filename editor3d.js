@@ -104,6 +104,30 @@ function _faceKey(verts) {
   return sorted.join(',');
 }
 
+/** Sorted corner position keys — stable across weld/remap of logical indices. */
+function _facePositionSignatureFromLogicals(weld, posAttr, logicals) {
+  if (!weld || !posAttr || !logicals?.length) return '';
+  const keys = [];
+  for (const logical of logicals) {
+    const idxs = weld.logicalToIdxs[logical];
+    if (!idxs || !idxs.length) return '';
+    const g = idxs[0];
+    keys.push(_weldKey(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g)));
+  }
+  keys.sort();
+  return keys.join(',');
+}
+
+function _facePositionSignatureFromGeomFace(pa, faceIdxs) {
+  if (!pa || !faceIdxs?.length) return '';
+  const keys = [];
+  for (const i of faceIdxs) {
+    keys.push(_weldKey(pa.getX(i), pa.getY(i), pa.getZ(i)));
+  }
+  keys.sort();
+  return keys.join(',');
+}
+
 /** Recompute the welded-vertex set that the gizmo / transform pipeline uses,
  *  from the current edge / face structural selections. Vertex-mode keeps
  *  editSelection authoritative. */
@@ -3689,12 +3713,20 @@ function commitEditChanges() {
     const prevSelection = [...editSelection];
     const prevEdges = [...editEdgeSelection];
     const prevFaces = [...editFaceSelection.entries()];
+    const weldBefore = editHelpers.weldMap;
+    const faceSigSet = new Set();
+    if (editSubMode === 'face' && weldBefore && prevFaces.length) {
+      for (const [, verts] of prevFaces) {
+        const sig = _facePositionSignatureFromLogicals(weldBefore, posAttr, verts);
+        if (sig) faceSigSet.add(sig);
+      }
+    }
     buildEditHelpers();
     editSelection.clear();
     editEdgeSelection.clear();
     editFaceSelection.clear();
-    // After welding, new logical N == old logical N (insertion order preserved),
-    // so the selection survives the rebuild.
+    // After welding, logical index ranges can shrink (coincident verts merge),
+    // so remap face picks by corner position signatures instead of raw indices.
     const weldCount = editHelpers ? editHelpers.weldMap.logicalToIdxs.length : 0;
     const inRange = i => i >= 0 && i < weldCount;
     prevSelection.forEach(l => { if (inRange(l)) editSelection.add(l); });
@@ -3702,9 +3734,30 @@ function commitEditChanges() {
       const [a, b] = _edgeKeyToVerts(k);
       if (inRange(a) && inRange(b)) editEdgeSelection.add(k);
     });
-    prevFaces.forEach(([k, verts]) => {
-      if (verts.every(inRange)) editFaceSelection.set(k, verts);
-    });
+    if (editSubMode === 'face' && faceSigSet.size) {
+      const mesh2 = objMeshes.get(editTargetId);
+      const pa2 = mesh2?.geometry?.getAttribute('position');
+      const wm = editHelpers?.weldMap;
+      if (pa2 && wm) {
+        const sigToLogicalFace = new Map();
+        for (const f of facesOut) {
+          if (!Array.isArray(f) || f.length < 3) continue;
+          const sig = _facePositionSignatureFromGeomFace(pa2, f);
+          if (!sigToLogicalFace.has(sig)) {
+            const logicalFace = f.map(i => wm.logicalForIdx[i]);
+            sigToLogicalFace.set(sig, logicalFace);
+          }
+        }
+        for (const sig of faceSigSet) {
+          const lf = sigToLogicalFace.get(sig);
+          if (lf) editFaceSelection.set(_faceKey(lf), [...lf]);
+        }
+      }
+    } else {
+      prevFaces.forEach(([k, verts]) => {
+        if (verts.every(inRange)) editFaceSelection.set(k, verts);
+      });
+    }
     refreshSelectionMarker();
     attachGizmoToEditSelection();
   }

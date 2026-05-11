@@ -24,11 +24,17 @@
   }
 
   function applyDockW(px) {
-    const w = clamp(px, 0, Math.min(420, Math.floor(window.innerWidth * 0.5)));
-    document.documentElement.style.setProperty('--dock-w', w + 'px');
-    try { localStorage.setItem(LS_DOCK, String(w)); } catch (_) {}
+    const mobile = window.matchMedia('(max-width: 768px)').matches;
+    let v;
+    if (mobile) {
+      v = clamp(px, 0, Math.min(420, Math.floor(window.innerWidth * 0.5)));
+    } else {
+      v = clamp(px, 120, Math.min(520, Math.floor(window.innerHeight * 0.62)));
+    }
+    document.documentElement.style.setProperty('--dock-w', v + 'px');
+    try { localStorage.setItem(LS_DOCK, String(v)); } catch (_) {}
     const dock = document.getElementById('right-dock');
-    if (dock) dock.classList.toggle('dock-collapsed', w < 8);
+    if (dock) dock.classList.toggle('dock-collapsed', mobile ? v < 8 : v < 24);
   }
 
   function initSidebarResize() {
@@ -61,20 +67,30 @@
   function initDockResize() {
     const handle = document.getElementById('dock-resize-handle');
     if (!handle) return;
-    let startX, startW;
+    let startX, startY, startW;
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
-      startX = e.clientX;
       const root = getComputedStyle(document.documentElement);
       const cur = parseInt(root.getPropertyValue('--dock-w'), 10) || readNum(LS_DOCK, 220);
-      startW = cur;
+      if (window.matchMedia('(max-width: 768px)').matches) {
+        startX = e.clientX;
+        startW = cur;
+      } else {
+        startY = e.clientY;
+        startW = cur;
+      }
       handle.setPointerCapture(e.pointerId);
       handle.classList.add('dragging');
     });
     handle.addEventListener('pointermove', e => {
       if (!handle.hasPointerCapture(e.pointerId)) return;
-      const dx = startX - e.clientX;
-      applyDockW(startW + dx);
+      if (window.matchMedia('(max-width: 768px)').matches) {
+        const dx = startX - e.clientX;
+        applyDockW(startW + dx);
+      } else {
+        const dy = startY - e.clientY;
+        applyDockW(startW + dy);
+      }
     });
     handle.addEventListener('pointerup', e => {
       if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);

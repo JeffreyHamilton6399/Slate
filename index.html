@@ -402,23 +402,39 @@ input, textarea { font-family: var(--sans); }
   background: var(--accent); opacity: 1;
 }
 #workspace-split {
-  flex: 1; min-height: 0; display: flex; flex-direction: row; position: relative;
+  flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative;
 }
 #editor-pane {
-  flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column;
+  flex: 1; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column;
   /* toolbar is now fixed-position on the right, no horizontal space needed here */
 }
-#dock-resize-handle.split-handle-v {
+#editor-view-stack {
+  flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column;
+}
+.split-handle-h {
+  height: 5px; width: 100%; flex-shrink: 0; cursor: row-resize; z-index: 12;
+  background: transparent; position: relative;
+}
+.split-handle-h::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 2px; height: 1px;
+  background: var(--border); opacity: 0.85;
+}
+.split-handle-h:hover::after, .split-handle-h.dragging::after {
+  background: var(--accent); opacity: 1;
+}
+#dock-resize-handle.split-handle-h {
   order: 2;
 }
 #right-dock {
   order: 3;
-  width: var(--dock-w);
-  min-width: 0;
+  width: 100%;
+  height: var(--dock-w);
+  min-height: 0;
   flex-shrink: 0;
   display: flex; flex-direction: column;
   background: var(--bg2);
-  border-left: 1px solid var(--border);
+  border-left: none;
+  border-top: 1px solid var(--border);
   z-index: 8;
 }
 #right-dock.dock-collapsed {
@@ -1619,32 +1635,30 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 }
 .vis-toggle .vis-label { display: none; }
 
-/* Voice bar in header */
-#voice-bar {
-  display: flex; align-items: center;
+/* Per-member voice controls (mic for self, speaker mute for others) */
+.member-voice-btn {
   flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border-radius: 5px;
+  background: transparent; border: 1px solid var(--border2);
+  color: var(--text-dim); cursor: pointer;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
 }
-#mute-btn {
-  display: flex; align-items: center; gap: 5px;
-  padding: 5px 8px; border-radius: var(--radius-sm);
-  background: transparent; border: 1px solid var(--border);
-  color: var(--text-dim); font-size: 0.78rem; font-family: var(--mono);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+.member-voice-btn:hover {
+  background: var(--bg3); border-color: var(--border2); color: var(--text);
 }
-#mute-btn:hover { background: var(--bg3); border-color: var(--border2); color: var(--text); }
-#mute-btn.muted {
-  background: rgba(248,113,113,0.1);
+.member-voice-btn.muted {
+  background: rgba(248,113,113,0.12);
   border-color: var(--danger);
   color: var(--danger);
 }
-#mute-btn.no-mic { color: var(--text-dim); opacity: 0.7; }
-#mute-btn.no-mic:hover { color: var(--accent); border-color: var(--accent-dim); opacity: 1; }
-.mic-bar {
-  display: flex; align-items: flex-end; gap: 1.5px; height: 12px;
+.member-voice-btn.no-mic { opacity: 0.75; }
+.member-voice-btn.no-mic:hover { color: var(--accent); border-color: var(--accent-dim); opacity: 1; }
+.member-voice-btn .mic-bar {
+  display: flex; align-items: flex-end; gap: 1px; height: 10px;
 }
-.mic-bar-seg {
-  width: 2.5px; border-radius: 1px; background: var(--green);
+.member-voice-btn .mic-bar-seg {
+  width: 2px; border-radius: 1px; background: var(--green);
   transition: height 0.08s ease;
 }
 
@@ -1659,8 +1673,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   pointer-events: none;
 }
 
-/* Chat panel — floating compact card, draggable. Default tucks just to the
-   left of the members square in the bottom-right. */
+/* Chat: floating card in 2D; docked under the 3D viewport in 3D mode */
 #chat-panel {
   position: fixed;
   right: 14px;
@@ -1673,6 +1686,22 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   z-index: 80;
   box-shadow: 0 8px 28px rgba(0,0,0,0.45);
   overflow: hidden;
+}
+body.mode-3d #chat-panel {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  top: auto;
+  width: 100%;
+  height: min(240px, 36vh);
+  flex-shrink: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  box-shadow: none;
+  z-index: 6;
 }
 #chat-panel.open { display: flex; }
 #chat-panel.dragging { transition: none; user-select: none; }
@@ -1798,6 +1827,10 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 
   #app { flex-direction: column; }
 
+  /* Bottom dock on desktop becomes a side drawer again on narrow screens. */
+  #workspace-split { flex-direction: row; }
+  #dock-resize-handle.split-handle-h { display: none !important; }
+
   #sidebar {
     position: fixed; top: 0; left: 0; bottom: 0;
     width: var(--sidebar-w);
@@ -1822,10 +1855,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
      mobile. The accompanying SVG already carries the meaning. */
   .header-action-btn { padding: 6px 8px !important; }
   .header-action-btn .btn-label { display: none; }
-  /* Voice bar — tighter, hide the live level meter so we save ~24px. */
-  #voice-bar { gap: 4px; }
-  #mute-btn  { padding: 5px 7px; }
-  #mute-btn .mic-bar { display: none; }
   /* Header icon buttons — slightly bigger touch target. */
   #board-header .btn-icon { padding: 7px; }
 
@@ -1940,14 +1969,29 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 
   /* ── Right dock — slide-in drawer + backdrop ──────────────────────── */
   #right-dock {
-    position: fixed; top: var(--header-h); right: 0; bottom: 0;
-    width: min(320px, 90vw);
+    position: fixed !important; top: var(--header-h); right: 0; bottom: 0;
+    width: min(320px, 90vw) !important;
+    height: auto !important;
+    max-height: none !important;
+    border-top: none !important;
     transform: translateX(110%);
     transition: transform 0.25s ease;
     z-index: 70; border-left: 1px solid var(--border);
     box-shadow: -4px 0 24px rgba(0,0,0,0.45);
   }
   #right-dock.dock-open { transform: translateX(0); }
+  body.mode-3d #chat-panel {
+    position: fixed;
+    right: 10px;
+    left: auto;
+    width: min(300px, calc(100vw - 20px));
+    height: min(360px, 55vh);
+    flex-shrink: 0;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+    z-index: 80;
+  }
   /* When the dock drawer is open, the small floating cards sit awkwardly
      on top of the panel. Hide them so the drawer is unambiguously the
      foreground. The JS auto-closes them as well; this is just a backup
@@ -2223,6 +2267,14 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </svg>
         <span class="btn-label">Save</span>
       </button>
+      <!-- Prominent export button in header (label updates per workspace mode) -->
+      <button id="export-btn" class="btn btn-ghost header-action-btn" title="Export board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/>
+          <path d="M1 10h11v2H1z"/>
+        </svg>
+        <span class="btn-label export-label">Export</span>
+      </button>
       <!-- 3D-only import button. Hidden in 2D mode. -->
       <button id="import-btn" class="btn btn-ghost header-action-btn" title="Import 3D model" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -2233,32 +2285,10 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       </button>
       <!-- Hidden file input bound to the import button. accept list mirrors the loaders in model-io.js. -->
       <input id="import-file-input" type="file" accept=".obj,.stl,.ply,.gltf,.glb,.fbx" style="display:none">
-      <!-- Prominent export button in header (label updates per workspace mode) -->
-      <button id="export-btn" class="btn btn-ghost header-action-btn" title="Export board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/>
-          <path d="M1 10h11v2H1z"/>
-        </svg>
-        <span class="btn-label export-label">Export</span>
-      </button>
       <button id="leave-board-btn" class="btn btn-ghost header-action-btn" title="Leave board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0;color:var(--danger);border-color:rgba(248,113,113,0.25)">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
         <span class="btn-label">Leave</span>
       </button>
-      <!-- Voice bar — mute button (always visible while in a board) -->
-      <div id="voice-bar" style="display:none">
-        <button id="mute-btn" class="no-mic" title="Click to enable microphone" aria-label="Microphone">
-          <svg id="mic-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
-            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
-          </svg>
-          <div class="mic-bar" id="mic-level-bar">
-            <div class="mic-bar-seg" style="height:3px"></div>
-            <div class="mic-bar-seg" style="height:5px"></div>
-            <div class="mic-bar-seg" style="height:3px"></div>
-          </div>
-        </button>
-      </div>
       <button id="chat-btn" class="btn-icon" aria-label="Toggle chat" title="Chat">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M2 3h12v8H9l-3 2v-2H2z"/>
@@ -2640,23 +2670,38 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
     <!-- Workspace: 2D / 3D editor + docked panels -->
     <div id="workspace-split">
       <div id="editor-pane">
-        <div id="canvas-area">
-          <canvas id="board-canvas"></canvas>
-          <div id="no-board-hint">
-            <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
-              <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
-              <line x1="20" y1="36" x2="52" y2="36" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-              <line x1="20" y1="24" x2="40" y2="24" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-              <line x1="20" y1="48" x2="32" y2="48" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
-            </svg>
-            <p>Select or create a board to start drawing</p>
+        <div id="editor-view-stack">
+          <div id="canvas-area">
+            <canvas id="board-canvas"></canvas>
+            <div id="no-board-hint">
+              <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+                <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
+                <line x1="20" y1="36" x2="52" y2="36" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+                <line x1="20" y1="24" x2="40" y2="24" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+                <line x1="20" y1="48" x2="32" y2="48" stroke="#7c6aff" stroke-width="3" stroke-linecap="round"/>
+              </svg>
+              <p>Select or create a board to start drawing</p>
+            </div>
+            <textarea id="text-input-overlay" rows="1" autocomplete="off" spellcheck="false"></textarea>
+            <div id="text-drag-guide"></div>
           </div>
-          <textarea id="text-input-overlay" rows="1" autocomplete="off" spellcheck="false"></textarea>
-          <div id="text-drag-guide"></div>
+          <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
         </div>
-        <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
+        <aside id="chat-panel">
+          <div class="chat-header">
+            <span class="chat-header-title">Chat</span>
+            <button id="chat-close-btn" class="btn-icon" style="padding:4px" aria-label="Close chat">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
+            </button>
+          </div>
+          <div id="chat-messages"></div>
+          <div class="chat-input-row">
+            <textarea id="chat-input" rows="1" placeholder="Message…" maxlength="500"></textarea>
+            <button id="chat-send-btn">Send</button>
+          </div>
+        </aside>
       </div>
-      <div id="dock-resize-handle" class="split-handle split-handle-v" title="Drag to resize panel column" role="separator" aria-orientation="vertical"></div>
+      <div id="dock-resize-handle" class="split-handle split-handle-h" title="Drag to resize panel height" role="separator" aria-orientation="horizontal"></div>
       <aside id="right-dock" aria-label="Tool panels">
         <div class="dock-tabs" id="dock-tabs"></div>
         <div id="dock-body"></div>
@@ -2666,33 +2711,15 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <div id="mobile-dock-backdrop" aria-hidden="true"></div>
     </div>
 
+    <aside id="member-panel">
+      <div class="member-panel-header">
+        <span class="member-panel-title">Members</span>
+        <span id="member-count-badge">0</span>
+      </div>
+      <div id="member-list"></div>
+    </aside>
+
   </div><!-- /#main -->
-
-</div><!-- /#app -->
-
-<!-- MEMBERS PANEL — fixed floating square -->
-  <aside id="member-panel">
-    <div class="member-panel-header">
-      <span class="member-panel-title">Members</span>
-      <span id="member-count-badge">0</span>
-    </div>
-    <div id="member-list"></div>
-  </aside>
-
-  <!-- Chat panel -->
-  <aside id="chat-panel">
-    <div class="chat-header">
-      <span class="chat-header-title">Chat</span>
-      <button id="chat-close-btn" class="btn-icon" style="padding:4px" aria-label="Close chat">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
-      </button>
-    </div>
-    <div id="chat-messages"></div>
-    <div class="chat-input-row">
-      <textarea id="chat-input" rows="1" placeholder="Message…" maxlength="500"></textarea>
-      <button id="chat-send-btn">Send</button>
-    </div>
-  </aside>
 
 </div><!-- /#app -->
 
@@ -3280,6 +3307,7 @@ const voiceState = {
   calls:         {},
   inbound:       {},
   peerVolume:    {},   // peerId -> 0..1
+  peerOutputVolBackup: {}, // peerId -> volume before output mute
   speakingPeers: new Set(),
   audioCtx:      null,
   analyser:      null,
@@ -7615,10 +7643,32 @@ function renderMembers() {
     const youHint   = m.isMe ? ' <span class="member-you-hint">you</span>' : '';
     const reco      = m.reconnecting ? '<span class="member-reco" title="Reconnecting">⟳</span>' : '';
 
+    const peerOutVol = m.isMe ? 1 : (voiceState.peerVolume[m.id] ?? 1);
+    const peerAudioMuted = !m.isMe && peerOutVol < 0.01;
+    const voiceCtl = m.isMe
+      ? `<button type="button" class="member-voice-btn no-mic" id="member-self-voice-btn" title="Microphone" aria-label="Microphone">
+          <svg class="member-mic-icon" width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
+            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+          </svg>
+          <div class="mic-bar" aria-hidden="true">
+            <div class="mic-bar-seg" style="height:3px"></div>
+            <div class="mic-bar-seg" style="height:5px"></div>
+            <div class="mic-bar-seg" style="height:3px"></div>
+          </div>
+        </button>`
+      : `<button type="button" class="member-voice-btn member-peer-out-btn${peerAudioMuted ? ' muted' : ''}" data-peer="${String(m.id || '').replace(/"/g, '&quot;')}" title="${peerAudioMuted ? 'Unmute' : 'Mute'} audio from this member" aria-label="${peerAudioMuted ? 'Unmute' : 'Mute'} member audio">
+          <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 5.5V9a2.5 2.5 0 0 0 5 0V5.5M3 5.5h8v3.5a4 4 0 0 1-8 0V5.5z"/>
+            ${peerAudioMuted ? '<line x1="2" y1="2" x2="12" y2="12" stroke="var(--danger)"/>' : ''}
+          </svg>
+        </button>`;
+
     row.innerHTML = `
       <div class="member-avatar" style="${avatarStyle}">${avatarContent}</div>
       <div class="member-info">
         <div class="member-name">${escHtml(m.name || m.id || '?')}${hostBadge}${muteBadge}${youHint}</div>
+        ${voiceCtl}
         ${reco}
       </div>
     `;
@@ -7628,11 +7678,42 @@ function renderMembers() {
   list.innerHTML = '';
   list.appendChild(frag);
 
+  document.getElementById('member-self-voice-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleMute();
+  });
+  list.querySelectorAll('.member-peer-out-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const pid = btn.dataset.peer;
+      if (pid) togglePeerOutputMute(pid);
+    });
+  });
+
   list.querySelectorAll('.member-row').forEach(row => {
     const pid = row.dataset.peer;
     if (!pid || pid === state.myId) return;
-    row.addEventListener('click', e => showModMenu(e, pid));
+    row.addEventListener('click', e => {
+      if (e.target.closest('.member-voice-btn')) return;
+      showModMenu(e, pid);
+    });
   });
+
+  updateMuteBtn();
+}
+
+function togglePeerOutputMute(peerId) {
+  if (!peerId || peerId === state.myId) return;
+  voiceState.peerOutputVolBackup = voiceState.peerOutputVolBackup || {};
+  const cur = voiceState.peerVolume[peerId] ?? 1;
+  if (cur > 0.01) {
+    voiceState.peerOutputVolBackup[peerId] = cur;
+    setPeerVolume(peerId, 0);
+  } else {
+    const prev = voiceState.peerOutputVolBackup[peerId] ?? 1;
+    setPeerVolume(peerId, prev);
+  }
+  renderMembers();
 }
 
 function showModMenu(e, peerId) {
@@ -7743,8 +7824,7 @@ function updateBoardControls() {
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
   const leaveBtn = document.getElementById('leave-board-btn');
   if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
-  const voiceBar = document.getElementById('voice-bar');
-  if (voiceBar) voiceBar.style.display = state.currentBoard ? '' : 'none';
+  updateMuteBtn();
   updateHostControlsBar();
 }
 
@@ -7781,11 +7861,21 @@ function applyWorkspaceMode(board) {
     // (not empty string) to override it.
     importBtn.style.display = mode === '3d' ? 'flex' : 'none';
   }
+  const chatPanel = document.getElementById('chat-panel');
+  const resetChatDockStyles = () => {
+    if (!chatPanel) return;
+    chatPanel.style.left = '';
+    chatPanel.style.top = '';
+    chatPanel.style.right = '';
+    chatPanel.style.bottom = '';
+  };
+
   if (mode === '3d') {
     area2.style.display = 'none';
     area3.style.display = 'block';
     if (tb)  tb.style.display = 'none';
     if (tb3) tb3.style.display = 'flex';
+    if (window.matchMedia('(min-width: 769px)').matches) resetChatDockStyles();
     // Switch dock to hierarchy panel if it's registered
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
       requestAnimationFrame(() => window.slateDock.setActive('hierarchy'));
@@ -7797,6 +7887,7 @@ function applyWorkspaceMode(board) {
     area2.style.display = '';
     if (tb)  tb.style.display = '';
     if (tb3) tb3.style.display = 'none';
+    resetChatDockStyles();
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
       requestAnimationFrame(() => window.slateDock.setActive('layers'));
     }
@@ -8788,8 +8879,8 @@ function startVAD(stream) {
       const speaking = rms > 18;
       if (speaking !== mySpeak) {
         mySpeak = speaking;
-        // Animate mic bar
-        const segs = document.querySelectorAll('.mic-bar-seg');
+        const selfMic = document.getElementById('member-self-voice-btn');
+        const segs = selfMic ? selfMic.querySelectorAll('.mic-bar-seg') : [];
         segs.forEach((s, i) => {
           s.style.height = speaking ? `${6 + rms * 0.15 * (i === 1 ? 1.5 : 1)}px` : '3px';
         });
@@ -8904,26 +8995,31 @@ function toggleMute() {
 }
 
 function updateMuteBtn() {
-  const btn = document.getElementById('mute-btn');
+  const btn = document.getElementById('member-self-voice-btn');
   if (!btn) return;
+  btn.classList.remove('no-mic', 'muted');
   if (!voiceState.localStream) {
-    btn.className = 'no-mic';
+    btn.classList.add('no-mic');
     btn.title = voiceState.micDenied
       ? 'Mic blocked — allow in browser settings'
       : 'Click to enable microphone';
+  } else if (voiceState.isMuted) {
+    btn.classList.add('muted');
+    btn.title = 'Unmute mic';
   } else {
-    btn.className = voiceState.isMuted ? 'muted' : '';
-    btn.title = voiceState.isMuted ? 'Unmute mic' : 'Mute mic';
+    btn.title = 'Mute mic';
   }
-  const icon = document.getElementById('mic-icon');
+  const icon = btn.querySelector('.member-mic-icon');
   if (icon) {
-    icon.innerHTML = voiceState.isMuted
-      ? `<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/><line x1="2" y1="11" x2="11" y2="2" stroke="var(--danger)" stroke-width="1.5"/>`
-      : `<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>`;
+    if (!voiceState.localStream) {
+      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>';
+    } else if (voiceState.isMuted) {
+      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/><line x1="2" y1="11" x2="11" y2="2" stroke="var(--danger)" stroke-width="1.5"/>';
+    } else {
+      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>';
+    }
   }
 }
-
-document.getElementById('mute-btn')?.addEventListener('click', toggleMute);
 
 function slateVoiceIncomingCall(call) {
   const pid = call.peer;
@@ -9097,6 +9193,7 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
 
   function applyStoredPos(panel, storageKey) {
     try {
+      if (panel?.id === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       const raw = localStorage.getItem(storageKey);
       if (!raw) return;
       const { x, y } = JSON.parse(raw);
@@ -9138,6 +9235,7 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
 
     panel.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
+      if (panelId === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       const handle = panel.querySelector(handleSel);
       if (!handle || !handle.contains(e.target)) return;
       // Buttons inside the header (e.g. chat-close-btn) should not drag.
@@ -9184,6 +9282,7 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
     panels.forEach(({ panelId }) => {
       const panel = document.getElementById(panelId);
       if (!panel) return;
+      if (panelId === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
       const rect = panel.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
       const c = clampToViewport(rect.left, rect.top, rect.width, rect.height);

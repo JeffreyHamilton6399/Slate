@@ -8766,6 +8766,8 @@ function startVAD(stream) {
 
 function callPeer(peerId) {
   if (!voiceState.localStream || !state.peer || voiceState.calls[peerId]) return;
+  const info = state.connections[peerId];
+  if (!info || info.board !== state.currentBoard) return;
   try {
     const call = state.peer.call(peerId, voiceState.localStream);
     voiceState.calls[peerId] = call;
@@ -8890,6 +8892,11 @@ document.getElementById('mute-btn')?.addEventListener('click', toggleMute);
 function slateVoiceIncomingCall(call) {
   const pid = call.peer;
   if (!state.currentBoard) {
+    try { call.close(); } catch {}
+    return;
+  }
+  const info = state.connections[pid];
+  if (!info || info.board !== state.currentBoard) {
     try { call.close(); } catch {}
     return;
   }

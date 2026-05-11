@@ -27,6 +27,12 @@ let orbit     = null;
 let transform = null;
 let transformHelper = null; // three r170+: TransformControls extends Controls, gizmo lives in getHelper()
 let raycaster = null;
+/** Small ortho scene rendered in the viewport corner (axis navigation). */
+let viewGizmoScene = null;
+let viewGizmoCam = null;
+let viewGizmoRoot = null;
+const viewGizmoPickables = [];
+let viewGizmoRaycaster = null;
 const pointer = new THREE.Vector2();
 let _lastMouseClientX = null;
 let _lastMouseClientY = null;
@@ -340,6 +346,7 @@ function _enterModalGrab() {
  *  to confirm, RMB / Esc to cancel — same Blender feel as the object grab. */
 function _enterModalEditGrab() {
   if (editorMode !== 'edit' || !editTargetId) return;
+  if (bevelState || extrudeState || insetState) return;
   if (!camera || !container || !editHelpers) return;
   const mesh = objMeshes.get(editTargetId);
   if (!mesh) return;
@@ -976,6 +983,15 @@ let _rmbDownX = 0, _rmbDownY = 0, _rmbArmed = false;
 function onPointerDown(e) {
   if (!orbit) return;
   if (flyEnabled) return;
+  if (!grabState && !bevelState && !extrudeState && !insetState && e.button === 0) {
+    const gv = _viewGizmoPickView(e.clientX, e.clientY);
+    if (gv) {
+      e.preventDefault(); e.stopPropagation();
+      setCameraViewPreset(gv);
+      try { window.slateSfx?.play('view-snap'); } catch (_) {}
+      return;
+    }
+  }
   // Modal grab is active: left-click confirms, right-click cancels.
   if (grabState) {
     if (e.button === 0) {
@@ -995,6 +1011,26 @@ function onPointerDown(e) {
     } else if (e.button === 2) {
       e.preventDefault(); e.stopPropagation();
       _bevelCancel();
+    }
+    return;
+  }
+  if (extrudeState) {
+    if (e.button === 0) {
+      e.preventDefault(); e.stopPropagation();
+      _extrudeConfirm();
+    } else if (e.button === 2) {
+      e.preventDefault(); e.stopPropagation();
+      _extrudeCancel();
+    }
+    return;
+  }
+  if (insetState) {
+    if (e.button === 0) {
+      e.preventDefault(); e.stopPropagation();
+      _insetConfirm();
+    } else if (e.button === 2) {
+      e.preventDefault(); e.stopPropagation();
+      _insetCancel();
     }
     return;
   }
@@ -1054,7 +1090,7 @@ function onPointerUp(e) {
       if (flyEnabled) exitFlyCamera();
       return;
     }
-    if (grabState) return;
+    if (grabState || bevelState || extrudeState || insetState) return;
     if (transform?.dragging) return;
     const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
     if (moved > 5) return;
@@ -1564,6 +1600,18 @@ function onKeyDown(e) {
   if (bevelState) {
     if (e.key === 'Escape') { swallow(); _bevelCancel(); return; }
     if (e.key === 'Enter')  { swallow(); _bevelConfirm(); return; }
+    swallow();
+    return;
+  }
+  if (extrudeState) {
+    if (e.key === 'Escape') { swallow(); _extrudeCancel(); return; }
+    if (e.key === 'Enter') { swallow(); _extrudeConfirm(); return; }
+    swallow();
+    return;
+  }
+  if (insetState) {
+    if (e.key === 'Escape') { swallow(); _insetCancel(); return; }
+    if (e.key === 'Enter') { swallow(); _insetConfirm(); return; }
     swallow();
     return;
   }
@@ -2202,6 +2250,7 @@ function pickFaceLogical(clientX, clientY) {
 }
 
 function handleEditClick(e) {
+  if (bevelState || extrudeState || insetState) return;
   if (!editHelpers || !editTargetId) return;
   const additive = e.shiftKey;
   let changed = false;
@@ -2521,6 +2570,143 @@ function _findFaceIndex(faces, targetVerts) {
   return bestIdx;
 }
 
+/** Undirected edge → face indices that contain that edge (polygon mesh). */
+function _buildMeshEdgeFaces(faces) {
+  const m = new Map();
+  for (let fi = 0; fi < faces.length; fi++) {
+    const f = faces[fi];
+    if (!Array.isArray(f) || f.length < 3) continue;
+    for (let i = 0; i < f.length; i++) {
+      const a = f[i], b = f[(i + 1) % f.length];
+      const k = _edgeKey(a, b);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(fi);
+    }
+  }
+  return m;
+}
+
+/** Opposite edge in a quad face given one directed edge (a,b) on that face. */
+function _oppositeVertsInQuad(face, a, b) {
+  if (!face || face.length !== 4) return null;
+  for (let i = 0; i < 4; i++) {
+    const x = face[i], y = face[(i + 1) % 4];
+    if ((x === a && y === b) || (x === b && y === a)) {
+      return [face[(i + 2) % 4], face[(i + 3) % 4]];
+    }
+  }
+  return null;
+}
+
+/** Walk a quad-only edge loop through `seedKey` and return split ops (face index + opposite edge pair). */
+function _loopCutQuadRingOps(faces, seedKey, edgeFaces) {
+  const seedFis = edgeFaces.get(seedKey) || [];
+  if (!seedFis.length) return null;
+  const ops = [];
+  const seenFi = new Set();
+  let fi = seedFis[0];
+  let [curA, curB] = _edgeKeyToVerts(seedKey);
+  const startKey = seedKey;
+  for (let guard = 0; guard < 20000; guard++) {
+    const face = faces[fi];
+    if (!face || face.length !== 4) break;
+    const opp = _oppositeVertsInQuad(face, curA, curB);
+    if (!opp) break;
+    const [nextA, nextB] = opp;
+    if (!seenFi.has(fi)) {
+      seenFi.add(fi);
+      ops.push({ fi, e1a: curA, e1b: curB, e2a: nextA, e2b: nextB });
+    }
+    const nextKey = _edgeKey(nextA, nextB);
+    if (nextKey === startKey) break;
+    const nf = edgeFaces.get(nextKey) || [];
+    const nfi = nf.find(fdx => fdx !== fi);
+    if (nfi === undefined) break;
+    curA = nextA;
+    curB = nextB;
+    fi = nfi;
+  }
+  return ops.length ? ops : null;
+}
+
+/** Split one quad by midpoints of two opposite edges; replaces faces[fi] with first quad, appends second. */
+function _splitQuadAlongOppositeMids(verts, faces, fi, getEdgeMid, e1a, e1b, e2a, e2b) {
+  const face = faces[fi];
+  if (!face || face.length !== 4) return null;
+  let i0 = -1;
+  for (let i = 0; i < 4; i++) {
+    const x = face[i], y = face[(i + 1) % 4];
+    if ((x === e1a && y === e1b) || (x === e1b && y === e1a)) { i0 = i; break; }
+  }
+  if (i0 < 0) return null;
+  const i1 = (i0 + 1) % 4, i2 = (i0 + 2) % 4, i3 = (i0 + 3) % 4;
+  const x2 = face[i2], y2 = face[(i2 + 1) % 4];
+  if (!((x2 === e2a && y2 === e2b) || (x2 === e2b && y2 === e2a))) return null;
+  const m1 = getEdgeMid(face[i0], face[i1]);
+  const m2 = getEdgeMid(face[i2], face[(i2 + 1) % 4]);
+  const q1 = [face[i0], m1, m2, face[i3]];
+  const q2 = [m1, face[i1], face[i2], m2];
+  faces[fi] = q1;
+  faces.push(q2);
+  return { q1, q2 };
+}
+
+function _computeExtrude(md, targets, distance) {
+  if (!md || !targets?.length) return null;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+  const newFaceSelections = [];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    const n = _faceNormalFromVerts(verts, face);
+    if (n.lengthSq() < 1e-20) continue;
+    n.normalize().multiplyScalar(distance);
+    const newIdxs = face.map(oldIdx => {
+      const p = _vecFromArr(verts, oldIdx).clone().add(n);
+      verts.push(p.x, p.y, p.z);
+      return (verts.length / 3) - 1;
+    });
+    faces[fi] = newIdxs.slice();
+    newFaceSelections.push(newIdxs.slice());
+    for (let i = 0; i < face.length; i++) {
+      const j = (i + 1) % face.length;
+      faces.push([face[i], face[j], newIdxs[j], newIdxs[i]]);
+    }
+  }
+  if (!newFaceSelections.length) return null;
+  return { vertices: verts, faces, newFaceSelections };
+}
+
+function _computeInset(md, targets, factor) {
+  if (!md || !targets?.length) return null;
+  const fClamped = Math.max(0.001, Math.min(0.49, factor));
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+  const newFaceSelections = [];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    if (face.length < 3) continue;
+    const centroid = _faceCentroidFromVerts(verts, face);
+    const innerIdxs = face.map(oldIdx => {
+      const p = _vecFromArr(verts, oldIdx).clone().lerp(centroid, fClamped);
+      verts.push(p.x, p.y, p.z);
+      return (verts.length / 3) - 1;
+    });
+    faces[fi] = innerIdxs.slice();
+    newFaceSelections.push(innerIdxs.slice());
+    for (let i = 0; i < face.length; i++) {
+      const j = (i + 1) % face.length;
+      faces.push([face[i], face[j], innerIdxs[j], innerIdxs[i]]);
+    }
+  }
+  if (!newFaceSelections.length) return null;
+  return { vertices: verts, faces, newFaceSelections };
+}
+
 /** Apply new mesh data, then rebuild edit helpers and restore the structural
  *  selections supplied by the caller (already expressed in NEW vertex
  *  indices). Falls back to clearing selections if anything looks off. */
@@ -2547,10 +2733,12 @@ function _editApplyMeshData(meshData, nextSel) {
   attachGizmoToEditSelection();
 }
 
-/** Extrude — for each selected face, duplicate its corners, push the duplicates
- *  along the face normal, and connect the perimeter with side quads. */
-function extrudeSelectedFaces(distance = 0.3) {
+/** Extrude — interactive: move mouse / scroll for distance, LMB / Enter confirm, RMB / Esc cancel. */
+let _extrudeHintEl = null;
+
+function extrudeSelectedFaces(distance) {
   if (editorMode !== 'edit') return;
+  if (grabState || bevelState || extrudeState || insetState) return;
   const md = _editFreshMeshData();
   if (!md) { _showEditHint('Nothing to extrude — select a face first'); return; }
   const targets = _deriveFaceSelection(md);
@@ -2559,35 +2747,115 @@ function extrudeSelectedFaces(distance = 0.3) {
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
-  window.slateScene3dBeginAction?.();
-  const verts = md.vertices.slice();
-  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
-  const newFaceSelections = [];
-  for (const sel of targets) {
-    const fi = _findFaceIndex(faces, sel);
-    if (fi < 0) continue;
-    const face = faces[fi];
-    const normal = _faceNormalFromVerts(verts, face).multiplyScalar(distance);
-    const newIdxs = face.map(oldIdx => {
-      const p = _vecFromArr(verts, oldIdx).add(normal);
-      verts.push(p.x, p.y, p.z);
-      return (verts.length / 3) - 1;
-    });
-    faces[fi] = newIdxs.slice();
-    newFaceSelections.push(newIdxs.slice());
-    for (let i = 0; i < face.length; i++) {
-      const j = (i + 1) % face.length;
-      faces.push([face[i], face[j], newIdxs[j], newIdxs[i]]);
-    }
+  if (typeof distance === 'number' && Number.isFinite(distance)) {
+    const result = _computeExtrude(md, targets, distance);
+    if (!result) return;
+    window.slateScene3dBeginAction?.();
+    setEditSubMode('face');
+    _editApplyMeshData({ vertices: result.vertices, faces: result.faces }, { faces: result.newFaceSelections });
+    try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+    return;
   }
-  setEditSubMode('face');
-  _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
+  extrudeState = {
+    snapshot: _cloneMeshDataDeep(md),
+    targets,
+    startY: _lastMouseClientY ?? 0,
+    wheelOffset: 0,
+    distance: 0,
+    didSetFaceMode: false,
+  };
+  window.slateScene3dBeginAction?.();
+  if (orbit) orbit.enabled = false;
+  if (transform) { transform.enabled = false; transform.detach(); }
+  if (transformHelper) transformHelper.visible = false;
+  container.addEventListener('pointermove', _onExtrudePointerMove, true);
+  container.addEventListener('wheel', _onExtrudeWheel, { capture: true, passive: false });
+  _showExtrudeHint();
+  try { window.slateSfx?.play('grab-start'); } catch (_) {}
+  _applyExtrude();
+}
+function _onExtrudePointerMove(e) {
+  if (!extrudeState) return;
+  _lastMouseClientX = e.clientX;
+  _lastMouseClientY = e.clientY;
+  _applyExtrude();
+}
+function _onExtrudeWheel(e) {
+  if (!extrudeState) return;
+  e.preventDefault(); e.stopPropagation();
+  extrudeState.wheelOffset += e.deltaY < 0 ? 0.06 : -0.06;
+  _applyExtrude();
+}
+function _applyExtrude() {
+  if (!extrudeState) return;
+  const clientY = _lastMouseClientY ?? extrudeState.startY;
+  const dy = extrudeState.startY - clientY;
+  const raw = dy * 0.008 + extrudeState.wheelOffset;
+  extrudeState.distance = Math.max(-4, Math.min(4, raw));
+  const result = _computeExtrude(extrudeState.snapshot, extrudeState.targets, extrudeState.distance);
+  if (!result) return;
+  if (!extrudeState.didSetFaceMode) {
+    extrudeState.didSetFaceMode = true;
+    editSubMode = 'face';
+    document.querySelectorAll('#toolbar-3d .t3d-esel-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.sel === 'face');
+    });
+  }
+  _editApplyMeshData(
+    { vertices: result.vertices, faces: result.faces },
+    { faces: result.newFaceSelections },
+  );
+  _updateExtrudeHint();
+}
+function _extrudeConfirm() {
+  if (!extrudeState) return;
+  container.removeEventListener('pointermove', _onExtrudePointerMove, true);
+  container.removeEventListener('wheel', _onExtrudeWheel, { capture: true });
+  extrudeState = null;
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideExtrudeHint();
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
+function _extrudeCancel() {
+  if (!extrudeState) return;
+  const snap = extrudeState.snapshot;
+  container.removeEventListener('pointermove', _onExtrudePointerMove, true);
+  container.removeEventListener('wheel', _onExtrudeWheel, { capture: true });
+  extrudeState = null;
+  _editApplyMeshData(snap, {});
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideExtrudeHint();
+  try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+}
+function _showExtrudeHint() {
+  if (!container) return;
+  if (!_extrudeHintEl) {
+    _extrudeHintEl = document.createElement('div');
+    _extrudeHintEl.className = 'fly-cam-hint';
+    container.appendChild(_extrudeHintEl);
+  }
+  _extrudeHintEl.style.display = '';
+  _updateExtrudeHint();
+}
+function _updateExtrudeHint() {
+  if (!_extrudeHintEl || !extrudeState) return;
+  _extrudeHintEl.textContent =
+    `Extrude · ${extrudeState.distance.toFixed(3)} · drag / scroll · click confirm · RMB / Esc cancel`;
+}
+function _hideExtrudeHint() {
+  if (_extrudeHintEl) _extrudeHintEl.style.display = 'none';
+}
 
-/** Inset — shrink each selected face inward, surround it with a quad ring. */
-function insetSelectedFaces(factor = 0.25) {
+/** Inset — interactive depth like Blender; LMB confirms, RMB / Esc cancels. */
+let _insetHintEl = null;
+
+function insetSelectedFaces(factor) {
   if (editorMode !== 'edit') return;
+  if (grabState || bevelState || extrudeState || insetState) return;
   const md = _editFreshMeshData();
   if (!md) { _showEditHint('Nothing to inset — select a face first'); return; }
   const targets = _deriveFaceSelection(md);
@@ -2596,30 +2864,107 @@ function insetSelectedFaces(factor = 0.25) {
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
-  window.slateScene3dBeginAction?.();
-  const verts = md.vertices.slice();
-  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
-  const newFaceSelections = [];
-  for (const sel of targets) {
-    const fi = _findFaceIndex(faces, sel);
-    if (fi < 0) continue;
-    const face = faces[fi];
-    const centroid = _faceCentroidFromVerts(verts, face);
-    const innerIdxs = face.map(oldIdx => {
-      const p = _vecFromArr(verts, oldIdx).lerp(centroid, factor);
-      verts.push(p.x, p.y, p.z);
-      return (verts.length / 3) - 1;
-    });
-    faces[fi] = innerIdxs.slice();
-    newFaceSelections.push(innerIdxs.slice());
-    for (let i = 0; i < face.length; i++) {
-      const j = (i + 1) % face.length;
-      faces.push([face[i], face[j], innerIdxs[j], innerIdxs[i]]);
-    }
+  if (typeof factor === 'number' && Number.isFinite(factor)) {
+    const result = _computeInset(md, targets, factor);
+    if (!result) return;
+    window.slateScene3dBeginAction?.();
+    setEditSubMode('face');
+    _editApplyMeshData({ vertices: result.vertices, faces: result.faces }, { faces: result.newFaceSelections });
+    try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+    return;
   }
-  setEditSubMode('face');
-  _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
+  insetState = {
+    snapshot: _cloneMeshDataDeep(md),
+    targets,
+    startX: _lastMouseClientX ?? 0,
+    wheelOffset: 0,
+    factor: 0.12,
+    didSetFaceMode: false,
+  };
+  window.slateScene3dBeginAction?.();
+  if (orbit) orbit.enabled = false;
+  if (transform) { transform.enabled = false; transform.detach(); }
+  if (transformHelper) transformHelper.visible = false;
+  container.addEventListener('pointermove', _onInsetPointerMove, true);
+  container.addEventListener('wheel', _onInsetWheel, { capture: true, passive: false });
+  _showInsetHint();
+  try { window.slateSfx?.play('grab-start'); } catch (_) {}
+  _applyInset();
+}
+function _onInsetPointerMove(e) {
+  if (!insetState) return;
+  _lastMouseClientX = e.clientX;
+  _lastMouseClientY = e.clientY;
+  _applyInset();
+}
+function _onInsetWheel(e) {
+  if (!insetState) return;
+  e.preventDefault(); e.stopPropagation();
+  insetState.wheelOffset += e.deltaY < 0 ? 0.02 : -0.02;
+  _applyInset();
+}
+function _applyInset() {
+  if (!insetState) return;
+  const clientX = _lastMouseClientX ?? insetState.startX;
+  const dx = clientX - insetState.startX;
+  const raw = dx * 0.0022 + insetState.wheelOffset;
+  insetState.factor = Math.max(0.01, Math.min(0.48, 0.12 + raw));
+  const result = _computeInset(insetState.snapshot, insetState.targets, insetState.factor);
+  if (!result) return;
+  if (!insetState.didSetFaceMode) {
+    insetState.didSetFaceMode = true;
+    editSubMode = 'face';
+    document.querySelectorAll('#toolbar-3d .t3d-esel-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.sel === 'face');
+    });
+  }
+  _editApplyMeshData(
+    { vertices: result.vertices, faces: result.faces },
+    { faces: result.newFaceSelections },
+  );
+  _updateInsetHint();
+}
+function _insetConfirm() {
+  if (!insetState) return;
+  container.removeEventListener('pointermove', _onInsetPointerMove, true);
+  container.removeEventListener('wheel', _onInsetWheel, { capture: true });
+  insetState = null;
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideInsetHint();
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+function _insetCancel() {
+  if (!insetState) return;
+  const snap = insetState.snapshot;
+  container.removeEventListener('pointermove', _onInsetPointerMove, true);
+  container.removeEventListener('wheel', _onInsetWheel, { capture: true });
+  insetState = null;
+  _editApplyMeshData(snap, {});
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideInsetHint();
+  try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+}
+function _showInsetHint() {
+  if (!container) return;
+  if (!_insetHintEl) {
+    _insetHintEl = document.createElement('div');
+    _insetHintEl.className = 'fly-cam-hint';
+    container.appendChild(_insetHintEl);
+  }
+  _insetHintEl.style.display = '';
+  _updateInsetHint();
+}
+function _updateInsetHint() {
+  if (!_insetHintEl || !insetState) return;
+  _insetHintEl.textContent =
+    `Inset · ${insetState.factor.toFixed(3)} · drag / scroll · click confirm · RMB / Esc cancel`;
+}
+function _hideInsetHint() {
+  if (_insetHintEl) _insetHintEl.style.display = 'none';
 }
 
 /** Subdivide each selected face into N quads (one per corner, meeting in the
@@ -2715,22 +3060,33 @@ function subdivideSelectedFaces() {
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
-/** Loop cut a single selected face — for a quad, splits it across the midpoint
- *  along the longer pair of edges into two quads. For tris splits into a tri
- *  and a quad along the longest edge. Works on multiple selected faces. */
+/** Loop cut — follows a quad edge loop through the selected edge (or first edge of a face). */
 function loopCutSelectedFaces() {
   if (editorMode !== 'edit') return;
   const md = _editFreshMeshData();
-  if (!md) { _showEditHint('Nothing to cut — select a face first'); return; }
-  const targets = _deriveFaceSelection(md);
-  if (!targets.length) {
-    _showEditHint('Select a face to loop-cut (press 3 for face mode)');
+  if (!md) { _showEditHint('Nothing to cut — select an edge or face first'); return; }
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+  const edgeFaces = _buildMeshEdgeFaces(faces);
+  const seeds = [];
+  if (editSubMode === 'edge' && editEdgeSelection.size) {
+    editEdgeSelection.forEach(k => seeds.push(k));
+  } else if (editSubMode === 'face' && editFaceSelection.size) {
+    const ring = [...editFaceSelection.values()][0];
+    if (ring && ring.length >= 2) seeds.push(_edgeKey(ring[0], ring[1]));
+  } else {
+    const derived = _deriveFaceSelection(md);
+    if (derived.length && derived[0].length >= 2) {
+      seeds.push(_edgeKey(derived[0][0], derived[0][1]));
+    }
+  }
+  if (!seeds.length) {
+    _showEditHint('Loop cut: select an edge (2) or face (3), or use Ctrl+R on a face');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
+
   window.slateScene3dBeginAction?.();
-  const verts = md.vertices.slice();
-  const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const edgeMid = new Map();
   function getEdgeMid(a, b) {
     const k = _edgeKey(a, b);
@@ -2742,55 +3098,99 @@ function loopCutSelectedFaces() {
     edgeMid.set(k, idx);
     return idx;
   }
-  const removeAt = new Set();
+
   const newFaceSelections = [];
+  const appliedFi = new Set();
+  let didRing = false;
+  for (const seed of seeds) {
+    const ops = _loopCutQuadRingOps(faces, seed, edgeFaces);
+    if (!ops) continue;
+    const sorted = [...ops].sort((a, b) => b.fi - a.fi);
+    for (const op of sorted) {
+      if (appliedFi.has(op.fi)) continue;
+      const got = _splitQuadAlongOppositeMids(
+        verts, faces, op.fi, getEdgeMid, op.e1a, op.e1b, op.e2a, op.e2b,
+      );
+      if (got) {
+        appliedFi.add(op.fi);
+        didRing = true;
+        newFaceSelections.push(got.q1.slice(), got.q2.slice());
+      }
+    }
+  }
+
+  if (didRing) {
+    setEditSubMode('face');
+    _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
+    try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+    return;
+  }
+
+  // Fallback: per-face cut (tris / n-gons / non-loop quads).
+  const targets = _deriveFaceSelection(md);
+  if (!targets.length) {
+    _showEditHint('Could not find a quad edge loop from this selection');
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  const verts2 = md.vertices.slice();
+  const faces2 = md.faces.map(f => Array.isArray(f) ? [...f] : f);
+  const edgeMid2 = new Map();
+  function getEdgeMid2(a, b) {
+    const k = _edgeKey(a, b);
+    if (edgeMid2.has(k)) return edgeMid2.get(k);
+    const pa = _vecFromArr(verts2, a), pb = _vecFromArr(verts2, b);
+    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+    verts2.push(mid.x, mid.y, mid.z);
+    const idx = (verts2.length / 3) - 1;
+    edgeMid2.set(k, idx);
+    return idx;
+  }
+  const removeAt = new Set();
+  const newFaceSel2 = [];
   for (const sel of targets) {
-    const fi = _findFaceIndex(faces, sel);
+    const fi = _findFaceIndex(faces2, sel);
     if (fi < 0) continue;
-    const face = faces[fi];
+    const face = faces2[fi];
     removeAt.add(fi);
     if (face.length === 4) {
-      // Cut between midpoints of opposite edges. Pick whichever pair gives
-      // the more square-ish halves (cut the longer pair).
-      const len = (a, b) => _vecFromArr(verts, a).distanceTo(_vecFromArr(verts, b));
+      const len = (a, b) => _vecFromArr(verts2, a).distanceTo(_vecFromArr(verts2, b));
       const e0 = len(face[0], face[1]) + len(face[2], face[3]);
       const e1 = len(face[1], face[2]) + len(face[3], face[0]);
       let i0, i1, i2, i3;
       if (e0 >= e1) { i0 = 0; i1 = 1; i2 = 2; i3 = 3; }
       else          { i0 = 1; i1 = 2; i2 = 3; i3 = 0; }
-      const m1 = getEdgeMid(face[i0], face[i1]);
-      const m2 = getEdgeMid(face[i2], face[i3]);
+      const m1 = getEdgeMid2(face[i0], face[i1]);
+      const m2 = getEdgeMid2(face[i2], face[i3]);
       const q1 = [face[i0], m1, m2, face[i3]];
       const q2 = [m1, face[i1], face[i2], m2];
-      faces.push(q1); faces.push(q2);
-      newFaceSelections.push(q1.slice(), q2.slice());
+      faces2.push(q1); faces2.push(q2);
+      newFaceSel2.push(q1.slice(), q2.slice());
     } else if (face.length === 3) {
-      // Split triangle across midpoint of the longest edge.
       let longest = 0, lLen = 0;
       for (let i = 0; i < 3; i++) {
-        const d = _vecFromArr(verts, face[i]).distanceTo(_vecFromArr(verts, face[(i + 1) % 3]));
+        const d = _vecFromArr(verts2, face[i]).distanceTo(_vecFromArr(verts2, face[(i + 1) % 3]));
         if (d > lLen) { lLen = d; longest = i; }
       }
       const a = face[longest], b = face[(longest + 1) % 3], c = face[(longest + 2) % 3];
-      const m = getEdgeMid(a, b);
-      faces.push([a, m, c]);
-      faces.push([m, b, c]);
-      newFaceSelections.push([a, m, c], [m, b, c]);
+      const m = getEdgeMid2(a, b);
+      faces2.push([a, m, c]);
+      faces2.push([m, b, c]);
+      newFaceSel2.push([a, m, c], [m, b, c]);
     } else {
-      // Polygon: just fan-subdivide (gives an OK result for n-gons).
-      const centroid = _faceCentroidFromVerts(verts, face);
-      verts.push(centroid.x, centroid.y, centroid.z);
-      const cIdx = (verts.length / 3) - 1;
+      const centroid = _faceCentroidFromVerts(verts2, face);
+      verts2.push(centroid.x, centroid.y, centroid.z);
+      const cIdx = (verts2.length / 3) - 1;
       for (let i = 0; i < face.length; i++) {
         const tri = [face[i], face[(i + 1) % face.length], cIdx];
-        faces.push(tri);
-        newFaceSelections.push(tri.slice());
+        faces2.push(tri);
+        newFaceSel2.push(tri.slice());
       }
     }
   }
-  const compact = faces.filter((_, i) => !removeAt.has(i));
+  const compact = faces2.filter((_, i) => !removeAt.has(i));
   setEditSubMode('face');
-  _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
+  _editApplyMeshData({ vertices: verts2, faces: compact }, { faces: newFaceSel2 });
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
@@ -2954,6 +3354,8 @@ function _bevelTargetsFromSelection() {
  *  the keyboard/pointer handlers can check it without depending on call
  *  order. */
 let bevelState = null;
+let extrudeState = null;
+let insetState = null;
 
 /** Blender-style Ctrl+B: enter an interactive modal where horizontal mouse
  *  movement controls the bevel amount. Click to confirm, RMB / Esc to cancel.
@@ -2961,8 +3363,8 @@ let bevelState = null;
  *  amount with no preview. */
 function bevelSelectedVerts(amount) {
   if (editorMode !== 'edit') return;
-  // Don't stack on top of an existing grab/bevel modal.
-  if (grabState || bevelState) return;
+  // Don't stack on top of an existing grab/bevel/extrude/inset modal.
+  if (grabState || bevelState || extrudeState || insetState) return;
   const md = _editFreshMeshData();
   if (!md) { _showEditHint('Nothing to bevel — select a vertex first'); return; }
   const vertTargets = _bevelTargetsFromSelection();
@@ -3085,39 +3487,46 @@ function _hideBevelHint() {
   if (_bevelHintEl) _bevelHintEl.style.display = 'none';
 }
 
-/** Move all selected vertices to their shared centroid. */
+/** Move all selected vertices to their shared centroid (meshData path + weld). */
 function mergeSelectedToCenter() {
   if (editorMode !== 'edit') return;
+  _syncDerivedVertSelection();
   if (!editSelection.size) {
-    _showEditHint('Select vertices to merge (press 1 for vertex mode)');
+    _showEditHint('Select vertices, edges, or faces to merge');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }
-  const mesh = objMeshes.get(editTargetId);
-  if (!mesh) return;
-  const posAttr = mesh.geometry.getAttribute('position');
-  if (!posAttr) return;
-  const weld = editHelpers.weldMap;
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const sel = [...editSelection].filter(i => i >= 0 && (i * 3 + 2) < verts.length);
+  if (!sel.length) return;
   const c = new THREE.Vector3();
-  let n = 0;
-  editSelection.forEach(logical => {
-    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
-    const g = weld.logicalToIdxs[logical][0];
-    c.add(new THREE.Vector3(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g)));
-    n++;
+  sel.forEach(i => c.add(_vecFromArr(verts, i)));
+  c.divideScalar(sel.length);
+  sel.forEach(i => {
+    verts[i * 3] = c.x;
+    verts[i * 3 + 1] = c.y;
+    verts[i * 3 + 2] = c.z;
   });
-  if (!n) return;
-  c.divideScalar(n);
   window.slateScene3dBeginAction?.();
-  editSelection.forEach(logical => {
-    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
-    for (const g of weld.logicalToIdxs[logical]) {
-      posAttr.setXYZ(g, c.x, c.y, c.z);
+  window.slateScene3d?.setMeshData(editTargetId, { vertices: verts, faces: md.faces });
+  buildEditHelpers();
+  setEditSubMode('vertex');
+  const mesh = objMeshes.get(editTargetId);
+  const posAttr = mesh?.geometry.getAttribute('position');
+  const weld = editHelpers?.weldMap;
+  if (posAttr && weld) {
+    const eps2 = 1e-12;
+    for (let l = 0; l < weld.logicalToIdxs.length; l++) {
+      const g = weld.logicalToIdxs[l][0];
+      const p = new THREE.Vector3(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g));
+      if (p.distanceToSquared(c) <= eps2) {
+        editSelection.add(l);
+        break;
+      }
     }
-  });
-  posAttr.needsUpdate = true;
-  mesh.geometry.computeVertexNormals();
-  mesh.geometry.computeBoundingSphere();
+  }
   commitEditChanges();
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
@@ -3273,6 +3682,98 @@ function updateToolbarVisibility() {
     if (el.classList.contains('toolbar-sep')) el.style.display = inEdit ? 'block' : 'none';
     else el.style.display = inEdit ? 'flex' : 'none';
   });
+}
+
+function _initViewGizmo() {
+  _disposeViewGizmo();
+  viewGizmoRaycaster = new THREE.Raycaster();
+  viewGizmoScene = new THREE.Scene();
+  viewGizmoCam = new THREE.OrthographicCamera(-1.35, 1.35, 1.35, -1.35, 0.1, 12);
+  viewGizmoCam.position.set(0, 0, 6);
+  viewGizmoCam.lookAt(0, 0, 0);
+  viewGizmoRoot = new THREE.Group();
+  viewGizmoScene.add(viewGizmoRoot);
+  viewGizmoPickables.length = 0;
+
+  function addArrow(dir, color, viewPreset) {
+    const d = dir.clone().normalize();
+    const mat = new THREE.MeshBasicMaterial({ color });
+    const r = 0.055;
+    const shaftH = 0.32;
+    const tipH = 0.2;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.5, r * 0.5, shaftH, 8), mat);
+    shaft.position.y = shaftH / 2;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(r, tipH, 10), mat);
+    tip.position.y = shaftH + tipH / 2;
+    const arm = new THREE.Group();
+    arm.add(shaft, tip);
+    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    shaft.userData.axisView = viewPreset;
+    tip.userData.axisView = viewPreset;
+    viewGizmoPickables.push(shaft, tip);
+    viewGizmoRoot.add(arm);
+  }
+  addArrow(new THREE.Vector3(1, 0, 0), 0xff4444, 'right');
+  addArrow(new THREE.Vector3(-1, 0, 0), 0xaa2222, 'left');
+  addArrow(new THREE.Vector3(0, 1, 0), 0x44dd66, 'top');
+  addArrow(new THREE.Vector3(0, -1, 0), 0x228844, 'bottom');
+  addArrow(new THREE.Vector3(0, 0, 1), 0x5599ff, 'front');
+  addArrow(new THREE.Vector3(0, 0, -1), 0x3366cc, 'back');
+}
+
+function _disposeViewGizmo() {
+  viewGizmoPickables.length = 0;
+  if (viewGizmoRoot) {
+    viewGizmoRoot.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose?.();
+    });
+  }
+  viewGizmoScene = null;
+  viewGizmoCam = null;
+  viewGizmoRoot = null;
+  viewGizmoRaycaster = null;
+}
+
+function _renderViewGizmo() {
+  if (!renderer || !viewGizmoScene || !viewGizmoCam || !viewGizmoRoot || !camera) return;
+  if (!document.body.classList.contains('mode-3d')) return;
+  viewGizmoRoot.quaternion.copy(camera.quaternion).invert();
+  const bufW = renderer.domElement.width;
+  const bufH = renderer.domElement.height;
+  if (bufW < 8 || bufH < 8) return;
+  const sz = Math.max(72, Math.min(130, Math.round(bufH * 0.2)));
+  const pad = Math.round(Math.max(10, bufH * 0.02));
+  const vx = bufW - sz - pad;
+  const vy = bufH - sz - pad;
+  const prevAuto = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.setViewport(vx, vy, sz, sz);
+  renderer.setScissor(vx, vy, sz, sz);
+  renderer.setScissorTest(true);
+  renderer.clearDepth();
+  renderer.render(viewGizmoScene, viewGizmoCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, bufW, bufH);
+  renderer.autoClear = prevAuto;
+}
+
+function _viewGizmoPickView(clientX, clientY) {
+  if (!renderer?.domElement || !viewGizmoScene || !viewGizmoCam || !viewGizmoRaycaster) return null;
+  if (!document.body.classList.contains('mode-3d')) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const bufH = renderer.domElement.height;
+  const sz = Math.max(72, Math.min(130, Math.round(bufH * 0.2)));
+  const pad = Math.round(Math.max(10, bufH * 0.02));
+  const gx0 = rect.right - sz - pad;
+  const gy0 = rect.top + pad;
+  if (clientX < gx0 || clientX > gx0 + sz || clientY < gy0 || clientY > gy0 + sz) return null;
+  const x = ((clientX - gx0) / sz) * 2 - 1;
+  const y = -((clientY - gy0) / sz) * 2 + 1;
+  viewGizmoRaycaster.setFromCamera({ x, y }, viewGizmoCam);
+  const hits = viewGizmoRaycaster.intersectObjects(viewGizmoPickables, false);
+  const v = hits[0]?.object?.userData?.axisView;
+  return typeof v === 'string' ? v : null;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -3550,6 +4051,7 @@ function loop() {
   if ((_loopFrame & 1) === 0) _updatePeerCamMarkers();
   _maybeBroadcastCamera(now);
   renderer.render(scene, camera);
+  _renderViewGizmo();
 }
 
 function onVisualViewportChange() { resize(); }
@@ -4097,6 +4599,7 @@ function _bindOutlinerRootDrop() {
 export function initEditor3D(rootEl) {
   if (!rootEl) return;
   if (container === rootEl && renderer) {
+    if (!viewGizmoScene) _initViewGizmo();
     resize(); bindEvents();
     _attachContainerResizeObserver(container);
     cancelAnimationFrame(raf); loop();
@@ -4177,6 +4680,7 @@ export function initEditor3D(rootEl) {
     : transform;
   scene.add(transformHelper);
   _customizeTransformGizmo();
+  _initViewGizmo();
 
   resize();
   bindEvents();
@@ -4208,6 +4712,10 @@ export function disposeEditor3D() {
   _cancelRmbFlyTimer();
   _rmbFlyTriggered = false;
   if (grabState) _grabCancel();
+  if (bevelState) _bevelCancel();
+  if (extrudeState) _extrudeCancel();
+  if (insetState) _insetCancel();
+  _disposeViewGizmo();
 
   _clearAllPeerCameras();
   selectedIds.clear();

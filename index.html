@@ -3762,7 +3762,8 @@ function handleData(peerId, data) {
         const hasContent =
           doc.shapes.size > 0 || doc.strokes.size > 0 ||
           (doc.layers && doc.layers.length > 1) ||
-          (doc.scene3d && doc.scene3d.objects.length > 1);
+          (doc.scene3d && doc.scene3d.objects.length > 1) ||
+          (doc.notes && doc.notes.sections.length > 0);
         if (hasContent) {
           try { state.connections[peerId]?.conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
         }
@@ -3841,6 +3842,62 @@ function handleData(peerId, data) {
       }
       if (scene3dChanged && typeof window.slateScene3d?._onSceneReplaced === 'function') {
         window.slateScene3d._onSceneReplaced();
+      }
+      let notesChanged = false;
+      if (Array.isArray(data.notesAdd) && data.notesAdd.length) {
+        data.notesAdd.forEach(s => {
+          const norm = _normalizeNoteSection(s);
+          const i = doc.notes.sections.findIndex(x => x.id === norm.id);
+          if (i >= 0) doc.notes.sections[i] = norm;
+          else        doc.notes.sections.push(norm);
+        });
+        notesChanged = true;
+      }
+      if (Array.isArray(data.notesUpd) && data.notesUpd.length) {
+        data.notesUpd.forEach(u => {
+          if (!u || !u.id) return;
+          const sec = doc.notes.sections.find(x => x.id === u.id);
+          if (!sec) return;
+          // Per-field merge: last write wins on each field independently. We
+          // intentionally don't drop the whole patch when its updatedAt is
+          // older — different users may have edited different fields, and
+          // we want both edits to land.
+          if (typeof u.title === 'string') sec.title = u.title.slice(0, 80);
+          if (typeof u.body  === 'string') sec.body  = u.body;
+          if (Array.isArray(u.items)) {
+            sec.items = u.items.map(it => ({
+              id:   String(it?.id || _genNoteId()),
+              text: String(it?.text || '').slice(0, 400),
+              done: !!it?.done,
+            }));
+          }
+          // Always advance updatedAt to the newest timestamp we've seen so
+          // future docMergeRemoteSnapshot calls compare against the latest
+          // edit time, not the original creation time.
+          if (typeof u.updatedAt === 'number' && u.updatedAt > (sec.updatedAt || 0)) {
+            sec.updatedAt = u.updatedAt;
+          }
+        });
+        notesChanged = true;
+      }
+      if (Array.isArray(data.notesDel) && data.notesDel.length) {
+        const delSet = new Set(data.notesDel);
+        doc.notes.sections = doc.notes.sections.filter(s => !delSet.has(s.id));
+        notesChanged = true;
+      }
+      if (Array.isArray(data.notesOrder) && data.notesOrder.length) {
+        const byId = new Map(doc.notes.sections.map(s => [s.id, s]));
+        const ordered = [];
+        for (const id of data.notesOrder) {
+          const s = byId.get(id);
+          if (s) { ordered.push(s); byId.delete(id); }
+        }
+        byId.forEach(s => ordered.push(s));
+        doc.notes.sections = ordered;
+        notesChanged = true;
+      }
+      if (notesChanged && typeof window.slateNotes?._emit === 'function') {
+        window.slateNotes._emit();
       }
       invalidateStatic();
       scheduleRender();
@@ -4445,11 +4502,16 @@ function _defaultScene3d() {
   };
 }
 
+function _defaultNotes() {
+  return { sections: [] };
+}
+
 const doc = {
   shapes:  new Map(),  // id -> Shape
   strokes: new Map(),  // id -> Stroke
   layers:  _defaultLayers(),
   scene3d: _defaultScene3d(),
+  notes:   _defaultNotes(),
 };
 
 function docClear() {
@@ -4457,11 +4519,15 @@ function docClear() {
   doc.strokes.clear();
   doc.layers = _defaultLayers();
   doc.scene3d = _defaultScene3d();
+  doc.notes   = _defaultNotes();
   if (typeof window.slateLayers?._onLayersReplaced === 'function') {
     window.slateLayers._onLayersReplaced();
   }
   if (typeof window.slateScene3d?._onSceneReplaced === 'function') {
     window.slateScene3d._onSceneReplaced();
+  }
+  if (typeof window.slateNotes?._onNotesReplaced === 'function') {
+    window.slateNotes._onNotesReplaced();
   }
   invalidateStatic();
 }
@@ -4486,11 +4552,17 @@ function docApplySnapshot(snap) {
   if (snap.scene3d && Array.isArray(snap.scene3d.objects)) {
     doc.scene3d = { objects: snap.scene3d.objects.map(_normalizeSceneObject) };
   }
+  if (snap.notes && Array.isArray(snap.notes.sections)) {
+    doc.notes = { sections: snap.notes.sections.map(_normalizeNoteSection) };
+  }
   if (typeof window.slateLayers?._onLayersReplaced === 'function') {
     window.slateLayers._onLayersReplaced();
   }
   if (typeof window.slateScene3d?._onSceneReplaced === 'function') {
     window.slateScene3d._onSceneReplaced();
+  }
+  if (typeof window.slateNotes?._onNotesReplaced === 'function') {
+    window.slateNotes._onNotesReplaced();
   }
   invalidateStatic();
 }
@@ -4572,6 +4644,26 @@ function docMergeRemoteSnapshot(snap) {
       }
     }
   }
+  // Notes merge: add unknown sections; for known sections, take whichever
+  // was updated more recently (per-section last-write-wins) so concurrent
+  // edits don't blow away local changes.
+  if (snap.notes && Array.isArray(snap.notes.sections)) {
+    const have = new Map(doc.notes.sections.map(s => [s.id, s]));
+    snap.notes.sections.forEach(rawSec => {
+      const sec = _normalizeNoteSection(rawSec);
+      if (!sec.id) return;
+      const local = have.get(sec.id);
+      if (!local) {
+        doc.notes.sections.push(sec);
+      } else if ((sec.updatedAt || 0) > (local.updatedAt || 0)) {
+        const i = doc.notes.sections.findIndex(s => s.id === sec.id);
+        if (i >= 0) doc.notes.sections[i] = sec;
+      }
+    });
+    if (typeof window.slateNotes?._onNotesReplaced === 'function') {
+      window.slateNotes._onNotesReplaced();
+    }
+  }
   invalidateStatic();
 }
 
@@ -4581,7 +4673,32 @@ function docSerialize() {
     strokes: [...doc.strokes.values()],
     layers:  doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible })),
     scene3d: { objects: doc.scene3d.objects.map(_normalizeSceneObject) },
+    notes:   { sections: doc.notes.sections.map(_normalizeNoteSection) },
   };
+}
+
+/** Coerce a raw note section (possibly from disk/peer) into our canonical
+ *  shape, dropping bogus fields and clamping lengths so a malicious or
+ *  corrupted snapshot can't break the UI. */
+function _normalizeNoteSection(raw) {
+  const sec = raw && typeof raw === 'object' ? raw : {};
+  const items = Array.isArray(sec.items) ? sec.items : [];
+  return {
+    id:        String(sec.id || _genNoteId()),
+    title:     String(sec.title || 'Note').slice(0, 80),
+    body:      String(sec.body || ''),
+    items:     items.map(it => ({
+      id:   String(it?.id || _genNoteId()),
+      text: String(it?.text || '').slice(0, 400),
+      done: !!it?.done,
+    })),
+    createdAt: Number(sec.createdAt) || Date.now(),
+    updatedAt: Number(sec.updatedAt) || Date.now(),
+    peerId:    sec.peerId ? String(sec.peerId) : null,
+  };
+}
+function _genNoteId() {
+  return 'nt_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
 
 /* ═══════════════════════════════════════════
@@ -4900,6 +5017,164 @@ window.slateScene3d = {
 };
 
 /* ═══════════════════════════════════════════
+   NOTES API  (per-board, multi-section text + checklists, fully synced)
+═══════════════════════════════════════════ */
+const _notesListeners = new Set();
+
+function _broadcastNoteAdd(section) {
+  pendingDiff.notesAdd.push(_normalizeNoteSection(section));
+  scheduleDiff();
+}
+function _broadcastNoteUpd(id, patch) {
+  // Coalesce repeated updates into one entry per section id.
+  const existing = pendingDiff.notesUpd.find(u => u.id === id);
+  if (existing) Object.assign(existing, patch);
+  else          pendingDiff.notesUpd.push({ id, ...patch });
+  scheduleDiff();
+}
+function _broadcastNoteDel(id) {
+  pendingDiff.notesDel.push(id);
+  pendingDiff.notesAdd = pendingDiff.notesAdd.filter(s => s.id !== id);
+  pendingDiff.notesUpd = pendingDiff.notesUpd.filter(u => u.id !== id);
+  scheduleDiff();
+}
+function _broadcastNotesOrder() {
+  pendingDiff.notesOrder = doc.notes.sections.map(s => s.id);
+  scheduleDiff();
+}
+
+window.slateNotes = {
+  get sections() { return doc.notes.sections; },
+
+  /** Subscribe to notes-changed events. Returns an unsubscribe function. */
+  onChange(fn) {
+    if (typeof fn === 'function') _notesListeners.add(fn);
+    return () => _notesListeners.delete(fn);
+  },
+  _emit() { _notesListeners.forEach(fn => { try { fn(); } catch {} }); },
+  _onNotesReplaced() { this._emit(); },
+
+  find(id) { return doc.notes.sections.find(s => s.id === id) || null; },
+
+  /** Create a new section. Returns the new section. */
+  createSection(opts = {}) {
+    const now = Date.now();
+    const sec = _normalizeNoteSection({
+      id:        opts.id || _genNoteId(),
+      title:     opts.title || `Note ${doc.notes.sections.length + 1}`,
+      body:      opts.body || '',
+      items:     Array.isArray(opts.items) ? opts.items : [],
+      createdAt: now,
+      updatedAt: now,
+      peerId:    state.myId || null,
+    });
+    doc.notes.sections.push(sec);
+    _broadcastNoteAdd(sec);
+    this._emit();
+    return sec;
+  },
+
+  /** Patch a section's fields (title / body / items). Touches updatedAt. */
+  patchSection(id, patch) {
+    const sec = this.find(id);
+    if (!sec) return false;
+    const clean = {};
+    if (typeof patch.title === 'string') clean.title = patch.title.slice(0, 80);
+    if (typeof patch.body  === 'string') clean.body  = patch.body;
+    if (Array.isArray(patch.items)) {
+      clean.items = patch.items.map(it => ({
+        id:   String(it?.id || _genNoteId()),
+        text: String(it?.text || '').slice(0, 400),
+        done: !!it?.done,
+      }));
+    }
+    if (!Object.keys(clean).length) return false;
+    Object.assign(sec, clean);
+    sec.updatedAt = Date.now();
+    _broadcastNoteUpd(id, { ...clean, updatedAt: sec.updatedAt });
+    this._emit();
+    return true;
+  },
+
+  renameSection(id, title) {
+    return this.patchSection(id, { title });
+  },
+  setBody(id, body) {
+    return this.patchSection(id, { body });
+  },
+  removeSection(id) {
+    const i = doc.notes.sections.findIndex(s => s.id === id);
+    if (i < 0) return false;
+    doc.notes.sections.splice(i, 1);
+    _broadcastNoteDel(id);
+    this._emit();
+    return true;
+  },
+
+  /** Move a section to a new index (clamped to range). */
+  moveSection(id, toIndex) {
+    const from = doc.notes.sections.findIndex(s => s.id === id);
+    if (from < 0) return false;
+    const clamped = Math.max(0, Math.min(doc.notes.sections.length - 1, toIndex));
+    if (clamped === from) return false;
+    const [s] = doc.notes.sections.splice(from, 1);
+    doc.notes.sections.splice(clamped, 0, s);
+    _broadcastNotesOrder();
+    this._emit();
+    return true;
+  },
+
+  /** Append a checklist item to a section. */
+  addItem(sectionId, text = '') {
+    const sec = this.find(sectionId);
+    if (!sec) return null;
+    const item = {
+      id:   _genNoteId(),
+      text: String(text || '').slice(0, 400),
+      done: false,
+    };
+    sec.items.push(item);
+    sec.updatedAt = Date.now();
+    _broadcastNoteUpd(sectionId, { items: sec.items, updatedAt: sec.updatedAt });
+    this._emit();
+    return item;
+  },
+  setItemText(sectionId, itemId, text) {
+    const sec = this.find(sectionId);
+    if (!sec) return false;
+    const it = sec.items.find(x => x.id === itemId);
+    if (!it) return false;
+    it.text = String(text || '').slice(0, 400);
+    sec.updatedAt = Date.now();
+    _broadcastNoteUpd(sectionId, { items: sec.items, updatedAt: sec.updatedAt });
+    this._emit();
+    return true;
+  },
+  setItemDone(sectionId, itemId, done) {
+    const sec = this.find(sectionId);
+    if (!sec) return false;
+    const it = sec.items.find(x => x.id === itemId);
+    if (!it) return false;
+    it.done = !!done;
+    sec.updatedAt = Date.now();
+    _broadcastNoteUpd(sectionId, { items: sec.items, updatedAt: sec.updatedAt });
+    this._emit();
+    return true;
+  },
+  removeItem(sectionId, itemId) {
+    const sec = this.find(sectionId);
+    if (!sec) return false;
+    const i = sec.items.findIndex(x => x.id === itemId);
+    if (i < 0) return false;
+    sec.items.splice(i, 1);
+    sec.updatedAt = Date.now();
+    _broadcastNoteUpd(sectionId, { items: sec.items, updatedAt: sec.updatedAt });
+    this._emit();
+    return true;
+  },
+};
+
+/* ═══════════════════════════════════════════
    DRAWING ENGINE
 ═══════════════════════════════════════════ */
 const canvas = document.getElementById('board-canvas');
@@ -5070,7 +5345,7 @@ const redoStack = [];
 
 // Deferred diff to batch changes
 function _freshPendingDiff() {
-  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null, scene3dFull: null };
+  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null, scene3dFull: null, notesAdd: [], notesUpd: [], notesDel: [], notesOrder: null };
 }
 let pendingDiff = _freshPendingDiff();
 let diffTimer   = null;
@@ -5082,7 +5357,8 @@ function flushDiff() {
   const empty = !d.added.length && !d.updated.length && !d.removed.length &&
                 !d.strokes.length && !d.delStrokes.length && !d.layers &&
                 !d.scene3dAdd.length && !d.scene3dUpd.length && !d.scene3dDel.length &&
-                !d.scene3dOrder && !d.scene3dFull;
+                !d.scene3dOrder && !d.scene3dFull &&
+                !d.notesAdd.length && !d.notesUpd.length && !d.notesDel.length && !d.notesOrder;
   if (empty) return;
   if (state.isDrawMuted) return;
   const msg = { type: 'doc-diff', added: d.added, updated: d.updated, removed: d.removed, strokes: d.strokes, delStrokes: d.delStrokes };
@@ -5094,6 +5370,10 @@ function flushDiff() {
     if (d.scene3dDel.length) msg.scene3dDel = d.scene3dDel;
     if (d.scene3dOrder)      msg.scene3dOrder = d.scene3dOrder;
   }
+  if (d.notesAdd.length) msg.notesAdd = d.notesAdd;
+  if (d.notesUpd.length) msg.notesUpd = d.notesUpd;
+  if (d.notesDel.length) msg.notesDel = d.notesDel;
+  if (d.notesOrder)      msg.notesOrder = d.notesOrder;
   broadcastAll(msg);
 }
 
@@ -5126,7 +5406,8 @@ function boardHasUnsavedChanges(board) {
   const isDefaultDoc =
     doc.shapes.size === 0 && doc.strokes.size === 0 &&
     doc.layers.length === 1 && doc.layers[0]?.id === 'l1' &&
-    doc.scene3d.objects.length === 1 && doc.scene3d.objects[0]?.id === 'obj_cube_default';
+    doc.scene3d.objects.length === 1 && doc.scene3d.objects[0]?.id === 'obj_cube_default' &&
+    doc.notes.sections.length === 0;
   return !isDefaultDoc;
 }
 
@@ -8369,6 +8650,7 @@ renderSavedBoards();
 <script src="sfx.js"></script>
 <script src="layout-dock.js"></script>
 <script src="features.js"></script>
+<script src="notes.js"></script>
 <script>
 // Move the 3D toolbar inside #editor-pane so its absolute positioning is
 // anchored to the editor area (and it overlays the 3D viewport correctly).

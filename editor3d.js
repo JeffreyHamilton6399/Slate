@@ -5035,6 +5035,15 @@ export function disposeEditor3D() {
 // first 3D activation so the dock can switch to it immediately.
 ensureHierarchyPanel();
 
+function _boot3dIfNeeded() {
+  const el = document.getElementById('canvas-area-3d');
+  if (!el || !document.body.classList.contains('mode-3d')) return;
+  try {
+    if (getComputedStyle(el).display === 'none') return;
+  } catch (_) {}
+  initEditor3D(el);
+}
+
 window.addEventListener('slate-3d-activate', () => {
   const el = document.getElementById('canvas-area-3d');
   if (el) initEditor3D(el);
@@ -5042,3 +5051,7 @@ window.addEventListener('slate-3d-activate', () => {
 window.addEventListener('slate-3d-deactivate', () => {
   disposeEditor3D();
 });
+
+/* `editor3d.js` is a deferred module — `slate-3d-activate` may have fired before
+   this listener registered. Re-init whenever we are already in 3D mode. */
+_boot3dIfNeeded();

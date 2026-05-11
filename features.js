@@ -897,8 +897,11 @@ function showToast(msg) {
 }
 
 
+let _propsDockRegistered = false;
 function injectPropsDockPlaceholder() {
+  if (_propsDockRegistered) return;
   if (!window.slateDock || typeof window.slateDock.registerPanel !== 'function') return;
+  if (!document.body.classList.contains('mode-3d')) return;
   window.slateDock.registerPanel({
     id: 'props',
     title: 'Properties',
@@ -907,7 +910,9 @@ function injectPropsDockPlaceholder() {
       el.innerHTML = '<p style="margin:12px 14px;font-size:0.78rem;line-height:1.45;color:var(--text-dim)">Selection and tool options will appear here. Register panels with <code style="font-size:0.7rem;font-family:var(--mono,monospace)">slateDock.registerPanel()</code>.</p>';
     },
   });
+  _propsDockRegistered = true;
 }
+window.slateEnsurePropsPanel = injectPropsDockPlaceholder;
 
 /* ─────────────────────────────────────────────────────────────────────────
    INIT
@@ -916,7 +921,6 @@ function init() {
   injectOpacityControl();
   injectMinimap();
   injectLayersPanel();
-  injectPropsDockPlaceholder();
   injectShortcutsOverlay();
   injectToolbarExtras();
   patchZoomLabel();

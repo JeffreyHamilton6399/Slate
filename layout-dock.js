@@ -184,12 +184,12 @@
       });
       const body = document.getElementById('dock-body');
       if (!body) return;
-      body.querySelectorAll('.dock-panel').forEach(p => {
-        // Don't override floating panels' display (they're parented elsewhere).
-        if (p.parentElement === body) {
-          p.style.display = p.dataset.panel === id ? 'flex' : 'none';
-        }
-      });
+      const dockedTarget = body.querySelector(`:scope > .dock-panel[data-panel="${id}"]`);
+      if (dockedTarget) {
+        body.querySelectorAll(':scope > .dock-panel').forEach(p => {
+          p.style.display = p === dockedTarget ? 'flex' : 'none';
+        });
+      }
       try { localStorage.setItem('slate_dock_active', id); } catch (_) {}
     },
     getActive() {

@@ -2589,10 +2589,47 @@ function _cyclicEqualAsRings(a, b) {
 function _meshFaceFromLogicalRing(md, logicalOrdered, weld) {
   if (!weld || !md?.faces) return null;
   const logWant = logicalOrdered.map(Number);
+  const wantSet = new Set(logWant);
   for (const f of md.faces) {
     if (!Array.isArray(f) || f.length < 3 || f.length !== logWant.length) continue;
     const logF = f.map(vi => weld.logicalForIdx[vi]);
     if (_cyclicEqualAsRings(logF, logWant)) return [...f];
+  }
+  /* Picking flood-fills coplanar tris into an n-gon of logical verts, while
+   * `md.faces` may still store two triangles. Match a single tri or a quad
+   * rebuilt from two tris sharing an internal edge. */
+  if (logWant.length === 3) {
+    for (const f of md.faces) {
+      if (!Array.isArray(f) || f.length !== 3) continue;
+      const logF = f.map(vi => weld.logicalForIdx[vi]);
+      const s = new Set(logF);
+      if (s.size < 3) continue;
+      if (logWant.every(L => s.has(L))) return [...f];
+    }
+  }
+  if (logWant.length === 4) {
+    const tris = [];
+    for (const f of md.faces) {
+      if (!Array.isArray(f) || f.length !== 3) continue;
+      const logF = f.map(vi => weld.logicalForIdx[vi]);
+      if (!logF.every(L => wantSet.has(L))) continue;
+      tris.push(f);
+    }
+    for (let i = 0; i < tris.length; i++) {
+      for (let j = i + 1; j < tris.length; j++) {
+        const u = new Set();
+        tris[i].forEach(vi => u.add(weld.logicalForIdx[vi]));
+        tris[j].forEach(vi => u.add(weld.logicalForIdx[vi]));
+        if (u.size !== 4) continue;
+        let full = true;
+        for (const L of wantSet) {
+          if (!u.has(L)) { full = false; break; }
+        }
+        if (!full) continue;
+        const q = _orderedQuadFromTwoTris(tris[i], tris[j]);
+        if (q) return q;
+      }
+    }
   }
   return null;
 }
@@ -3406,10 +3443,9 @@ function loopCutSelectedFaces() {
  *  edges by `amount`, replacing the vertex with a small polygon (chamfer).
  *  Auto-derives a vertex selection from edge / face selections so the tool
  *  works regardless of submode. */
-/** Pure: compute bevelled mesh. `cuts` = segment count along each edge (scroll).
- *  Drag controls `amount` only; wheel adjusts `cuts` in the modal. */
-function _computeBevel(md, vertTargets, amountRequested, cutsIn = 1) {
-  const cuts = Math.max(1, Math.min(16, cutsIn | 0));
+/** Pure: vertex chamfer bevel — single ring per corner, stable at high amounts
+ *  because `amount` is clamped per-edge to stay inside adjacent edges. */
+function _computeBevel(md, vertTargets, amountRequested) {
   const verts = md.vertices.slice();
   const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
   const newVertSel = new Set();
@@ -3431,8 +3467,8 @@ function _computeBevel(md, vertTargets, amountRequested, cutsIn = 1) {
       const nextV = f[(p + 1) % f.length];
       const dPrev = _vecFromArr(verts, prevV).distanceTo(center);
       const dNext = _vecFromArr(verts, nextV).distanceTo(center);
-      if (dPrev > 1e-6) maxSafe = Math.min(maxSafe, dPrev * 0.45);
-      if (dNext > 1e-6) maxSafe = Math.min(maxSafe, dNext * 0.45);
+      if (dPrev > 1e-6) maxSafe = Math.min(maxSafe, dPrev * 0.38);
+      if (dNext > 1e-6) maxSafe = Math.min(maxSafe, dNext * 0.38);
     }
     const amount = Math.max(0.001, Math.min(amountRequested, maxSafe));
 
@@ -3443,96 +3479,36 @@ function _computeBevel(md, vertTargets, amountRequested, cutsIn = 1) {
     }
     if (outward.lengthSq() > 1e-10) outward.normalize();
 
-    const segVERT = new Map();
-    const segKey = (a, b, seg) => (a < b ? `${a}|${b}|s${seg}` : `${b}|${a}|s${seg}`);
-    const getSegVert = nbr => seg => {
-      const key = segKey(targetIdx, nbr, seg);
-      let vi = segVERT.get(key);
-      if (vi != null) return vi;
-      const dir = _vecFromArr(verts, nbr).sub(center);
-      const len = dir.length();
-      if (len < 1e-8) return null;
-      dir.multiplyScalar(1 / len);
-      const t = seg / cuts;
-      const pos = center.clone().add(dir.multiplyScalar(amount * t));
-      verts.push(pos.x, pos.y, pos.z);
-      vi = (verts.length / 3) - 1;
-      segVERT.set(key, vi);
-      return vi;
-    };
-
     const replacements = [];
     for (const { fi, p } of incidentFaces) {
       const f = faces[fi];
       const prevV = f[(p - 1 + f.length) % f.length];
       const nextV = f[(p + 1) % f.length];
-      const gPrev = getSegVert(prevV);
-      const gNext = getSegVert(nextV);
-      const chain = [];
-      for (let seg = cuts; seg >= 1; seg--) {
-        const vi = gPrev(seg);
-        if (vi != null) chain.push(vi);
-      }
-      for (let seg = 1; seg <= cuts; seg++) {
-        const vi = gNext(seg);
-        if (vi != null) chain.push(vi);
-      }
-      replacements.push({ fi, p, chain, prevV, nextV });
+      const dirPrev = _vecFromArr(verts, prevV).sub(center).normalize().multiplyScalar(amount);
+      const dirNext = _vecFromArr(verts, nextV).sub(center).normalize().multiplyScalar(amount);
+      const pL = center.clone().add(dirPrev);
+      const pR = center.clone().add(dirNext);
+      verts.push(pL.x, pL.y, pL.z);
+      const leftIdx = (verts.length / 3) - 1;
+      verts.push(pR.x, pR.y, pR.z);
+      const rightIdx = (verts.length / 3) - 1;
+      replacements.push({ fi, p, leftIdx, rightIdx, prevV, nextV });
     }
-
     replacements.sort((a, b) => b.fi - a.fi);
     for (const r of replacements) {
       const f = faces[r.fi];
       const out = [];
       for (let i = 0; i < f.length; i++) {
-        if (i === r.p) for (const idx of r.chain) out.push(idx);
+        if (i === r.p) out.push(r.leftIdx, r.rightIdx);
         else out.push(f[i]);
       }
       faces[r.fi] = out;
     }
-    replacements.forEach(r => r.chain.forEach(vi => newVertSel.add(vi)));
+    replacements.forEach(r => { newVertSel.add(r.leftIdx); newVertSel.add(r.rightIdx); });
 
-    const nbrSet = new Set();
-    for (const { prevV, nextV } of replacements) {
-      nbrSet.add(prevV);
-      nbrSet.add(nextV);
-    }
-    const neighbors = [...nbrSet];
-    let perpA = new THREE.Vector3(1, 0, 0);
-    if (Math.abs(outward.dot(perpA)) > 0.95) perpA.set(0, 1, 0);
-    perpA.sub(outward.clone().multiplyScalar(outward.dot(perpA)));
-    if (perpA.lengthSq() < 1e-10) perpA.set(0, 0, 1);
-    perpA.normalize();
-    const perpB = new THREE.Vector3().crossVectors(outward, perpA).normalize();
-    const tangAngle = nbr => {
-      const d = _vecFromArr(verts, nbr).sub(center);
-      d.sub(outward.clone().multiplyScalar(d.dot(outward)));
-      if (d.lengthSq() < 1e-12) return 0;
-      return Math.atan2(d.dot(perpB), d.dot(perpA));
-    };
-    neighbors.sort((a, b) => tangAngle(a) - tangAngle(b));
-
-    if (cuts > 1) {
-      const m = neighbors.length;
-      for (let i = 0; i < m; i++) {
-        const n0 = neighbors[i];
-        const n1 = neighbors[(i + 1) % m];
-        for (let seg = 1; seg < cuts; seg++) {
-          const v0 = segVERT.get(segKey(targetIdx, n0, seg));
-          const v1 = segVERT.get(segKey(targetIdx, n0, seg + 1));
-          const v2 = segVERT.get(segKey(targetIdx, n1, seg + 1));
-          const v3 = segVERT.get(segKey(targetIdx, n1, seg));
-          if (v0 == null || v1 == null || v2 == null || v3 == null) continue;
-          const q = [v0, v1, v2, v3];
-          _orientQuadLike(verts, q, outward);
-          faces.push(q);
-        }
-      }
-    }
-
-    if (neighbors.length >= 3) {
-      const ringIdxs = neighbors.map(nbr => segVERT.get(segKey(targetIdx, nbr, 1))).filter(v => v != null);
-      if (ringIdxs.length < 3) continue;
+    if (replacements.length >= 3) {
+      const ringIdxs = [];
+      replacements.forEach(r => { ringIdxs.push(r.leftIdx, r.rightIdx); });
       const cap = new THREE.Vector3();
       ringIdxs.forEach(i => cap.add(_vecFromArr(verts, i)));
       cap.divideScalar(ringIdxs.length);
@@ -3599,8 +3575,8 @@ let bevelState = null;
 let extrudeState = null;
 let insetState = null;
 
-/** Blender-style Ctrl+B: interactive modal — drag adjusts amount, scroll wheel
- *  adjusts segment count (cuts). Click to confirm, RMB / Esc to cancel. */
+/** Blender-style Ctrl+B: interactive modal — drag and scroll adjust amount.
+ *  Click to confirm, RMB / Esc to cancel. */
 function bevelSelectedVerts(amount) {
   if (editorMode !== 'edit') return;
   // Don't stack on top of an existing grab/bevel/extrude/inset modal.
@@ -3617,7 +3593,7 @@ function bevelSelectedVerts(amount) {
   const snapshot = _cloneMeshDataDeep(md);
   if (typeof amount === 'number' && amount >= 0) {
     // Non-modal invocation (e.g. external programmatic call) — apply directly.
-    const result = _computeBevel(snapshot, vertTargets, amount, 1);
+    const result = _computeBevel(snapshot, vertTargets, amount);
     if (!result) return;
     window.slateScene3dBeginAction?.();
     setEditSubMode('vertex');
@@ -3634,8 +3610,8 @@ function _enterModalBevel(snapshot, vertTargets) {
     snapshot,
     vertTargets,
     startX: _lastMouseClientX ?? 0,
+    wheelOffset: 0,
     amount: 0.05,
-    cuts: 1,
   };
   window.slateScene3dBeginAction?.();
   if (orbit) orbit.enabled = false;
@@ -3656,21 +3632,17 @@ function _onBevelPointerMove(e) {
 function _onBevelWheel(e) {
   if (!bevelState) return;
   e.preventDefault(); e.stopPropagation();
-  const delta = e.deltaY < 0 ? 1 : -1;
-  bevelState.cuts = Math.max(1, Math.min(16, (bevelState.cuts | 0) + delta));
+  const step = e.deltaY < 0 ? 0.035 : -0.035;
+  bevelState.wheelOffset += step;
   _applyBevel();
 }
 function _applyBevel() {
   if (!bevelState) return;
   const clientX = _lastMouseClientX ?? bevelState.startX;
   const dx = clientX - bevelState.startX;
-  bevelState.amount = Math.max(0.001, Math.min(2, dx * 0.0025 + 0.05));
-  const result = _computeBevel(
-    bevelState.snapshot,
-    bevelState.vertTargets,
-    bevelState.amount,
-    bevelState.cuts,
-  );
+  const raw = dx * 0.0025 + bevelState.wheelOffset + 0.05;
+  bevelState.amount = Math.max(0.001, Math.min(2, raw));
+  const result = _computeBevel(bevelState.snapshot, bevelState.vertTargets, bevelState.amount);
   if (!result) return;
   bevelState.lastResult = result;
   _editApplyMeshData(
@@ -3720,7 +3692,7 @@ function _showBevelHint() {
 function _updateBevelHint() {
   if (!_bevelHintEl || !bevelState) return;
   _bevelHintEl.textContent =
-    `Bevel · amount ${bevelState.amount.toFixed(3)} (drag) · cuts ${bevelState.cuts} (scroll) · click confirm · RMB / Esc cancel`;
+    `Bevel · ${bevelState.amount.toFixed(3)} · drag / scroll amount · click confirm · RMB / Esc cancel`;
 }
 function _hideBevelHint() {
   if (_bevelHintEl) _bevelHintEl.style.display = 'none';
@@ -3738,7 +3710,17 @@ function mergeSelectedToCenter() {
   const md = _editFreshMeshData();
   if (!md) return;
   const verts = md.vertices.slice();
-  const sel = [...editSelection].filter(i => i >= 0 && (i * 3 + 2) < verts.length);
+  const weld = editHelpers?.weldMap;
+  const meshIdxs = new Set();
+  if (weld) {
+    editSelection.forEach(log => {
+      const idxs = weld.logicalToIdxs[log];
+      if (idxs) idxs.forEach(mi => meshIdxs.add(mi));
+    });
+  } else {
+    editSelection.forEach(log => meshIdxs.add(log));
+  }
+  const sel = [...meshIdxs].filter(i => i >= 0 && (i * 3 + 2) < verts.length);
   if (!sel.length) return;
   const c = new THREE.Vector3();
   sel.forEach(i => c.add(_vecFromArr(verts, i)));
@@ -3776,22 +3758,25 @@ function deleteSelectedTopology() {
   if (editorMode !== 'edit') return;
   const md = _editFreshMeshData();
   if (!md) return;
+  const weld = editHelpers?.weldMap;
   let touchedFaces = [];
   if (editSubMode === 'face' && editFaceSelection.size) {
-    touchedFaces = [...editFaceSelection.values()];
+    touchedFaces = _deriveFaceSelection(md);
   } else if (editSubMode === 'edge' && editEdgeSelection.size) {
     const edgePairs = [...editEdgeSelection].map(_edgeKeyToVerts);
     md.faces.forEach((f, fi) => {
       for (const [a, b] of edgePairs) {
         for (let i = 0; i < f.length; i++) {
           const x = f[i], y = f[(i + 1) % f.length];
-          if ((x === a && y === b) || (x === b && y === a)) { touchedFaces.push(f); return; }
+          const lx = weld ? weld.logicalForIdx[x] : x;
+          const ly = weld ? weld.logicalForIdx[y] : y;
+          if ((lx === a && ly === b) || (lx === b && ly === a)) { touchedFaces.push(f); return; }
         }
       }
     });
   } else if (editSubMode === 'vertex' && editSelection.size) {
     md.faces.forEach(f => {
-      if (f.some(v => editSelection.has(v))) touchedFaces.push(f);
+      if (f.some(v => editSelection.has(weld ? weld.logicalForIdx[v] : v))) touchedFaces.push(f);
     });
   }
   if (!touchedFaces.length) { try { window.slateSfx?.play('grab-cancel'); } catch (_) {} return; }

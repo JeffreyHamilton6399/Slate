@@ -58,6 +58,9 @@
   --dock-w:      220px;
   --header-h:    52px;
   --toolbar-h:   52px;
+  --left-dock-w: 220px;
+  --draw-toolbar-strip-h: 52px;
+  --t3d-toolbar-strip-h: 54px;
 }
 
 /* ═══════════════════════════════════════════
@@ -1080,11 +1083,173 @@ body.compact-ui .panel-body { padding: 6px 8px; }
 /* Mode visibility helpers — applied to <body> by applyWorkspaceMode */
 body.mode-3d #draw-toolbar,
 body.mode-3d #minimap-wrap,
+body.mode-3d #sidebar-workspace-nav,
 body.mode-3d .dock-tab[data-panel="layers"],
-body.mode-3d #dock-body .dock-panel[data-panel="layers"] { display: none !important; }
+body.mode-3d #dock-body .dock-panel[data-panel="layers"],
+body.mode-3d .dock-tab[data-panel="hierarchy"] { display: none !important; }
+body.mode-3d .left-dock-mount .dock-panel[data-panel="hierarchy"] {
+  display: flex !important;
+  flex: 1;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+}
 body.mode-2d #toolbar-3d,
+body.mode-2d #left-dock,
 body.mode-2d .dock-tab[data-panel="hierarchy"],
 body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !important; }
+
+/* Left outliner (3D) — between sidebar and main */
+#left-dock {
+  display: none;
+  width: var(--left-dock-w, 220px);
+  flex-shrink: 0;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  z-index: 9;
+}
+body.mode-3d #left-dock {
+  display: flex;
+}
+.left-dock-head {
+  flex-shrink: 0;
+  padding: 10px 12px 8px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+}
+.left-dock-mount {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 3D: full-width top toolbar + viewport inset */
+body.mode-3d #toolbar-3d {
+  left: 0;
+  right: 0;
+  top: 0;
+  transform: none;
+  max-width: none;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  padding: 4px 8px 8px;
+  padding-top: max(4px, env(safe-area-inset-top, 0px));
+}
+body.mode-3d #canvas-area-3d {
+  top: var(--t3d-toolbar-strip-h, 54px);
+}
+
+/* 2D desktop: horizontal toolbar along top (floating still works) */
+@media (min-width: 769px) {
+  body.mode-2d #draw-toolbar:not(.toolbar-floating) {
+    top: calc(var(--header-h) + 6px);
+    bottom: auto;
+    left: 12px;
+    right: calc(var(--dock-w, 0px) + 12px);
+    width: auto;
+    height: var(--draw-toolbar-strip-h, 52px);
+    max-height: var(--draw-toolbar-strip-h, 52px);
+    min-height: 42px;
+    flex-direction: row;
+    align-items: center;
+    padding: 4px 8px 6px;
+    padding-left: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: none;
+    scrollbar-width: none;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  }
+  body.mode-2d #draw-toolbar:not(.toolbar-floating) .toolbar-resize-edge-2d {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    height: 6px;
+    cursor: ns-resize;
+    border-radius: 0 0 10px 10px;
+    background: linear-gradient(0deg, rgba(255,255,255,0.06), transparent);
+  }
+  body.mode-2d #draw-toolbar:not(.toolbar-floating) .toolbar-resize-edge-2d:hover {
+    background: linear-gradient(0deg, rgba(124,106,255,0.2), transparent);
+  }
+  body.mode-2d #canvas-area {
+    margin-right: 0;
+    margin-bottom: 0;
+    margin-top: calc(var(--header-h) + var(--draw-toolbar-strip-h, 52px) + 18px);
+  }
+  body.mode-2d #stroke-size,
+  body.mode-2d #stroke-opacity {
+    width: 72px;
+    height: auto;
+    writing-mode: horizontal-tb;
+    direction: ltr;
+    -webkit-appearance: auto;
+  }
+  body.mode-2d #stroke-size-wrap,
+  body.mode-2d #stroke-opacity-wrap {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    padding: 0 6px;
+  }
+  body.mode-2d #fill-toggle-wrap { flex-direction: row; align-items: center; }
+  body.mode-2d #font-size-wrap { flex-direction: row; align-items: center; }
+  body.mode-2d #zoom-wrap { flex-direction: row; align-items: center; }
+  body.mode-2d #zoom-label { writing-mode: horizontal-tb; font-size: 0.72rem; min-width: 36px; }
+  body.mode-2d .toolbar-spacer { display: flex; flex: 1; }
+}
+
+#draw-toolbar .toolbar-move-handle {
+  flex-shrink: 0;
+  width: 10px;
+  min-height: 28px;
+  align-self: stretch;
+  border-radius: 6px;
+  margin: 2px 2px 2px 0;
+  cursor: grab;
+  background: linear-gradient(90deg, rgba(255,255,255,0.07), transparent);
+}
+#draw-toolbar .toolbar-move-handle:active { cursor: grabbing; }
+#draw-toolbar.toolbar-floating {
+  right: auto !important;
+  width: min(92vw, 720px) !important;
+  max-width: 92vw;
+  flex-direction: row !important;
+  align-items: center;
+  height: var(--draw-toolbar-strip-h, 52px) !important;
+  max-height: var(--draw-toolbar-strip-h, 52px) !important;
+  min-height: 42px !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 45;
+  box-shadow: 0 6px 28px rgba(0,0,0,0.45);
+}
+#draw-toolbar.toolbar-floating .toolbar-resize-edge-2d {
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: 0;
+  width: 100%;
+  height: 6px;
+  cursor: ns-resize;
+  border-radius: 0 0 10px 10px;
+}
 
 @media (max-width: 720px) {
   #toolbar-3d {
@@ -2283,6 +2448,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       </button>
     </div>
 
+    <div id="sidebar-workspace-nav">
     <div class="sidebar-section">
       <div class="sidebar-section-label boards-tab-row">
         <span>Boards</span>
@@ -2348,8 +2514,15 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </div>
       </div>
     </div>
+    </div><!-- /#sidebar-workspace-nav -->
   </nav>
   <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
+
+  <!-- 3D: scene outliner (Hierarchy) — moved here from the right dock in JS -->
+  <aside id="left-dock" class="left-dock" aria-label="Outliner">
+    <div class="left-dock-head">Scene</div>
+    <div id="left-dock-mount" class="left-dock-mount"></div>
+  </aside>
 
   <!-- MAIN -->
   <div id="main">
@@ -2434,6 +2607,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 
     <!-- Drawing toolbar -->
     <div id="draw-toolbar" role="toolbar" aria-label="Drawing tools">
+      <div class="toolbar-move-handle" title="Drag to move toolbar" aria-hidden="true"></div>
       <div class="toolbar-resize-edge toolbar-resize-edge-2d" title="Drag to resize toolbar" aria-hidden="true"></div>
       <!-- Pen tool -->
       <button class="tool-btn active" data-tool="pen" title="Pen (P)">
@@ -7945,6 +8119,44 @@ function getBoardDocMode(board) {
   return boardDocModes[board] === '3d' ? '3d' : '2d';
 }
 
+/** Move the 3D hierarchy dock panel between the right dock and the left outliner. */
+window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
+  const body = document.getElementById('dock-body');
+  const mount = document.getElementById('left-dock-mount');
+  const panel = document.querySelector('.dock-panel[data-panel="hierarchy"]');
+  if (!panel || !body || !mount) return;
+  if (workspaceMode === '3d') {
+    mount.appendChild(panel);
+    panel.style.display = 'flex';
+  } else {
+    body.appendChild(panel);
+    panel.style.display = 'none';
+  }
+};
+
+function slateFocusDefaultDockTab3d() {
+  if (!window.slateDock || typeof window.slateDock.setActive !== 'function') return;
+  const prefer = ['props', 'layers'];
+  for (const id of prefer) {
+    const tab = document.querySelector(`.dock-tab[data-panel="${id}"]`);
+    if (!tab || tab.classList.contains('dock-tab-dismissed')) continue;
+    if (getComputedStyle(tab).display === 'none') continue;
+    const docked = document.querySelector(`#dock-body > .dock-panel[data-panel="${id}"]`);
+    if (!docked || getComputedStyle(docked).display === 'none') continue;
+    window.slateDock.setActive(id);
+    return;
+  }
+  const tabBar = document.getElementById('dock-tabs');
+  const any = tabBar && [...tabBar.querySelectorAll('.dock-tab')].find(t => {
+    const id = t.dataset.panel;
+    if (!id || id === 'hierarchy') return false;
+    if (t.classList.contains('dock-tab-dismissed')) return false;
+    const st = getComputedStyle(t);
+    return st.display !== 'none' && st.visibility !== 'hidden';
+  });
+  if (any && any.dataset.panel) window.slateDock.setActive(any.dataset.panel);
+}
+
 function applyWorkspaceMode(board) {
   const mode = board ? getBoardDocMode(board) : '2d';
   const area2 = document.getElementById('canvas-area');
@@ -7989,9 +8201,16 @@ function applyWorkspaceMode(board) {
     if (tb)  tb.style.display = 'none';
     if (tb3) tb3.style.display = 'flex';
     if (window.matchMedia('(min-width: 769px)').matches) resetChatDockStyles();
-    // Switch dock to hierarchy panel if it's registered
+    try { window.slateEnsurePropsPanel?.(); } catch (_) {}
+    try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
+    requestAnimationFrame(() => {
+      const t = document.getElementById('toolbar-3d');
+      if (t && t.offsetHeight) {
+        document.documentElement.style.setProperty('--t3d-toolbar-strip-h', t.offsetHeight + 'px');
+      }
+    });
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
-      requestAnimationFrame(() => window.slateDock.setActive('hierarchy'));
+      requestAnimationFrame(() => slateFocusDefaultDockTab3d());
     }
     window.dispatchEvent(new CustomEvent('slate-3d-activate'));
   } else {
@@ -8001,6 +8220,7 @@ function applyWorkspaceMode(board) {
     if (tb)  tb.style.display = '';
     if (tb3) tb3.style.display = 'none';
     resetChatDockStyles();
+    try { window.slateRelocateHierarchy?.('2d'); } catch (_) {}
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
       requestAnimationFrame(() => window.slateDock.setActive('layers'));
     }
@@ -8010,6 +8230,16 @@ function applyWorkspaceMode(board) {
     });
   }
 }
+
+window.addEventListener('slate-3d-activate', () => {
+  try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
+  requestAnimationFrame(() => {
+    const t = document.getElementById('toolbar-3d');
+    if (t && t.offsetHeight) {
+      document.documentElement.style.setProperty('--t3d-toolbar-strip-h', t.offsetHeight + 'px');
+    }
+  });
+});
 
 function toggleBoardVisibility() {
   if (!state.currentBoard || !state.isBoardHost) return;
@@ -9450,6 +9680,88 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
 
   panels.forEach(p => wire(p.panelId, p.handleSel, p.storageKey));
 
+  function wireFloatingToolbar(panelId, handleSel, storageKey) {
+    const panel = document.getElementById(panelId);
+    const handle = panel?.querySelector(handleSel);
+    if (!panel || !handle) return;
+    const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+    function clearFloat() {
+      panel.classList.remove('toolbar-floating');
+      panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = '';
+    }
+    function applyStoredToolbar() {
+      if (isMobile()) { clearFloat(); return; }
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        const { x, y } = JSON.parse(raw);
+        if (typeof x !== 'number' || typeof y !== 'number') return;
+        const rect = panel.getBoundingClientRect();
+        const w = rect.width || 400;
+        const h = rect.height || 52;
+        const c = clampToViewport(x, y, w, h);
+        panel.classList.add('toolbar-floating');
+        panel.style.position = 'fixed';
+        panel.style.left = c.x + 'px';
+        panel.style.top = c.y + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      } catch (_) {}
+    }
+    applyStoredToolbar();
+    window.addEventListener('resize', () => {
+      if (isMobile()) clearFloat();
+      else applyStoredToolbar();
+    });
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || isMobile()) return;
+      e.preventDefault();
+      if (e.target.closest('button, input, textarea, select')) return;
+      let rect = panel.getBoundingClientRect();
+      if (!panel.classList.contains('toolbar-floating')) {
+        panel.classList.add('toolbar-floating');
+        panel.style.position = 'fixed';
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      }
+      rect = panel.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origX = rect.left;
+      const origY = rect.top;
+      const w = rect.width;
+      const h = rect.height;
+      let moved = false;
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      function onMove(ev) {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) < 4) return;
+        moved = true;
+        const c = clampToViewport(origX + dx, origY + dy, w, h);
+        panel.style.left = c.x + 'px';
+        panel.style.top = c.y + 'px';
+      }
+      function onUp(ev) {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
+        if (moved) {
+          const r = panel.getBoundingClientRect();
+          try { localStorage.setItem(storageKey, JSON.stringify({ x: r.left, y: r.top })); } catch (_) {}
+        }
+      }
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+  }
+
+  wireFloatingToolbar('draw-toolbar', '.toolbar-move-handle', 'slate_toolbar_2d_pos');
+
   function wireToolbarResize(panelId, handleSel, storageKeyW, storageKeyH) {
     const panel = document.getElementById(panelId);
     const handle = panel?.querySelector(handleSel);
@@ -9462,7 +9774,7 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
           if (row) {
             const h = parseInt(localStorage.getItem(storageKeyH), 10);
             if (Number.isFinite(h)) {
-              const v = Math.max(48, Math.min(120, h));
+              const v = Math.max(42, Math.min(120, h));
               document.documentElement.style.setProperty('--draw-toolbar-strip-h', v + 'px');
             }
           } else {
@@ -9477,6 +9789,10 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
           if (Number.isFinite(h)) {
             const v = Math.max(36, Math.min(96, h));
             panel.style.setProperty('--t3d-toolbar-h', v + 'px');
+            requestAnimationFrame(() => {
+              const oh = panel.offsetHeight;
+              if (oh > 0) document.documentElement.style.setProperty('--t3d-toolbar-strip-h', oh + 'px');
+            });
           }
         }
       } catch (_) {}
@@ -9511,7 +9827,7 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
         if (panelId === 'draw-toolbar') {
           if (row) {
             const dy = ev.clientY - startPrimary;
-            const nh = Math.max(48, Math.min(120, startVal + dy));
+            const nh = Math.max(42, Math.min(120, startVal + dy));
             document.documentElement.style.setProperty('--draw-toolbar-strip-h', nh + 'px');
           } else {
             const dx = startPrimary - ev.clientX;
@@ -9522,6 +9838,8 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
           const dy = ev.clientY - startPrimary;
           const nh = Math.max(36, Math.min(96, startVal + dy));
           panel.style.setProperty('--t3d-toolbar-h', nh + 'px');
+          const oh = panel.offsetHeight;
+          if (oh > 0) document.documentElement.style.setProperty('--t3d-toolbar-strip-h', oh + 'px');
         }
       }
       function onUp(ev) {
@@ -9542,6 +9860,8 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
           } else {
             const h = parseInt(getComputedStyle(panel).getPropertyValue('--t3d-toolbar-h'), 10);
             if (Number.isFinite(h)) localStorage.setItem(storageKeyH, String(h));
+            const oh = panel.offsetHeight;
+            if (oh > 0) document.documentElement.style.setProperty('--t3d-toolbar-strip-h', oh + 'px');
           }
         } catch (_) {}
       }

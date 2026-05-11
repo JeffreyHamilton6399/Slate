@@ -592,6 +592,20 @@ input, textarea { font-family: var(--sans); }
 }
 
 /* ── Global polish: gentle transitions on common interactive elements ── */
+body.no-motion *, body.no-motion *::before, body.no-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+body.compact-ui #draw-toolbar { padding: 4px 2px; gap: 1px; }
+body.compact-ui .tool-btn,
+body.compact-ui .t3d-btn { padding: 5px 6px; min-width: 28px; }
+body.compact-ui .dock-tab { padding: 4px 8px; font-size: 0.74rem; }
+body.compact-ui .setting-row { padding: 6px 8px; }
+body.compact-ui #right-dock { font-size: 0.85rem; }
+body.compact-ui .panel-body { padding: 6px 8px; }
+
 @media (prefers-reduced-motion: no-preference) {
   .tool-btn, .t3d-btn, .btn-icon, .btn, .dock-tab {
     transition: background .15s ease, color .15s ease, border-color .15s ease,
@@ -683,15 +697,7 @@ input, textarea { font-family: var(--sans); }
   color: var(--text); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-#board-topic-input {
-  flex: 1; min-width: 0;
-  background: transparent; border: none;
-  font-family: var(--sans); font-size: 0.82rem;
-  color: var(--text-dim); outline: none;
-  padding: 4px 8px;
-}
-#board-topic-input::placeholder { color: var(--text-dim); }
-#board-topic-input:focus { color: var(--text); }
+/* (Topic input removed — was #board-topic-input.) */
 
 /* Legacy host bar / chip styles removed; replaced by .board-vis-toggle. */
 #share-board-btn { flex-shrink: 0; }
@@ -1777,7 +1783,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   #members-toggle { display: none; }
 
   #board-header { gap: 6px; padding: 0 10px; }
-  #board-topic-input { display: none; }
 
   /* Toolbar: revert to horizontal strip at bottom on mobile */
   #draw-toolbar {
@@ -2046,8 +2051,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </svg>
       </button>
       <span id="board-name-display">No board</span>
-      <input id="board-topic-input" type="text" placeholder="Add a topic…" maxlength="80">
-      <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <button id="share-board-btn" class="btn-icon" title="Copy invite link">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="3" r="1.5"/>
@@ -2057,6 +2060,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           <line x1="10.6" y1="3.75" x2="4.4" y2="7.25"/>
         </svg>
       </button>
+      <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <!-- Save board snapshot -->
       <button id="save-board-btn" class="btn btn-ghost" title="Save snapshot of this board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -2352,6 +2356,54 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </button>
         <button class="t3d-btn t3d-esel-btn" data-sel="face" title="Face select (3)">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="10" height="10" rx="1"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-sep t3d-edit-only" style="display:none"></div>
+
+      <div class="t3d-group t3d-edit-only" id="t3d-edit-tools-group" style="display:none" title="Mesh editing tools">
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-extrude-btn" title="Extrude selected faces (E)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <rect x="3" y="4" width="6" height="6" rx="0.6"/>
+            <rect x="6" y="2" width="6" height="6" rx="0.6"/>
+            <path d="M3 4l3-2M9 4l3-2M3 10l3-2M9 10l3-2"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-inset-btn" title="Inset selected faces (I)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <rect x="2" y="2" width="10" height="10" rx="1"/>
+            <rect x="5" y="5" width="4" height="4" rx="0.6"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-bevel-btn" title="Bevel selected vertices (Ctrl+B)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <path d="M2 12V5l3-3h7v10z"/>
+            <path d="M2 5l3-3"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-loopcut-btn" title="Loop cut selected faces (Ctrl+R)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <rect x="2" y="2" width="10" height="10" rx="0.6"/>
+            <line x1="7" y1="2" x2="7" y2="12" stroke-dasharray="1.5 1.4"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-subdivide-btn" title="Subdivide selected faces">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <rect x="2" y="2" width="10" height="10" rx="0.6"/>
+            <line x1="7" y1="2" x2="7" y2="12"/>
+            <line x1="2" y1="7" x2="12" y2="7"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-merge-btn" title="Merge selected vertices to center (M)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <circle cx="7" cy="7" r="1.6"/>
+            <path d="M2 2l3 3M12 2l-3 3M2 12l3-3M12 12l-3-3"/>
+          </svg>
+        </button>
+        <button class="t3d-btn t3d-meshop-btn" id="t3d-delete-btn-edit" title="Delete selected topology (X)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 4h8M5 4V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1M4 4l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L10 4"/>
+          </svg>
         </button>
       </div>
 
@@ -2679,6 +2731,81 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </div>
       </div>
 
+      <!-- Appearance -->
+      <div class="settings-section">
+        <div class="settings-section-title">Appearance</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Reduced motion</div>
+            <div class="setting-row-sub">Disable subtle UI animations and transitions</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="reduced-motion-toggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Compact UI</div>
+            <div class="setting-row-sub">Tighter padding for toolbars, panels &amp; docks</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="compact-ui-toggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Show peer cursors</div>
+            <div class="setting-row-sub">Live mouse tags on the 2D canvas</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="show-peer-cursors-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- 3D Viewport -->
+      <div class="settings-section">
+        <div class="settings-section-title">3D Viewport</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Background</div>
+            <div class="setting-row-sub">Solid color behind your 3D scene</div>
+          </div>
+          <input id="viewport-bg-color" type="color" value="#12121a"
+            style="width:42px;height:30px;border:1px solid var(--border2);border-radius:6px;background:transparent;cursor:pointer;padding:0">
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Camera field of view</div>
+            <div class="setting-row-sub"><span id="viewport-fov-label">55</span>° — lower is more telephoto</div>
+          </div>
+          <input id="viewport-fov-slider" type="range" min="25" max="110" step="1" value="55" style="width:140px">
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Show grid</div>
+            <div class="setting-row-sub">Toggle the ground-plane grid &amp; axes</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="viewport-grid-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Show peer cameras</div>
+            <div class="setting-row-sub">Floating frustum markers for other members</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="viewport-peer-cams-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
       <!-- Board management -->
       <div class="settings-section">
         <div class="settings-section-title">Boards</div>
@@ -2689,6 +2816,16 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="autoclean-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Auto-save snapshots</div>
+            <div class="setting-row-sub">Silently save your boards every few minutes</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="autosave-toggle" checked>
             <span class="toggle-track"></span>
           </label>
         </div>
@@ -4292,11 +4429,9 @@ function leaveBoard() {
   const nameEl  = document.getElementById('board-name-display');
   const noHint  = document.getElementById('no-board-hint');
   const visBtn  = document.getElementById('board-vis-toggle');
-  const topicEl = document.getElementById('board-topic-input');
   if (nameEl)  nameEl.textContent = 'No board';
   if (noHint)  noHint.classList.remove('hidden');
   if (visBtn)  visBtn.hidden = true;
-  if (topicEl) topicEl.value = '';
   const exportBtn2 = document.getElementById('export-btn');
   if (exportBtn2) exportBtn2.style.display = 'none';
   const saveBoardBtn2 = document.getElementById('save-board-btn');
@@ -5548,7 +5683,7 @@ function renderFrame() {
   }
 
   // ── 6. Remote cursors ──
-  if (Object.keys(state.connections).length) {
+  if (Object.keys(state.connections).length && window.slateShowPeerCursors !== false) {
     ctx.save();
     ctx.setTransform(vp.zoom, 0, 0, vp.zoom, vp.panX, vp.panY);
     Object.entries(state.connections).forEach(([pid, info]) => {
@@ -7162,9 +7297,9 @@ function updateBoardChip() {
 }
 
 function updateTopicInput() {
-  const el = document.getElementById('board-topic-input');
-  if (!el || !state.currentBoard) return;
-  el.value = boardTopics[state.currentBoard] || '';
+  // Topic input was removed from the UI. Function preserved as a no-op so any
+  // historical caller still resolves; topic data is still persisted/merged
+  // for backward compatibility with older peers.
 }
 
 function updateBoardControls() {
@@ -7245,22 +7380,6 @@ window.toggleBoardVisibility = toggleBoardVisibility;
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
-/* ═══════════════════════════════════════════
-   BOARD TOPIC INPUT
-═══════════════════════════════════════════ */
-const topicInput = document.getElementById('board-topic-input');
-topicInput.addEventListener('change', () => {
-  if (!state.currentBoard) return;
-  const topic = topicInput.value.slice(0, 80);
-  boardTopics[state.currentBoard] = topic;
-  persistBoardTopics();
-  broadcastAll({ type: 'board-topic', board: state.currentBoard, topic });
-});
-topicInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); topicInput.blur(); }
-  if (e.key === 'Escape') { topicInput.value = boardTopics[state.currentBoard] || ''; topicInput.blur(); }
-});
 
 /* ═══════════════════════════════════════════
    SHARE / COPY LINK
@@ -7615,16 +7734,125 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
 
   // ── Board management ──
   const autocleanToggle = document.getElementById('autoclean-toggle');
-  autocleanToggle.checked = localStorage.getItem('slate_autoclean') !== '0';
-
-  autocleanToggle?.addEventListener('change', () => {
-    localStorage.setItem('slate_autoclean', autocleanToggle.checked ? '1' : '0');
-  });
+  if (autocleanToggle) {
+    autocleanToggle.checked = localStorage.getItem('slate_autoclean') !== '0';
+    autocleanToggle.addEventListener('change', () => {
+      localStorage.setItem('slate_autoclean', autocleanToggle.checked ? '1' : '0');
+    });
+  }
 
   document.getElementById('clean-boards-btn')?.addEventListener('click', () => {
     const n = pruneEmptyBoards();
     toast(n ? `Removed ${n} empty board${n > 1 ? 's' : ''}` : 'No empty boards found');
   });
+
+  // ── Auto-save toggle ──
+  const autosaveToggle = document.getElementById('autosave-toggle');
+  if (autosaveToggle) {
+    autosaveToggle.checked = localStorage.getItem('slate_autosave') !== '0';
+    window.slateAutosaveEnabled = autosaveToggle.checked;
+    autosaveToggle.addEventListener('change', () => {
+      localStorage.setItem('slate_autosave', autosaveToggle.checked ? '1' : '0');
+      window.slateAutosaveEnabled = autosaveToggle.checked;
+    });
+  }
+
+  // ── Reduced motion ──
+  const motionToggle = document.getElementById('reduced-motion-toggle');
+  if (motionToggle) {
+    const saved = localStorage.getItem('slate_reduced_motion');
+    const prefers = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const initial = saved == null ? !!prefers : saved === '1';
+    motionToggle.checked = initial;
+    document.body.classList.toggle('no-motion', initial);
+    motionToggle.addEventListener('change', () => {
+      document.body.classList.toggle('no-motion', motionToggle.checked);
+      localStorage.setItem('slate_reduced_motion', motionToggle.checked ? '1' : '0');
+    });
+  }
+
+  // ── Compact UI ──
+  const compactToggle = document.getElementById('compact-ui-toggle');
+  if (compactToggle) {
+    compactToggle.checked = localStorage.getItem('slate_compact_ui') === '1';
+    document.body.classList.toggle('compact-ui', compactToggle.checked);
+    compactToggle.addEventListener('change', () => {
+      document.body.classList.toggle('compact-ui', compactToggle.checked);
+      localStorage.setItem('slate_compact_ui', compactToggle.checked ? '1' : '0');
+    });
+  }
+
+  // ── Show peer cursors (2D) ──
+  const peerCursorsToggle = document.getElementById('show-peer-cursors-toggle');
+  if (peerCursorsToggle) {
+    peerCursorsToggle.checked = localStorage.getItem('slate_peer_cursors') !== '0';
+    window.slateShowPeerCursors = peerCursorsToggle.checked;
+    peerCursorsToggle.addEventListener('change', () => {
+      window.slateShowPeerCursors = peerCursorsToggle.checked;
+      localStorage.setItem('slate_peer_cursors', peerCursorsToggle.checked ? '1' : '0');
+      if (typeof scheduleRender === 'function') scheduleRender();
+    });
+  }
+
+  // ── 3D viewport: background color ──
+  const bgInput = document.getElementById('viewport-bg-color');
+  if (bgInput) {
+    const stored = localStorage.getItem('slate_viewport_bg') || '#12121a';
+    bgInput.value = stored;
+    window.slateViewportBg = stored;
+    try { window.slateScene3dRpc?.setViewportBackground?.(stored); } catch (_) {}
+    bgInput.addEventListener('input', () => {
+      window.slateViewportBg = bgInput.value;
+      localStorage.setItem('slate_viewport_bg', bgInput.value);
+      try { window.slateScene3dRpc?.setViewportBackground?.(bgInput.value); } catch (_) {}
+    });
+  }
+
+  // ── 3D viewport: camera FOV ──
+  const fovSlider = document.getElementById('viewport-fov-slider');
+  const fovLabel  = document.getElementById('viewport-fov-label');
+  if (fovSlider) {
+    const stored = parseInt(localStorage.getItem('slate_viewport_fov') || '55', 10);
+    fovSlider.value = String(stored);
+    if (fovLabel) fovLabel.textContent = String(stored);
+    window.slateViewportFov = stored;
+    try { window.slateScene3dRpc?.setCameraFov?.(stored); } catch (_) {}
+    fovSlider.addEventListener('input', () => {
+      const v = parseInt(fovSlider.value, 10);
+      if (fovLabel) fovLabel.textContent = String(v);
+      window.slateViewportFov = v;
+      localStorage.setItem('slate_viewport_fov', String(v));
+      try { window.slateScene3dRpc?.setCameraFov?.(v); } catch (_) {}
+    });
+  }
+
+  // ── 3D viewport: grid ──
+  const gridToggle = document.getElementById('viewport-grid-toggle');
+  if (gridToggle) {
+    const on = localStorage.getItem('slate_viewport_grid') !== '0';
+    gridToggle.checked = on;
+    window.slateViewportGrid = on;
+    try { window.slateScene3dRpc?.setGridVisible?.(on); } catch (_) {}
+    gridToggle.addEventListener('change', () => {
+      window.slateViewportGrid = gridToggle.checked;
+      localStorage.setItem('slate_viewport_grid', gridToggle.checked ? '1' : '0');
+      try { window.slateScene3dRpc?.setGridVisible?.(gridToggle.checked); } catch (_) {}
+    });
+  }
+
+  // ── 3D viewport: show peer cameras ──
+  const peerCamsToggle = document.getElementById('viewport-peer-cams-toggle');
+  if (peerCamsToggle) {
+    const on = localStorage.getItem('slate_peer_cameras') !== '0';
+    peerCamsToggle.checked = on;
+    window.slateShowPeerCameras = on;
+    try { window.slateScene3dRpc?.setPeerCamerasVisible?.(on); } catch (_) {}
+    peerCamsToggle.addEventListener('change', () => {
+      window.slateShowPeerCameras = peerCamsToggle.checked;
+      localStorage.setItem('slate_peer_cameras', peerCamsToggle.checked ? '1' : '0');
+      try { window.slateScene3dRpc?.setPeerCamerasVisible?.(peerCamsToggle.checked); } catch (_) {}
+    });
+  }
 
 })();
 
@@ -8330,6 +8558,9 @@ let savedBoards = loadSavedBoards();
 function saveBoardSnapshot(folderName, opts = {}) {
   const board = state.currentBoard;
   if (!board) return;
+  // Silent saves are auto-saves — respect the user's "Auto-save snapshots"
+  // setting. Manual / explicit saves always proceed.
+  if (opts.silent && window.slateAutosaveEnabled === false) return;
   const alreadySaved = currentBoardHasManualSave();
   if (!savedBoards[folderName]) savedBoards[folderName] = [];
   const snap = {

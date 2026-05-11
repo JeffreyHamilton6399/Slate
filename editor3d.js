@@ -66,8 +66,38 @@ let transformMode = 'translate';
 let editSubMode  = 'vertex'; // 'vertex' | 'edge' | 'face'
 let editTargetId = null;
 let editHelpers  = null;     // { vertexPoints, edgeLines, faceMesh, group }
-let editSelection = new Set();
+let editSelection = new Set();    // welded logical vertex indices (derived)
+let editEdgeSelection = new Set();// canonical edge keys "min|max"
+let editFaceSelection = new Map();// faceKey -> ordered logical vertex array
 let editDragHelper = null;   // Object3D the gizmo is attached to in edit mode
+
+function _edgeKey(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
+function _edgeKeyToVerts(k) { return k.split('|').map(Number); }
+function _faceKey(verts) {
+  if (!Array.isArray(verts) || !verts.length) return '';
+  // Canonicalize so the same face hashes identically regardless of winding /
+  // starting vertex.
+  const sorted = [...verts].sort((a, b) => a - b);
+  return sorted.join(',');
+}
+
+/** Recompute the welded-vertex set that the gizmo / transform pipeline uses,
+ *  from the current edge / face structural selections. Vertex-mode keeps
+ *  editSelection authoritative. */
+function _syncDerivedVertSelection() {
+  if (editSubMode === 'vertex') return; // editSelection is authoritative here
+  editSelection.clear();
+  if (editSubMode === 'edge') {
+    editEdgeSelection.forEach(k => {
+      const [a, b] = _edgeKeyToVerts(k);
+      editSelection.add(a); editSelection.add(b);
+    });
+  } else if (editSubMode === 'face') {
+    editFaceSelection.forEach(verts => {
+      verts.forEach(v => editSelection.add(v));
+    });
+  }
+}
 
 /** Unsub function from slateScene3d.onChange */
 let unsubScene = null;
@@ -217,6 +247,17 @@ function _cloneMeshDataDeep(md) {
 function _onContainerPointerTrack(e) {
   _lastMouseClientX = e.clientX;
   _lastMouseClientY = e.clientY;
+  // If user is mid-RMB-hold and has moved beyond a small threshold while fly
+  // is armed, trigger fly mode early instead of waiting out the full 200ms
+  // hold timer.
+  if (_rmbArmed && flyArmed && !flyEnabled && !_rmbFlyTriggered) {
+    const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
+    if (moved > 4) {
+      _cancelRmbFlyTimer();
+      _rmbFlyTriggered = true;
+      enterFlyCamera();
+    }
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -466,40 +507,81 @@ function _onViewportContextMenu(e) {
   if (grabState) _grabCancel();
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Free-look (fly) camera
+   The fly button arms the gesture; once armed, holding right-mouse enters
+   fly mode and WASD navigates. Releasing right-mouse exits. A quick RMB tap
+   (no hold) still falls through to the add-object context menu via
+   onPointerUp, so the same button does both jobs unambiguously.
+───────────────────────────────────────────────────────────────────────── */
+let flyArmed = false;
+try {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('slate_fly_armed') === '1') {
+    flyArmed = true;
+  }
+} catch (_) {}
+let _rmbHoldTimer = null;
+let _rmbFlyTriggered = false;
+
+function _persistFlyArmed() {
+  try { localStorage.setItem('slate_fly_armed', flyArmed ? '1' : '0'); } catch (_) {}
+}
+function _updateFlyArmedUI() {
+  const btn = document.getElementById('t3d-fly-btn');
+  if (btn) {
+    btn.classList.toggle('active', flyArmed);
+    btn.title = flyArmed
+      ? 'Fly view armed — hold right-mouse to fly, release to exit (click to disarm)'
+      : 'Fly view — click to arm, then hold right-mouse to fly';
+  }
+}
+function setFlyArmed(on) {
+  flyArmed = !!on;
+  _persistFlyArmed();
+  _updateFlyArmedUI();
+  if (!flyArmed && flyEnabled) exitFlyCamera();
+}
+function toggleFlyArmed() { setFlyArmed(!flyArmed); }
+
 function _onFreeLookHoldKeyDown(e) {
   if (!document.body.classList.contains('mode-3d')) return;
   if (!container?.isConnected) return;
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
   if (e.code !== 'Backquote' || e.repeat) return;
-  if (flyEnabled) return;
   if (transform?.dragging) return;
   e.preventDefault();
-  enterFlyCamera();
+  toggleFlyArmed();
+  try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
 }
 
-function _onFreeLookHoldKeyUp(e) {
-  if (e.code !== 'Backquote') return;
-  if (flyEnabled) exitFlyCamera();
-}
+function _onFreeLookHoldKeyUp(_e) { /* no-op — Backquote is a toggle now */ }
 
-let _flyBtnHeldFromUi = false;
 function _onFlyCamBtnDown(e) {
+  // Toggle arm state — gesture is now driven by right-mouse hold.
   e.preventDefault();
-  _flyBtnHeldFromUi = true;
-  enterFlyCamera();
+  toggleFlyArmed();
+  try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
 }
-function _onFlyCamPointerEnd() {
-  if (!_flyBtnHeldFromUi) return;
-  _flyBtnHeldFromUi = false;
-  if (flyEnabled) exitFlyCamera();
-}
+function _onFlyCamPointerEnd() { /* legacy — nothing to do, kept for compat */ }
 
 function _ensureFlyUiPointerUpListeners() {
-  if (_flyUiUpBound) return;
+  // No global pointerup listener needed anymore; kept as a no-op so callers
+  // don't crash if invoked from older code paths.
   _flyUiUpBound = true;
-  window.addEventListener('pointerup', _onFlyCamPointerEnd, true);
-  window.addEventListener('pointercancel', _onFlyCamPointerEnd, true);
+}
+
+function _cancelRmbFlyTimer() {
+  if (_rmbHoldTimer) { clearTimeout(_rmbHoldTimer); _rmbHoldTimer = null; }
+}
+function _maybeStartRmbFlyOnHold(clientX, clientY) {
+  if (!flyArmed || flyEnabled) return;
+  _rmbFlyTriggered = false;
+  _cancelRmbFlyTimer();
+  _rmbHoldTimer = setTimeout(() => {
+    _rmbHoldTimer = null;
+    if (_rmbArmed) { _rmbFlyTriggered = true; enterFlyCamera(); }
+  }, 200);
 }
 function makeGeometryFor(obj) {
   const p = obj.params || {};
@@ -682,7 +764,10 @@ function selectById(id, additive = false) {
     else transform?.detach();
   }
   _refreshSelectionOutlines();
-  renderHierarchy();
+  // Only update which rows look "selected" rather than rebuilding the DOM —
+  // a full re-render destroys the row the user just clicked, which would
+  // break the dblclick → rename flow that fires immediately after.
+  _refreshHierarchySelection();
   _updateObjectColorPicker();
 }
 
@@ -694,7 +779,7 @@ function selectAllObjects() {
   selectedId = [...selectedIds].pop() || null;
   if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
   _refreshSelectionOutlines();
-  renderHierarchy();
+  _refreshHierarchySelection();
 }
 
 /* Apply a subtle emissive outline to every selected mesh so multi-select is
@@ -754,12 +839,18 @@ function onPointerDown(e) {
     }
     return;
   }
-  // Track right-button presses so onPointerUp can decide: drag (orbit/pan
-  // already handled by OrbitControls) vs. tap (open add-object menu).
+  // Track right-button presses so onPointerUp can decide between three
+  // gestures:
+  //   1. Quick tap (no movement) → open the add-object menu / nothing if a
+  //      mesh is under the cursor.
+  //   2. Drag → Orbit's pan (kept for users who don't want fly-mode).
+  //   3. Hold ≥ 200ms while flyArmed → enter free-look (WASD navigation);
+  //      releasing exits.
   if (e.button === 2) {
     _rmbArmed = true;
     _rmbDownX = e.clientX;
     _rmbDownY = e.clientY;
+    _maybeStartRmbFlyOnHold(e.clientX, e.clientY);
     return;
   }
   // In object mode, Shift+left-drag starts a Blender-style box select.
@@ -792,10 +883,19 @@ function onPointerUp(e) {
     boxSelect = null;
     return;
   }
-  // Right-mouse: decide between a drag (already consumed by Orbit pan) and a
-  // click → open the add-object context menu (only on empty space).
+  // Right-mouse up: three gestures to disambiguate.
   if (e.button === 2 && _rmbArmed) {
     _rmbArmed = false;
+    _cancelRmbFlyTimer();
+    // If we entered fly-mode on the hold (even if user pressed Esc to exit
+    // first), releasing right-mouse should NOT also fall through to opening
+    // the add-object menu.
+    const wasFly = _rmbFlyTriggered || flyEnabled;
+    _rmbFlyTriggered = false;
+    if (wasFly) {
+      if (flyEnabled) exitFlyCamera();
+      return;
+    }
     if (grabState) return;
     if (transform?.dragging) return;
     const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
@@ -887,7 +987,7 @@ function _commitBoxSelect() {
   if (lastHit) selectedId = lastHit;
   if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
   _refreshSelectionOutlines();
-  renderHierarchy();
+  _refreshHierarchySelection();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -912,7 +1012,7 @@ function enterFlyCamera() {
   if (!flyHint) {
     flyHint = document.createElement('div');
     flyHint.className = 'fly-cam-hint';
-    flyHint.textContent = 'WASD move · release ` or Esc to exit';
+    flyHint.textContent = 'WASD move · release right-mouse or Esc to exit';
     container.appendChild(flyHint);
   } else {
     flyHint.style.display = '';
@@ -1012,6 +1112,11 @@ function applyPeerCamera(peerId, msg, meta) {
     if (container) container.appendChild(label);
     entry = { group, label, color };
     peerCams.set(peerId, entry);
+    // Honor the user's "Show peer cameras" preference for newly-discovered peers.
+    if (!_persistedPeerCamsVisible) {
+      group.visible = false;
+      label.style.display = 'none';
+    }
   } else if (meta?.name && entry.label && entry.label.textContent !== meta.name) {
     entry.label.textContent = meta.name;
   }
@@ -1114,9 +1219,16 @@ function _buildCamMarker(color) {
 const _camLabelTmp = new THREE.Vector3();
 function _updatePeerCamMarkers() {
   if (!camera || !container) return;
+  const allowVisible = _persistedPeerCamsVisible;
   const rect = container.getBoundingClientRect();
   peerCams.forEach(entry => {
     if (!entry.group || !entry.label) return;
+    if (!allowVisible) {
+      entry.group.visible = false;
+      entry.label.style.display = 'none';
+      return;
+    }
+    entry.group.visible = true;
     _camLabelTmp.copy(entry.group.position).project(camera);
     if (_camLabelTmp.z > 1 || _camLabelTmp.z < -1) {
       entry.label.style.display = 'none';
@@ -1138,12 +1250,65 @@ function _clearAllPeerCameras() {
   peerCams.clear();
 }
 
+/* Persisted viewport prefs — initialized from localStorage so the very first
+   scene the renderer paints already matches the user's settings (the host
+   page's Settings UI may not have wired up by the time ensureScene() runs). */
+let _persistedViewportBg = '#12121a';
+let _persistedFov = 55;
+let _persistedGridVisible = true;
+let _persistedPeerCamsVisible = true;
+try {
+  if (typeof localStorage !== 'undefined') {
+    const bg  = localStorage.getItem('slate_viewport_bg');
+    const fov = localStorage.getItem('slate_viewport_fov');
+    const grd = localStorage.getItem('slate_viewport_grid');
+    const pcm = localStorage.getItem('slate_peer_cameras');
+    if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) _persistedViewportBg = bg;
+    if (fov) { const v = parseInt(fov, 10); if (Number.isFinite(v)) _persistedFov = Math.max(15, Math.min(140, v)); }
+    if (grd != null) _persistedGridVisible = grd !== '0';
+    if (pcm != null) _persistedPeerCamsVisible = pcm !== '0';
+  }
+} catch (_) {}
+
 /* Expose the receive entry point so the host page can route incoming
-   cam-3d messages here. */
+   cam-3d messages here, plus a small RPC surface that the Settings panel
+   uses to live-tune the viewport. */
+function setViewportBackground(hex) {
+  _persistedViewportBg = hex || '#12121a';
+  if (scene && scene.background) {
+    try { scene.background.set(_persistedViewportBg); } catch (_) {}
+  } else if (scene) {
+    scene.background = new THREE.Color(_persistedViewportBg);
+  }
+}
+function setCameraFov(deg) {
+  const v = Math.max(15, Math.min(140, Number(deg) || 55));
+  _persistedFov = v;
+  if (camera) { camera.fov = v; camera.updateProjectionMatrix(); }
+}
+function setGridVisible(visible) {
+  _persistedGridVisible = !!visible;
+  if (_gridHelper) _gridHelper.visible = !!visible;
+  if (_axesHelper) _axesHelper.visible = !!visible;
+  const btn = document.getElementById('t3d-grid-btn');
+  if (btn) btn.classList.toggle('active', !!visible);
+}
+function setPeerCamerasVisible(visible) {
+  _persistedPeerCamsVisible = !!visible;
+  peerCams.forEach(entry => {
+    if (entry.group) entry.group.visible = !!visible;
+    if (entry.label) entry.label.style.display = visible ? '' : 'none';
+  });
+}
+
 window.slateScene3dRpc = Object.assign(window.slateScene3dRpc || {}, {
   applyPeerCamera,
   removePeerCamera,
   clearAllPeerCameras: _clearAllPeerCameras,
+  setViewportBackground,
+  setCameraFov,
+  setGridVisible,
+  setPeerCamerasVisible,
 });
 
 const _flyTmp1 = new THREE.Vector3();
@@ -1212,6 +1377,24 @@ function onKeyDown(e) {
 
   if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
 
+  // Edit-mode tool shortcuts that take priority (run BEFORE rotate/scale
+  // because Ctrl+R / Ctrl+B should not get eaten by setTransformMode('rotate')
+  // and the topology delete should beat the object-mode 'x' handler below).
+  if (editorMode === 'edit') {
+    if ((e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey) { swallow(); loopCutSelectedFaces();  return; }
+    if ((e.key === 'b' || e.key === 'B') && e.ctrlKey && !e.metaKey) { swallow(); bevelSelectedVerts();    return; }
+    if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey) { swallow(); extrudeSelectedFaces(); return; }
+    if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey) { swallow(); insetSelectedFaces();   return; }
+    if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) { swallow(); mergeSelectedToCenter();return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace' ||
+         ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey))) {
+      swallow(); deleteSelectedTopology(); return;
+    }
+    if (e.key === '1') { swallow(); setEditSubMode('vertex'); return; }
+    if (e.key === '2') { swallow(); setEditSubMode('edge');   return; }
+    if (e.key === '3') { swallow(); setEditSubMode('face');   return; }
+  }
+
   if (e.key === 'g' || e.key === 'G') {
     swallow();
     setTransformMode('translate');
@@ -1249,11 +1432,6 @@ function onKeyDown(e) {
     return;
   }
 
-  if (editorMode === 'edit') {
-    if (e.key === '1') { swallow(); setEditSubMode('vertex'); return; }
-    if (e.key === '2') { swallow(); setEditSubMode('edge');   return; }
-    if (e.key === '3') { swallow(); setEditSubMode('face');   return; }
-  }
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && editorMode === 'object' && selectedId) {
     window.slateScene3dBeginAction?.();
@@ -1318,6 +1496,8 @@ function enterEditMode() {
   editTargetId = selectedId;
   editorMode = 'edit';
   editSelection.clear();
+  editEdgeSelection.clear();
+  editFaceSelection.clear();
   buildEditHelpers();
   if (transform) transform.detach();
   updateModeButtons();
@@ -1333,6 +1513,8 @@ function leaveEditMode() {
   editTargetId = null;
   editorMode = 'object';
   editSelection.clear();
+  editEdgeSelection.clear();
+  editFaceSelection.clear();
   if (transform) transform.detach();
   if (selectedId && objMeshes.has(selectedId)) transform?.attach(objMeshes.get(selectedId));
   updateModeButtons();
@@ -1458,7 +1640,30 @@ function buildEditHelpers() {
   selPoints.renderOrder = 4;
   group.add(selPoints);
 
-  editHelpers = { group, edges, points, selPoints, weldMap };
+  // Selected-edges highlight (Blender-style bright edges layered on top).
+  const selEdgesGeo = new THREE.BufferGeometry();
+  selEdgesGeo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+  const selEdgesMat = new THREE.LineBasicMaterial({
+    color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95, linewidth: 2,
+  });
+  const selEdges = new THREE.LineSegments(selEdgesGeo, selEdgesMat);
+  selEdges.renderOrder = 5;
+  selEdges.visible = false;
+  group.add(selEdges);
+
+  // Selected-face translucent fill.
+  const selFacesGeo = new THREE.BufferGeometry();
+  selFacesGeo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+  const selFacesMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.32,
+    depthTest: false, side: THREE.DoubleSide,
+  });
+  const selFaces = new THREE.Mesh(selFacesGeo, selFacesMat);
+  selFaces.renderOrder = 1; // under the edge overlay
+  selFaces.visible = false;
+  group.add(selFaces);
+
+  editHelpers = { group, edges, points, selPoints, selEdges, selFaces, weldMap };
   _refreshEditPoints();
 }
 
@@ -1498,17 +1703,62 @@ function refreshSelectionMarker() {
   if (!mesh) return;
   const posAttr = mesh.geometry.getAttribute('position');
   const weld = editHelpers.weldMap;
-  const pts = [];
-  editSelection.forEach(logical => {
-    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+  const safe = logical => logical >= 0 && logical < weld.logicalToIdxs.length;
+  const pos = logical => {
     const g = weld.logicalToIdxs[logical][0];
-    pts.push(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g));
-  });
-  editHelpers.selPoints.geometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(new Float32Array(pts), 3),
-  );
-  editHelpers.selPoints.geometry.attributes.position.needsUpdate = true;
+    return [posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g)];
+  };
+
+  // ── Vertex dots — only in vertex mode (or as a subtle fallback). ──
+  const showVertexDots = editSubMode === 'vertex';
+  editHelpers.selPoints.visible = showVertexDots;
+  if (showVertexDots) {
+    const pts = [];
+    editSelection.forEach(l => { if (safe(l)) pts.push(...pos(l)); });
+    editHelpers.selPoints.geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(new Float32Array(pts), 3),
+    );
+    editHelpers.selPoints.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // ── Edge highlights — only in edge mode. ──
+  const showEdges = editSubMode === 'edge';
+  editHelpers.selEdges.visible = showEdges;
+  if (showEdges) {
+    const segs = [];
+    editEdgeSelection.forEach(k => {
+      const [a, b] = _edgeKeyToVerts(k);
+      if (!safe(a) || !safe(b)) return;
+      segs.push(...pos(a), ...pos(b));
+    });
+    editHelpers.selEdges.geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(new Float32Array(segs), 3),
+    );
+    editHelpers.selEdges.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // ── Face highlights — only in face mode. ──
+  const showFaces = editSubMode === 'face';
+  editHelpers.selFaces.visible = showFaces;
+  if (showFaces) {
+    const verts = [];
+    editFaceSelection.forEach(face => {
+      if (!Array.isArray(face) || face.length < 3) return;
+      if (!face.every(safe)) return;
+      // Fan-triangulate the polygon.
+      const p0 = pos(face[0]);
+      for (let i = 1; i < face.length - 1; i++) {
+        verts.push(...p0, ...pos(face[i]), ...pos(face[i + 1]));
+      }
+    });
+    editHelpers.selFaces.geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(new Float32Array(verts), 3),
+    );
+    editHelpers.selFaces.geometry.attributes.position.needsUpdate = true;
+  }
 }
 
 function destroyEditHelpers() {
@@ -1526,6 +1776,10 @@ function destroyEditHelpers() {
   if (editHelpers.points?.material)   editHelpers.points.material.dispose();
   if (editHelpers.selPoints?.geometry) editHelpers.selPoints.geometry.dispose();
   if (editHelpers.selPoints?.material) editHelpers.selPoints.material.dispose();
+  if (editHelpers.selEdges?.geometry)  editHelpers.selEdges.geometry.dispose();
+  if (editHelpers.selEdges?.material)  editHelpers.selEdges.material.dispose();
+  if (editHelpers.selFaces?.geometry)  editHelpers.selFaces.geometry.dispose();
+  if (editHelpers.selFaces?.material)  editHelpers.selFaces.material.dispose();
   if (editDragHelper) { scene.remove(editDragHelper); editDragHelper = null; }
   editHelpers = null;
 }
@@ -1643,28 +1897,63 @@ function handleEditClick(e) {
     }
   } else if (editSubMode === 'face') {
     const verts = pickFaceLogical(e.clientX, e.clientY);
-    if (verts && verts.length) {
-      if (!additive) editSelection.clear();
-      verts.forEach(v => editSelection.add(v));
+    if (verts && verts.length >= 3) {
+      const fk = _faceKey(verts);
+      if (!additive) editFaceSelection.clear();
+      if (editFaceSelection.has(fk)) editFaceSelection.delete(fk);
+      else editFaceSelection.set(fk, [...verts]);
+      _syncDerivedVertSelection();
       changed = true;
-    } else if (!additive) { editSelection.clear(); changed = true; }
+    } else if (!additive) {
+      editFaceSelection.clear();
+      _syncDerivedVertSelection();
+      changed = true;
+    }
   } else if (editSubMode === 'edge') {
     const verts = pickFaceLogical(e.clientX, e.clientY);
     if (verts && verts.length >= 2) {
-      if (!additive) editSelection.clear();
+      // Snap to the edge of the picked face that's closest to the cursor in
+      // screen space — same heuristic as before but stable per edge.
       const rect = container.getBoundingClientRect();
       const nx =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
       const ny = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
-      const screenSpaceDist = logical => {
+      const project = logical => {
         const wp = _logicalVertWorld(logical);
-        if (!wp) return Infinity;
+        if (!wp) return null;
         wp.project(camera);
-        return Math.hypot(wp.x - nx, wp.y - ny);
+        return { x: wp.x, y: wp.y };
       };
-      verts.sort((a, b) => screenSpaceDist(a) - screenSpaceDist(b));
-      verts.slice(0, 2).forEach(v => editSelection.add(v));
+      // Build polygon boundary edges (consecutive pairs in the face ring).
+      let bestKey = null, bestDist = Infinity;
+      for (let i = 0; i < verts.length; i++) {
+        const a = verts[i], b = verts[(i + 1) % verts.length];
+        const pa = project(a), pb = project(b);
+        if (!pa || !pb) continue;
+        // Distance from cursor to the projected edge segment.
+        const dx = pb.x - pa.x, dy = pb.y - pa.y;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 > 0 ? ((nx - pa.x) * dx + (ny - pa.y) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const px = pa.x + dx * t, py = pa.y + dy * t;
+        const d = Math.hypot(px - nx, py - ny);
+        if (d < bestDist) { bestDist = d; bestKey = _edgeKey(a, b); }
+      }
+      if (bestKey) {
+        if (!additive) editEdgeSelection.clear();
+        if (editEdgeSelection.has(bestKey)) editEdgeSelection.delete(bestKey);
+        else editEdgeSelection.add(bestKey);
+        _syncDerivedVertSelection();
+        changed = true;
+      } else if (!additive) {
+        editEdgeSelection.clear();
+        _syncDerivedVertSelection();
+        changed = true;
+      }
+    } else if (!additive) {
+      editEdgeSelection.clear();
+      _syncDerivedVertSelection();
       changed = true;
-    } else if (!additive) { editSelection.clear(); changed = true; }
+    }
   }
 
   if (changed) {
@@ -1758,6 +2047,448 @@ function applyEditTransformDelta() {
   editDragHelper.userData.lastScale = currScl.clone();
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Mesh-editing operators (Blender-style): extrude, inset, bevel, loop-cut,
+   subdivide, merge, delete. All operators work on the canonical meshData
+   (welded polygons) — they call _editFreshMeshData() to make sure the doc
+   reflects any in-flight vertex transforms first.
+───────────────────────────────────────────────────────────────────────── */
+function _editFreshMeshData() {
+  if (!editTargetId) return null;
+  // Commit any pending in-flight transforms so the doc has the latest verts.
+  commitEditChanges();
+  const obj = window.slateScene3d?.find(editTargetId);
+  if (!obj || !obj.meshData) return null;
+  return {
+    vertices: [...(obj.meshData.vertices || []).map(Number)],
+    faces: _cloneFacesArray(obj.meshData.faces),
+  };
+}
+
+function _vecFromArr(verts, i) {
+  return new THREE.Vector3(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2]);
+}
+function _faceNormalFromVerts(verts, face) {
+  // Newell's method — robust against non-planar polygons.
+  const n = new THREE.Vector3();
+  for (let i = 0; i < face.length; i++) {
+    const a = _vecFromArr(verts, face[i]);
+    const b = _vecFromArr(verts, face[(i + 1) % face.length]);
+    n.x += (a.y - b.y) * (a.z + b.z);
+    n.y += (a.z - b.z) * (a.x + b.x);
+    n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  if (n.lengthSq() < 1e-10) return new THREE.Vector3(0, 1, 0);
+  return n.normalize();
+}
+function _faceCentroidFromVerts(verts, face) {
+  const c = new THREE.Vector3();
+  for (const idx of face) c.add(_vecFromArr(verts, idx));
+  return c.divideScalar(Math.max(1, face.length));
+}
+
+/** Find the index in `faces` of any polygon whose vertex set equals `targetSet`.
+ *  Used to look up "the same" face that was selected before the rebuild. */
+function _findFaceIndex(faces, targetVerts) {
+  const want = new Set(targetVerts);
+  for (let i = 0; i < faces.length; i++) {
+    const f = faces[i];
+    if (!Array.isArray(f) || f.length !== targetVerts.length) continue;
+    if (f.every(v => want.has(v))) return i;
+  }
+  return -1;
+}
+
+/** Apply new mesh data, then rebuild edit helpers and restore the structural
+ *  selections supplied by the caller (already expressed in NEW vertex
+ *  indices). Falls back to clearing selections if anything looks off. */
+function _editApplyMeshData(meshData, nextSel) {
+  window.slateScene3d?.setMeshData(editTargetId, meshData);
+  if (editorMode !== 'edit' || !editTargetId) return;
+  buildEditHelpers();
+  editSelection.clear();
+  editEdgeSelection.clear();
+  editFaceSelection.clear();
+  const weldCount = editHelpers ? editHelpers.weldMap.logicalToIdxs.length : 0;
+  const inRange = i => i >= 0 && i < weldCount;
+  if (nextSel?.verts)  nextSel.verts.forEach(v => { if (inRange(v)) editSelection.add(v); });
+  if (nextSel?.edges)  nextSel.edges.forEach(([a, b]) => {
+    if (inRange(a) && inRange(b)) editEdgeSelection.add(_edgeKey(a, b));
+  });
+  if (nextSel?.faces)  nextSel.faces.forEach(verts => {
+    if (Array.isArray(verts) && verts.every(inRange)) {
+      editFaceSelection.set(_faceKey(verts), [...verts]);
+    }
+  });
+  _syncDerivedVertSelection();
+  refreshSelectionMarker();
+  attachGizmoToEditSelection();
+}
+
+/** Extrude — for each selected face, duplicate its corners, push the duplicates
+ *  along the face normal, and connect the perimeter with side quads. */
+function extrudeSelectedFaces(distance = 0.3) {
+  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  window.slateScene3dBeginAction?.();
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => [...f]);
+  const newFaceSelections = [];
+  // Iterate snapshot of the selection — face indices may shift as we splice.
+  const targets = [...editFaceSelection.values()];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    const normal = _faceNormalFromVerts(verts, face).multiplyScalar(distance);
+    // Duplicate each corner into a new vert.
+    const newIdxs = face.map(oldIdx => {
+      const p = _vecFromArr(verts, oldIdx).add(normal);
+      verts.push(p.x, p.y, p.z);
+      return (verts.length / 3) - 1;
+    });
+    // Replace the face with the new polygon (top of extrusion).
+    faces[fi] = newIdxs.slice();
+    newFaceSelections.push(newIdxs.slice());
+    // Side quads: (face[i], face[i+1], newIdxs[i+1], newIdxs[i]).
+    for (let i = 0; i < face.length; i++) {
+      const j = (i + 1) % face.length;
+      faces.push([face[i], face[j], newIdxs[j], newIdxs[i]]);
+    }
+  }
+  _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Inset — shrink each selected face inward, surround it with a quad ring. */
+function insetSelectedFaces(factor = 0.25) {
+  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  window.slateScene3dBeginAction?.();
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => [...f]);
+  const newFaceSelections = [];
+  const targets = [...editFaceSelection.values()];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    const centroid = _faceCentroidFromVerts(verts, face);
+    const innerIdxs = face.map(oldIdx => {
+      const p = _vecFromArr(verts, oldIdx).lerp(centroid, factor);
+      verts.push(p.x, p.y, p.z);
+      return (verts.length / 3) - 1;
+    });
+    faces[fi] = innerIdxs.slice();
+    newFaceSelections.push(innerIdxs.slice());
+    for (let i = 0; i < face.length; i++) {
+      const j = (i + 1) % face.length;
+      faces.push([face[i], face[j], innerIdxs[j], innerIdxs[i]]);
+    }
+  }
+  _editApplyMeshData({ vertices: verts, faces }, { faces: newFaceSelections });
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Subdivide each selected face into N quads (one per corner, meeting in the
+ *  centroid). Tris become 3 quads, quads → 4 quads, etc. */
+function subdivideSelectedFaces() {
+  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  window.slateScene3dBeginAction?.();
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => [...f]);
+  // Cache shared edge midpoints by edgeKey so neighbour faces share verts.
+  const edgeMid = new Map();
+  function getEdgeMid(a, b) {
+    const k = _edgeKey(a, b);
+    if (edgeMid.has(k)) return edgeMid.get(k);
+    const pa = _vecFromArr(verts, a), pb = _vecFromArr(verts, b);
+    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+    verts.push(mid.x, mid.y, mid.z);
+    const idx = (verts.length / 3) - 1;
+    edgeMid.set(k, idx);
+    return idx;
+  }
+  const targets = [...editFaceSelection.values()];
+  const removeAt = new Set();
+  const newFaceSelections = [];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    removeAt.add(fi);
+    const centroid = _faceCentroidFromVerts(verts, face);
+    verts.push(centroid.x, centroid.y, centroid.z);
+    const cIdx = (verts.length / 3) - 1;
+    const mids = face.map((_, i) => getEdgeMid(face[i], face[(i + 1) % face.length]));
+    for (let i = 0; i < face.length; i++) {
+      const prev = (i - 1 + face.length) % face.length;
+      const quad = [face[i], mids[i], cIdx, mids[prev]];
+      faces.push(quad);
+      newFaceSelections.push(quad.slice());
+    }
+  }
+  const compact = faces.filter((_, i) => !removeAt.has(i));
+  _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Loop cut a single selected face — for a quad, splits it across the midpoint
+ *  along the longer pair of edges into two quads. For tris splits into a tri
+ *  and a quad along the longest edge. Works on multiple selected faces. */
+function loopCutSelectedFaces() {
+  if (editorMode !== 'edit' || editSubMode !== 'face' || !editFaceSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  window.slateScene3dBeginAction?.();
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => [...f]);
+  const edgeMid = new Map();
+  function getEdgeMid(a, b) {
+    const k = _edgeKey(a, b);
+    if (edgeMid.has(k)) return edgeMid.get(k);
+    const pa = _vecFromArr(verts, a), pb = _vecFromArr(verts, b);
+    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+    verts.push(mid.x, mid.y, mid.z);
+    const idx = (verts.length / 3) - 1;
+    edgeMid.set(k, idx);
+    return idx;
+  }
+  const targets = [...editFaceSelection.values()];
+  const removeAt = new Set();
+  const newFaceSelections = [];
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    removeAt.add(fi);
+    if (face.length === 4) {
+      // Cut between midpoints of opposite edges. Pick whichever pair gives
+      // the more square-ish halves (cut the longer pair).
+      const len = (a, b) => _vecFromArr(verts, a).distanceTo(_vecFromArr(verts, b));
+      const e0 = len(face[0], face[1]) + len(face[2], face[3]);
+      const e1 = len(face[1], face[2]) + len(face[3], face[0]);
+      let i0, i1, i2, i3;
+      if (e0 >= e1) { i0 = 0; i1 = 1; i2 = 2; i3 = 3; }
+      else          { i0 = 1; i1 = 2; i2 = 3; i3 = 0; }
+      const m1 = getEdgeMid(face[i0], face[i1]);
+      const m2 = getEdgeMid(face[i2], face[i3]);
+      const q1 = [face[i0], m1, m2, face[i3]];
+      const q2 = [m1, face[i1], face[i2], m2];
+      faces.push(q1); faces.push(q2);
+      newFaceSelections.push(q1.slice(), q2.slice());
+    } else if (face.length === 3) {
+      // Split triangle across midpoint of the longest edge.
+      let longest = 0, lLen = 0;
+      for (let i = 0; i < 3; i++) {
+        const d = _vecFromArr(verts, face[i]).distanceTo(_vecFromArr(verts, face[(i + 1) % 3]));
+        if (d > lLen) { lLen = d; longest = i; }
+      }
+      const a = face[longest], b = face[(longest + 1) % 3], c = face[(longest + 2) % 3];
+      const m = getEdgeMid(a, b);
+      faces.push([a, m, c]);
+      faces.push([m, b, c]);
+      newFaceSelections.push([a, m, c], [m, b, c]);
+    } else {
+      // Polygon: just fan-subdivide (gives an OK result for n-gons).
+      const centroid = _faceCentroidFromVerts(verts, face);
+      verts.push(centroid.x, centroid.y, centroid.z);
+      const cIdx = (verts.length / 3) - 1;
+      for (let i = 0; i < face.length; i++) {
+        const tri = [face[i], face[(i + 1) % face.length], cIdx];
+        faces.push(tri);
+        newFaceSelections.push(tri.slice());
+      }
+    }
+  }
+  const compact = faces.filter((_, i) => !removeAt.has(i));
+  _editApplyMeshData({ vertices: verts, faces: compact }, { faces: newFaceSelections });
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Vertex bevel — for each selected vertex, push it apart along its connected
+ *  edges by `amount`, replacing the vertex with a small polygon (chamfer). */
+function bevelSelectedVerts(amount = 0.18) {
+  if (editorMode !== 'edit' || editSubMode !== 'vertex' || !editSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  window.slateScene3dBeginAction?.();
+  const md = _editFreshMeshData();
+  if (!md) return;
+  const verts = md.vertices.slice();
+  const faces = md.faces.map(f => [...f]);
+  const targets = [...editSelection];
+  const newVertSel = new Set();
+
+  for (const targetIdx of targets) {
+    // Find every face containing this vertex.
+    const incidentFaces = [];
+    faces.forEach((f, fi) => {
+      const p = f.indexOf(targetIdx);
+      if (p >= 0) incidentFaces.push({ fi, p });
+    });
+    if (incidentFaces.length === 0) continue;
+
+    // For each incident face: replace targetIdx with two NEW verts pulled
+    // along the two adjacent edges by `amount`.
+    const replacements = []; // { fi, leftIdx, rightIdx, neighborLeft, neighborRight }
+    const center = _vecFromArr(verts, targetIdx);
+    for (const { fi, p } of incidentFaces) {
+      const f = faces[fi];
+      const prevV = f[(p - 1 + f.length) % f.length];
+      const nextV = f[(p + 1) % f.length];
+      const dirPrev = _vecFromArr(verts, prevV).sub(center).normalize().multiplyScalar(amount);
+      const dirNext = _vecFromArr(verts, nextV).sub(center).normalize().multiplyScalar(amount);
+      const pL = center.clone().add(dirPrev);
+      const pR = center.clone().add(dirNext);
+      verts.push(pL.x, pL.y, pL.z);
+      const leftIdx = (verts.length / 3) - 1;
+      verts.push(pR.x, pR.y, pR.z);
+      const rightIdx = (verts.length / 3) - 1;
+      replacements.push({ fi, p, leftIdx, rightIdx, prevV, nextV });
+    }
+    // Apply the replacements: swap targetIdx in each face with [leftIdx, rightIdx]
+    // (in winding order so the bevel face inserts cleanly).
+    // We iterate in reverse insertion order to keep indices valid.
+    replacements.sort((a, b) => b.fi - a.fi);
+    for (const r of replacements) {
+      const f = faces[r.fi];
+      const out = [];
+      for (let i = 0; i < f.length; i++) {
+        if (i === r.p) out.push(r.leftIdx, r.rightIdx);
+        else out.push(f[i]);
+      }
+      faces[r.fi] = out;
+    }
+    // Build a new polygon connecting the inner ring (rightIdx -> leftIdx of next
+    // face going around the vertex). We don't have a robust topological walk,
+    // so for the common case (closed manifold around the vert) we just collect
+    // all the new verts and let triangulation fill them.
+    const beforeLen = newVertSel.size;
+    replacements.forEach(r => { newVertSel.add(r.leftIdx); newVertSel.add(r.rightIdx); });
+    if (replacements.length >= 3) {
+      // Order new verts by angle around the centroid normal so the cap polygon
+      // is convex.
+      const ringIdxs = [];
+      replacements.forEach(r => { ringIdxs.push(r.leftIdx, r.rightIdx); });
+      const cap = new THREE.Vector3();
+      ringIdxs.forEach(i => cap.add(_vecFromArr(verts, i)));
+      cap.divideScalar(ringIdxs.length);
+      const normal = new THREE.Vector3();
+      for (let i = 0; i < ringIdxs.length; i++) {
+        const a = _vecFromArr(verts, ringIdxs[i]).sub(cap);
+        const b = _vecFromArr(verts, ringIdxs[(i + 1) % ringIdxs.length]).sub(cap);
+        normal.add(a.cross(b));
+      }
+      if (normal.lengthSq() > 1e-10) {
+        normal.normalize();
+        const ref = _vecFromArr(verts, ringIdxs[0]).sub(cap).normalize();
+        const right = new THREE.Vector3().crossVectors(normal, ref).normalize();
+        const angleOf = i => {
+          const v = _vecFromArr(verts, i).sub(cap);
+          const x = v.dot(ref);
+          const y = v.dot(right);
+          return Math.atan2(y, x);
+        };
+        ringIdxs.sort((a, b) => angleOf(a) - angleOf(b));
+        faces.push(ringIdxs);
+      }
+    }
+    // Suppress unused-var warning.
+    void beforeLen;
+  }
+
+  // Remove the original vertices from the verts array? That's tricky because
+  // other faces may still reference unrelated indices — leave them as orphans
+  // (the commit pass strips degenerate/unreachable verts on next save).
+  _editApplyMeshData({ vertices: verts, faces }, { verts: [...newVertSel] });
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Move all selected vertices to their shared centroid. */
+function mergeSelectedToCenter() {
+  if (editorMode !== 'edit' || !editSelection.size) {
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  const mesh = objMeshes.get(editTargetId);
+  if (!mesh) return;
+  const posAttr = mesh.geometry.getAttribute('position');
+  if (!posAttr) return;
+  const weld = editHelpers.weldMap;
+  const c = new THREE.Vector3();
+  let n = 0;
+  editSelection.forEach(logical => {
+    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+    const g = weld.logicalToIdxs[logical][0];
+    c.add(new THREE.Vector3(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g)));
+    n++;
+  });
+  if (!n) return;
+  c.divideScalar(n);
+  window.slateScene3dBeginAction?.();
+  editSelection.forEach(logical => {
+    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+    for (const g of weld.logicalToIdxs[logical]) {
+      posAttr.setXYZ(g, c.x, c.y, c.z);
+    }
+  });
+  posAttr.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+  mesh.geometry.computeBoundingSphere();
+  commitEditChanges();
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
+/** Delete the selected faces (or, for vertex/edge modes, every face touching
+ *  the selection). Orphan vertices are stripped on the next commit. */
+function deleteSelectedTopology() {
+  if (editorMode !== 'edit') return;
+  const md = _editFreshMeshData();
+  if (!md) return;
+  let touchedFaces = [];
+  if (editSubMode === 'face' && editFaceSelection.size) {
+    touchedFaces = [...editFaceSelection.values()];
+  } else if (editSubMode === 'edge' && editEdgeSelection.size) {
+    const edgePairs = [...editEdgeSelection].map(_edgeKeyToVerts);
+    md.faces.forEach((f, fi) => {
+      for (const [a, b] of edgePairs) {
+        for (let i = 0; i < f.length; i++) {
+          const x = f[i], y = f[(i + 1) % f.length];
+          if ((x === a && y === b) || (x === b && y === a)) { touchedFaces.push(f); return; }
+        }
+      }
+    });
+  } else if (editSubMode === 'vertex' && editSelection.size) {
+    md.faces.forEach(f => {
+      if (f.some(v => editSelection.has(v))) touchedFaces.push(f);
+    });
+  }
+  if (!touchedFaces.length) { try { window.slateSfx?.play('grab-cancel'); } catch (_) {} return; }
+  window.slateScene3dBeginAction?.();
+  const kill = new Set(touchedFaces.map(f => _faceKey(f)));
+  const keptFaces = md.faces.filter(f => !kill.has(_faceKey(f)));
+  _editApplyMeshData({ vertices: md.vertices, faces: keptFaces }, {});
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+
 function commitEditChanges() {
   if (!editTargetId) return;
   const mesh = objMeshes.get(editTargetId);
@@ -1807,13 +2538,23 @@ function commitEditChanges() {
   // gizmo to the same logical selection so the user can keep editing.
   if (editorMode === 'edit' && editTargetId && editHelpers) {
     const prevSelection = [...editSelection];
+    const prevEdges = [...editEdgeSelection];
+    const prevFaces = [...editFaceSelection.entries()];
     buildEditHelpers();
     editSelection.clear();
+    editEdgeSelection.clear();
+    editFaceSelection.clear();
     // After welding, new logical N == old logical N (insertion order preserved),
     // so the selection survives the rebuild.
     const weldCount = editHelpers ? editHelpers.weldMap.logicalToIdxs.length : 0;
-    prevSelection.forEach(logical => {
-      if (logical >= 0 && logical < weldCount) editSelection.add(logical);
+    const inRange = i => i >= 0 && i < weldCount;
+    prevSelection.forEach(l => { if (inRange(l)) editSelection.add(l); });
+    prevEdges.forEach(k => {
+      const [a, b] = _edgeKeyToVerts(k);
+      if (inRange(a) && inRange(b)) editEdgeSelection.add(k);
+    });
+    prevFaces.forEach(([k, verts]) => {
+      if (verts.every(inRange)) editFaceSelection.set(k, verts);
     });
     refreshSelectionMarker();
     attachGizmoToEditSelection();
@@ -1823,6 +2564,8 @@ function commitEditChanges() {
 function setEditSubMode(mode) {
   editSubMode = mode;
   editSelection.clear();
+  editEdgeSelection.clear();
+  editFaceSelection.clear();
   refreshSelectionMarker();
   transform?.detach();
   document.querySelectorAll('#toolbar-3d .t3d-esel-btn').forEach(b => {
@@ -1857,8 +2600,14 @@ function _animateModeToggle() {
 function updateToolbarVisibility() {
   const editGroup = document.getElementById('t3d-edit-select-group');
   const sep = document.getElementById('t3d-edit-sep');
-  if (editGroup) editGroup.style.display = editorMode === 'edit' ? 'flex' : 'none';
-  if (sep)       sep.style.display       = editorMode === 'edit' ? 'block' : 'none';
+  const inEdit = editorMode === 'edit';
+  if (editGroup) editGroup.style.display = inEdit ? 'flex' : 'none';
+  if (sep)       sep.style.display       = inEdit ? 'block' : 'none';
+  document.querySelectorAll('#toolbar-3d .t3d-edit-only').forEach(el => {
+    if (!el) return;
+    if (el.classList.contains('toolbar-sep')) el.style.display = inEdit ? 'block' : 'none';
+    else el.style.display = inEdit ? 'flex' : 'none';
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1867,9 +2616,9 @@ function updateToolbarVisibility() {
 function ensureScene() {
   if (scene) return;
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x12121a);
+  scene.background = new THREE.Color(_persistedViewportBg);
 
-  camera = new THREE.PerspectiveCamera(55, 1, 0.05, 500);
+  camera = new THREE.PerspectiveCamera(_persistedFov, 1, 0.05, 500);
   camera.position.set(4, 3.5, 6);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.45));
@@ -1880,12 +2629,14 @@ function ensureScene() {
   // Floor grid (Blender-style infinite-ish ground reference).
   const grid = new THREE.GridHelper(40, 40, 0x3a3a4d, 0x252530);
   grid.userData.helper = true;
+  grid.visible = _persistedGridVisible;
   scene.add(grid);
   _gridHelper = grid;
 
   // Axis helper at origin
   const axes = new THREE.AxesHelper(0.8);
   axes.userData.helper = true;
+  axes.visible = _persistedGridVisible;
   scene.add(axes);
   _axesHelper = axes;
 
@@ -1896,10 +2647,12 @@ function ensureScene() {
 let _gridHelper = null;
 let _axesHelper = null;
 function toggleGrid() {
-  if (_gridHelper) _gridHelper.visible = !_gridHelper.visible;
-  if (_axesHelper) _axesHelper.visible = _gridHelper?.visible !== false;
-  const btn = document.getElementById('t3d-grid-btn');
-  if (btn) btn.classList.toggle('active', _gridHelper?.visible !== false);
+  const next = !(_gridHelper?.visible !== false);
+  setGridVisible(next);
+  // Keep the settings checkbox in sync if it exists.
+  const set = document.getElementById('viewport-grid-toggle');
+  if (set && set.checked !== next) set.checked = next;
+  try { localStorage.setItem('slate_viewport_grid', next ? '1' : '0'); } catch (_) {}
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -2082,8 +2835,11 @@ function mirrorOnAxis(axisIdx) {
 
 function resize() {
   if (!container || !renderer || !camera) return;
-  const w = container.clientWidth  || 1;
-  const h = container.clientHeight || 1;
+  // Round to whole CSS pixels so the renderer doesn't pick up sub-pixel sizes
+  // that drift away from container.aspect — fixes the stretched-on-resize bug
+  // when the dock-resize-handle shifts the viewport mid-frame.
+  const w = Math.max(1, Math.round(container.clientWidth  || 1));
+  const h = Math.max(1, Math.round(container.clientHeight || 1));
   renderer.setSize(w, h, false);
   const coarse = (typeof window !== 'undefined' && window.matchMedia && (
     window.matchMedia('(max-width: 768px)').matches ||
@@ -2091,8 +2847,29 @@ function resize() {
   ));
   const prCap = coarse ? 1.25 : 2;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, prCap));
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  const aspect = w / h;
+  if (camera.aspect !== aspect) {
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+  }
+  // Some Three.js controls cache the renderer's DOM size — give them a chance
+  // to read the new layout on the next frame.
+  if (transform && typeof transform.update === 'function') {
+    try { transform.update(); } catch (_) {}
+  }
+}
+
+let _resizeObserver = null;
+function _attachContainerResizeObserver(el) {
+  if (_resizeObserver || !el || typeof ResizeObserver !== 'function') return;
+  _resizeObserver = new ResizeObserver(() => resize());
+  _resizeObserver.observe(el);
+}
+function _detachContainerResizeObserver() {
+  if (_resizeObserver) {
+    try { _resizeObserver.disconnect(); } catch (_) {}
+    _resizeObserver = null;
+  }
 }
 
 let _lastLoopTs = 0;
@@ -2189,7 +2966,8 @@ function bindToolbar() {
   document.getElementById('t3d-frame-btn')?.addEventListener('click', frameSelected);
   document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
   _ensureFlyUiPointerUpListeners();
-  document.getElementById('t3d-fly-btn')?.addEventListener('pointerdown', _onFlyCamBtnDown);
+  document.getElementById('t3d-fly-btn')?.addEventListener('click', _onFlyCamBtnDown);
+  _updateFlyArmedUI();
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
   document.getElementById('t3d-snap-btn')?.addEventListener('click', toggleSnap);
   document.getElementById('t3d-space-btn')?.addEventListener('click', cycleTransformSpace);
@@ -2207,6 +2985,14 @@ function bindToolbar() {
     _openViewMenu(r.left, r.bottom + 4);
   });
   document.getElementById('t3d-object-color')?.addEventListener('input', _onObjectColorInput);
+  // Mesh-editing operators (only enabled while in edit mode).
+  document.getElementById('t3d-extrude-btn')  ?.addEventListener('click', () => extrudeSelectedFaces());
+  document.getElementById('t3d-inset-btn')    ?.addEventListener('click', () => insetSelectedFaces());
+  document.getElementById('t3d-bevel-btn')    ?.addEventListener('click', () => bevelSelectedVerts());
+  document.getElementById('t3d-loopcut-btn')  ?.addEventListener('click', () => loopCutSelectedFaces());
+  document.getElementById('t3d-subdivide-btn')?.addEventListener('click', () => subdivideSelectedFaces());
+  document.getElementById('t3d-merge-btn')    ?.addEventListener('click', () => mergeSelectedToCenter());
+  document.getElementById('t3d-delete-btn-edit')?.addEventListener('click', () => deleteSelectedTopology());
 }
 
 function _openMirrorMenu(clientX, clientY) {
@@ -2371,6 +3157,21 @@ function _renderRow(obj, depth, hasChildren) {
   </div>`;
 }
 
+/** Lightweight DOM patch for selection-only changes — leaves the row nodes
+ *  intact so that an in-flight dblclick (which fires AFTER the first click's
+ *  selection update) still lands on the same span and can begin a rename. */
+function _refreshHierarchySelection() {
+  if (!hierarchyEl) {
+    hierarchyEl = document.getElementById('hierarchy-list');
+    if (!hierarchyEl) return;
+  }
+  hierarchyEl.querySelectorAll('.outliner-row').forEach(row => {
+    const oid = row.dataset.oid;
+    const sel = oid === selectedId || oid === editTargetId || selectedIds.has(oid);
+    row.classList.toggle('selected', !!sel);
+  });
+}
+
 function renderHierarchy() {
   if (!hierarchyEl) {
     hierarchyEl = document.getElementById('hierarchy-list');
@@ -2410,7 +3211,9 @@ function renderHierarchy() {
     });
     row.querySelector('.out-name')?.addEventListener('dblclick', e => {
       e.stopPropagation();
-      beginOutlinerRename(row.querySelector('.out-name'));
+      e.preventDefault();
+      const span = row.querySelector('.out-name');
+      if (span && !span.tagName.match(/^INPUT$/i)) beginOutlinerRename(span);
     });
     row.querySelector('.out-vis-btn')?.addEventListener('click', e => {
       e.stopPropagation();
@@ -2590,6 +3393,7 @@ export function initEditor3D(rootEl) {
   if (!rootEl) return;
   if (container === rootEl && renderer) {
     resize(); bindEvents();
+    _attachContainerResizeObserver(container);
     cancelAnimationFrame(raf); loop();
     return;
   }
@@ -2670,6 +3474,7 @@ export function initEditor3D(rootEl) {
   bindEvents();
   bindToolbar();
   ensureHierarchyPanel();
+  _attachContainerResizeObserver(container);
 
   // Sync from current doc state and subscribe for future changes.
   syncSceneFromDoc();
@@ -2684,6 +3489,7 @@ export function initEditor3D(rootEl) {
 export function disposeEditor3D() {
   cancelAnimationFrame(raf);
   unbindEvents();
+  _detachContainerResizeObserver();
 
   if (typeof unsubScene === 'function') { unsubScene(); unsubScene = null; }
 

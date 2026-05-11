@@ -108,8 +108,7 @@ let hierarchyRegistered = false;
 
 /** Modal grab (Blender-style: G to start, X/Y/Z to constrain, click confirm, RMB/Esc cancel). */
 let grabState = null;
-let _ctxMenuEl    = null;
-let _flyUiUpBound = false;
+let _ctxMenuEl = null;
 
 /* ─────────────────────────────────────────────────────────────────────────
    Mesh faces: stored as nested polygons [[i0..], …] or legacy flat triangles.
@@ -555,22 +554,12 @@ function _onFreeLookHoldKeyDown(e) {
   try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
 }
 
-function _onFreeLookHoldKeyUp(_e) { /* no-op — Backquote is a toggle now */ }
-
 function _onFlyCamBtnDown(e) {
   // Toggle arm state — gesture is now driven by right-mouse hold.
   e.preventDefault();
   toggleFlyArmed();
   try { window.slateSfx?.play(flyArmed ? 'toggle' : 'panel-close'); } catch (_) {}
 }
-function _onFlyCamPointerEnd() { /* legacy — nothing to do, kept for compat */ }
-
-function _ensureFlyUiPointerUpListeners() {
-  // No global pointerup listener needed anymore; kept as a no-op so callers
-  // don't crash if invoked from older code paths.
-  _flyUiUpBound = true;
-}
-
 function _cancelRmbFlyTimer() {
   if (_rmbHoldTimer) { clearTimeout(_rmbHoldTimer); _rmbHoldTimer = null; }
 }
@@ -2894,7 +2883,6 @@ function bindEvents() {
   bound = true;
   window.addEventListener('resize', resize);
   window.addEventListener('keydown', _onFreeLookHoldKeyDown, true);
-  window.addEventListener('keyup',   _onFreeLookHoldKeyUp,   true);
   window.addEventListener('keydown', onKeyDown, true);
   container.addEventListener('pointerdown', onPointerDown);
   container.addEventListener('pointerup',   onPointerUp);
@@ -2910,7 +2898,6 @@ function unbindEvents() {
   bound = false;
   window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', _onFreeLookHoldKeyDown, true);
-  window.removeEventListener('keyup',   _onFreeLookHoldKeyUp,   true);
   window.removeEventListener('keydown', onKeyDown, true);
   if (container) {
     container.removeEventListener('pointerdown', onPointerDown);
@@ -2965,7 +2952,6 @@ function bindToolbar() {
   });
   document.getElementById('t3d-frame-btn')?.addEventListener('click', frameSelected);
   document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
-  _ensureFlyUiPointerUpListeners();
   document.getElementById('t3d-fly-btn')?.addEventListener('click', _onFlyCamBtnDown);
   _updateFlyArmedUI();
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
@@ -3497,12 +3483,8 @@ export function disposeEditor3D() {
   if (renderer?.domElement) {
     renderer.domElement.removeEventListener('contextmenu', _onViewportContextMenu);
   }
-  if (_flyUiUpBound) {
-    window.removeEventListener('pointerup', _onFlyCamPointerEnd, true);
-    window.removeEventListener('pointercancel', _onFlyCamPointerEnd, true);
-    _flyUiUpBound = false;
-  }
-  _flyBtnHeldFromUi = false;
+  _cancelRmbFlyTimer();
+  _rmbFlyTriggered = false;
   if (grabState) _grabCancel();
 
   _clearAllPeerCameras();

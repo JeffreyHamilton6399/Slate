@@ -697,7 +697,6 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   color: var(--text); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-/* (Topic input removed — was #board-topic-input.) */
 
 /* Legacy host bar / chip styles removed; replaced by .board-vis-toggle. */
 #share-board-btn { flex-shrink: 0; }
@@ -1885,7 +1884,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   }
   #chat-panel.open   { transform: translateX(0); display: flex; }
 
-  #board-topic-input { display: none; }
   #draw-toolbar { padding: 0 4px; gap: 1px; }
   #draw-toolbar .tool-btn { padding: 5px 5px; }
 }
@@ -2647,16 +2645,16 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 </div>
 
 <!-- Install prompt (PWA) -->
-<div id="install-prompt">
+<div id="install-prompt" role="dialog" aria-labelledby="install-prompt-title" aria-describedby="install-prompt-desc">
   <div style="display:flex;align-items:center;gap:12px">
-    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style="flex-shrink:0">
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style="flex-shrink:0" aria-hidden="true">
       <rect width="36" height="36" rx="9" fill="#0c0c0e"/>
       <rect x="3" y="3" width="30" height="30" rx="5" stroke="#7c6aff" stroke-width="2"/>
       <path d="M23 9l4 4-11 11-5 1.2 1.2-5z" fill="none" stroke="#7c6aff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     </svg>
     <div>
-      <div style="font-weight:600;font-size:0.9rem">Install Slate</div>
-      <div style="font-size:0.78rem;color:var(--text-dim);margin-top:2px">Add to home screen for the best experience</div>
+      <div id="install-prompt-title" style="font-weight:600;font-size:0.9rem">Install Slate</div>
+      <div id="install-prompt-desc" class="install-hint-text" style="font-size:0.78rem;color:var(--text-dim);margin-top:2px">Add to home screen for the best experience</div>
     </div>
   </div>
   <div class="install-prompt-row">
@@ -2832,6 +2830,17 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         <button class="btn btn-ghost" id="clean-boards-btn" style="font-size:0.83rem">
           Remove all empty boards now
         </button>
+      </div>
+
+      <!-- App -->
+      <div class="settings-section">
+        <div class="settings-section-title">App</div>
+        <button class="btn btn-ghost" id="install-app-btn" style="font-size:0.83rem">
+          Install Slate as an app
+        </button>
+        <div style="font-size:0.74rem;color:var(--text-dim);line-height:1.5">
+          Runs in its own window, launches faster, and works fully offline once cached.
+        </div>
       </div>
 
       <!-- About -->
@@ -3204,6 +3213,8 @@ function toast(msg, type = '') {
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { el.className = ''; }, 3500);
 }
+// Globally accessible toast for setup code that runs in its own IIFE scope.
+window.slateToast = toast;
 
 /* Board name from URL hash */
 function boardFromUrl() {
@@ -7757,6 +7768,18 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     });
   }
 
+  // ── Install-as-app button ──
+  const installAppBtn = document.getElementById('install-app-btn');
+  if (installAppBtn) {
+    installAppBtn.addEventListener('click', () => {
+      const ok = window.slateShowInstallPrompt?.();
+      if (ok === false) {
+        // Already installed; just close settings.
+        document.getElementById('settings-overlay')?.classList.remove('show');
+      }
+    });
+  }
+
   // ── Reduced motion ──
   const motionToggle = document.getElementById('reduced-motion-toggle');
   if (motionToggle) {
@@ -7876,26 +7899,125 @@ document.getElementById('panels-toggle')?.addEventListener('click', () => {
 });
 
 /* ═══════════════════════════════════════════
-   INSTALL PROMPT (PWA)
+   PWA — service worker registration + install prompt
 ═══════════════════════════════════════════ */
-let deferredInstallEvent = null;
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  deferredInstallEvent = e;
-  if (!localStorage.getItem('slate_install_dismissed')) {
-    setTimeout(() => document.getElementById('install-prompt').classList.add('show'), 3000);
+(function setupPwa() {
+  // Register the service worker so Chromium fires `beforeinstallprompt`.
+  // We do it after window.load so it never blocks initial paint.
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js')
+        .catch(err => console.debug('Slate SW register failed:', err?.message || err));
+    });
   }
-});
 
-document.getElementById('install-ok').addEventListener('click', () => {
-  document.getElementById('install-prompt').classList.remove('show');
-  deferredInstallEvent?.prompt();
-});
+  const promptEl    = document.getElementById('install-prompt');
+  const installBtn  = document.getElementById('install-ok');
+  const dismissBtn  = document.getElementById('install-dismiss');
+  if (!promptEl || !installBtn || !dismissBtn) return;
 
-document.getElementById('install-dismiss').addEventListener('click', () => {
-  document.getElementById('install-prompt').classList.remove('show');
-  localStorage.setItem('slate_install_dismissed', '1');
-});
+  // Cooling-off period after a dismissal — don't pester users repeatedly.
+  const DISMISS_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+  const DISMISS_KEY  = 'slate_install_dismissed_at';
+  const INSTALLED_KEY = 'slate_installed';
+
+  function isStandalone() {
+    return window.matchMedia?.('(display-mode: standalone)').matches
+      || window.matchMedia?.('(display-mode: minimal-ui)').matches
+      || window.navigator.standalone === true; // iOS Safari
+  }
+  function recentlyDismissed() {
+    const at = parseInt(localStorage.getItem(DISMISS_KEY) || '0', 10);
+    if (!at) return false;
+    return Date.now() - at < DISMISS_COOLDOWN_MS;
+  }
+  function markDismissed() {
+    try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch (_) {}
+  }
+  function markInstalled() {
+    try {
+      localStorage.setItem(INSTALLED_KEY, '1');
+      localStorage.removeItem(DISMISS_KEY);
+    } catch (_) {}
+  }
+  function show()  { promptEl.classList.add('show');    try { window.slateSfx?.play('panel-open'); } catch (_) {} }
+  function hide()  { promptEl.classList.remove('show'); }
+
+  let deferredInstallEvent = null;
+  window.slateShowInstallPrompt = function () {
+    // Manual entry point (e.g. from settings) — bypasses the cooldown.
+    if (isStandalone() || localStorage.getItem(INSTALLED_KEY) === '1') {
+      try { window.slateToast?.('Slate is already installed', 'green'); } catch (_) {}
+      return false;
+    }
+    if (!deferredInstallEvent) {
+      // No native prompt available (iOS Safari, Firefox desktop, etc.) — give
+      // a manual hint in the prompt body.
+      const hint = promptEl.querySelector('.install-hint-text');
+      if (hint) hint.textContent = isIos()
+        ? 'On iOS, tap the Share button, then “Add to Home Screen”.'
+        : 'Use your browser menu (⋮) → “Install app” or “Add to Home screen”.';
+      show();
+      return true;
+    }
+    show();
+    return true;
+  };
+
+  function isIos() {
+    const ua = navigator.userAgent || '';
+    return /iPad|iPhone|iPod/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+  }
+
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredInstallEvent = e;
+    if (isStandalone() || localStorage.getItem(INSTALLED_KEY) === '1') return;
+    if (recentlyDismissed()) return;
+    // Delay so it doesn't fight with the first-paint splash / join modal.
+    setTimeout(() => {
+      if (!promptEl.classList.contains('show')) show();
+    }, 3500);
+  });
+
+  window.addEventListener('appinstalled', () => {
+    markInstalled();
+    hide();
+    deferredInstallEvent = null;
+    try { window.slateToast?.('Slate installed!', 'green'); } catch (_) {}
+  });
+
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallEvent) {
+      // No native prompt available — close the manual hint banner.
+      hide();
+      return;
+    }
+    hide();
+    try {
+      deferredInstallEvent.prompt();
+      const choice = await deferredInstallEvent.userChoice;
+      if (choice?.outcome === 'dismissed') markDismissed();
+    } catch (_) {}
+    deferredInstallEvent = null;
+  });
+
+  dismissBtn.addEventListener('click', () => {
+    hide();
+    markDismissed();
+    try { window.slateSfx?.play('panel-close'); } catch (_) {}
+  });
+
+  // iOS fallback — beforeinstallprompt never fires there. If the user is on
+  // iOS Safari and hasn't been shown the hint yet, surface it once.
+  if (isIos() && !isStandalone() && !recentlyDismissed()
+      && localStorage.getItem(INSTALLED_KEY) !== '1') {
+    const hint = promptEl.querySelector('.install-hint-text');
+    if (hint) hint.textContent = 'Tap the Share button, then “Add to Home Screen”.';
+    installBtn.textContent = 'Got it';
+    setTimeout(() => show(), 4000);
+  }
+})();
 
 /* ═══════════════════════════════════════════
    WAKE LOCK

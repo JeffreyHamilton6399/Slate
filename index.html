@@ -2290,7 +2290,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <!-- Font size (text tool) -->
       <div id="font-size-wrap" style="display:none">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" style="opacity:0.5"><path d="M1 1h10v2H7v8H5V3H1V1z"/></svg>
-        <input id="font-size-input" type="number" value="28" min="8" max="200" title="Font size">
+        <input id="font-size-input" type="number" value="200" min="8" max="600" title="Font size">
       </div>
 
       <div class="toolbar-sep"></div>
@@ -5453,7 +5453,7 @@ let strokeColor   = '#1a1a2e'; // dark ink on light paper (matches first swatch)
 let strokeSize    = 4;
 let fillColor     = '#e8e6ff';
 let useFill       = false;
-let fontSize      = 28;
+let fontSize      = 200;
 let strokeOpacity = 1;        // 0..1 — appended to FG hex as alpha for new strokes
 function _alphaHexSuffix(opacity) {
   if (!Number.isFinite(opacity) || opacity >= 0.999) return '';
@@ -6026,7 +6026,16 @@ function onPointerDown(e) {
       toast('Click a shape to fill', 'red');
     }
   } else if (currentTool === 'text') {
-    // Start drag to define text box — release to open textarea
+    // Clicking an existing text/sticky box: select it (and let dbl-click
+    // promote into edit mode) instead of spawning a new box on top of it.
+    const hit = hitTestShapeAt(wx, wy);
+    if (hit && (hit.type === 'text' || hit.type === 'sticky')) {
+      selItems = [{ kind: 'shape', id: hit.id }];
+      selBox = null; selDragStart = null; selHandle = null;
+      scheduleRender();
+      return;
+    }
+    // Otherwise start drag to define a text box — release to open textarea.
     if (textPos) { commitText(); } // commit any in-progress text first
     textDragStart = { sx: e.clientX, sy: e.clientY, wx, wy };
     isDrawing = true;
@@ -6165,10 +6174,18 @@ function onPointerUp(e) {
     textDragGuide.style.display = 'none';
     isDrawing = false;
     const dx = e.clientX - textDragStart.sx, dy = e.clientY - textDragStart.sy;
-    textBoxSw = Math.max(80, Math.abs(dx));
-    textBoxSh = Math.max(40, Math.abs(dy));
-    const sx = Math.min(e.clientX, textDragStart.sx);
-    const sy = Math.min(e.clientY, textDragStart.sy);
+    // Click-without-drag → make the default box scale with the current font
+    // size so a 200pt text doesn't overflow an 80px box. Drag-defined boxes
+    // honour the user's exact rectangle as before.
+    const dragged = Math.abs(dx) > 4 || Math.abs(dy) > 4;
+    const pxFont  = fontSize * vp.zoom;
+    textBoxSw = dragged ? Math.max(80, Math.abs(dx)) : Math.max(160, pxFont * 4);
+    textBoxSh = dragged ? Math.max(40, Math.abs(dy)) : Math.max(60,  pxFont * 1.5);
+    // Spawn position: anchor at the cursor (or the drag's top-left for a real
+    // drag). Without the dragged check, a click would always be the corner of
+    // the cursor — that's the intended Blender-ish behaviour.
+    const sx = dragged ? Math.min(e.clientX, textDragStart.sx) : e.clientX;
+    const sy = dragged ? Math.min(e.clientY, textDragStart.sy) : e.clientY;
     const { wx, wy } = screenToWorld(sx, sy);
     textBoxSx = sx; textBoxSy = sy;
     textDragStart = null;
@@ -6650,12 +6667,60 @@ textOverlay.addEventListener('keydown', e => {
   if (e.key === 'Escape') { e.preventDefault(); commitSticky(); }
   e.stopPropagation();
 });
-/* Double-click an existing sticky to edit its text (works in select mode). */
+/* ── Text editor: re-uses the overlay to edit an EXISTING text shape ── */
+let _editingTextId = null;
+function openTextEditor(shape) {
+  if (!shape || shape.type !== 'text') return;
+  _editingTextId = shape.id;
+  textPos = null;            // disambiguate from new-text mode
+  _editingStickyId = null;
+  const sx = shape.x * vp.zoom + vp.panX;
+  const sy = shape.y * vp.zoom + vp.panY;
+  const sw = Math.max(40, (shape.w || 200) * vp.zoom);
+  const sh = Math.max(28, (shape.h || 60)  * vp.zoom);
+  const cont = _overlayContainerRect();
+  textOverlay.style.display    = 'block';
+  textOverlay.style.left       = (sx - cont.left) + 'px';
+  textOverlay.style.top        = (sy - cont.top)  + 'px';
+  textOverlay.style.width      = sw + 'px';
+  textOverlay.style.height     = sh + 'px';
+  textOverlay.style.fontSize   = Math.max(14, (shape.fontSize || fontSize) * vp.zoom) + 'px';
+  textOverlay.style.lineHeight = '1.4';
+  textOverlay.style.padding    = '';
+  textOverlay.value = shape.text || '';
+  setTimeout(() => { textOverlay.focus(); textOverlay.select(); }, 30);
+}
+function commitTextEdit() {
+  if (!_editingTextId) return;
+  const id = _editingTextId; _editingTextId = null;
+  const text = textOverlay.value;
+  textOverlay.style.display = 'none';
+  textOverlay.value = '';
+  const shape = doc.shapes.get(id);
+  if (!shape) return;
+  if ((shape.text || '') === text) return;
+  shape.text = text;
+  pendingDiff.updated.push({ ...shape });
+  scheduleDiff();
+  invalidateStatic(); scheduleRender();
+}
+textOverlay.addEventListener('blur', () => { if (_editingTextId) commitTextEdit(); });
+textOverlay.addEventListener('keydown', e => {
+  if (!_editingTextId) return;
+  if (e.key === 'Escape') { e.preventDefault(); commitTextEdit(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitTextEdit(); }
+  e.stopPropagation();
+});
+
+/* Double-click an existing text or sticky to edit it (works in select + the
+   matching tool mode). */
 canvas.addEventListener('dblclick', e => {
-  if (currentTool === 'select' || currentTool === 'sticky') {
+  if (currentTool === 'select' || currentTool === 'sticky' || currentTool === 'text') {
     const { wx, wy } = getPos(e);
     const hit = hitTestShapeAt(wx, wy);
-    if (hit && hit.type === 'sticky') openStickyEditor(hit);
+    if (!hit) return;
+    if (hit.type === 'sticky') { openStickyEditor(hit); return; }
+    if (hit.type === 'text')   { openTextEditor(hit);   return; }
   }
 });
 
@@ -6881,7 +6946,7 @@ document.addEventListener('keydown', e => {
 });
 
 document.getElementById('font-size-input').addEventListener('change', e => {
-  fontSize = Math.max(8, Math.min(200, Number(e.target.value) || 28));
+  fontSize = Math.max(8, Math.min(600, Number(e.target.value) || 200));
   e.target.value = fontSize;
 });
 

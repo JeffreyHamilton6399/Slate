@@ -12,7 +12,9 @@
 import * as THREE from 'three';
 import { OrbitControls }       from 'three/addons/controls/OrbitControls.js';
 import { TransformControls }   from 'three/addons/controls/TransformControls.js';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+// PointerLockControls used to power free-look but its lock semantics were
+// flaky across browsers — we now drive yaw/pitch from raw mousemove deltas
+// directly in `_onFlyMouseMove`, which works with or without an actual lock.
 
 /* ─────────────────────────────────────────────────────────────────────────
    Module state
@@ -47,11 +49,23 @@ const objMeshes = new Map();
 /** Box-select state. */
 let boxSelect = null;   // { x0, y0, x1, y1 } in client coords
 let boxSelectEl = null; // overlay div for the rubber-band
-/** Fly camera state. */
-let flyEnabled  = false;
-let flyControls = null;
-let flyKeys     = new Set();
-let flyHint     = null;
+/** Fly camera state.
+ *  - `flyArmed`   : user toggled the free-look button on; RMB-hold will now
+ *                   enter fly mode instead of orbiting / panning.
+ *  - `flyEnabled` : actively in fly mode (looking around with mouse, WASD to
+ *                   move). True only while RMB is held (or briefly between
+ *                   arming and the first release in toggle scenarios).
+ */
+let flyArmed   = (typeof localStorage !== 'undefined'
+                    && localStorage.getItem('slate_fly_armed') === '1');
+let flyEnabled = false;
+let flyKeys    = new Set();
+let flyHint    = null;
+/** Yaw/pitch we track manually because we don't use PointerLockControls
+ *  anymore — raw mousemove deltas drive these and we rebuild the camera
+ *  quaternion every frame the mouse moves while in fly mode. */
+let _flyYaw   = 0;
+let _flyPitch = 0;
 /** Peer camera markers. peerId -> { group, label, color } */
 const peerCams = new Map();
 /** Throttle for camera broadcasts. */
@@ -141,37 +155,35 @@ function _triSharesUndirectedEdge(t, a, b) {
   return false;
 }
 
-/** Two triangles sharing one internal edge → one quad (boundary walk). */
+/** Two CCW-wound triangles sharing one internal edge → one ordered quad.
+ *  We walk DIRECTED half-edges: the shared edge appears in opposite directions
+ *  in the two tris, so it cancels out and the remaining 4 form a clean cycle.
+ *  Using undirected edges (the old approach) failed when two boundary edges
+ *  happened to share a starting vertex — the `next` map collided. */
 function _orderedQuadFromTwoTris(t1, t2) {
-  const edges = [];
-  function addUndirected(a, b) {
-    edges.push(a < b ? [a, b] : [b, a]);
-  }
-  addUndirected(t1[0], t1[1]); addUndirected(t1[1], t1[2]); addUndirected(t1[2], t1[0]);
-  addUndirected(t2[0], t2[1]); addUndirected(t2[1], t2[2]); addUndirected(t2[2], t2[0]);
-  const cnt = new Map();
-  for (const [a, b] of edges) {
-    const k = `${a},${b}`;
-    cnt.set(k, (cnt.get(k) || 0) + 1);
-  }
-  const boundary = [];
-  for (const [a, b] of edges) {
-    if (cnt.get(`${a},${b}`) === 1) boundary.push([a, b]);
-  }
+  const halves = [
+    [t1[0], t1[1]], [t1[1], t1[2]], [t1[2], t1[0]],
+    [t2[0], t2[1]], [t2[1], t2[2]], [t2[2], t2[0]],
+  ];
+  const k = (a, b) => `${a}|${b}`;
+  const present = new Set(halves.map(([a, b]) => k(a, b)));
+  // A half-edge is interior iff its reverse is also present (the two tris share
+  // it). Anything else is on the outer boundary of the merged quad.
+  const boundary = halves.filter(([a, b]) => !present.has(k(b, a)));
   if (boundary.length !== 4) return null;
   const next = new Map();
   for (const [a, b] of boundary) {
-    if (next.has(a)) return null;
+    if (next.has(a)) return null;        // shouldn't happen with CCW winding
     next.set(a, b);
   }
   const start = boundary[0][0];
   const ring = [];
   let v = start;
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 5; i++) {
     ring.push(v);
     v = next.get(v);
-    if (v === start) break;
     if (v === undefined) return null;
+    if (v === start) break;
   }
   if (ring.length !== 4) return null;
   return ring;
@@ -249,7 +261,7 @@ function _onContainerPointerTrack(e) {
   // Movement during an RMB hold → enter fly mode early instead of waiting for
   // the full hold timer. Keeps the gesture feeling instant when you start
   // dragging right away.
-  if (_rmbArmed && !flyEnabled && !_rmbFlyTriggered) {
+  if (_rmbArmed && !flyEnabled && !_rmbFlyTriggered && flyArmed) {
     const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
     if (moved > RMB_FLY_MOVE_PX) {
       _cancelRmbFlyTimer();
@@ -293,8 +305,87 @@ function _enterModalGrab() {
   const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir.clone().negate(), anchor);
 
   grabState = {
+    mode: 'object',
     ids,
     originalById,
+    axisLock: null,
+    anchor,
+    dragPlane,
+    dragStartWorld: null,
+    lastDelta: new THREE.Vector3(),
+  };
+
+  if (transform) {
+    transform.enabled = false;
+    transform.detach();
+  }
+  if (transformHelper) transformHelper.visible = false;
+  if (orbit) orbit.enabled = false;
+  window.slateScene3dBeginAction?.();
+
+  container.addEventListener('pointermove', _onGrabPointerMove, true);
+  _showGrabHint();
+  try { window.slateSfx?.play('grab-start'); } catch (_) {}
+
+  if (_lastMouseClientX != null) {
+    const start = new THREE.Vector3();
+    if (_projectMouseOntoGrabPlane(_lastMouseClientX, _lastMouseClientY, start)) {
+      grabState.dragStartWorld = start.clone();
+    }
+  }
+}
+
+/** Edit-mode version: grab the currently-selected verts/edges/faces and
+ *  slide them along a screen-aligned drag plane. X/Y/Z lock to axes, click
+ *  to confirm, RMB / Esc to cancel — same Blender feel as the object grab. */
+function _enterModalEditGrab() {
+  if (editorMode !== 'edit' || !editTargetId) return;
+  if (!camera || !container || !editHelpers) return;
+  const mesh = objMeshes.get(editTargetId);
+  if (!mesh) return;
+  // Make sure editSelection mirrors the structural (edge/face) selection.
+  _syncDerivedVertSelection();
+  if (editSelection.size === 0) {
+    _showEditHint('Nothing to grab — select something first');
+    return;
+  }
+
+  const weld = editHelpers.weldMap;
+  const posAttr = mesh.geometry.getAttribute('position');
+  const originalPositions = new Map(); // logical -> [x, y, z] (LOCAL coords)
+  const centroidLocal = new THREE.Vector3();
+  editSelection.forEach(logical => {
+    const indices = weld.logicalToIdxs[logical];
+    if (!indices?.length) return;
+    const g = indices[0];
+    const p = [posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g)];
+    originalPositions.set(logical, p);
+    centroidLocal.add(new THREE.Vector3(p[0], p[1], p[2]));
+  });
+  if (originalPositions.size === 0) {
+    _showEditHint('Nothing to grab — selection is empty');
+    return;
+  }
+  centroidLocal.divideScalar(originalPositions.size);
+
+  mesh.updateWorldMatrix(true, false);
+  const anchor = centroidLocal.clone().applyMatrix4(mesh.matrixWorld);
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir.clone().negate(), anchor);
+
+  // World→local conversion matrix for translating screen-space drag deltas
+  // into the mesh's local frame (so the gizmo stays consistent when the
+  // mesh has been rotated / scaled).
+  const worldToLocal = new THREE.Matrix3().setFromMatrix4(
+    new THREE.Matrix4().copy(mesh.matrixWorld).invert()
+  );
+
+  grabState = {
+    mode: 'edit',
+    targetMesh: mesh,
+    originalPositions,
+    worldToLocal,
     axisLock: null,
     anchor,
     dragPlane,
@@ -343,14 +434,36 @@ function _applyGrabFromMouse(clientX, clientY) {
   else if (grabState.axisLock === 'z') { delta.x = 0; delta.y = 0; }
   grabState.lastDelta.copy(delta);
 
-  grabState.originalById.forEach((orig, id) => {
-    const m = objMeshes.get(id);
-    if (!m) return;
-    m.position.set(orig[0] + delta.x, orig[1] + delta.y, orig[2] + delta.z);
-    window.slateScene3d?.setTransform(id, {
-      position: [m.position.x, m.position.y, m.position.z],
+  if (grabState.mode === 'edit') {
+    // Translate the world-space delta into the mesh's LOCAL frame so the
+    // gizmo math matches what the user sees (the mesh might be rotated /
+    // scaled).
+    const localDelta = delta.clone().applyMatrix3(grabState.worldToLocal);
+    const mesh = grabState.targetMesh;
+    const posAttr = mesh.geometry.getAttribute('position');
+    const weld = editHelpers?.weldMap;
+    if (!posAttr || !weld) return;
+    grabState.originalPositions.forEach((orig, logical) => {
+      const indices = weld.logicalToIdxs[logical] || [];
+      indices.forEach(g => {
+        posAttr.setXYZ(g, orig[0] + localDelta.x, orig[1] + localDelta.y, orig[2] + localDelta.z);
+      });
     });
-  });
+    posAttr.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingSphere();
+    _refreshEditPoints();
+    refreshSelectionMarker();
+  } else {
+    grabState.originalById.forEach((orig, id) => {
+      const m = objMeshes.get(id);
+      if (!m) return;
+      m.position.set(orig[0] + delta.x, orig[1] + delta.y, orig[2] + delta.z);
+      window.slateScene3d?.setTransform(id, {
+        position: [m.position.x, m.position.y, m.position.z],
+      });
+    });
+  }
   _updateGrabHint();
 }
 
@@ -376,19 +489,41 @@ function _exitGrabCleanup() {
 }
 
 function _grabConfirm() {
+  if (grabState?.mode === 'edit') {
+    // Persist the new vertex positions through commitEditChanges → setMeshData,
+    // so the doc state and undo stack stay in sync with what the user sees.
+    commitEditChanges();
+  }
   _exitGrabCleanup();
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 function _grabCancel() {
   if (!grabState) return;
-  grabState.originalById.forEach((orig, id) => {
-    const m = objMeshes.get(id);
-    if (m) {
-      m.position.set(orig[0], orig[1], orig[2]);
-      window.slateScene3d?.setTransform(id, { position: [...orig] });
+  if (grabState.mode === 'edit') {
+    const mesh = grabState.targetMesh;
+    const posAttr = mesh?.geometry?.getAttribute('position');
+    const weld = editHelpers?.weldMap;
+    if (posAttr && weld) {
+      grabState.originalPositions.forEach((orig, logical) => {
+        const indices = weld.logicalToIdxs[logical] || [];
+        indices.forEach(g => posAttr.setXYZ(g, orig[0], orig[1], orig[2]));
+      });
+      posAttr.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+      mesh.geometry.computeBoundingSphere();
+      _refreshEditPoints();
+      refreshSelectionMarker();
     }
-  });
+  } else {
+    grabState.originalById?.forEach((orig, id) => {
+      const m = objMeshes.get(id);
+      if (m) {
+        m.position.set(orig[0], orig[1], orig[2]);
+        window.slateScene3d?.setTransform(id, { position: [...orig] });
+      }
+    });
+  }
   _exitGrabCleanup();
   try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
 }
@@ -521,33 +656,52 @@ function _cancelRmbFlyTimer() {
   if (_rmbHoldTimer) { clearTimeout(_rmbHoldTimer); _rmbHoldTimer = null; }
 }
 function _maybeStartRmbFlyOnHold() {
-  if (flyEnabled) return;
+  if (flyEnabled || !flyArmed) return;
   _rmbFlyTriggered = false;
   _cancelRmbFlyTimer();
   _rmbHoldTimer = setTimeout(() => {
     _rmbHoldTimer = null;
-    if (_rmbArmed && !flyEnabled && !transform?.dragging) {
+    if (_rmbArmed && !flyEnabled && !transform?.dragging && flyArmed) {
       _rmbFlyTriggered = true;
       enterFlyCamera();
     }
   }, RMB_FLY_HOLD_MS);
 }
 
-/* The fly button is no longer required — RMB-hold is the primary gesture.
-   The button remains as a touch-friendly entry point: click → enter fly,
-   click again (or press Esc) → exit. */
+/* The fly button arms / disarms free-look. When armed, holding the right
+   mouse button enters fly mode; release exits. When NOT armed, right-mouse
+   drag pans through OrbitControls and a quick tap opens the context menu. */
+function _persistFlyArmed() {
+  try { localStorage.setItem('slate_fly_armed', flyArmed ? '1' : '0'); } catch (_) {}
+}
+function _applyFlyArmedToOrbit() {
+  if (!orbit) return;
+  // When fly is armed we don't want OrbitControls intercepting the right
+  // button at all — that would fight our fly-on-hold gesture. When it's
+  // disarmed, RMB-drag pans the camera (which is what the user expects
+  // from "right-click to pan").
+  orbit.mouseButtons.RIGHT = flyArmed ? null : THREE.MOUSE.PAN;
+}
+function setFlyArmed(v) {
+  flyArmed = !!v;
+  _persistFlyArmed();
+  _applyFlyArmedToOrbit();
+  if (!flyArmed && flyEnabled) exitFlyCamera();
+  _updateFlyButtonUI();
+}
 function _onFlyCamBtnDown(e) {
   e.preventDefault();
-  if (flyEnabled) { exitFlyCamera(); return; }
-  enterFlyCamera();
+  setFlyArmed(!flyArmed);
 }
 function _updateFlyButtonUI() {
   const btn = document.getElementById('t3d-fly-btn');
   if (!btn) return;
-  btn.classList.toggle('active', !!flyEnabled);
+  btn.classList.toggle('active', !!flyArmed);
   btn.title = flyEnabled
-    ? 'Fly view active — click to exit'
-    : 'Fly view — hold right-mouse to fly, release to exit';
+    ? 'Fly view active — release right-mouse to exit'
+    : flyArmed
+      ? 'Fly view armed — hold right-mouse to fly. Click to disarm.'
+      : 'Fly view — click to arm, then hold right-mouse to fly';
 }
 function makeGeometryFor(obj) {
   const p = obj.params || {};
@@ -816,6 +970,17 @@ function onPointerDown(e) {
     }
     return;
   }
+  // Modal bevel is active: same click semantics — LMB confirm, RMB cancel.
+  if (bevelState) {
+    if (e.button === 0) {
+      e.preventDefault(); e.stopPropagation();
+      _bevelConfirm();
+    } else if (e.button === 2) {
+      e.preventDefault(); e.stopPropagation();
+      _bevelCancel();
+    }
+    return;
+  }
   // Track right-button presses so onPointerUp can decide between two
   // gestures:
   //   1. Quick tap (no movement, released before the hold timer fires) →
@@ -967,43 +1132,54 @@ function _commitBoxSelect() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Free-fly camera (hold ` or hold fly button)
-   • PointerLockControls handles mouselook.
-   • WASD to strafe / forward-back, QE for down/up, Shift = boost.
-   • Release ` / fly button or Esc exits; camera stays at the current pose.
+   Free-fly camera
+   • Arm via the toolbar fly button (or settings). When armed, holding the
+     right mouse button enters fly mode; releasing exits cleanly.
+   • In fly mode, mouse movement looks around (yaw/pitch tracked manually
+     so we don't depend on browser PointerLock — that mode was flaky on
+     some browsers, leading to "activates but can't look around").
+   • WASD strafe/forward-back, Q/E down/up, Shift = boost.
+   • Esc exits without disarming. Toolbar click again disarms.
 ───────────────────────────────────────────────────────────────────────── */
+const FLY_LOOK_SENSITIVITY = 0.0022; // radians per mouse-pixel
+const FLY_PITCH_LIMIT = Math.PI / 2 - 0.001;
+
 function enterFlyCamera() {
   if (!renderer || !camera || flyEnabled) return;
   if (transform?.dragging) return;
-  if (!flyControls) {
-    flyControls = new PointerLockControls(camera, renderer.domElement);
-    flyControls.addEventListener('unlock', () => { if (flyEnabled) exitFlyCamera(); });
-  }
   orbit.enabled = false;
-  try { flyControls.lock(); } catch (_) { /* may fail if user-gesture timing is off */ }
   flyEnabled = true;
   flyKeys.clear();
-  window.addEventListener('keydown', _onFlyKeyDown, true);
-  window.addEventListener('keyup',   _onFlyKeyUp,   true);
+  // Initialize yaw/pitch from the current camera quaternion so we don't snap.
+  const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+  _flyYaw   = euler.y;
+  _flyPitch = euler.x;
+  window.addEventListener('keydown',  _onFlyKeyDown,    true);
+  window.addEventListener('keyup',    _onFlyKeyUp,      true);
+  window.addEventListener('mousemove', _onFlyMouseMove, true);
+  // PointerLock is a "nice to have" — if the browser grants it, we get
+  // unbounded mouse movement (great for big rotations). If it doesn't, the
+  // mousemove handler still rotates the camera with normal pointer deltas.
+  try { renderer.domElement.requestPointerLock?.(); } catch (_) {}
   if (!flyHint) {
     flyHint = document.createElement('div');
     flyHint.className = 'fly-cam-hint';
-    flyHint.textContent = 'WASD move · release right-mouse to exit';
     container.appendChild(flyHint);
-  } else {
-    flyHint.textContent = 'WASD move · release right-mouse to exit';
-    flyHint.style.display = '';
   }
+  flyHint.textContent = 'WASD move · mouse look · release right-mouse to exit';
+  flyHint.style.display = '';
   _updateFlyButtonUI();
 }
 
 function exitFlyCamera() {
+  if (!flyEnabled) return;
   flyEnabled = false;
   flyKeys.clear();
-  if (flyControls) flyControls.unlock();
+  window.removeEventListener('keydown',  _onFlyKeyDown,    true);
+  window.removeEventListener('keyup',    _onFlyKeyUp,      true);
+  window.removeEventListener('mousemove', _onFlyMouseMove, true);
+  try { if (document.pointerLockElement) document.exitPointerLock?.(); } catch (_) {}
   if (flyHint) flyHint.style.display = 'none';
-  window.removeEventListener('keydown', _onFlyKeyDown, true);
-  window.removeEventListener('keyup',   _onFlyKeyUp,   true);
   if (orbit && camera) {
     // Snap orbit.target to a point along the camera's new forward direction
     // so the next orbit doesn't whip back to the previous focus point.
@@ -1014,6 +1190,19 @@ function exitFlyCamera() {
     orbit.update();
   }
   _updateFlyButtonUI();
+}
+
+function _onFlyMouseMove(e) {
+  if (!flyEnabled || !camera) return;
+  const dx = e.movementX || 0;
+  const dy = e.movementY || 0;
+  if (!dx && !dy) return;
+  _flyYaw   -= dx * FLY_LOOK_SENSITIVITY;
+  _flyPitch -= dy * FLY_LOOK_SENSITIVITY;
+  if (_flyPitch >  FLY_PITCH_LIMIT) _flyPitch =  FLY_PITCH_LIMIT;
+  if (_flyPitch < -FLY_PITCH_LIMIT) _flyPitch = -FLY_PITCH_LIMIT;
+  const e2 = new THREE.Euler(_flyPitch, _flyYaw, 0, 'YXZ');
+  camera.quaternion.setFromEuler(e2);
 }
 
 function _onFlyKeyDown(e) {
@@ -1353,6 +1542,14 @@ function onKeyDown(e) {
     swallow();
     return;
   }
+  // Modal bevel — Esc cancel / Enter confirm; everything else passes through
+  // (we don't want to swallow Ctrl+Z if the user really wants to undo).
+  if (bevelState) {
+    if (e.key === 'Escape') { swallow(); _bevelCancel(); return; }
+    if (e.key === 'Enter')  { swallow(); _bevelConfirm(); return; }
+    swallow();
+    return;
+  }
 
   if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
 
@@ -1393,6 +1590,8 @@ function onKeyDown(e) {
     setTransformMode('translate');
     if (editorMode === 'object' && (selectedId || selectedIds.size > 0)) {
       _enterModalGrab();
+    } else if (editorMode === 'edit' && editTargetId) {
+      _enterModalEditGrab();
     }
     return;
   }
@@ -1585,6 +1784,10 @@ function _weldedGeometryFor(geo) {
 
 function buildEditHelpers() {
   destroyEditHelpers();
+  // Defensive: vertex dots / edge overlay / selected-face fill must NEVER
+  // exist while the user is back in object mode. If something accidentally
+  // calls us outside edit mode, bail cleanly.
+  if (editorMode !== 'edit' || !editTargetId) return;
   const mesh = objMeshes.get(editTargetId);
   if (!mesh) return;
 
@@ -2541,37 +2744,15 @@ function loopCutSelectedFaces() {
  *  edges by `amount`, replacing the vertex with a small polygon (chamfer).
  *  Auto-derives a vertex selection from edge / face selections so the tool
  *  works regardless of submode. */
-function bevelSelectedVerts(amount = 0.18) {
-  if (editorMode !== 'edit') return;
-  const md = _editFreshMeshData();
-  if (!md) { _showEditHint('Nothing to bevel — select a vertex first'); return; }
-  // Derive vertex selection from whichever submode the user is in.
-  let vertTargets = [...editSelection];
-  if (!vertTargets.length && editSubMode === 'edge' && editEdgeSelection.size) {
-    const seen = new Set();
-    editEdgeSelection.forEach(k => {
-      const [a, b] = _edgeKeyToVerts(k);
-      if (!seen.has(a)) { seen.add(a); vertTargets.push(a); }
-      if (!seen.has(b)) { seen.add(b); vertTargets.push(b); }
-    });
-  } else if (!vertTargets.length && editSubMode === 'face' && editFaceSelection.size) {
-    const seen = new Set();
-    editFaceSelection.forEach(verts => verts.forEach(v => {
-      if (!seen.has(v)) { seen.add(v); vertTargets.push(v); }
-    }));
-  }
-  if (!vertTargets.length) {
-    _showEditHint('Select something to bevel (press 1 for vertices)');
-    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
-    return;
-  }
-  window.slateScene3dBeginAction?.();
+/** Pure: compute the bevelled mesh data for `amount` without touching state.
+ *  Used by both the one-shot bevel and the interactive modal so dragging
+ *  the bevel amount in real-time produces consistent results. */
+function _computeBevel(md, vertTargets, amount) {
   const verts = md.vertices.slice();
   const faces = md.faces.map(f => Array.isArray(f) ? [...f] : f);
-  const targets = vertTargets;
   const newVertSel = new Set();
 
-  for (const targetIdx of targets) {
+  for (const targetIdx of vertTargets) {
     // Find every face containing this vertex.
     const incidentFaces = [];
     faces.forEach((f, fi) => {
@@ -2649,12 +2830,148 @@ function bevelSelectedVerts(amount = 0.18) {
     void beforeLen;
   }
 
-  // Remove the original vertices from the verts array? That's tricky because
-  // other faces may still reference unrelated indices — leave them as orphans
-  // (the commit pass strips degenerate/unreachable verts on next save).
-  setEditSubMode('vertex');
-  _editApplyMeshData({ vertices: verts, faces }, { verts: [...newVertSel] });
+  // Original verts are left as orphans — the next commit prunes them.
+  return { vertices: verts, faces, newVertSel: [...newVertSel] };
+}
+
+/** Derive the vertex target list used by `_computeBevel` from whatever
+ *  submode the user is currently in (vertex / edge / face). */
+function _bevelTargetsFromSelection() {
+  let vertTargets = [...editSelection];
+  if (!vertTargets.length && editSubMode === 'edge' && editEdgeSelection.size) {
+    const seen = new Set();
+    editEdgeSelection.forEach(k => {
+      const [a, b] = _edgeKeyToVerts(k);
+      if (!seen.has(a)) { seen.add(a); vertTargets.push(a); }
+      if (!seen.has(b)) { seen.add(b); vertTargets.push(b); }
+    });
+  } else if (!vertTargets.length && editSubMode === 'face' && editFaceSelection.size) {
+    const seen = new Set();
+    editFaceSelection.forEach(verts => verts.forEach(v => {
+      if (!seen.has(v)) { seen.add(v); vertTargets.push(v); }
+    }));
+  }
+  return vertTargets;
+}
+
+/** Modal state for the interactive Ctrl+B bevel. Lives at module scope so
+ *  the keyboard/pointer handlers can check it without depending on call
+ *  order. */
+let bevelState = null;
+
+/** Blender-style Ctrl+B: enter an interactive modal where horizontal mouse
+ *  movement controls the bevel amount. Click to confirm, RMB / Esc to cancel.
+ *  Replaces the previous one-shot bevel which silently dumped a hard-coded
+ *  amount with no preview. */
+function bevelSelectedVerts(amount) {
+  if (editorMode !== 'edit') return;
+  // Don't stack on top of an existing grab/bevel modal.
+  if (grabState || bevelState) return;
+  const md = _editFreshMeshData();
+  if (!md) { _showEditHint('Nothing to bevel — select a vertex first'); return; }
+  const vertTargets = _bevelTargetsFromSelection();
+  if (!vertTargets.length) {
+    _showEditHint('Select something to bevel (press 1 for vertices)');
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
+  // Snap-shot for the modal so each mouse-move recomputes from the same base.
+  const snapshot = _cloneMeshDataDeep(md);
+  if (typeof amount === 'number' && amount >= 0) {
+    // Non-modal invocation (e.g. external programmatic call) — apply directly.
+    const result = _computeBevel(snapshot, vertTargets, amount);
+    if (!result) return;
+    window.slateScene3dBeginAction?.();
+    setEditSubMode('vertex');
+    _editApplyMeshData({ vertices: result.vertices, faces: result.faces },
+                       { verts: result.newVertSel });
+    try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+    return;
+  }
+  _enterModalBevel(snapshot, vertTargets);
+}
+
+function _enterModalBevel(snapshot, vertTargets) {
+  bevelState = {
+    snapshot,
+    vertTargets,
+    startX: _lastMouseClientX ?? 0,
+    amount: 0.001,
+  };
+  window.slateScene3dBeginAction?.();
+  if (orbit) orbit.enabled = false;
+  if (transform) { transform.enabled = false; transform.detach(); }
+  if (transformHelper) transformHelper.visible = false;
+  container.addEventListener('pointermove', _onBevelPointerMove, true);
+  _showBevelHint();
+  try { window.slateSfx?.play('grab-start'); } catch (_) {}
+  _applyBevelFromMouse(_lastMouseClientX ?? bevelState.startX);
+}
+function _onBevelPointerMove(e) {
+  if (!bevelState) return;
+  _lastMouseClientX = e.clientX;
+  _lastMouseClientY = e.clientY;
+  _applyBevelFromMouse(e.clientX);
+}
+function _applyBevelFromMouse(clientX) {
+  if (!bevelState) return;
+  const dx = clientX - bevelState.startX;
+  // 200 pixels of drag → about 0.5 units of bevel; clamped to a reasonable range.
+  bevelState.amount = Math.max(0.001, Math.min(2, dx * 0.0025));
+  const result = _computeBevel(bevelState.snapshot, bevelState.vertTargets, bevelState.amount);
+  if (!result) return;
+  // Stash the latest result so _bevelConfirm can keep the freshly-created
+  // ring selected without recomputing.
+  bevelState.lastResult = result;
+  _editApplyMeshData(
+    { vertices: result.vertices, faces: result.faces },
+    { verts: result.newVertSel },
+  );
+  _updateBevelHint();
+}
+function _bevelConfirm() {
+  if (!bevelState) return;
+  container.removeEventListener('pointermove', _onBevelPointerMove, true);
+  // _applyBevelFromMouse already applied the latest result through
+  // _editApplyMeshData, so the scene is up-to-date. Just clean up modal state.
+  bevelState = null;
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideBevelHint();
   try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
+}
+function _bevelCancel() {
+  if (!bevelState) return;
+  const snap = bevelState.snapshot;
+  container.removeEventListener('pointermove', _onBevelPointerMove, true);
+  bevelState = null;
+  // Restore original mesh data — selection follows the snapshot exactly.
+  _editApplyMeshData(snap, {});
+  if (orbit) orbit.enabled = true;
+  if (transform) transform.enabled = true;
+  if (transformHelper) transformHelper.visible = true;
+  _hideBevelHint();
+  try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+}
+let _bevelHintEl = null;
+function _showBevelHint() {
+  if (!container) return;
+  if (!_bevelHintEl) {
+    _bevelHintEl = document.createElement('div');
+    _bevelHintEl.className = 'fly-cam-hint';
+    container.appendChild(_bevelHintEl);
+  }
+  _bevelHintEl.style.display = '';
+  _updateBevelHint();
+}
+function _updateBevelHint() {
+  if (!_bevelHintEl || !bevelState) return;
+  _bevelHintEl.textContent =
+    `Bevel · ${bevelState.amount.toFixed(2)} · drag to adjust · click confirm · RMB / Esc cancel`;
+}
+function _hideBevelHint() {
+  if (_bevelHintEl) _bevelHintEl.style.display = 'none';
 }
 
 /** Move all selected vertices to their shared centroid. */
@@ -3694,12 +4011,12 @@ export function initEditor3D(rootEl) {
   // TransformControls stops propagation when the gizmo grabs the pointer,
   // so Orbit never sees pointer events on those clicks.
   orbit = new OrbitControls(camera, renderer.domElement);
-  // Right-mouse drags the viewport (pan); a right-click *without* drag opens
-  // the add-object context menu — see onPointerDown / onPointerUp below.
-  // RMB is reserved for fly-mode (press-and-hold) / context menu (quick tap).
-  // Disable OrbitControls' right-button pan so it doesn't fight our gesture.
-  // Middle-mouse-button still pans (default MOUSE.PAN).
-  orbit.mouseButtons.RIGHT = null;
+  // RMB binding is gated on `flyArmed`:
+  //   • fly disarmed → RMB-drag pans (orbit.mouseButtons.RIGHT = PAN).
+  //   • fly armed    → RMB is consumed by our hold-to-fly gesture (null).
+  // A quick RMB tap always opens the add-object context menu — see
+  // onPointerDown / onPointerUp.
+  _applyFlyArmedToOrbit();
   orbit.enableDamping = true;
   orbit.dampingFactor = 0.06;
   orbit.target.set(0, 0.4, 0);

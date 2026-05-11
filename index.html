@@ -1083,7 +1083,6 @@ body.compact-ui .panel-body { padding: 6px 8px; }
 /* Mode visibility helpers — applied to <body> by applyWorkspaceMode */
 body.mode-3d #draw-toolbar,
 body.mode-3d #minimap-wrap,
-body.mode-3d #sidebar-workspace-nav,
 body.mode-3d .dock-tab[data-panel="layers"],
 body.mode-3d #dock-body .dock-panel[data-panel="layers"],
 body.mode-3d .dock-tab[data-panel="hierarchy"] { display: none !important; }
@@ -1113,23 +1112,97 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 body.mode-3d #left-dock {
   display: flex;
 }
-.left-dock-head {
+.left-dock-tabs {
+  display: flex;
   flex-shrink: 0;
-  padding: 10px 12px 8px;
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-dim);
+  gap: 2px;
+  padding: 6px 6px 0;
   border-bottom: 1px solid var(--border);
-  font-family: var(--mono);
+  background: var(--bg);
 }
+.left-dock-tab {
+  flex: 1 1 0;
+  padding: 7px 8px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--sans);
+}
+.left-dock-tab:hover { color: var(--text); background: var(--bg3); }
+.left-dock-tab.active {
+  color: var(--accent);
+  background: var(--bg2);
+  border-color: var(--border2);
+  border-bottom-color: var(--bg2);
+  margin-bottom: -1px;
+}
+.left-dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+.left-dock-panel {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.left-dock-panel.active { display: flex; }
 .left-dock-mount {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+.left-dock-boards-mount {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.left-dock-boards-mount #sidebar-workspace-nav {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.left-dock-boards-mount #sidebar-workspace-nav #board-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Chat / notes when hosted inside the right dock or a float shell */
+#dock-body .dock-panel #chat-panel.slate-dock-hosted,
+#dock-body .dock-panel #notes-popout.slate-dock-hosted,
+.panel-float-body #chat-panel.slate-dock-hosted,
+.panel-float-body #notes-popout.slate-dock-hosted {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  flex: 1;
+  display: flex !important;
+  flex-direction: column;
+  box-shadow: none;
+  border-radius: 0;
+  border: none;
 }
 
 /* 3D: full-width top toolbar + viewport inset */
@@ -2518,10 +2591,20 @@ body.mode-3d #canvas-area-3d {
   </nav>
   <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
 
-  <!-- 3D: scene outliner (Hierarchy) — moved here from the right dock in JS -->
-  <aside id="left-dock" class="left-dock" aria-label="Outliner">
-    <div class="left-dock-head">Scene</div>
-    <div id="left-dock-mount" class="left-dock-mount"></div>
+  <!-- 3D: left column — Scene (hierarchy) + Boards tabs -->
+  <aside id="left-dock" class="left-dock" aria-label="Scene and boards">
+    <div class="left-dock-tabs" role="tablist" aria-label="Left panels">
+      <button type="button" class="left-dock-tab active" data-left-tab="scene" role="tab" aria-selected="true">Scene</button>
+      <button type="button" class="left-dock-tab" data-left-tab="boards" role="tab" aria-selected="false">Boards</button>
+    </div>
+    <div id="left-dock-body" class="left-dock-body">
+      <div class="left-dock-panel active" data-left-tab="scene" role="tabpanel">
+        <div id="left-dock-mount" class="left-dock-mount"></div>
+      </div>
+      <div class="left-dock-panel" data-left-tab="boards" role="tabpanel">
+        <div id="left-dock-boards-mount" class="left-dock-boards-mount"></div>
+      </div>
+    </div>
   </aside>
 
   <!-- MAIN -->
@@ -8134,6 +8217,42 @@ window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
   }
 };
 
+window.slateRelocateBoardsNav = function slateRelocateBoardsNav(workspaceMode) {
+  const nav = document.getElementById('sidebar-workspace-nav');
+  const sidebar = document.getElementById('sidebar');
+  const header = sidebar?.querySelector('.sidebar-header');
+  const mount = document.getElementById('left-dock-boards-mount');
+  if (!nav || !sidebar || !header || !mount) return;
+  if (workspaceMode === '3d') mount.appendChild(nav);
+  else header.insertAdjacentElement('afterend', nav);
+};
+
+(function initSlateLeftDockTabs() {
+  function bind() {
+    const tabs = document.querySelectorAll('.left-dock-tab');
+    const panels = document.querySelectorAll('.left-dock-panel');
+    if (!tabs.length) return;
+    const LS = 'slate_left_dock_tab';
+    function setTab(id) {
+      if (id !== 'scene' && id !== 'boards') id = 'scene';
+      tabs.forEach(t => {
+        const on = t.dataset.leftTab === id;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === id));
+      try { localStorage.setItem(LS, id); } catch (_) {}
+    }
+    tabs.forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.leftTab)));
+    try {
+      const saved = localStorage.getItem(LS);
+      if (saved === 'boards' || saved === 'scene') setTab(saved);
+    } catch (_) {}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+
 function slateFocusDefaultDockTab3d() {
   if (!window.slateDock || typeof window.slateDock.setActive !== 'function') return;
   const prefer = ['props', 'layers'];
@@ -8203,6 +8322,7 @@ function applyWorkspaceMode(board) {
     if (window.matchMedia('(min-width: 769px)').matches) resetChatDockStyles();
     try { window.slateEnsurePropsPanel?.(); } catch (_) {}
     try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
+    try { window.slateRelocateBoardsNav?.('3d'); } catch (_) {}
     requestAnimationFrame(() => {
       const t = document.getElementById('toolbar-3d');
       if (t && t.offsetHeight) {
@@ -8221,6 +8341,7 @@ function applyWorkspaceMode(board) {
     if (tb3) tb3.style.display = 'none';
     resetChatDockStyles();
     try { window.slateRelocateHierarchy?.('2d'); } catch (_) {}
+    try { window.slateRelocateBoardsNav?.('2d'); } catch (_) {}
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
       requestAnimationFrame(() => window.slateDock.setActive('layers'));
     }
@@ -8233,6 +8354,7 @@ function applyWorkspaceMode(board) {
 
 window.addEventListener('slate-3d-activate', () => {
   try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
+  try { window.slateRelocateBoardsNav?.('3d'); } catch (_) {}
   requestAnimationFrame(() => {
     const t = document.getElementById('toolbar-3d');
     if (t && t.offsetHeight) {
@@ -9521,6 +9643,22 @@ document.getElementById('chat-input').addEventListener('input', e => {
 
 document.getElementById('chat-btn').addEventListener('click', () => {
   const panel = document.getElementById('chat-panel');
+  if (panel.classList.contains('slate-dock-hosted')) {
+    window.slateDock?.revealPanel?.('chat');
+    panel.classList.add('open');
+    document.getElementById('notes-popout')?.classList.remove('open');
+    chatUnread = 0;
+    updateChatBadge();
+    renderChat();
+    setTimeout(() => {
+      const el = document.getElementById('chat-messages');
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 50);
+    if (window.innerWidth <= 768) {
+      document.getElementById('member-panel')?.classList.remove('open');
+    }
+    return;
+  }
   panel.classList.toggle('open');
   if (panel.classList.contains('open')) {
     document.getElementById('notes-popout')?.classList.remove('open');
@@ -9546,12 +9684,32 @@ document.getElementById('chat-btn').addEventListener('click', () => {
 });
 
 document.getElementById('chat-close-btn').addEventListener('click', () => {
-  document.getElementById('chat-panel').classList.remove('open');
+  const panel = document.getElementById('chat-panel');
+  if (panel.classList.contains('slate-dock-hosted')) {
+    const tabs = document.getElementById('dock-tabs');
+    const next = document.body.classList.contains('mode-2d')
+      ? 'layers'
+      : (tabs?.querySelector('.dock-tab[data-panel="props"]') ? 'props' : 'layers');
+    window.slateDock?.setActive?.(next);
+    return;
+  }
+  panel.classList.remove('open');
 });
 
 document.getElementById('notes-header-btn')?.addEventListener('click', () => {
   const np = document.getElementById('notes-popout');
   if (!np) return;
+  if (np.classList.contains('slate-dock-hosted')) {
+    window.slateDock?.revealPanel?.('notes');
+    np.classList.add('open');
+    document.getElementById('chat-panel')?.classList.remove('open');
+    if (window.innerWidth <= 768) {
+      document.getElementById('right-dock')?.classList.remove('dock-open');
+      document.getElementById('mobile-dock-backdrop')?.classList.remove('visible');
+      document.getElementById('member-panel')?.classList.remove('expanded');
+    }
+    return;
+  }
   np.classList.toggle('open');
   if (np.classList.contains('open')) {
     document.getElementById('chat-panel')?.classList.remove('open');
@@ -9564,7 +9722,17 @@ document.getElementById('notes-header-btn')?.addEventListener('click', () => {
 });
 
 document.getElementById('notes-close-btn')?.addEventListener('click', () => {
-  document.getElementById('notes-popout')?.classList.remove('open');
+  const np = document.getElementById('notes-popout');
+  if (!np) return;
+  if (np.classList.contains('slate-dock-hosted')) {
+    const tabs = document.getElementById('dock-tabs');
+    const next = document.body.classList.contains('mode-2d')
+      ? 'layers'
+      : (tabs?.querySelector('.dock-tab[data-panel="props"]') ? 'props' : 'layers');
+    window.slateDock?.setActive?.(next);
+    return;
+  }
+  np.classList.remove('open');
 });
 
 document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
@@ -9734,17 +9902,36 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
       const w = rect.width;
       const h = rect.height;
       let moved = false;
+      let moveRaf = null;
+      let pendingMove = null;
       try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-      function onMove(ev) {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
+      function flushMove() {
+        moveRaf = null;
+        const ev2 = pendingMove;
+        if (!ev2) return;
+        const dx = ev2.clientX - startX;
+        const dy = ev2.clientY - startY;
         if (!moved && Math.hypot(dx, dy) < 4) return;
         moved = true;
         const c = clampToViewport(origX + dx, origY + dy, w, h);
         panel.style.left = c.x + 'px';
         panel.style.top = c.y + 'px';
       }
+      function onMove(ev) {
+        pendingMove = ev;
+        if (moveRaf != null) return;
+        moveRaf = requestAnimationFrame(() => {
+          moveRaf = null;
+          flushMove();
+        });
+      }
       function onUp(ev) {
+        if (moveRaf != null) {
+          cancelAnimationFrame(moveRaf);
+          moveRaf = null;
+          flushMove();
+        }
+        pendingMove = null;
         handle.removeEventListener('pointermove', onMove);
         handle.removeEventListener('pointerup', onUp);
         handle.removeEventListener('pointercancel', onUp);

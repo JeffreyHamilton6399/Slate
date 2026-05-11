@@ -914,6 +914,55 @@ function injectPropsDockPlaceholder() {
 }
 window.slateEnsurePropsPanel = injectPropsDockPlaceholder;
 
+let _chatNotesDockRegistered = false;
+/** Register Chat + Notes as right-dock tabs so they can be docked, floated, and reordered like Properties. */
+function injectChatNotesDockPanels() {
+  if (_chatNotesDockRegistered) return;
+  if (!window.slateDock || typeof window.slateDock.registerPanel !== 'function') return;
+  const styleHost = (el) => {
+    el.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;padding:0;overflow:hidden;';
+  };
+  window.slateDock.registerPanel({
+    id: 'chat',
+    title: 'Chat',
+    order: 52,
+    mount(el) {
+      styleHost(el);
+      const chat = document.getElementById('chat-panel');
+      if (chat && chat.parentElement !== el) {
+        el.appendChild(chat);
+        chat.classList.add('slate-dock-hosted');
+        chat.classList.add('open');
+      }
+    },
+  });
+  window.slateDock.registerPanel({
+    id: 'notes',
+    title: 'Notes',
+    order: 53,
+    mount(el) {
+      styleHost(el);
+      const np = document.getElementById('notes-popout');
+      if (np && np.parentElement !== el) {
+        el.appendChild(np);
+        np.classList.add('slate-dock-hosted');
+        np.classList.add('open');
+      }
+    },
+  });
+  _chatNotesDockRegistered = true;
+  requestAnimationFrame(() => {
+    try {
+      if (!window.slateDock?.setActive) return;
+      const tabs = document.getElementById('dock-tabs');
+      if (!tabs) return;
+      const want = document.body.classList.contains('mode-2d') ? 'layers' : 'props';
+      if (tabs.querySelector(`.dock-tab[data-panel="${want}"]`)) window.slateDock.setActive(want);
+      else if (tabs.querySelector('.dock-tab[data-panel="layers"]')) window.slateDock.setActive('layers');
+    } catch (_) {}
+  });
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    INIT
 ───────────────────────────────────────────────────────────────────────── */
@@ -921,6 +970,7 @@ function init() {
   injectOpacityControl();
   injectMinimap();
   injectLayersPanel();
+  injectChatNotesDockPanels();
   injectShortcutsOverlay();
   injectToolbarExtras();
   patchZoomLabel();

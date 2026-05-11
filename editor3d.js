@@ -2631,6 +2631,16 @@ function _meshFaceFromLogicalRing(md, logicalOrdered, weld) {
       }
     }
   }
+  /* Last resort: same multiset of logical corners (winding-agnostic). Stops
+   * tools from falling back to fuzzy face matching when only ordering differs. */
+  const sortedWant = [...logWant].sort((a, b) => a - b).join(',');
+  for (const f of md.faces) {
+    if (!Array.isArray(f) || f.length !== logWant.length) continue;
+    const logF = f.map(vi => weld.logicalForIdx[vi]);
+    if ([...new Set(logF)].length !== logWant.length) continue;
+    const sortedF = [...logF].sort((a, b) => a - b).join(',');
+    if (sortedF === sortedWant) return [...f];
+  }
   return null;
 }
 
@@ -2723,36 +2733,21 @@ function _faceCentroidFromVerts(verts, face) {
   return c.divideScalar(Math.max(1, face.length));
 }
 
-/** Find the index in `faces` of any polygon whose vertex set equals `targetSet`.
- *  Used to look up "the same" face that was selected before the rebuild.
- *  Falls back to a "best overlap" match if no perfect match exists — handy
- *  when the picker reports a slightly different polygon than what's stored
- *  (e.g. a quad picked as 3 verts because a coplanar diagonal is missing). */
+/** Index in `faces` whose vertex *set* matches `targetVerts` (same count, no extras).
+ *  Strict only — fuzzy overlap used to pick the wrong face and broke extrude /
+ *  inset / bevel / subdivide when several faces shared corners. */
 function _findFaceIndex(faces, targetVerts) {
   if (!Array.isArray(targetVerts) || targetVerts.length < 3) return -1;
   const want = new Set(targetVerts);
-
-  // Exact match first.
+  if (want.size !== targetVerts.length) return -1;
   for (let i = 0; i < faces.length; i++) {
     const f = faces[i];
     if (!Array.isArray(f) || f.length !== targetVerts.length) continue;
-    if (f.every(v => want.has(v))) return i;
+    const fset = new Set(f);
+    if (fset.size !== want.size) continue;
+    if ([...fset].every(v => want.has(v))) return i;
   }
-
-  // Fallback: pick the polygon with the most shared verts (>=3 overlap and
-  // the overlap covers the majority of the stored polygon).
-  let bestIdx = -1, bestShare = 0;
-  for (let i = 0; i < faces.length; i++) {
-    const f = faces[i];
-    if (!Array.isArray(f) || f.length < 3) continue;
-    let shared = 0;
-    for (const v of f) if (want.has(v)) shared++;
-    if (shared > bestShare && shared >= 3 && shared >= f.length - 1) {
-      bestShare = shared;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
+  return -1;
 }
 
 /** Undirected edge → face indices that contain that edge (polygon mesh). */
@@ -3545,26 +3540,38 @@ function _computeBevel(md, vertTargets, amountRequested) {
   return { vertices: verts, faces, newVertSel: [...newVertSel] };
 }
 
-/** Derive mesh vertex indices for bevel from selection (logical in edit mode). */
+/** Derive mesh vertex indices for bevel from selection (logical in edit mode).
+ *  Face / edge modes use structural picks only (not the derived vertex set) so
+ *  we expand every welded mesh index per logical — otherwise only one split
+ *  corner was beveled and tools looked “random”. */
 function _bevelTargetsFromSelection() {
   const weld = editHelpers?.weldMap;
-  const toMesh = L => (weld?.logicalToIdxs?.[L]?.[0] ?? L);
   const uniq = [];
   const seen = new Set();
-  const pushMesh = L => {
-    const m = toMesh(L);
-    if (m >= 0 && !seen.has(m)) { seen.add(m); uniq.push(m); }
+  const pushLogicalExpanded = (L) => {
+    const idxs = weld?.logicalToIdxs?.[L];
+    if (idxs && idxs.length) {
+      for (const m of idxs) {
+        if (m >= 0 && !seen.has(m)) { seen.add(m); uniq.push(m); }
+      }
+    } else if (L >= 0 && !seen.has(L)) {
+      seen.add(L);
+      uniq.push(L);
+    }
   };
-  editSelection.forEach(pushMesh);
-  if (!uniq.length && editSubMode === 'edge' && editEdgeSelection.size) {
+  if (editSubMode === 'face' && editFaceSelection.size) {
+    editFaceSelection.forEach(verts => verts.forEach(pushLogicalExpanded));
+    return uniq;
+  }
+  if (editSubMode === 'edge' && editEdgeSelection.size) {
     editEdgeSelection.forEach(k => {
       const [a, b] = _edgeKeyToVerts(k);
-      pushMesh(a);
-      pushMesh(b);
+      pushLogicalExpanded(a);
+      pushLogicalExpanded(b);
     });
-  } else if (!uniq.length && editSubMode === 'face' && editFaceSelection.size) {
-    editFaceSelection.forEach(verts => verts.forEach(pushMesh));
+    return uniq;
   }
+  editSelection.forEach(pushLogicalExpanded);
   return uniq;
 }
 
@@ -3585,7 +3592,7 @@ function bevelSelectedVerts(amount) {
   if (!md) { _showEditHint('Nothing to bevel — select a vertex first'); return; }
   const vertTargets = _bevelTargetsFromSelection();
   if (!vertTargets.length) {
-    _showEditHint('Select something to bevel (press 1 for vertices)');
+    _showEditHint('Select vertices (1), edges (2), or faces (3) to bevel');
     try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
     return;
   }

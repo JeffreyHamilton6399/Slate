@@ -1656,6 +1656,10 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   body.mode-3d #toolbar-3d { left: 8px; right: 8px; transform: none; max-width: calc(100vw - 16px); overflow-x: auto; }
   body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
   body.mode-3d #toolbar-3d .t3d-btn { min-width: 32px; height: 32px; padding: 0 5px; }
+  body.mode-3d #toolbar-3d .t3d-mirror-btn { font-size: 0.62rem; padding: 0 4px; min-width: 28px; }
+  #editor-pane { min-height: 0; }
+  #canvas-area-3d { min-height: 0; touch-action: none; }
+  body.mode-3d #toolbar-3d { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
 
   /* Right dock collapses to a slide-in drawer on mobile so the tiny screen
      isn't permanently chewed up by tabs. The new #panels-toggle button in
@@ -2188,6 +2192,28 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         <button class="t3d-btn t3d-add-btn" data-prim="plane" title="Add Plane">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 4.5L7 2l5.5 2.5L7 7z"/></svg>
         </button>
+        <button class="t3d-btn t3d-add-btn" data-prim="octahedron" title="Add Octahedron">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1.5l5 5-5 5-5-5z"/></svg>
+        </button>
+        <button class="t3d-btn t3d-add-btn" data-prim="tetrahedron" title="Add Tetrahedron">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1.5L12.5 12H1.5z"/></svg>
+        </button>
+        <button class="t3d-btn t3d-add-btn" data-prim="icosahedron" title="Add Icosphere">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/></svg>
+        </button>
+        <button class="t3d-btn t3d-add-btn" data-prim="capsule" title="Add Capsule">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4.5 3.5a2.5 2.5 0 0 1 5 0v7a2.5 2.5 0 0 1-5 0z"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-sep"></div>
+
+      <div class="t3d-group" title="Transform space & snapping">
+        <button class="t3d-btn" id="t3d-space-btn" title="Global / Local (&comma;)">W</button>
+        <button class="t3d-btn" id="t3d-snap-btn" title="Toggle move / rotate / scale snap">Snap</button>
+        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-x-btn" title="Mirror on X">Mx</button>
+        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-y-btn" title="Mirror on Y">My</button>
+        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-z-btn" title="Mirror on Z">Mz</button>
       </div>
 
       <div class="toolbar-spacer"></div>
@@ -3583,6 +3609,10 @@ function handleData(peerId, data) {
         }
       }
       let scene3dChanged = false;
+      if (Array.isArray(data.scene3dFull)) {
+        doc.scene3d.objects = data.scene3dFull.map(_normalizeSceneObject);
+        scene3dChanged = true;
+      } else {
       if (Array.isArray(data.scene3dAdd) && data.scene3dAdd.length) {
         data.scene3dAdd.forEach(o => {
           const norm = _normalizeSceneObject(o);
@@ -3629,6 +3659,7 @@ function handleData(peerId, data) {
         byId.forEach(o => ordered.push(o));
         doc.scene3d.objects = ordered;
         scene3dChanged = true;
+      }
       }
       if (scene3dChanged && typeof window.slateScene3d?._onSceneReplaced === 'function') {
         window.slateScene3d._onSceneReplaced();
@@ -4478,6 +4509,51 @@ function _broadcastObjDel(id) {
 
 const _scene3dListeners = new Set();
 
+/* 3D scene undo / redo — stacks of JSON snapshots (local user only). */
+const _scene3dUndoStack = [];
+const _scene3dRedoStack = [];
+const SCENE3D_UNDO_MAX = 60;
+
+function _scene3dSnapshotJson() {
+  return JSON.stringify(doc.scene3d.objects.map(_normalizeSceneObject));
+}
+function _scene3dApplySnapshotJson(json) {
+  try {
+    const arr = JSON.parse(json);
+    if (!Array.isArray(arr)) return;
+    doc.scene3d.objects = arr.map(_normalizeSceneObject);
+    window.slateScene3d._emit();
+    broadcastAll({ type: 'doc-diff', scene3dFull: doc.scene3d.objects.map(_normalizeSceneObject) });
+    if (state.currentBoard) state.dirtyBoards.add(state.currentBoard);
+    invalidateStatic();
+    scheduleRender();
+  } catch (_) {}
+}
+
+/** Call before a discrete 3D mutation (add / delete / mirror / transform drag…). */
+window.slateScene3dBeginAction = function slateScene3dBeginAction() {
+  if (!document.body.classList.contains('mode-3d')) return;
+  _scene3dUndoStack.push(_scene3dSnapshotJson());
+  if (_scene3dUndoStack.length > SCENE3D_UNDO_MAX) _scene3dUndoStack.shift();
+  _scene3dRedoStack.length = 0;
+};
+
+window.slateScene3dUndo = function slateScene3dUndo() {
+  if (!document.body.classList.contains('mode-3d')) return;
+  if (_scene3dUndoStack.length === 0) return;
+  _scene3dRedoStack.push(_scene3dSnapshotJson());
+  const prev = _scene3dUndoStack.pop();
+  _scene3dApplySnapshotJson(prev);
+};
+
+window.slateScene3dRedo = function slateScene3dRedo() {
+  if (!document.body.classList.contains('mode-3d')) return;
+  if (_scene3dRedoStack.length === 0) return;
+  _scene3dUndoStack.push(_scene3dSnapshotJson());
+  const next = _scene3dRedoStack.pop();
+  _scene3dApplySnapshotJson(next);
+};
+
 window.slateScene3d = {
   get objects() { return doc.scene3d.objects; },
   /** Subscribe to scene-changed events. Returns an unsubscribe function. */
@@ -4778,7 +4854,7 @@ const redoStack = [];
 
 // Deferred diff to batch changes
 function _freshPendingDiff() {
-  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null };
+  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null, scene3dFull: null };
 }
 let pendingDiff = _freshPendingDiff();
 let diffTimer   = null;
@@ -4790,15 +4866,18 @@ function flushDiff() {
   const empty = !d.added.length && !d.updated.length && !d.removed.length &&
                 !d.strokes.length && !d.delStrokes.length && !d.layers &&
                 !d.scene3dAdd.length && !d.scene3dUpd.length && !d.scene3dDel.length &&
-                !d.scene3dOrder;
+                !d.scene3dOrder && !d.scene3dFull;
   if (empty) return;
   if (state.isDrawMuted) return;
   const msg = { type: 'doc-diff', added: d.added, updated: d.updated, removed: d.removed, strokes: d.strokes, delStrokes: d.delStrokes };
   if (d.layers) msg.layers = d.layers;
-  if (d.scene3dAdd.length) msg.scene3dAdd = d.scene3dAdd;
-  if (d.scene3dUpd.length) msg.scene3dUpd = d.scene3dUpd;
-  if (d.scene3dDel.length) msg.scene3dDel = d.scene3dDel;
-  if (d.scene3dOrder)      msg.scene3dOrder = d.scene3dOrder;
+  if (d.scene3dFull) msg.scene3dFull = d.scene3dFull;
+  else {
+    if (d.scene3dAdd.length) msg.scene3dAdd = d.scene3dAdd;
+    if (d.scene3dUpd.length) msg.scene3dUpd = d.scene3dUpd;
+    if (d.scene3dDel.length) msg.scene3dDel = d.scene3dDel;
+    if (d.scene3dOrder)      msg.scene3dOrder = d.scene3dOrder;
+  }
   broadcastAll(msg);
 }
 

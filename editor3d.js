@@ -25,6 +25,11 @@ let orbit     = null;
 let transform = null;
 let raycaster = null;
 const pointer = new THREE.Vector2();
+/** Meshes eligible for raycast selection (rebuilt in syncSceneFromDoc). */
+const _selectableList = [];
+let _loopFrame = 0;
+let snapEnabled = false;
+let transformSpace = 'world';
 
 let raf = 0;
 let bound = false;
@@ -80,6 +85,14 @@ function makeGeometryFor(obj) {
     case 'cylinder': return new THREE.CylinderGeometry(p.radiusTop ?? 0.5, p.radiusBottom ?? 0.5, p.height ?? 1, p.radialSegments ?? 32);
     case 'cone':     return new THREE.ConeGeometry(p.radius ?? 0.5, p.height ?? 1, p.radialSegments ?? 32);
     case 'torus':    return new THREE.TorusGeometry(p.radius ?? 0.5, p.tube ?? 0.18, p.radialSegments ?? 16, p.tubularSegments ?? 32);
+    case 'octahedron':
+      return new THREE.OctahedronGeometry(p.radius ?? 0.55, p.detail ?? 0);
+    case 'tetrahedron':
+      return new THREE.TetrahedronGeometry(p.radius ?? 0.55, p.detail ?? 0);
+    case 'icosahedron':
+      return new THREE.IcosahedronGeometry(p.radius ?? 0.5, p.detail ?? 0);
+    case 'capsule':
+      return new THREE.CapsuleGeometry(p.radius ?? 0.35, p.length ?? 0.9, p.capSegments ?? 4, p.radialSegments ?? 12);
     case 'mesh': {
       const geo = new THREE.BufferGeometry();
       const md = obj.meshData || { vertices: [], faces: [] };
@@ -113,8 +126,8 @@ function buildMesh(obj) {
     color: obj.color || '#7c6aff', roughness: 0.45, metalness: 0.15,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
   applyObjState(mesh, obj);
   return mesh;
 }
@@ -192,6 +205,11 @@ function syncSceneFromDoc() {
   }
 
   renderHierarchy();
+
+  _selectableList.length = 0;
+  objMeshes.forEach(m => {
+    if (m.visible && m.userData.selectable) _selectableList.push(m);
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -203,9 +221,8 @@ function pickObject(clientX, clientY) {
   pointer.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
   pointer.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const meshes = [];
-  scene.traverse(o => { if (o.isMesh && o.userData.selectable && o.visible) meshes.push(o); });
-  const hits = raycaster.intersectObjects(meshes, false);
+  if (!_selectableList.length) return null;
+  const hits = raycaster.intersectObjects(_selectableList, false);
   return hits.length ? hits[0].object : null;
 }
 
@@ -267,6 +284,7 @@ function duplicateSelected() {
   if (!api || !selectedId) return;
   const src = api.find(selectedId);
   if (!src || src.type === 'folder') return;
+  window.slateScene3dBeginAction?.();
   const spec = {
     type: src.type,
     name: src.name + ' copy',
@@ -499,6 +517,7 @@ function _maybeBroadcastCamera(nowMs) {
     type: 'cam-3d',
     pos: [cur[0], cur[1], cur[2]],
     target: [cur[3], cur[4], cur[5]],
+    quat: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
   });
 }
 
@@ -523,7 +542,20 @@ function applyPeerCamera(peerId, msg, meta) {
     entry.label.textContent = meta.name;
   }
   entry.group.position.set(msg.pos[0], msg.pos[1], msg.pos[2]);
-  entry.group.lookAt(msg.target[0], msg.target[1], msg.target[2]);
+  if (Array.isArray(msg.quat) && msg.quat.length === 4) {
+    entry.group.quaternion.set(
+      Number(msg.quat[0]),
+      Number(msg.quat[1]),
+      Number(msg.quat[2]),
+      Number(msg.quat[3]),
+    );
+  } else {
+    /* Legacy peers: Object3D.lookAt aligns +Z toward the target, but our
+       frustum / camera convention uses −Z as forward — flip 180° on Y. */
+    entry.group.rotation.set(0, 0, 0);
+    entry.group.lookAt(msg.target[0], msg.target[1], msg.target[2]);
+    entry.group.rotateY(Math.PI);
+  }
 }
 
 function removePeerCamera(peerId) {
@@ -548,9 +580,8 @@ function _buildCamMarker(color) {
      marker in local space with -Z = forward, matching THREE.PerspectiveCamera
      and Blender's convention. */
   const bodyGeo = new THREE.BoxGeometry(0.18, 0.14, 0.22);
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color, emissive: color, emissiveIntensity: 0.45,
-    roughness: 0.5, metalness: 0.2,
+  const bodyMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.92, depthTest: true,
   });
   const body = new THREE.Mesh(bodyGeo, bodyMat);
   body.position.set(0, 0, 0.08);
@@ -667,24 +698,59 @@ function _stepFlyCamera(dt) {
 ───────────────────────────────────────────────────────────────────────── */
 function onKeyDown(e) {
   if (!container || !container.isConnected) return;
-  // Only handle 3D shortcuts while the 3D viewport is the active workspace.
   if (!document.body.classList.contains('mode-3d')) return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
 
-  // 3D shortcuts swallow these keys so they don't also fire 2D shortcuts.
   const swallow = () => { e.preventDefault(); e.stopPropagation(); };
 
-  if (e.key === 'Tab')        { swallow(); toggleEditMode(); return; }
+  /* Undo / redo (Blender-style; capture before single-letter tools). */
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'z' || e.key === 'Z') {
+      swallow();
+      if (e.shiftKey) window.slateScene3dRedo?.();
+      else window.slateScene3dUndo?.();
+      return;
+    }
+    if (e.key === 'y' || e.key === 'Y') {
+      swallow();
+      window.slateScene3dRedo?.();
+      return;
+    }
+  }
+
+  if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
+
   if (e.key === 'g' || e.key === 'G') { swallow(); setTransformMode('translate'); return; }
   if (e.key === 'r' || e.key === 'R') { swallow(); setTransformMode('rotate');    return; }
   if (e.key === 's' || e.key === 'S') { swallow(); setTransformMode('scale');     return; }
   if (e.key === 'f' || e.key === 'F') { swallow(); frameSelected(); return; }
   if ((e.key === 'a' || e.key === 'A') && editorMode === 'object') { swallow(); selectAllObjects(); return; }
-  if ((e.key === 'd' || e.key === 'D') && (e.shiftKey) && editorMode === 'object' && selectedId) {
+  if ((e.key === 'd' || e.key === 'D') && e.shiftKey && editorMode === 'object' && selectedId) {
     swallow(); duplicateSelected(); return;
   }
   if ((e.key === '`' || e.key === '~') && e.shiftKey) { swallow(); toggleFlyCamera(); return; }
+
+  if (e.key === ',' && editorMode === 'object') { swallow(); cycleTransformSpace(); return; }
+  if (e.key === '.' && editorMode === 'object') { swallow(); toggleGrid(); return; }
+  if ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey && editorMode === 'object' && selectedId) {
+    swallow();
+    window.slateScene3dBeginAction?.();
+    const ids = [...selectedIds];
+    if (!ids.length && selectedId) ids.push(selectedId);
+    ids.forEach(id => window.slateScene3d?.remove(id));
+    selectedIds.clear();
+    selectedId = null;
+    transform?.detach();
+    return;
+  }
+  if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && editorMode === 'object' && selectedId) {
+    swallow();
+    const api = window.slateScene3d;
+    const o = api?.find(selectedId);
+    if (o) api.setVisible(selectedId, o.visible === false);
+    return;
+  }
 
   if (editorMode === 'edit') {
     if (e.key === '1') { swallow(); setEditSubMode('vertex'); return; }
@@ -693,7 +759,11 @@ function onKeyDown(e) {
   }
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && editorMode === 'object' && selectedId) {
-    window.slateScene3d?.remove(selectedId);
+    window.slateScene3dBeginAction?.();
+    const ids = [...selectedIds];
+    if (!ids.length && selectedId) ids.push(selectedId);
+    ids.forEach(id => window.slateScene3d?.remove(id));
+    selectedIds.clear();
     selectedId = null;
     transform?.detach();
     swallow();
@@ -702,7 +772,10 @@ function onKeyDown(e) {
 
 function setTransformMode(mode) {
   transformMode = mode;
-  if (transform) transform.setMode(mode);
+  if (transform) {
+    transform.setMode(mode);
+    transform.setSpace(transformSpace);
+  }
   document.querySelectorAll('#toolbar-3d .t3d-tool-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tt === mode);
   });
@@ -1118,12 +1191,56 @@ function toggleGrid() {
   if (btn) btn.classList.toggle('active', _gridHelper?.visible !== false);
 }
 
+function toggleSnap() {
+  snapEnabled = !snapEnabled;
+  const btn = document.getElementById('t3d-snap-btn');
+  if (btn) btn.classList.toggle('active', snapEnabled);
+  if (!transform) return;
+  if (snapEnabled) {
+    transform.translationSnap = 0.25;
+    transform.rotationSnap = THREE.MathUtils.degToRad(15);
+    transform.scaleSnap = 0.05;
+  } else {
+    transform.translationSnap = null;
+    transform.rotationSnap = null;
+    transform.scaleSnap = null;
+  }
+}
+
+function cycleTransformSpace() {
+  if (!transform) return;
+  transformSpace = transformSpace === 'world' ? 'local' : 'world';
+  transform.setSpace(transformSpace);
+  const btn = document.getElementById('t3d-space-btn');
+  if (btn) btn.textContent = transformSpace === 'world' ? 'W' : 'L';
+}
+
+function mirrorOnAxis(axisIdx) {
+  const api = window.slateScene3d;
+  if (!api || !selectedId) return;
+  const obj = api.find(selectedId);
+  if (!obj || obj.type === 'folder') return;
+  window.slateScene3dBeginAction?.();
+  const s = [
+    Number(obj.scale[0]) || 1,
+    Number(obj.scale[1]) || 1,
+    Number(obj.scale[2]) || 1,
+  ];
+  s[axisIdx] *= -1;
+  api.setTransform(selectedId, { scale: s });
+}
+
 function resize() {
   if (!container || !renderer || !camera) return;
   const w = container.clientWidth  || 1;
   const h = container.clientHeight || 1;
   renderer.setSize(w, h, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const coarse = (typeof window !== 'undefined' && window.matchMedia && (
+    window.matchMedia('(max-width: 768px)').matches ||
+    window.matchMedia('(pointer: coarse)').matches
+  ));
+  const prCap = coarse ? 1.25 : 2;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, prCap));
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -1137,7 +1254,8 @@ function loop() {
   _lastLoopTs = now;
   if (flyEnabled) _stepFlyCamera(dt);
   if (orbit && !flyEnabled) orbit.update();
-  _updatePeerCamMarkers();
+  _loopFrame++;
+  if ((_loopFrame & 1) === 0) _updatePeerCamMarkers();
   _maybeBroadcastCamera(now);
   renderer.render(scene, camera);
 }
@@ -1205,6 +1323,8 @@ function bindToolbar() {
     if (!api) return;
     const ids = [...selectedIds];
     if (!ids.length && selectedId) ids.push(selectedId);
+    if (!ids.length) return;
+    window.slateScene3dBeginAction?.();
     ids.forEach(id => api.remove(id));
     selectedIds.clear(); selectedId = null;
     transform?.detach();
@@ -1213,10 +1333,16 @@ function bindToolbar() {
   document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
   document.getElementById('t3d-fly-btn')?.addEventListener('click', toggleFlyCamera);
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
+  document.getElementById('t3d-snap-btn')?.addEventListener('click', toggleSnap);
+  document.getElementById('t3d-space-btn')?.addEventListener('click', cycleTransformSpace);
+  document.getElementById('t3d-mirror-x-btn')?.addEventListener('click', () => mirrorOnAxis(0));
+  document.getElementById('t3d-mirror-y-btn')?.addEventListener('click', () => mirrorOnAxis(1));
+  document.getElementById('t3d-mirror-z-btn')?.addEventListener('click', () => mirrorOnAxis(2));
 }
 
 function addPrimitive(kind) {
   if (!window.slateScene3d) return;
+  window.slateScene3dBeginAction?.();
   const presets = {
     cube:     { type: 'cube',     name: 'Cube',     params: { size: 1 },      position: [0, 0.5, 0],  color: '#7c6aff' },
     sphere:   { type: 'sphere',   name: 'Sphere',   params: { radius: 0.5 },  position: [0, 0.5, 0],  color: '#22d3a5' },
@@ -1224,6 +1350,10 @@ function addPrimitive(kind) {
     cylinder: { type: 'cylinder', name: 'Cylinder', params: { radiusTop: 0.5, radiusBottom: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#f59e0b' },
     cone:     { type: 'cone',     name: 'Cone',     params: { radius: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#ef4444' },
     torus:    { type: 'torus',    name: 'Torus',    params: { radius: 0.5, tube: 0.18 }, position: [0, 0.5, 0], color: '#38bdf8' },
+    octahedron: { type: 'octahedron', name: 'Octahedron', params: { radius: 0.55 }, position: [0, 0.55, 0], color: '#c084fc' },
+    tetrahedron: { type: 'tetrahedron', name: 'Tetrahedron', params: { radius: 0.55 }, position: [0, 0.45, 0], color: '#fb7185' },
+    icosahedron: { type: 'icosahedron', name: 'Icosphere', params: { radius: 0.5 }, position: [0, 0.5, 0], color: '#4ade80' },
+    capsule:  { type: 'capsule',  name: 'Capsule',  params: { radius: 0.35, length: 0.9 }, position: [0, 0.55, 0], color: '#94a3b8' },
   };
   const spec = presets[kind] || presets.cube;
   const obj = window.slateScene3d.add(spec);
@@ -1393,6 +1523,10 @@ const OUTLINER_ICONS = {
   cylinder: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><ellipse cx="7" cy="3" rx="4.5" ry="1.5"/><path d="M2.5 3v8a4.5 1.5 0 0 0 9 0V3"/></svg>`,
   cone:     `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.5L12 12H2z"/><ellipse cx="7" cy="12" rx="5" ry="1.3"/></svg>`,
   torus:    `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><ellipse cx="7" cy="7" rx="5.5" ry="2.5"/></svg>`,
+  octahedron: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.5l5 5-5 5-5-5z"/></svg>`,
+  tetrahedron: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.5L12.5 12H1.5z"/></svg>`,
+  icosahedron: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="5"/></svg>`,
+  capsule:  `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4.5 3.5a2.5 2.5 0 0 1 5 0v7a2.5 2.5 0 0 1-5 0z"/></svg>`,
   mesh:     `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 4l5-2 5 2v6l-5 2-5-2z M2 4l5 2 5-2M7 6v6"/></svg>`,
   folder:   `<svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M1.2 3.5h4l1 1.2H12.8a.7.7 0 0 1 .7.7v6a.7.7 0 0 1-.7.7H1.2a.7.7 0 0 1-.7-.7v-7.2a.7.7 0 0 1 .7-.7z"/></svg>`,
   default:  `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5"/></svg>`,
@@ -1534,9 +1668,13 @@ export function initEditor3D(rootEl) {
   container.style.touchAction = 'none';
   ensureScene();
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+  const coarse = (typeof window !== 'undefined' && window.matchMedia && (
+    window.matchMedia('(max-width: 768px)').matches ||
+    window.matchMedia('(pointer: coarse)').matches
+  ));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 2));
+  renderer.shadowMap.enabled = false;
   container.appendChild(renderer.domElement);
   renderer.domElement.style.touchAction = 'none';
 
@@ -1548,16 +1686,23 @@ export function initEditor3D(rootEl) {
 
   transform = new TransformControls(camera, renderer.domElement);
   transform.setMode(transformMode);
+  transform.setSpace(transformSpace);
+  transform.showX = transform.showY = transform.showZ = true;
+  transform.setSize(1.05);
   transform.addEventListener('dragging-changed', ev => {
     orbit.enabled = !ev.value;
+    if (ev.value) {
+      transform.setSize(1.32);
+      window.slateScene3dBeginAction?.();
+    } else {
+      transform.setSize(1.05);
+    }
     if (ev.value && editorMode === 'edit' && editDragHelper) {
-      // Capture starting transforms so apply-delta works
       editDragHelper.userData.lastPos   = editDragHelper.position.clone();
       editDragHelper.userData.lastQuat  = editDragHelper.quaternion.clone();
       editDragHelper.userData.lastScale = editDragHelper.scale.clone();
     }
     if (!ev.value && editorMode === 'edit' && editTargetId) {
-      // On drag end, commit final mesh data so remote peers get the result.
       commitEditChanges();
     }
   });
@@ -1597,6 +1742,13 @@ export function disposeEditor3D() {
   unbindEvents();
 
   if (typeof unsubScene === 'function') { unsubScene(); unsubScene = null; }
+
+  _clearAllPeerCameras();
+  selectedIds.clear();
+  _selectableList.length = 0;
+  if (flyEnabled) exitFlyCamera();
+  snapEnabled = false;
+  transformSpace = 'world';
 
   destroyEditHelpers();
   editTargetId = null;

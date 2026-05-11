@@ -3,7 +3,7 @@
    collaborative bits run live over WebRTC, so we only cache the static
    shell and let everything else fall through to the network. */
 
-const CACHE_VERSION = 'slate-shell-v5';
+const CACHE_VERSION = 'slate-shell-v6';
 const SHELL = [
   './',
   './index.html',

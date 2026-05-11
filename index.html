@@ -669,6 +669,12 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   padding: 7px 14px; cursor: pointer; font: inherit;
 }
 .t3d-viewport-ctx button:hover { background: rgba(124,106,255,0.12); }
+@media (max-width: 768px) {
+  /* Touch-friendly hit targets for the viewport context menu (Add /
+     Mirror / etc.) so fingers can pick items cleanly. */
+  .t3d-viewport-ctx { min-width: 180px; font-size: 0.88rem; }
+  .t3d-viewport-ctx button { padding: 11px 16px; }
+}
 .peer-cam-tag {
   position: absolute; pointer-events: none; z-index: 50;
   padding: 2px 7px; border-radius: 10px; font-size: 0.62rem;
@@ -1220,7 +1226,8 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   max-width: 0; transition: max-width 0.2s ease, opacity 0.2s;
   opacity: 0;
 }
-#member-panel:hover .member-panel-title {
+#member-panel:hover .member-panel-title,
+#member-panel.expanded .member-panel-title {
   max-width: 80px; opacity: 1;
 }
 #member-count-badge {
@@ -1240,7 +1247,8 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   transition: background 0.14s ease;
   justify-content: center;
 }
-#member-panel:hover .member-row { justify-content: flex-start; }
+#member-panel:hover .member-row,
+#member-panel.expanded .member-row { justify-content: flex-start; }
 .member-row:hover { background: var(--bg3); }
 .member-row.is-self { cursor: default; }
 .member-avatar {
@@ -1259,7 +1267,8 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   flex: 1; min-width: 0;
   display: none; align-items: center; gap: 4px;
 }
-#member-panel:hover .member-info { display: flex; }
+#member-panel:hover .member-info,
+#member-panel.expanded .member-info { display: flex; }
 .member-name {
   font-size: 0.7rem; font-weight: 500;
   color: var(--text); overflow: hidden;
@@ -1399,6 +1408,11 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 #toast.red   { background: rgba(248,113,113,0.12); border-color: var(--danger); color: var(--danger); }
 #toast.info  { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
 
+/* Mobile-only dock backdrop — hidden by default; the @media (max-width:768px)
+   block toggles it on. Without this default the empty <div> would still
+   render as a 0-height block in non-mobile viewports. */
+#mobile-dock-backdrop { display: none; }
+
 /* ═══════════════════════════════════════════
    INSTALL PROMPT
 ═══════════════════════════════════════════ */
@@ -1418,6 +1432,13 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 }
 .install-prompt-row { display: flex; gap: 8px; justify-content: flex-end; }
 .install-prompt-row .btn { padding: 9px 16px; font-size: 0.85rem; }
+/* On phones the bottom 56px is the 2D toolbar; float the prompt above it. */
+@media (max-width: 768px) {
+  #install-prompt {
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    width: calc(100vw - 24px);
+  }
+}
 
 /* ═══════════════════════════════════════════
    SETTINGS OVERLAY
@@ -1750,6 +1771,19 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
    MOBILE OVERRIDES
 ═══════════════════════════════════════════ */
 /* ── Portrait phone ── */
+/* ═══════════════════════════════════════════════════════════════════════
+   MOBILE LAYOUT (≤768px tablet/phone)
+   ───────────────────────────────────────────────────────────────────────
+   Everything below the 768px breakpoint runs through a single, focused
+   block so it's easy to audit. We:
+     • Slim the header so its 8+ buttons don't crush the board name.
+     • Reflow the 2D toolbar to a horizontal bottom strip.
+     • Make the 3D toolbar a scrollable top strip with finger-sized hits.
+     • Turn the right dock into a slide-in drawer with a backdrop.
+     • Anchor chat + members panels above the bottom toolbar with safe-area
+       padding so the iOS home indicator never overlaps them.
+     • Convert the members panel from hover-expand to tap-expand.
+═══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   :root { --sidebar-w: min(280px, 88vw); }
 
@@ -1764,23 +1798,117 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
     box-shadow: 4px 0 24px rgba(0,0,0,0.5);
   }
   #sidebar.open { transform: translateX(0); }
+  #sidebar-toggle { display: flex; }
 
-  /* Chat panel keeps the floating-card model on mobile, just slightly smaller
-     and nudged above the bottom toolbar. */
+  /* ── Header ─────────────────────────────────────────────────────────
+     Slim padding + smaller gaps + icon-only action buttons keep the
+     8-button row from being unusably tight on phones. */
+  #board-header {
+    gap: 4px; padding: 0 8px;
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+    padding-left:  max(8px, env(safe-area-inset-left, 0px));
+  }
+  #board-name-display { font-size: 0.85rem; max-width: 44vw; }
+  /* Header action buttons (Save / Import / Export / Leave): icon-only on
+     mobile. The accompanying SVG already carries the meaning. */
+  .header-action-btn { padding: 6px 8px !important; }
+  .header-action-btn .btn-label { display: none; }
+  /* Voice bar — tighter, hide the live level meter so we save ~24px. */
+  #voice-bar { gap: 4px; }
+  #mute-btn  { padding: 5px 7px; }
+  #mute-btn .mic-bar { display: none; }
+  /* Header icon buttons — slightly bigger touch target. */
+  #board-header .btn-icon { padding: 7px; }
+
+  /* ── 2D drawing toolbar — horizontal strip pinned to bottom ───────── */
+  #draw-toolbar {
+    position: fixed; bottom: 0; left: 0; right: 0; top: auto;
+    width: auto; max-height: 56px;
+    flex-direction: row; padding: 4px 6px;
+    padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+    border-radius: 0; border-top: 1px solid var(--border);
+    border-bottom: none; border-left: none; border-right: none;
+    overflow-x: auto; overflow-y: hidden; gap: 3px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* Confine touch gestures to horizontal so the page doesn't scroll
+       vertically while the user picks a tool. */
+    touch-action: pan-x;
+    box-shadow: 0 -4px 18px rgba(0,0,0,0.35);
+  }
+  #draw-toolbar::-webkit-scrollbar { display: none; }
+  #draw-toolbar .tool-btn { width: 40px; height: 40px; flex-shrink: 0; }
+  #draw-toolbar .toolbar-sep { width: 1px; height: 28px; margin: 0 2px; }
+  #stroke-size { width: 60px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
+  #stroke-size-wrap { flex-direction: row; gap: 4px; width: auto; align-items: center; padding: 0 6px; }
+  #stroke-opacity { width: 50px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
+  #stroke-opacity-wrap { flex-direction: row; gap: 4px; width: auto; padding: 4px 6px; align-items: center; }
+  #color-fgbg { margin: 0 4px; }
+  #fill-toggle-wrap { flex-direction: row; align-items: center; }
+  /* Quick-palette / recents would overflow the bottom strip on phones. */
+  #color-palette, #color-recents { display: none; }
+  #font-size-wrap { flex-direction: row; align-items: center; }
+  #zoom-wrap { flex-direction: row; align-items: center; }
+  #zoom-label { writing-mode: horizontal-tb; font-size: 0.72rem; min-width: 36px; }
+  /* The canvas pushes up to clear the bottom toolbar + iOS safe area. */
+  #canvas-area { margin-right: 0; margin-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
+  .toolbar-spacer { display: flex; flex: 1; }
+
+  /* iOS Safari auto-zooms when focusing inputs whose font-size is < 16px.
+     Forcing 16px sidesteps that. We exclude color / range / checkbox so
+     those keep their compact widgets. */
+  input:not([type="color"]):not([type="range"]):not([type="checkbox"]),
+  textarea, select { font-size: 16px; }
+
+  /* Let pinch-zoom always work inside the dock — never trap the gesture. */
+  #right-dock, #right-dock * { touch-action: pan-x pan-y pinch-zoom; }
+
+  /* Bottom-left visibility toggle sits above the toolbar strip. */
+  .board-vis-toggle { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); left: 10px; }
+
+  /* ── 3D toolbar — horizontal top strip with finger-sized hits ─────── */
+  body.mode-3d #toolbar-3d {
+    left: 8px; right: 8px; transform: none;
+    max-width: calc(100vw - 16px);
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    padding: 4px 6px;
+    padding-top: max(4px, env(safe-area-inset-top, 0px));
+  }
+  body.mode-3d #toolbar-3d::-webkit-scrollbar { display: none; }
+  body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
+  body.mode-3d #toolbar-3d .t3d-btn {
+    min-width: 38px; height: 38px; padding: 0 7px; font-size: 0.78rem;
+  }
+  body.mode-3d #toolbar-3d .t3d-mirror-btn   { padding: 0 8px; min-width: 56px; }
+  body.mode-3d #toolbar-3d .t3d-mode-toggle-btn { padding: 0 10px; min-width: 78px; }
+  body.mode-3d #toolbar-3d #t3d-object-color-wrap { width: 36px; height: 36px; }
+  body.mode-3d #toolbar-3d .toolbar-sep { height: 26px; }
+
+  #editor-pane { min-height: 0; }
+  #canvas-area-3d { min-height: 0; touch-action: none; }
+
+  /* ── Chat — floating card above the bottom toolbar ────────────────── */
   #chat-panel {
-    width: min(280px, calc(100vw - 24px));
-    height: min(320px, 60vh);
-    right: 10px; bottom: 70px;
+    width: min(300px, calc(100vw - 20px));
+    height: min(360px, 55vh);
+    right: 10px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     z-index: 60;
   }
+  /* Chat header hit target slightly larger so the drag handle is reachable. */
+  #chat-panel .chat-header { padding: 10px 12px; }
 
-  /* Members panel keeps the desktop compact-square layout on mobile too —
-     same small floating square that expands on hover. */
+  /* ── Members — compact 44px column, tap to expand on mobile ───────── */
   #member-panel {
     position: fixed;
-    top: auto; left: auto; right: 10px; bottom: 60px;
+    top: auto; left: auto;
+    right: 10px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     transform: none;
-    width: 44px; height: auto; max-height: 220px;
+    width: 44px; height: auto; max-height: 240px;
     border-radius: 10px;
     border: 1px solid var(--border);
     padding: 6px 0 4px;
@@ -1791,90 +1919,94 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
     z-index: 80;
     transition: width 0.2s ease, background 0.15s;
   }
-  #member-panel:hover { width: 160px; overflow: hidden; }
-  #member-panel.open  { /* legacy class no longer needed on mobile */ }
-
-  #sidebar-toggle { display: flex; }
+  /* Touch devices don't fire :hover reliably — switch to a tap-driven
+     `.expanded` class managed in JS so the list is actually openable. */
+  @media (hover: hover) {
+    #member-panel:hover { width: 170px; overflow: hidden; }
+  }
+  #member-panel.expanded { width: 170px; overflow: hidden; }
+  #member-panel.dragging:hover { width: 44px; }
+  /* Hide the legacy members-toggle (in the header) — the bottom-right
+     square is now the primary affordance on mobile. */
   #members-toggle { display: none; }
 
-  #board-header { gap: 6px; padding: 0 10px; }
-
-  /* Toolbar: revert to horizontal strip at bottom on mobile */
-  #draw-toolbar {
-    position: fixed; bottom: 0; left: 0; right: 0; top: auto;
-    width: auto; max-height: 52px;
-    flex-direction: row; padding: 0 6px;
-    border-radius: 0; border-top: 1px solid var(--border);
-    border-bottom: none; border-left: none; border-right: none;
-    overflow-x: auto; overflow-y: hidden; gap: 2px;
-    right: 0;
-  }
-  #draw-toolbar .tool-btn { width: 36px; height: 36px; flex-shrink: 0; }
-  #draw-toolbar .toolbar-sep { width: 1px; height: 24px; margin: 0 2px; }
-  #stroke-size { width: 52px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
-  #stroke-size-wrap { flex-direction: row; gap: 4px; width: auto; }
-  #stroke-opacity { width: 46px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
-  #stroke-opacity-wrap { flex-direction: row; gap: 4px; width: auto; padding: 4px 6px; }
-  #color-fgbg { margin: 0 4px; }
-  #fill-toggle-wrap { flex-direction: row; }
-  /* Hide quick-palette / recents on horizontal mobile toolbar to save space. */
-  #color-palette, #color-recents { display: none; }
-  #font-size-wrap { flex-direction: row; }
-  #zoom-wrap { flex-direction: row; }
-  #zoom-label { writing-mode: horizontal-tb; font-size: 0.7rem; min-width: 34px; }
-  #canvas-area { margin-right: 0; margin-bottom: 52px; }
-  .toolbar-spacer { display: flex; flex: 1; }
-
-  /* iOS Safari auto-zooms when focusing inputs whose font-size is < 16px,
-     and the page can get "stuck" zoomed in. Forcing 16px avoids that.
-     We exclude type=color / type=range so they keep their compact widgets. */
-  input:not([type="color"]):not([type="range"]):not([type="checkbox"]),
-  textarea, select { font-size: 16px; }
-
-  /* Make sure dock panels never trap pinch-zoom on mobile. */
-  #right-dock, #right-dock * { touch-action: pan-x pan-y pinch-zoom; }
-
-  /* Bottom-left visibility toggle sits above the toolbar strip on mobile. */
-  .board-vis-toggle { bottom: 60px; left: 8px; }
-
-  /* 3D toolbar fits on mobile (tighter primitive group). */
-  body.mode-3d #toolbar-3d { left: 8px; right: 8px; transform: none; max-width: calc(100vw - 16px); overflow-x: auto; }
-  body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
-  body.mode-3d #toolbar-3d .t3d-btn { min-width: 32px; height: 32px; padding: 0 5px; }
-  body.mode-3d #toolbar-3d .t3d-mirror-btn { padding: 0 6px; min-width: 50px; }
-  body.mode-3d #toolbar-3d .t3d-mode-toggle-btn { padding: 0 8px; min-width: 72px; }
-  body.mode-3d #toolbar-3d #t3d-object-color-wrap { width: 32px; height: 32px; }
-  #editor-pane { min-height: 0; }
-  #canvas-area-3d { min-height: 0; touch-action: none; }
-  body.mode-3d #toolbar-3d { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
-
-  /* Right dock collapses to a slide-in drawer on mobile so the tiny screen
-     isn't permanently chewed up by tabs. The new #panels-toggle button in
-     the header opens it. */
+  /* ── Right dock — slide-in drawer + backdrop ──────────────────────── */
   #right-dock {
     position: fixed; top: var(--header-h); right: 0; bottom: 0;
-    width: min(280px, 86vw);
+    width: min(320px, 90vw);
     transform: translateX(110%);
     transition: transform 0.25s ease;
-    z-index: 55; border-left: 1px solid var(--border);
+    z-index: 70; border-left: 1px solid var(--border);
     box-shadow: -4px 0 24px rgba(0,0,0,0.45);
   }
-  #right-dock.dock-open    { transform: translateX(0); }
-  #dock-resize-handle      { display: none; }
+  #right-dock.dock-open { transform: translateX(0); }
+  /* When the dock drawer is open, the small floating cards sit awkwardly
+     on top of the panel. Hide them so the drawer is unambiguously the
+     foreground. The JS auto-closes them as well; this is just a backup
+     in case state drifts. */
+  body:has(#right-dock.dock-open) #chat-panel,
+  body:has(#right-dock.dock-open) #member-panel { display: none !important; }
+  #dock-resize-handle   { display: none; }
   /* The fixed-position toolbar shouldn't try to dodge the dock. */
   #draw-toolbar { right: 0 !important; }
+  /* Make tabs scroll horizontally and give them bigger touch targets. */
+  .dock-tabs { padding: 8px 6px 0; gap: 4px; }
+  .dock-tab  { padding: 8px 12px; font-size: 0.78rem; min-height: 36px; }
+
+  /* The mobile-only backdrop sits between the dock (z-index 70) and the
+     content below. Tapping it closes the dock. */
+  #mobile-dock-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 65;
+  }
+  #mobile-dock-backdrop.visible {
+    opacity: 1; pointer-events: auto;
+  }
 
   /* Floating dock panels are noisy on phones; pin them inline instead. */
   .panel-float { display: none !important; }
 
   #panels-toggle { display: flex; }
-
-  /* Voice bar compact on mobile */
-  #voice-bar { gap: 4px; }
-  #mute-btn { padding: 5px 6px; }
 }
 
-/* ── Landscape phone (height < 500px) ── */
+/* ═══════════════════════════════════════════════════════════════════════
+   EXTRA-NARROW PHONES (≤480px)
+   Squeeze further: hide the share button, board name truncates harder,
+   action buttons drop padding by a hair, and panels reach a bit further.
+═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 480px) {
+  #board-header { gap: 3px; padding: 0 6px; }
+  #board-name-display { font-size: 0.8rem; max-width: 38vw; }
+  /* Save button is redundant when auto-save runs every minute. */
+  #save-board-btn { display: none !important; }
+  .header-action-btn { padding: 6px 7px !important; }
+  #board-header .btn-icon { padding: 6px; }
+
+  /* Drop the share-board button on extra-narrow phones — it's accessible
+     from the sidebar and rarely the user's first action. */
+  #share-board-btn { display: none; }
+
+  /* Chat fills almost the whole width but stays a card (not a sheet) so
+     the bottom toolbar remains visible underneath. */
+  #chat-panel {
+    width: calc(100vw - 16px);
+    right: 8px;
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    height: min(340px, 52vh);
+  }
+  #member-panel {
+    right: 8px;
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #right-dock { width: 92vw; }
+}
+
+/* ── Landscape phone (height < 500px) ──────────────────────────────── */
 @media (max-height: 500px) and (max-width: 1024px) {
   :root { --header-h: 40px; --toolbar-h: 40px; }
 
@@ -1890,11 +2022,17 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   #sidebar-toggle { display: flex; }
   #members-toggle { display: none; }
 
-  /* Chat panel stays a floating card; nudged so it doesn't cover the toolbar. */
-  #chat-panel { width: min(240px, 78vw); height: min(220px, 60vh); right: 10px; bottom: 50px; z-index: 60; }
+  /* In landscape the on-screen keyboard eats vertical space — keep chat
+     small enough that it doesn't shove the toolbar off-screen. */
+  #chat-panel {
+    width: min(260px, 70vw); height: min(220px, 60vh);
+    right: 10px; bottom: 50px; z-index: 60;
+  }
+  #member-panel { bottom: 50px; right: 10px; }
 
-  #draw-toolbar { padding: 0 4px; gap: 1px; }
-  #draw-toolbar .tool-btn { padding: 5px 5px; }
+  #draw-toolbar { padding: 0 4px; gap: 2px; max-height: 48px; }
+  #draw-toolbar .tool-btn { width: 36px; height: 36px; padding: 4px; }
+  #canvas-area { margin-bottom: 48px; }
 }
 </style>
 </head>
@@ -2069,34 +2207,34 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       </button>
       <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <!-- Save board snapshot -->
-      <button id="save-board-btn" class="btn btn-ghost" title="Save snapshot of this board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+      <button id="save-board-btn" class="btn btn-ghost header-action-btn" title="Save snapshot of this board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M2 2h7l2 2v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>
           <path d="M4 2v3h5V2M3.5 7.5h6M3.5 10h4"/>
         </svg>
-        Save
+        <span class="btn-label">Save</span>
       </button>
       <!-- 3D-only import button. Hidden in 2D mode. -->
-      <button id="import-btn" class="btn btn-ghost" title="Import 3D model" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+      <button id="import-btn" class="btn btn-ghost header-action-btn" title="Import 3D model" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6.5 12V5M4 7.5l2.5-2.5L9 7.5"/>
           <path d="M1 1h11v2H1z"/>
         </svg>
-        Import
+        <span class="btn-label">Import</span>
       </button>
       <!-- Hidden file input bound to the import button. accept list mirrors the loaders in model-io.js. -->
       <input id="import-file-input" type="file" accept=".obj,.stl,.ply,.gltf,.glb,.fbx" style="display:none">
       <!-- Prominent export button in header (label updates per workspace mode) -->
-      <button id="export-btn" class="btn btn-ghost" title="Export board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
+      <button id="export-btn" class="btn btn-ghost header-action-btn" title="Export board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/>
           <path d="M1 10h11v2H1z"/>
         </svg>
-        <span class="export-label">Export</span>
+        <span class="btn-label export-label">Export</span>
       </button>
-      <button id="leave-board-btn" class="btn btn-ghost" title="Leave board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0;color:var(--danger);border-color:rgba(248,113,113,0.25)">
+      <button id="leave-board-btn" class="btn btn-ghost header-action-btn" title="Leave board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0;color:var(--danger);border-color:rgba(248,113,113,0.25)">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
-        Leave
+        <span class="btn-label">Leave</span>
       </button>
       <!-- Voice bar — mute button (always visible while in a board) -->
       <div id="voice-bar" style="display:none">
@@ -2516,6 +2654,9 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         <div class="dock-tabs" id="dock-tabs"></div>
         <div id="dock-body"></div>
       </aside>
+      <!-- Mobile-only translucent backdrop for the slide-in dock drawer.
+           Tapping it closes the dock; managed in the panels-toggle handler. -->
+      <div id="mobile-dock-backdrop" aria-hidden="true"></div>
     </div>
 
   </div><!-- /#main -->
@@ -8146,12 +8287,90 @@ document.getElementById('members-toggle').addEventListener('click', () => {
   if (window.innerWidth <= 768) document.getElementById('chat-panel').classList.remove('open');
 });
 
-/* Mobile-only — slide the right dock (Layers / Hierarchy panels) in and out. */
-document.getElementById('panels-toggle')?.addEventListener('click', () => {
-  const dock = document.getElementById('right-dock');
-  if (!dock) return;
-  dock.classList.toggle('dock-open');
-});
+/* ─── Mobile UX glue ───────────────────────────────────────────────────
+   1. The right dock slides in from the right on mobile. A backdrop sits
+      behind it so the user can tap outside to dismiss — matching the
+      iOS/Android sheet conventions they already know.
+   2. The members panel relies on :hover on desktop, but mobile devices
+      don't fire :hover reliably. We layer on a `.expanded` class driven
+      by tap so the member list is actually reachable on a phone. */
+(function setupMobileUx() {
+  const mqlMobile = window.matchMedia('(max-width: 768px)');
+  const dock      = document.getElementById('right-dock');
+  const backdrop  = document.getElementById('mobile-dock-backdrop');
+  const memberPan = document.getElementById('member-panel');
+
+  function isMobile() { return mqlMobile.matches; }
+
+  function closeDockDrawer() {
+    if (!dock) return;
+    dock.classList.remove('dock-open');
+    backdrop?.classList.remove('visible');
+  }
+  function openDockDrawer() {
+    if (!dock) return;
+    dock.classList.add('dock-open');
+    if (isMobile()) {
+      backdrop?.classList.add('visible');
+      // Stack-management: chat + members floating cards live on a lower
+      // z-layer, but auto-closing them on mobile reduces visual noise and
+      // makes the dock the unambiguous foreground sheet.
+      document.getElementById('chat-panel')?.classList.remove('open');
+      memberPan?.classList.remove('expanded');
+    }
+  }
+
+  document.getElementById('panels-toggle')?.addEventListener('click', () => {
+    if (!dock) return;
+    if (dock.classList.contains('dock-open')) closeDockDrawer();
+    else openDockDrawer();
+  });
+  backdrop?.addEventListener('click', closeDockDrawer);
+  // Escape closes the drawer too.
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && dock?.classList.contains('dock-open') && isMobile()) {
+      closeDockDrawer();
+    }
+  });
+  // If the viewport grows past the mobile breakpoint, drop the drawer state
+  // so we don't leave a stranded backdrop on desktop.
+  mqlMobile.addEventListener?.('change', e => {
+    if (!e.matches) {
+      backdrop?.classList.remove('visible');
+      dock?.classList.remove('dock-open');
+    }
+  });
+
+  // ── Members tap-to-expand on touch devices ─────────────────────────
+  if (memberPan) {
+    memberPan.addEventListener('click', e => {
+      if (!isMobile()) return;
+      // Buttons inside the panel (kick / mute / etc.) should still work.
+      if (e.target.closest('button, input, textarea, select, a')) return;
+      memberPan.classList.toggle('expanded');
+    });
+    // Tap outside collapses again — mirrors the hover-to-expand UX.
+    document.addEventListener('pointerdown', e => {
+      if (!isMobile() || !memberPan.classList.contains('expanded')) return;
+      if (memberPan.contains(e.target)) return;
+      memberPan.classList.remove('expanded');
+    });
+  }
+
+  // ── Sidebar tap-outside on mobile ──────────────────────────────────
+  // The sidebar covers ~80% of the viewport when open; tap-outside is the
+  // expected dismissal gesture on phones.
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    document.addEventListener('pointerdown', e => {
+      if (!isMobile() || !sidebar.classList.contains('open')) return;
+      if (sidebar.contains(e.target)) return;
+      // Don't fight the sidebar-toggle button itself.
+      if (e.target.closest?.('#sidebar-toggle')) return;
+      sidebar.classList.remove('open');
+    });
+  }
+})();
 
 /* ═══════════════════════════════════════════
    PWA — service worker registration + install prompt
@@ -8788,6 +9007,13 @@ document.getElementById('chat-btn').addEventListener('click', () => {
   const panel = document.getElementById('chat-panel');
   panel.classList.toggle('open');
   if (panel.classList.contains('open')) {
+    // Floating panels overlap on phones — close siblings so chat actually
+    // gets the foreground when the user opens it.
+    if (window.innerWidth <= 768) {
+      document.getElementById('right-dock')?.classList.remove('dock-open');
+      document.getElementById('mobile-dock-backdrop')?.classList.remove('visible');
+      document.getElementById('member-panel')?.classList.remove('expanded');
+    }
     chatUnread = 0;
     updateChatBadge();
     renderChat();

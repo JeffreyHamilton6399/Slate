@@ -450,6 +450,10 @@ input, textarea { font-family: var(--sans); }
   color: var(--accent); background: var(--bg2);
   border-color: var(--border2); border-bottom-color: var(--bg2); margin-bottom: -1px;
 }
+.dock-tab-dismissed {
+  opacity: 0.42;
+  font-style: italic;
+}
 #dock-body {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   overflow: hidden;
@@ -533,7 +537,9 @@ input, textarea { font-family: var(--sans); }
 
 /* ── Board loading overlay ─────────────────────────────────────────────── */
 #board-loading-overlay {
-  position: fixed; inset: 0; z-index: 9000;
+  position: fixed; left: 0; right: 0; bottom: 0;
+  top: var(--header-h);
+  z-index: 9000;
   display: flex; align-items: center; justify-content: center;
   background: rgba(12, 12, 18, 0.78);
   backdrop-filter: blur(10px);
@@ -728,7 +734,7 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   gap: 2px;
   flex-shrink: 0; z-index: 39;
   overflow-y: auto; scrollbar-width: none;
-  max-height: calc(100vh - var(--header-h) - 100px); /* leaves room for member panel at bottom */
+  max-height: calc(100vh - var(--header-h) - 100px); /* leaves room for members (bottom-left) + chat (bottom-right) */
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
 #draw-toolbar::-webkit-scrollbar { display: none; }
@@ -1191,8 +1197,9 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 ═══════════════════════════════════════════ */
 #member-panel {
   position: fixed;
-  bottom: 14px;
-  right: 10px;
+  bottom: 12px;
+  left: 12px;
+  right: auto;
   width: 44px;
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -1596,10 +1603,12 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
 .vis-toggle:hover { border-color: var(--accent-dim); color: var(--accent); }
+/* Public / private — lives in #board-header next to share (was bottom-left). */
 .board-vis-toggle {
-  position: absolute; left: 12px; bottom: 12px; z-index: 30;
-  width: 32px; height: 32px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+  position: relative;
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  box-shadow: none;
 }
 .board-vis-toggle[hidden] { display: none !important; }
 .board-vis-toggle:not(.is-host) { cursor: default; opacity: 0.85; }
@@ -1654,7 +1663,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
    left of the members square in the bottom-right. */
 #chat-panel {
   position: fixed;
-  right: 62px;
+  right: 14px;
   bottom: 14px;
   width: 280px; height: 340px;
   background: var(--bg2);
@@ -1864,7 +1873,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   #right-dock, #right-dock * { touch-action: pan-x pan-y pinch-zoom; }
 
   /* Bottom-left visibility toggle sits above the toolbar strip. */
-  .board-vis-toggle { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); left: 10px; }
+  /* Visibility control is in the header on mobile too */
 
   /* ── 3D toolbar — horizontal top strip with finger-sized hits ─────── */
   body.mode-3d #toolbar-3d {
@@ -1901,11 +1910,10 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   /* Chat header hit target slightly larger so the drag handle is reachable. */
   #chat-panel .chat-header { padding: 10px 12px; }
 
-  /* ── Members — compact 44px column, tap to expand on mobile ───────── */
+  /* ── Members — bottom-left on mobile (matches desktop layout) ─────── */
   #member-panel {
     position: fixed;
-    top: auto; left: auto;
-    right: 10px;
+    top: auto; left: 10px; right: auto;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     transform: none;
     width: 44px; height: auto; max-height: 240px;
@@ -2205,6 +2213,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           <line x1="10.6" y1="3.75" x2="4.4" y2="7.25"/>
         </svg>
       </button>
+      <button type="button" id="board-vis-toggle" class="vis-toggle board-vis-toggle" title="Visibility" aria-label="public" hidden></button>
       <div id="header-spacer" style="flex:1;min-width:4px"></div>
       <!-- Save board snapshot -->
       <button id="save-board-btn" class="btn btn-ghost header-action-btn" title="Save snapshot of this board" style="display:none;gap:5px;padding:6px 11px;font-size:0.78rem;flex-shrink:0">
@@ -2646,8 +2655,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
           <div id="text-drag-guide"></div>
         </div>
         <div id="canvas-area-3d" style="display:none" aria-label="3D viewport"></div>
-        <!-- Bottom-left current-board visibility toggle (replaces the old host bar) -->
-        <button type="button" id="board-vis-toggle" class="vis-toggle board-vis-toggle" title="Visibility" aria-label="public" hidden></button>
       </div>
       <div id="dock-resize-handle" class="split-handle split-handle-v" title="Drag to resize panel column" role="separator" aria-orientation="vertical"></div>
       <aside id="right-dock" aria-label="Tool panels">
@@ -3206,10 +3213,33 @@ function loadPersistedBoardVisibility() {
   } catch {}
 }
 
+const MAX_LIVE_BOARDS = 100;
+
+/** Drop oldest inactive boards so `liveBoards` cannot grow without bound. */
+function pruneLiveBoardsIfNeeded() {
+  if (liveBoards.size <= MAX_LIVE_BOARDS) return;
+  const counts = {};
+  Object.values(state.lobbyRegistry).forEach(info => {
+    if (info.board) counts[info.board] = (counts[info.board] || 0) + 1;
+  });
+  const boards = [...liveBoards].filter(b => b !== state.currentBoard);
+  boards.sort((a, b) => (state.boardActivity[a] || 0) - (state.boardActivity[b] || 0));
+  let removed = 0;
+  while (liveBoards.size > MAX_LIVE_BOARDS && boards.length) {
+    const b = boards.shift();
+    if (!b) break;
+    if ((counts[b] || 0) > 0) continue;
+    liveBoards.delete(b);
+    removed++;
+  }
+  if (removed) persistBoards();
+}
+
 function safeAddBoard(b) {
   if (b && !liveBoards.has(b)) {
     liveBoards.add(b);
     persistBoards();
+    pruneLiveBoardsIfNeeded();
   }
 }
 
@@ -3876,6 +3906,7 @@ function setupDataConn(conn, incoming = false) {
       // Also ask the new peer to share what they have, in case we just rejoined.
       try { conn.send({ type: 'doc-req' }); } catch {}
     }
+    tryBoardLoadSyncAdvance();
   });
 
   conn.on('data', data => {
@@ -4061,6 +4092,7 @@ function handleData(peerId, data) {
       if (data.doc && state.currentBoard) {
         // Merge instead of replace: lets concurrent local edits survive a remote rejoin snapshot.
         docMergeRemoteSnapshot(data.doc);
+        noteBoardDocSynced();
         scheduleRender();
       }
       break;
@@ -4208,6 +4240,7 @@ function handleData(peerId, data) {
         window.slateNotes._emit();
       }
       invalidateStatic();
+      noteBoardDocSynced();
       scheduleRender();
       markBoardActivity(peerId);
       break;
@@ -4457,7 +4490,7 @@ function helloPayload() {
 
 function updateHostControlsBar() {
   // The old top-of-header host bar was removed in favour of a single
-  // bottom-left visibility toggle (#board-vis-toggle). This shim is kept
+  // Header visibility toggle (#board-vis-toggle). This shim is kept
   // so existing call sites continue to work; the real refresh happens in
   // updateBoardChip(), which is called alongside this from updateBoardControls().
   updateBoardChip();
@@ -4579,6 +4612,7 @@ function leaveBoardWithSavePrompt(andThen) {
 
 function leaveBoard() {
   if (!state.currentBoard) return;
+  finishBoardLoadSync(); // clears loading overlay if mid-sync
   const leftBoard = state.currentBoard;
   try { window.slateSfx?.play('leave'); } catch (_) {}
   broadcastAll({ type: 'leave', board: leftBoard, name: state.myName });
@@ -4971,6 +5005,7 @@ function docMergeRemoteSnapshot(snap) {
     }
   }
   invalidateStatic();
+  noteBoardDocSynced();
 }
 
 function docSerialize() {
@@ -7494,6 +7529,7 @@ function pruneEmptyBoards() {
 function renderBoards(filter) {
   const scroll = document.getElementById('board-scroll');
   if (!scroll) return;
+  pruneLiveBoardsIfNeeded();
 
   // Count members per board from registry
   const counts = {};
@@ -9333,25 +9369,77 @@ function saveBoardSnapshot(folderName, opts = {}) {
   }
 }
 
-/* Briefly show a loading overlay when entering a board. Auto-hides on the
-   next animation frame after a short minimum so the fade feels intentional
-   rather than a flash. */
-let _loadingTimer = null;
+/* Board entry: keep overlay up until transport + doc sync look stable (not a
+   fixed 700ms flash). Solo boards clear quickly; multi-peer waits for opens
+   or a bounded timeout. */
+let _boardLoadCtx = null;
+
+function noteBoardDocSynced() {
+  if (_boardLoadCtx && state.currentBoard === _boardLoadCtx.board) {
+    _boardLoadCtx.gotDoc = true;
+    const sub = document.getElementById('board-loading-sub');
+    if (sub) sub.textContent = 'Receiving updates…';
+    tryBoardLoadSyncAdvance();
+  }
+}
+
+function tryBoardLoadSyncAdvance() {
+  if (!_boardLoadCtx || state.currentBoard !== _boardLoadCtx.board) return;
+  const elapsed = Date.now() - _boardLoadCtx.t0;
+  const peers = Object.entries(state.lobbyRegistry).filter(([id, o]) => id !== state.myId && o && o.board === _boardLoadCtx.board);
+  const pendingConn = peers.some(([id]) => !state.connections[id]?.conn?.open);
+  const minElapsed = elapsed >= (peers.length ? 750 : 480);
+  const docOk = _boardLoadCtx.gotDoc || peers.length === 0 || elapsed >= 4200;
+  const connOk = !pendingConn || elapsed >= 13000;
+  const sub = document.getElementById('board-loading-sub');
+  if (sub && peers.length && pendingConn && elapsed > 400) {
+    sub.textContent = `Connecting to ${peers.length} peer${peers.length > 1 ? 's' : ''}…`;
+  }
+  if (minElapsed && docOk && connOk) {
+    finishBoardLoadSync();
+  }
+}
+
+function startBoardLoadSync(boardName) {
+  if (_boardLoadCtx) {
+    clearInterval(_boardLoadCtx.iv);
+    clearTimeout(_boardLoadCtx.tmax);
+    _boardLoadCtx = null;
+  }
+  _boardLoadCtx = {
+    board: boardName,
+    t0: Date.now(),
+    gotDoc: false,
+    iv: setInterval(tryBoardLoadSyncAdvance, 220),
+    tmax: setTimeout(finishBoardLoadSync, 15000),
+  };
+}
+
+function finishBoardLoadSync() {
+  if (_boardLoadCtx) {
+    clearInterval(_boardLoadCtx.iv);
+    clearTimeout(_boardLoadCtx.tmax);
+    _boardLoadCtx = null;
+  }
+  hideBoardLoadingOverlay();
+}
+
 function showBoardLoadingOverlay(board) {
   const overlay = document.getElementById('board-loading-overlay');
   if (!overlay) return;
   const nameEl = document.getElementById('board-loading-name');
   const subEl  = document.getElementById('board-loading-sub');
   if (nameEl) nameEl.textContent = board || 'Loading board';
-  if (subEl)  subEl.textContent  = 'Syncing with peers…';
+  if (subEl)  subEl.textContent  = 'Connecting and syncing…';
   overlay.classList.add('show');
-  clearTimeout(_loadingTimer);
-  _loadingTimer = setTimeout(() => {
-    overlay.classList.remove('show');
-  }, 700);
+  overlay.setAttribute('aria-hidden', 'false');
+  startBoardLoadSync(board);
+  requestAnimationFrame(() => tryBoardLoadSyncAdvance());
 }
 function hideBoardLoadingOverlay() {
-  document.getElementById('board-loading-overlay')?.classList.remove('show');
+  const o = document.getElementById('board-loading-overlay');
+  o?.classList.remove('show');
+  o?.setAttribute('aria-hidden', 'true');
 }
 
 /* Show a small floating "Saved" pill in the corner; auto-fades. */

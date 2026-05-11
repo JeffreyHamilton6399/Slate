@@ -91,7 +91,32 @@
   const panels = [];
   /** id -> floating window element (only set while floating) */
   const floats = new Map();
+  /** id -> panel element hidden after user closed a floating panel (×). */
+  const dismissedPanels = new Map();
   const LS_FLOATS = 'slate_dock_floats';
+
+  function _ensureDismissPool() {
+    let el = document.getElementById('dock-dismissed-pool');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'dock-dismissed-pool';
+      el.setAttribute('hidden', '');
+      el.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function _defaultFloatGeomBR() {
+    const w = 300;
+    const h = 340;
+    return {
+      left: Math.max(12, window.innerWidth - w - 18),
+      top: Math.max(52, window.innerHeight - h - 20),
+      width: w,
+      height: h,
+    };
+  }
 
   function _saveFloats() {
     const data = {};
@@ -132,6 +157,10 @@
         w.style.zIndex = String(_topFloatZ());
         return;
       }
+      if (dismissedPanels.has(id)) {
+        window.slateDock.detachPanel(id, _defaultFloatGeomBR());
+        return;
+      }
       const tabs = document.getElementById('dock-tabs');
       if (!tabs) return;
       tabs.querySelectorAll('.dock-tab').forEach(t => {
@@ -157,6 +186,10 @@
         w.style.zIndex = String(_topFloatZ());
         return;
       }
+      if (dismissedPanels.has(id)) {
+        window.slateDock.detachPanel(id, _defaultFloatGeomBR());
+        return;
+      }
       const dock = document.getElementById('right-dock');
       if (dock) dock.classList.remove('dock-user-collapsed');
       const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || 0;
@@ -177,6 +210,28 @@
       }
     },
     /** Pop a docked panel out into a floating window (Photoshop-style). */
+    dismissPanel(id) {
+      const win = floats.get(id);
+      if (!win) return;
+      const tabs = document.getElementById('dock-tabs');
+      const panelEl = win.querySelector(`.dock-panel[data-panel="${id}"]`);
+      if (!panelEl) return;
+      panelEl.style.display = 'none';
+      _ensureDismissPool().appendChild(panelEl);
+      dismissedPanels.set(id, panelEl);
+      win.remove();
+      floats.delete(id);
+      const tab = tabs?.querySelector(`.dock-tab[data-panel="${id}"]`);
+      if (tab) {
+        tab.style.display = '';
+        tab.classList.add('dock-tab-dismissed');
+        tab.title = `${panels.find(p => p.id === id)?.title || id} — click to reopen`;
+      }
+      const stillVisible = tabs && [...tabs.children].find(t => t.style.display !== 'none' && t.dataset.panel !== id);
+      if (stillVisible) window.slateDock.setActive(stillVisible.dataset.panel);
+      try { window.slateSfx?.play('panel-close'); } catch (_) {}
+      _saveFloats();
+    },
     detachPanel(id, geom) {
       if (floats.has(id)) return;
       const def = panels.find(p => p.id === id);
@@ -184,13 +239,20 @@
       const body = document.getElementById('dock-body');
       const tabs = document.getElementById('dock-tabs');
       if (!body || !tabs) return;
-      const panelEl = body.querySelector(`.dock-panel[data-panel="${id}"]`);
+      let panelEl = body.querySelector(`.dock-panel[data-panel="${id}"]`);
+      if (!panelEl && dismissedPanels.has(id)) {
+        panelEl = dismissedPanels.get(id);
+        dismissedPanels.delete(id);
+        const tab = tabs.querySelector(`.dock-tab[data-panel="${id}"]`);
+        tab?.classList.remove('dock-tab-dismissed');
+        if (tab) tab.title = `${def.title} (drag tab to detach)`;
+      }
       if (!panelEl) return;
 
       const win = document.createElement('div');
       win.className = 'panel-float';
       win.dataset.panel = id;
-      const g = geom || { left: 120, top: 120, width: 280, height: 360 };
+      const g = geom || _defaultFloatGeomBR();
       win.style.left   = g.left + 'px';
       win.style.top    = g.top + 'px';
       win.style.width  = g.width + 'px';
@@ -199,7 +261,7 @@
       win.innerHTML = `
         <div class="panel-float-bar">
           <span class="panel-float-title">${def.title}</span>
-          <button class="panel-float-close" title="Dock panel" aria-label="Dock panel">×</button>
+          <button class="panel-float-close" title="Close panel (reopen from dock tab)" aria-label="Close panel">×</button>
         </div>
         <div class="panel-float-body"></div>
         <div class="panel-float-resize" title="Drag to resize"></div>
@@ -218,7 +280,7 @@
 
       _bindFloatDrag(win);
       _bindFloatResize(win);
-      win.querySelector('.panel-float-close').addEventListener('click', () => window.slateDock.dockPanel(id));
+      win.querySelector('.panel-float-close').addEventListener('click', () => window.slateDock.dismissPanel(id));
       try { window.slateSfx?.play('panel-open'); } catch (_) {}
 
       // If detached panel was active, switch the dock to a different one.
@@ -238,7 +300,12 @@
       win.remove();
       floats.delete(id);
       const tab = tabs?.querySelector(`.dock-tab[data-panel="${id}"]`);
-      if (tab) tab.style.display = '';
+      if (tab) {
+        tab.style.display = '';
+        tab.classList.remove('dock-tab-dismissed');
+        const def = panels.find(p => p.id === id);
+        if (def) tab.title = `${def.title} (drag tab to detach)`;
+      }
       window.slateDock.setActive(id);
       try { window.slateSfx?.play('panel-close'); } catch (_) {}
       _saveFloats();
@@ -356,9 +423,10 @@
         isDown = false;
         const id = tab.dataset.panel;
         window.slateDock.detachPanel(id, {
-          left: Math.max(20, e.clientX - 100),
-          top:  Math.max(20, e.clientY - 14),
-          width: 300, height: 360,
+          left: Math.max(12, Math.min(e.clientX - 100, window.innerWidth - 312)),
+          top: Math.max(52, e.clientY - 20),
+          width: 300,
+          height: 360,
         });
       }
     });

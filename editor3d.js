@@ -34,6 +34,9 @@ let viewGizmoRoot = null;
 const viewGizmoPickables = [];
 let viewGizmoRaycaster = null;
 const pointer = new THREE.Vector2();
+const _extrudePlaneThree = new THREE.Plane();
+const _extrudeHitVec = new THREE.Vector3();
+const _extrudeDelta = new THREE.Vector3();
 let _lastMouseClientX = null;
 let _lastMouseClientY = null;
 /** Meshes eligible for raycast selection (rebuilt in syncSceneFromDoc). */
@@ -1860,8 +1863,16 @@ function buildEditHelpers() {
   const posAttr = geo.getAttribute('position');
   if (!posAttr) return;
 
-  // Hide the source mesh's fill while editing (keep an outline overlay).
-  mesh.material = mesh.material.clone();
+  // Hide the source mesh's fill while editing — clone the edit overlay material
+  // ONCE per edit session; re-cloning every rebuild (e.g. inset/extrude preview)
+  // leaked materials and broke tools.
+  if (!mesh.userData._slateEditBaseMaterial) {
+    mesh.userData._slateEditBaseMaterial = mesh.material;
+  }
+  if (mesh.userData._slateEditOverlayMaterial && mesh.material !== mesh.userData._slateEditBaseMaterial) {
+    try { mesh.userData._slateEditOverlayMaterial.dispose?.(); } catch (_) {}
+  }
+  mesh.material = mesh.userData._slateEditOverlayMaterial = mesh.userData._slateEditBaseMaterial.clone();
   mesh.material.transparent = true;
   mesh.material.opacity = 0.35;
   mesh.material.needsUpdate = true;
@@ -2035,7 +2046,17 @@ function refreshSelectionMarker() {
 function destroyEditHelpers() {
   if (!editHelpers) return;
   const mesh = objMeshes.get(editTargetId);
-  if (mesh && mesh.material) {
+  if (mesh && mesh.userData._slateEditBaseMaterial) {
+    if (mesh.material && mesh.material !== mesh.userData._slateEditBaseMaterial) {
+      try { mesh.material.dispose?.(); } catch (_) {}
+    }
+    mesh.material = mesh.userData._slateEditBaseMaterial;
+    mesh.material.transparent = false;
+    mesh.material.opacity = 1;
+    mesh.material.needsUpdate = true;
+    delete mesh.userData._slateEditBaseMaterial;
+    delete mesh.userData._slateEditOverlayMaterial;
+  } else if (mesh && mesh.material) {
     mesh.material.transparent = false;
     mesh.material.opacity = 1;
     mesh.material.needsUpdate = true;
@@ -2651,6 +2672,46 @@ function _splitQuadAlongOppositeMids(verts, faces, fi, getEdgeMid, e1a, e1b, e2a
   return { q1, q2 };
 }
 
+/** Average centroid + averaged face normals for interactive extrude depth. */
+function _buildExtrudePlane(md, targets) {
+  if (!md || !targets?.length) return null;
+  const faces = md.faces.map(f => (Array.isArray(f) ? [...f] : f));
+  const verts = md.vertices;
+  const C = new THREE.Vector3();
+  const N = new THREE.Vector3();
+  let n = 0;
+  for (const sel of targets) {
+    const fi = _findFaceIndex(faces, sel);
+    if (fi < 0) continue;
+    const face = faces[fi];
+    const nrm = _faceNormalFromVerts(verts, face);
+    if (nrm.lengthSq() < 1e-20) continue;
+    nrm.normalize();
+    C.add(_faceCentroidFromVerts(verts, face));
+    N.add(nrm);
+    n++;
+  }
+  if (!n) return null;
+  C.divideScalar(n);
+  if (N.lengthSq() < 1e-16) return null;
+  N.normalize();
+  return { origin: C, normal: N };
+}
+
+/** Signed extrusion distance along `plane.normal` from ray–plane hit (screen mouse). */
+function _extrudeSignedDistanceFromPointer(clientX, clientY, plane) {
+  if (!container || !camera || !raycaster || !plane) return 0;
+  const rect = container.getBoundingClientRect();
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  _extrudePlaneThree.setFromNormalAndCoplanarPoint(plane.normal, plane.origin);
+  const hit = raycaster.ray.intersectPlane(_extrudePlaneThree, _extrudeHitVec);
+  if (!hit) return 0;
+  _extrudeDelta.subVectors(_extrudeHitVec, plane.origin);
+  return _extrudeDelta.dot(plane.normal);
+}
+
 function _computeExtrude(md, targets, distance) {
   if (!md || !targets?.length) return null;
   const verts = md.vertices.slice();
@@ -2756,10 +2817,16 @@ function extrudeSelectedFaces(distance) {
     try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
     return;
   }
+  const plane = _buildExtrudePlane(md, targets);
+  if (!plane) {
+    _showEditHint('Could not compute extrusion direction for selection');
+    try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
+    return;
+  }
   extrudeState = {
     snapshot: _cloneMeshDataDeep(md),
     targets,
-    startY: _lastMouseClientY ?? 0,
+    plane,
     wheelOffset: 0,
     distance: 0,
     didSetFaceMode: false,
@@ -2788,10 +2855,10 @@ function _onExtrudeWheel(e) {
 }
 function _applyExtrude() {
   if (!extrudeState) return;
-  const clientY = _lastMouseClientY ?? extrudeState.startY;
-  const dy = extrudeState.startY - clientY;
-  const raw = dy * 0.008 + extrudeState.wheelOffset;
-  extrudeState.distance = Math.max(-4, Math.min(4, raw));
+  const cx = _lastMouseClientX ?? 0;
+  const cy = _lastMouseClientY ?? 0;
+  const raw = _extrudeSignedDistanceFromPointer(cx, cy, extrudeState.plane) + extrudeState.wheelOffset;
+  extrudeState.distance = Math.max(-6, Math.min(6, raw));
   const result = _computeExtrude(extrudeState.snapshot, extrudeState.targets, extrudeState.distance);
   if (!result) return;
   if (!extrudeState.didSetFaceMode) {
@@ -2844,7 +2911,7 @@ function _showExtrudeHint() {
 function _updateExtrudeHint() {
   if (!_extrudeHintEl || !extrudeState) return;
   _extrudeHintEl.textContent =
-    `Extrude · ${extrudeState.distance.toFixed(3)} · drag / scroll · click confirm · RMB / Esc cancel`;
+    `Extrude · ${extrudeState.distance.toFixed(3)} · move mouse / scroll · click to confirm · RMB / Esc cancel`;
 }
 function _hideExtrudeHint() {
   if (_extrudeHintEl) _extrudeHintEl.style.display = 'none';
@@ -2967,15 +3034,12 @@ function _hideInsetHint() {
   if (_insetHintEl) _insetHintEl.style.display = 'none';
 }
 
-/** Subdivide each selected face into N quads (one per corner, meeting in the
- *  centroid). Tris become 3 quads, quads → 4 quads, etc. When no face is
- *  selected, subdivides EVERY face — Blender-style "Subdivide all".
+/** Subdivide faces: each **quad** becomes **four** corner quads (edge midpoints
+ *  + face center). Tris become three corner quads; n-gons become n quads around
+ *  the centroid. When no face is selected, subdivides every face ("Subdivide all").
  *
- *  For partial subdivisions, neighbouring (un-subdivided) faces that share an
- *  edge with a subdivided face would normally end up with a T-junction —
- *  their edge AB stays whole while their neighbour's edge has a new midpoint.
- *  We fix this by edge-splitting the neighbour: inserting the midpoint into
- *  the neighbour's ring so the mesh stays manifold. */
+ *  For partial subdivisions, neighbouring faces that share an edge with a
+ *  subdivided face get edge-split midpoints inserted so the mesh stays manifold. */
 function subdivideSelectedFaces() {
   if (editorMode !== 'edit') return;
   const md = _editFreshMeshData();
@@ -3022,12 +3086,23 @@ function subdivideSelectedFaces() {
     const centroid = _faceCentroidFromVerts(verts, face);
     verts.push(centroid.x, centroid.y, centroid.z);
     const cIdx = (verts.length / 3) - 1;
-    const mids = face.map((_, i) => getEdgeMid(face[i], face[(i + 1) % face.length]));
-    for (let i = 0; i < face.length; i++) {
-      const prev = (i - 1 + face.length) % face.length;
-      const quad = [face[i], mids[i], cIdx, mids[prev]];
-      faces.push(quad);
-      newFaceSelections.push(quad.slice());
+    const n = face.length;
+    const mids = face.map((_, i) => getEdgeMid(face[i], face[(i + 1) % n]));
+    // Quads → exactly four corner quads (equal topological split).
+    if (n === 4) {
+      for (let i = 0; i < 4; i++) {
+        const prev = (i + 3) % 4;
+        const quad = [face[i], mids[i], cIdx, mids[prev]];
+        faces.push(quad);
+        newFaceSelections.push(quad.slice());
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const prev = (i - 1 + n) % n;
+        const quad = [face[i], mids[i], cIdx, mids[prev]];
+        faces.push(quad);
+        newFaceSelections.push(quad.slice());
+      }
     }
   }
 

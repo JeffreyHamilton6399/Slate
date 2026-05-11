@@ -17,6 +17,23 @@ function _fmt(n) {
   return s.replace(/\.?0+$/, '') || '0';
 }
 
+function _triangulatedIndicesFromMeshFaces(faces) {
+  const out = [];
+  if (!faces?.length) return out;
+  if (Array.isArray(faces[0])) {
+    for (const poly of faces) {
+      if (!Array.isArray(poly) || poly.length < 3) continue;
+      const p = poly.map(Number);
+      for (let i = 1; i < p.length - 1; i++) {
+        out.push(p[0], p[i], p[i + 1]);
+      }
+    }
+  } else {
+    for (let i = 0; i < faces.length; i++) out.push(Number(faces[i]));
+  }
+  return out;
+}
+
 function _geometryFor(obj) {
   const p = obj.params || {};
   switch (obj.type) {
@@ -30,7 +47,8 @@ function _geometryFor(obj) {
       const g = new THREE.BufferGeometry();
       const md = obj.meshData || { vertices: [], faces: [] };
       if (md.vertices?.length) g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(md.vertices), 3));
-      if (md.faces?.length) g.setIndex(md.faces);
+      const idx = _triangulatedIndicesFromMeshFaces(md.faces);
+      if (idx.length) g.setIndex(idx);
       g.computeVertexNormals();
       return g;
     }

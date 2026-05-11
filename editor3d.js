@@ -2,8 +2,8 @@
  * editor3d.js — Blender-style 3D viewport for Slate.
  *
  *  • Reads / writes window.slateScene3d (which is doc.scene3d on the host page).
- *  • Object mode: orbit/pan/zoom, TransformControls gizmos (G/R/S), add primitives,
- *    delete, frame.
+ *  • Object mode: orbit/pan/zoom, TransformControls gizmos (G/R/S), add primitives via
+ *    + menu or viewport context menu, delete, frame. Hold ` (grave) for free-look fly.
  *  • Edit mode: per-mesh vertex / edge / face selection and translation. On exit the
  *    edited mesh is converted to a generic 'mesh' type and synced over the wire.
  *  • Hierarchy outliner panel is registered with the dock so it replaces the
@@ -73,9 +73,267 @@ let unsubScene = null;
 let hierarchyEl = null;
 let hierarchyRegistered = false;
 
+/** Blender-style grab: after G, X/Y/Z locks translation to one axis until drag ends. */
+let grabAwaitAxis = false;
+let grabAxisLock  = null; // null | 'x' | 'y' | 'z'
+let _ctxMenuEl    = null;
+let _flyUiUpBound = false;
+
 /* ─────────────────────────────────────────────────────────────────────────
-   Geometry factory
+   Mesh faces: stored as nested polygons [[i0..], …] or legacy flat triangles.
+   GPU paths triangulate; commit merges obvious triangle pairs into quads.
 ───────────────────────────────────────────────────────────────────────── */
+function _triangulatedIndicesFromMeshFaces(faces) {
+  const out = [];
+  if (!faces?.length) return out;
+  if (Array.isArray(faces[0])) {
+    for (const poly of faces) {
+      if (!Array.isArray(poly) || poly.length < 3) continue;
+      const p = poly.map(Number);
+      for (let i = 1; i < p.length - 1; i++) {
+        out.push(p[0], p[i], p[i + 1]);
+      }
+    }
+  } else {
+    for (let i = 0; i < faces.length; i++) out.push(Number(faces[i]));
+  }
+  return out;
+}
+
+function _triSharesUndirectedEdge(t, a, b) {
+  const pairs = [
+    [t[0], t[1]], [t[1], t[2]], [t[2], t[0]],
+  ];
+  for (const [u, v] of pairs) {
+    if ((u === a && v === b) || (u === b && v === a)) return true;
+  }
+  return false;
+}
+
+/** Two triangles sharing one internal edge → one quad (boundary walk). */
+function _orderedQuadFromTwoTris(t1, t2) {
+  const edges = [];
+  function addUndirected(a, b) {
+    edges.push(a < b ? [a, b] : [b, a]);
+  }
+  addUndirected(t1[0], t1[1]); addUndirected(t1[1], t1[2]); addUndirected(t1[2], t1[0]);
+  addUndirected(t2[0], t2[1]); addUndirected(t2[1], t2[2]); addUndirected(t2[2], t2[0]);
+  const cnt = new Map();
+  for (const [a, b] of edges) {
+    const k = `${a},${b}`;
+    cnt.set(k, (cnt.get(k) || 0) + 1);
+  }
+  const boundary = [];
+  for (const [a, b] of edges) {
+    if (cnt.get(`${a},${b}`) === 1) boundary.push([a, b]);
+  }
+  if (boundary.length !== 4) return null;
+  const next = new Map();
+  for (const [a, b] of boundary) {
+    if (next.has(a)) return null;
+    next.set(a, b);
+  }
+  const start = boundary[0][0];
+  const ring = [];
+  let v = start;
+  for (let i = 0; i < 6; i++) {
+    ring.push(v);
+    v = next.get(v);
+    if (v === start) break;
+    if (v === undefined) return null;
+  }
+  if (ring.length !== 4) return null;
+  return ring;
+}
+
+function _mergeTrianglePairsToQuads(tris) {
+  const used = new Array(tris.length).fill(false);
+  const out = [];
+  for (let ti = 0; ti < tris.length; ti++) {
+    if (used[ti]) continue;
+    const t1 = tris[ti];
+    let merged = false;
+    for (let e = 0; e < 3; e++) {
+      const a = t1[e], b = t1[(e + 1) % 3];
+      for (let tj = 0; tj < tris.length; tj++) {
+        if (tj === ti || used[tj]) continue;
+        const t2 = tris[tj];
+        if (!_triSharesUndirectedEdge(t2, a, b)) continue;
+        const verts = new Set([t1[0], t1[1], t1[2], t2[0], t2[1], t2[2]]);
+        if (verts.size !== 4) continue;
+        const quad = _orderedQuadFromTwoTris(t1, t2);
+        if (!quad) continue;
+        out.push(quad);
+        used[ti] = used[tj] = true;
+        merged = true;
+        break;
+      }
+      if (merged) break;
+    }
+    if (!merged) {
+      out.push([t1[0], t1[1], t1[2]]);
+      used[ti] = true;
+    }
+  }
+  return out;
+}
+
+function _cloneFacesArray(faces) {
+  if (!faces?.length) return [];
+  if (Array.isArray(faces[0])) return faces.map(p => (Array.isArray(p) ? [...p.map(Number)] : []));
+  return [...faces.map(Number)];
+}
+
+function _cloneMeshDataDeep(md) {
+  if (!md) return undefined;
+  return {
+    vertices: [...(md.vertices || []).map(Number)],
+    faces: _cloneFacesArray(md.faces),
+  };
+}
+
+function _applyGrabAxisVisibility() {
+  if (!transform) return;
+  if (transformMode !== 'translate' || !grabAxisLock) {
+    transform.showX = transform.showY = transform.showZ = true;
+    return;
+  }
+  transform.showX = grabAxisLock === 'x';
+  transform.showY = grabAxisLock === 'y';
+  transform.showZ = grabAxisLock === 'z';
+}
+
+function _clearGrabAxisState() {
+  grabAwaitAxis = false;
+  grabAxisLock = null;
+  _applyGrabAxisVisibility();
+}
+
+const ADD_PRIMITIVE_ORDER = [
+  'cube', 'sphere', 'plane', 'cylinder', 'cone', 'torus',
+  'octahedron', 'tetrahedron', 'icosahedron', 'capsule',
+];
+const ADD_PRIMITIVE_LABELS = {
+  cube: 'Cube',
+  sphere: 'Sphere',
+  plane: 'Plane',
+  cylinder: 'Cylinder',
+  cone: 'Cone',
+  torus: 'Torus',
+  octahedron: 'Octahedron',
+  tetrahedron: 'Tetrahedron',
+  icosahedron: 'Icosphere',
+  capsule: 'Capsule',
+};
+
+const ADD_PRIMITIVE_PRESETS = {
+  cube:     { type: 'cube',     name: 'Cube',     params: { size: 1 },      position: [0, 0.5, 0],  color: '#7c6aff' },
+  sphere:   { type: 'sphere',   name: 'Sphere',   params: { radius: 0.5 },  position: [0, 0.5, 0],  color: '#22d3a5' },
+  plane:    { type: 'plane',    name: 'Plane',    params: { width: 2, height: 2 }, position: [0, 0.001, 0], rotation: [-Math.PI / 2, 0, 0], color: '#a3a3a3' },
+  cylinder: { type: 'cylinder', name: 'Cylinder', params: { radiusTop: 0.5, radiusBottom: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#f59e0b' },
+  cone:     { type: 'cone',     name: 'Cone',     params: { radius: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#ef4444' },
+  torus:    { type: 'torus',    name: 'Torus',    params: { radius: 0.5, tube: 0.18 }, position: [0, 0.5, 0], color: '#38bdf8' },
+  octahedron: { type: 'octahedron', name: 'Octahedron', params: { radius: 0.55 }, position: [0, 0.55, 0], color: '#c084fc' },
+  tetrahedron: { type: 'tetrahedron', name: 'Tetrahedron', params: { radius: 0.55 }, position: [0, 0.45, 0], color: '#fb7185' },
+  icosahedron: { type: 'icosahedron', name: 'Icosphere', params: { radius: 0.5 }, position: [0, 0.5, 0], color: '#4ade80' },
+  capsule:  { type: 'capsule',  name: 'Capsule',  params: { radius: 0.35, length: 0.9 }, position: [0, 0.55, 0], color: '#94a3b8' },
+};
+
+function _closeViewportCtxMenu() {
+  if (_ctxMenuEl) {
+    _ctxMenuEl.remove();
+    _ctxMenuEl = null;
+  }
+  window.removeEventListener('pointerdown', _onDocCloseCtx, true);
+  window.removeEventListener('keydown', _onKeyCloseCtx, true);
+}
+
+function _onDocCloseCtx(e) {
+  if (_ctxMenuEl && !_ctxMenuEl.contains(e.target)) _closeViewportCtxMenu();
+}
+
+function _onKeyCloseCtx(e) {
+  if (e.key === 'Escape') _closeViewportCtxMenu();
+}
+
+function _openAddPrimitiveMenu(clientX, clientY) {
+  _closeViewportCtxMenu();
+  const div = document.createElement('div');
+  div.className = 't3d-viewport-ctx';
+  div.innerHTML = `<div class="t3d-ctx-head">Add</div>${
+    ADD_PRIMITIVE_ORDER.map(kind => `<button type="button" data-prim="${kind}">${ADD_PRIMITIVE_LABELS[kind] || kind}</button>`).join('')
+  }`;
+  document.body.appendChild(div);
+  _ctxMenuEl = div;
+  div.querySelectorAll('button[data-prim]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      addPrimitive(btn.dataset.prim);
+      _closeViewportCtxMenu();
+    });
+  });
+  const pad = 8;
+  let x = clientX;
+  let y = clientY;
+  div.style.left = `${x}px`;
+  div.style.top = `${y}px`;
+  requestAnimationFrame(() => {
+    const w = div.offsetWidth;
+    const h = div.offsetHeight;
+    if (x + w + pad > window.innerWidth) x = Math.max(pad, window.innerWidth - w - pad);
+    if (y + h + pad > window.innerHeight) y = Math.max(pad, window.innerHeight - h - pad);
+    div.style.left = `${x}px`;
+    div.style.top = `${y}px`;
+  });
+  setTimeout(() => {
+    window.addEventListener('pointerdown', _onDocCloseCtx, true);
+    window.addEventListener('keydown', _onKeyCloseCtx, true);
+  }, 0);
+}
+
+function _onViewportContextMenu(e) {
+  if (flyEnabled) return;
+  if (transform?.dragging) return;
+  const hit = pickObject(e.clientX, e.clientY);
+  if (hit) return;
+  e.preventDefault();
+  _openAddPrimitiveMenu(e.clientX, e.clientY);
+}
+
+function _onFreeLookHoldKeyDown(e) {
+  if (!document.body.classList.contains('mode-3d')) return;
+  if (!container?.isConnected) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  if (e.code !== 'Backquote' || e.repeat) return;
+  if (flyEnabled) return;
+  if (transform?.dragging) return;
+  e.preventDefault();
+  enterFlyCamera();
+}
+
+function _onFreeLookHoldKeyUp(e) {
+  if (e.code !== 'Backquote') return;
+  if (flyEnabled) exitFlyCamera();
+}
+
+let _flyBtnHeldFromUi = false;
+function _onFlyCamBtnDown(e) {
+  e.preventDefault();
+  _flyBtnHeldFromUi = true;
+  enterFlyCamera();
+}
+function _onFlyCamPointerEnd() {
+  if (!_flyBtnHeldFromUi) return;
+  _flyBtnHeldFromUi = false;
+  if (flyEnabled) exitFlyCamera();
+}
+
+function _ensureFlyUiPointerUpListeners() {
+  if (_flyUiUpBound) return;
+  _flyUiUpBound = true;
+  window.addEventListener('pointerup', _onFlyCamPointerEnd, true);
+  window.addEventListener('pointercancel', _onFlyCamPointerEnd, true);
+}
 function makeGeometryFor(obj) {
   const p = obj.params || {};
   switch (obj.type) {
@@ -99,7 +357,8 @@ function makeGeometryFor(obj) {
       if (md.vertices?.length) {
         geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(md.vertices), 3));
       }
-      if (md.faces?.length) geo.setIndex(md.faces);
+      const idx = _triangulatedIndicesFromMeshFaces(md.faces);
+      if (idx.length) geo.setIndex(idx);
       geo.computeVertexNormals();
       return geo;
     }
@@ -295,7 +554,7 @@ function duplicateSelected() {
     color: src.color,
     params: { ...src.params },
     parentId: src.parentId || null,
-    meshData: src.meshData ? { vertices: [...src.meshData.vertices], faces: [...src.meshData.faces] } : undefined,
+    meshData: _cloneMeshDataDeep(src.meshData),
   };
   const obj = api.add(spec);
   if (obj) selectById(obj.id);
@@ -415,23 +674,19 @@ function _commitBoxSelect() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Free-fly camera (Blender Shift+`)
+   Free-fly camera (hold ` or hold fly button)
    • PointerLockControls handles mouselook.
    • WASD to strafe / forward-back, QE for down/up, Shift = boost.
-   • Esc or another Shift+` press exits.
+   • Release ` / fly button or Esc exits; camera stays at the current pose.
 ───────────────────────────────────────────────────────────────────────── */
-function toggleFlyCamera() {
-  if (flyEnabled) exitFlyCamera(); else enterFlyCamera();
-}
-
 function enterFlyCamera() {
   if (!renderer || !camera || flyEnabled) return;
+  if (transform?.dragging) return;
   if (!flyControls) {
     flyControls = new PointerLockControls(camera, renderer.domElement);
     flyControls.addEventListener('unlock', () => { if (flyEnabled) exitFlyCamera(); });
   }
   orbit.enabled = false;
-  if (transform?.dragging) return;
   flyControls.lock();
   flyEnabled = true;
   flyKeys.clear();
@@ -440,7 +695,7 @@ function enterFlyCamera() {
   if (!flyHint) {
     flyHint = document.createElement('div');
     flyHint.className = 'fly-cam-hint';
-    flyHint.textContent = 'Fly mode — WASD move, QE up/down, Shift boost, Esc to exit';
+    flyHint.textContent = 'WASD move · release ` or Esc to exit';
     container.appendChild(flyHint);
   } else {
     flyHint.style.display = '';
@@ -467,12 +722,14 @@ function exitFlyCamera() {
 
 function _onFlyKeyDown(e) {
   if (!flyEnabled) return;
+  if (e.code === 'Backquote') return;
   if (e.key === 'Escape') { e.preventDefault(); exitFlyCamera(); return; }
   flyKeys.add(e.key.toLowerCase());
   e.stopPropagation(); e.preventDefault();
 }
 function _onFlyKeyUp(e) {
   if (!flyEnabled) return;
+  if (e.code === 'Backquote') return;
   flyKeys.delete(e.key.toLowerCase());
   e.stopPropagation();
 }
@@ -719,17 +976,44 @@ function onKeyDown(e) {
     }
   }
 
+  if (flyEnabled) return;
+
   if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
 
-  if (e.key === 'g' || e.key === 'G') { swallow(); setTransformMode('translate'); return; }
-  if (e.key === 'r' || e.key === 'R') { swallow(); setTransformMode('rotate');    return; }
-  if (e.key === 's' || e.key === 'S') { swallow(); setTransformMode('scale');     return; }
+  if (e.key === 'Escape') {
+    if (grabAwaitAxis || grabAxisLock) {
+      swallow();
+      _clearGrabAxisState();
+      return;
+    }
+  }
+
+  if (e.key === 'g' || e.key === 'G') {
+    swallow();
+    setTransformMode('translate');
+    grabAxisLock = null;
+    grabAwaitAxis = editorMode === 'object' && !!selectedId;
+    _applyGrabAxisVisibility();
+    return;
+  }
+  if (e.key === 'r' || e.key === 'R') { swallow(); setTransformMode('rotate'); return; }
+  if (e.key === 's' || e.key === 'S') { swallow(); setTransformMode('scale');  return; }
   if (e.key === 'f' || e.key === 'F') { swallow(); frameSelected(); return; }
   if ((e.key === 'a' || e.key === 'A') && editorMode === 'object') { swallow(); selectAllObjects(); return; }
   if ((e.key === 'd' || e.key === 'D') && e.shiftKey && editorMode === 'object' && selectedId) {
     swallow(); duplicateSelected(); return;
   }
-  if ((e.key === '`' || e.key === '~') && e.shiftKey) { swallow(); toggleFlyCamera(); return; }
+
+  if (editorMode === 'object' && selectedId && grabAwaitAxis && !e.ctrlKey && !e.metaKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'x' || k === 'y' || k === 'z') {
+      swallow();
+      grabAxisLock = k;
+      grabAwaitAxis = false;
+      _applyGrabAxisVisibility();
+      return;
+    }
+  }
 
   if (e.key === ',' && editorMode === 'object') { swallow(); cycleTransformSpace(); return; }
   if (e.key === '.' && editorMode === 'object') { swallow(); toggleGrid(); return; }
@@ -772,9 +1056,12 @@ function onKeyDown(e) {
 
 function setTransformMode(mode) {
   transformMode = mode;
+  grabAwaitAxis = false;
+  grabAxisLock = null;
   if (transform) {
     transform.setMode(mode);
     transform.setSpace(transformSpace);
+    transform.showX = transform.showY = transform.showZ = true;
   }
   document.querySelectorAll('#toolbar-3d .t3d-tool-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tt === mode);
@@ -1121,11 +1408,22 @@ function commitEditChanges() {
   if (!posAttr) return;
   const vertices = Array.from(posAttr.array);
   const indexAttr = mesh.geometry.getIndex();
-  const faces = indexAttr ? Array.from(indexAttr.array) : (() => {
-    // Generate trivial face list from triangle soup
-    const arr = []; for (let i = 0; i < posAttr.count; i++) arr.push(i); return arr;
-  })();
-  window.slateScene3d?.setMeshData(editTargetId, { vertices, faces });
+  let facesOut;
+  if (indexAttr) {
+    const indexArr = Array.from(indexAttr.array);
+    const tris = [];
+    for (let i = 0; i < indexArr.length; i += 3) {
+      tris.push([indexArr[i], indexArr[i + 1], indexArr[i + 2]]);
+    }
+    facesOut = _mergeTrianglePairsToQuads(tris);
+  } else {
+    const tris = [];
+    for (let i = 0; i + 2 < posAttr.count; i += 3) {
+      tris.push([i, i + 1, i + 2]);
+    }
+    facesOut = _mergeTrianglePairsToQuads(tris);
+  }
+  window.slateScene3d?.setMeshData(editTargetId, { vertices, faces: facesOut });
 }
 
 function setEditSubMode(mode) {
@@ -1266,6 +1564,8 @@ function bindEvents() {
   if (bound || !container) return;
   bound = true;
   window.addEventListener('resize', resize);
+  window.addEventListener('keydown', _onFreeLookHoldKeyDown, true);
+  window.addEventListener('keyup',   _onFreeLookHoldKeyUp,   true);
   window.addEventListener('keydown', onKeyDown, true);
   container.addEventListener('pointerdown', onPointerDown);
   container.addEventListener('pointerup',   onPointerUp);
@@ -1279,6 +1579,8 @@ function unbindEvents() {
   if (!bound) return;
   bound = false;
   window.removeEventListener('resize', resize);
+  window.removeEventListener('keydown', _onFreeLookHoldKeyDown, true);
+  window.removeEventListener('keyup',   _onFreeLookHoldKeyUp,   true);
   window.removeEventListener('keydown', onKeyDown, true);
   if (container) {
     container.removeEventListener('pointerdown', onPointerDown);
@@ -1304,8 +1606,9 @@ function bindToolbar() {
   tb.querySelectorAll('.t3d-tool-btn').forEach(btn => {
     btn.addEventListener('click', () => setTransformMode(btn.dataset.tt));
   });
-  tb.querySelectorAll('.t3d-add-btn').forEach(btn => {
-    btn.addEventListener('click', () => addPrimitive(btn.dataset.prim));
+  document.getElementById('t3d-add-menu-btn')?.addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    _openAddPrimitiveMenu(r.left, r.bottom + 4);
   });
   tb.querySelectorAll('.t3d-mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1331,7 +1634,8 @@ function bindToolbar() {
   });
   document.getElementById('t3d-frame-btn')?.addEventListener('click', frameSelected);
   document.getElementById('t3d-duplicate-btn')?.addEventListener('click', duplicateSelected);
-  document.getElementById('t3d-fly-btn')?.addEventListener('click', toggleFlyCamera);
+  _ensureFlyUiPointerUpListeners();
+  document.getElementById('t3d-fly-btn')?.addEventListener('pointerdown', _onFlyCamBtnDown);
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
   document.getElementById('t3d-snap-btn')?.addEventListener('click', toggleSnap);
   document.getElementById('t3d-space-btn')?.addEventListener('click', cycleTransformSpace);
@@ -1343,19 +1647,13 @@ function bindToolbar() {
 function addPrimitive(kind) {
   if (!window.slateScene3d) return;
   window.slateScene3dBeginAction?.();
-  const presets = {
-    cube:     { type: 'cube',     name: 'Cube',     params: { size: 1 },      position: [0, 0.5, 0],  color: '#7c6aff' },
-    sphere:   { type: 'sphere',   name: 'Sphere',   params: { radius: 0.5 },  position: [0, 0.5, 0],  color: '#22d3a5' },
-    plane:    { type: 'plane',    name: 'Plane',    params: { width: 2, height: 2 }, position: [0, 0.001, 0], rotation: [-Math.PI / 2, 0, 0], color: '#a3a3a3' },
-    cylinder: { type: 'cylinder', name: 'Cylinder', params: { radiusTop: 0.5, radiusBottom: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#f59e0b' },
-    cone:     { type: 'cone',     name: 'Cone',     params: { radius: 0.5, height: 1 }, position: [0, 0.5, 0], color: '#ef4444' },
-    torus:    { type: 'torus',    name: 'Torus',    params: { radius: 0.5, tube: 0.18 }, position: [0, 0.5, 0], color: '#38bdf8' },
-    octahedron: { type: 'octahedron', name: 'Octahedron', params: { radius: 0.55 }, position: [0, 0.55, 0], color: '#c084fc' },
-    tetrahedron: { type: 'tetrahedron', name: 'Tetrahedron', params: { radius: 0.55 }, position: [0, 0.45, 0], color: '#fb7185' },
-    icosahedron: { type: 'icosahedron', name: 'Icosphere', params: { radius: 0.5 }, position: [0, 0.5, 0], color: '#4ade80' },
-    capsule:  { type: 'capsule',  name: 'Capsule',  params: { radius: 0.35, length: 0.9 }, position: [0, 0.55, 0], color: '#94a3b8' },
+  const src = ADD_PRIMITIVE_PRESETS[kind] || ADD_PRIMITIVE_PRESETS.cube;
+  const spec = {
+    ...src,
+    params: { ...src.params },
+    position: [...src.position],
+    ...(src.rotation ? { rotation: [...src.rotation] } : {}),
   };
-  const spec = presets[kind] || presets.cube;
   const obj = window.slateScene3d.add(spec);
   if (obj) selectById(obj.id);
 }
@@ -1451,7 +1749,7 @@ function renderHierarchy() {
   if (countEl) countEl.textContent = objects.length;
 
   if (!objects.length) {
-    hierarchyEl.innerHTML = `<div class="outliner-empty">No objects yet. Use the Add menu in the toolbar.</div>`;
+    hierarchyEl.innerHTML = `<div class="outliner-empty">No objects yet. Right-click the 3D viewport (or use +▾ in the toolbar) to add one.</div>`;
     return;
   }
 
@@ -1677,12 +1975,7 @@ export function initEditor3D(rootEl) {
   renderer.shadowMap.enabled = false;
   container.appendChild(renderer.domElement);
   renderer.domElement.style.touchAction = 'none';
-
-  orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.enableDamping = true;
-  orbit.dampingFactor = 0.06;
-  orbit.target.set(0, 0.4, 0);
-  orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  renderer.domElement.addEventListener('contextmenu', _onViewportContextMenu);
 
   transform = new TransformControls(camera, renderer.domElement);
   transform.setMode(transformMode);
@@ -1696,6 +1989,7 @@ export function initEditor3D(rootEl) {
       window.slateScene3dBeginAction?.();
     } else {
       transform.setSize(1.05);
+      _clearGrabAxisState();
     }
     if (ev.value && editorMode === 'edit' && editDragHelper) {
       editDragHelper.userData.lastPos   = editDragHelper.position.clone();
@@ -1722,6 +2016,13 @@ export function initEditor3D(rootEl) {
   });
   scene.add(transform);
 
+  orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.mouseButtons.RIGHT = -1;
+  orbit.enableDamping = true;
+  orbit.dampingFactor = 0.06;
+  orbit.target.set(0, 0.4, 0);
+  orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
   resize();
   bindEvents();
   bindToolbar();
@@ -1742,6 +2043,18 @@ export function disposeEditor3D() {
   unbindEvents();
 
   if (typeof unsubScene === 'function') { unsubScene(); unsubScene = null; }
+
+  _closeViewportCtxMenu();
+  if (renderer?.domElement) {
+    renderer.domElement.removeEventListener('contextmenu', _onViewportContextMenu);
+  }
+  if (_flyUiUpBound) {
+    window.removeEventListener('pointerup', _onFlyCamPointerEnd, true);
+    window.removeEventListener('pointercancel', _onFlyCamPointerEnd, true);
+    _flyUiUpBound = false;
+  }
+  _flyBtnHeldFromUi = false;
+  _clearGrabAxisState();
 
   _clearAllPeerCameras();
   selectedIds.clear();

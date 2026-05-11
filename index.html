@@ -635,6 +635,24 @@ input, textarea { font-family: var(--sans); }
   border: 1px solid rgba(124,106,255,0.5);
   font-family: var(--mono);
 }
+.t3d-viewport-ctx {
+  position: fixed; z-index: 9500;
+  min-width: 160px; padding: 4px 0;
+  background: var(--bg2, #1a1a22); color: var(--text);
+  border: 1px solid var(--border, #333); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.4);
+  font-size: 0.78rem;
+}
+.t3d-viewport-ctx .t3d-ctx-head {
+  padding: 5px 12px 4px; font-size: 0.62rem; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim, #888);
+}
+.t3d-viewport-ctx button {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: transparent; color: inherit;
+  padding: 7px 14px; cursor: pointer; font: inherit;
+}
+.t3d-viewport-ctx button:hover { background: rgba(124,106,255,0.12); }
 .peer-cam-tag {
   position: absolute; pointer-events: none; z-index: 50;
   padding: 2px 7px; border-radius: 10px; font-size: 0.62rem;
@@ -2173,36 +2191,9 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
       <div class="toolbar-sep" id="t3d-edit-sep" style="display:none"></div>
 
       <div class="t3d-group" id="t3d-add-group">
-        <span class="t3d-grouplabel">Add</span>
-        <button class="t3d-btn t3d-add-btn" data-prim="cube" title="Add Cube">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M7 1.5L12.5 4 7 6.5 1.5 4z"/><path d="M1.5 4v6L7 12.5V6.5"/><path d="M12.5 4v6L7 12.5"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="sphere" title="Add Sphere">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><ellipse cx="7" cy="7" rx="5.5" ry="2.4"/><ellipse cx="7" cy="7" rx="2.4" ry="5.5"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="cylinder" title="Add Cylinder">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="7" cy="3" rx="4.5" ry="1.5"/><path d="M2.5 3v8a4.5 1.5 0 0 0 9 0V3"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="cone" title="Add Cone">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1.5L12 12H2z"/><ellipse cx="7" cy="12" rx="5" ry="1.4"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="torus" title="Add Torus">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="7" cy="7" rx="5.5" ry="2.6"/><ellipse cx="7" cy="7" rx="2.4" ry="0.9"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="plane" title="Add Plane">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 4.5L7 2l5.5 2.5L7 7z"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="octahedron" title="Add Octahedron">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1.5l5 5-5 5-5-5z"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="tetrahedron" title="Add Tetrahedron">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1.5L12.5 12H1.5z"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="icosahedron" title="Add Icosphere">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/></svg>
-        </button>
-        <button class="t3d-btn t3d-add-btn" data-prim="capsule" title="Add Capsule">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4.5 3.5a2.5 2.5 0 0 1 5 0v7a2.5 2.5 0 0 1-5 0z"/></svg>
+        <button type="button" class="t3d-btn" id="t3d-add-menu-btn" title="Add object — or right-click empty space in the viewport">
+          <span style="font-weight:700;font-size:1.05rem;line-height:1">+</span>
+          <span style="font-size:.58rem;margin-left:1px;opacity:.85;align-self:flex-end">▾</span>
         </button>
       </div>
 
@@ -2230,7 +2221,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         <button class="t3d-btn" id="t3d-frame-btn" title="Frame selected (F)">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/></svg>
         </button>
-        <button class="t3d-btn" id="t3d-fly-btn" title="Fly camera (Shift+`)">
+        <button class="t3d-btn" id="t3d-fly-btn" title="Fly view (hold mouse), or hold ` key — release to exit">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
             <path d="M2 11l5-9 5 9-5-3z"/>
           </svg>
@@ -3639,7 +3630,7 @@ function handleData(peerId, data) {
           if (o.params && typeof o.params === 'object') obj.params = { ...obj.params, ...o.params };
           if (o.meshData && typeof o.meshData === 'object') obj.meshData = {
             vertices: Array.isArray(o.meshData.vertices) ? o.meshData.vertices.map(Number) : obj.meshData?.vertices || [],
-            faces:    Array.isArray(o.meshData.faces)    ? o.meshData.faces.map(Number)    : obj.meshData?.faces || [],
+            faces:    _coerceMeshFaces(o.meshData.faces, obj.meshData?.faces),
           };
         });
         scene3dChanged = true;
@@ -4317,6 +4308,26 @@ function docApplySnapshot(snap) {
   invalidateStatic();
 }
 
+/** Deep-clone stored mesh faces (flat triangle list or nested polygons). */
+function _cloneMeshFaceArray(f) {
+  if (!Array.isArray(f)) return [];
+  if (f.length && Array.isArray(f[0])) {
+    return f.map(poly => (Array.isArray(poly) ? poly.map(Number) : [])).filter(p => p.length >= 3);
+  }
+  return f.map(Number).filter(Number.isFinite);
+}
+
+/** Normalize mesh face data: legacy flat triangle indices or nested polygon corner lists. */
+function _coerceMeshFaces(faces, fallback) {
+  if (!Array.isArray(faces)) return _cloneMeshFaceArray(fallback);
+  if (faces.length && Array.isArray(faces[0])) {
+    const polys = faces.map(poly => (Array.isArray(poly) ? poly.map(Number) : [])).filter(p => p.length >= 3);
+    return polys.length ? polys : _cloneMeshFaceArray(fallback);
+  }
+  const flat = faces.map(Number).filter(Number.isFinite);
+  return flat.length ? flat : _cloneMeshFaceArray(fallback);
+}
+
 function _normalizeSceneObject(o) {
   const out = {
     id: String(o.id || ('obj_' + Math.random().toString(36).slice(2, 8))),
@@ -4334,7 +4345,7 @@ function _normalizeSceneObject(o) {
   if (o.type === 'mesh' && o.meshData && typeof o.meshData === 'object') {
     out.meshData = {
       vertices: Array.isArray(o.meshData.vertices) ? o.meshData.vertices.map(Number) : [],
-      faces:    Array.isArray(o.meshData.faces)    ? o.meshData.faces.map(Number)    : [],
+      faces:    _coerceMeshFaces(o.meshData.faces),
     };
   }
   return out;
@@ -4677,7 +4688,7 @@ window.slateScene3d = {
     obj.type = 'mesh';
     obj.meshData = {
       vertices: Array.isArray(meshData?.vertices) ? meshData.vertices.map(Number) : [],
-      faces:    Array.isArray(meshData?.faces)    ? meshData.faces.map(Number)    : [],
+      faces:    _coerceMeshFaces(meshData?.faces),
     };
     _broadcastObjUpd(id, { type: 'mesh', meshData: obj.meshData });
     if (opts?.silent !== true) this._emit();
@@ -7737,10 +7748,6 @@ function saveBoardSnapshot(folderName, opts = {}) {
   _boardLastFolder[board] = folderName;
   _persistLastFolders(_boardLastFolder);
   if (opts.silent) {
-    // Tiny audible cue + brief floating indicator instead of a toast so it
-    // doesn't pile up during rapid edits.
-    try { window.slateSfx?.play('save-silent'); } catch (_) {}
-    flashSaveIndicator();
     return;
   }
   try { window.slateSfx?.play('save'); } catch (_) {}

@@ -23,8 +23,11 @@ let scene     = null;
 let camera    = null;
 let orbit     = null;
 let transform = null;
+let transformHelper = null; // three r170+: TransformControls extends Controls, gizmo lives in getHelper()
 let raycaster = null;
 const pointer = new THREE.Vector2();
+let _lastMouseClientX = null;
+let _lastMouseClientY = null;
 /** Meshes eligible for raycast selection (rebuilt in syncSceneFromDoc). */
 const _selectableList = [];
 let _loopFrame = 0;
@@ -73,9 +76,8 @@ let unsubScene = null;
 let hierarchyEl = null;
 let hierarchyRegistered = false;
 
-/** Blender-style grab: after G, X/Y/Z locks translation to one axis until drag ends. */
-let grabAwaitAxis = false;
-let grabAxisLock  = null; // null | 'x' | 'y' | 'z'
+/** Modal grab (Blender-style: G to start, X/Y/Z to constrain, click confirm, RMB/Esc cancel). */
+let grabState = null;
 let _ctxMenuEl    = null;
 let _flyUiUpBound = false;
 
@@ -146,21 +148,40 @@ function _orderedQuadFromTwoTris(t1, t2) {
   return ring;
 }
 
-function _mergeTrianglePairsToQuads(tris) {
+function _trisCoplanar(t1, t2, verts) {
+  function p(i) {
+    return new THREE.Vector3(verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2]);
+  }
+  const a = p(t1[0]), b = p(t1[1]), c = p(t1[2]);
+  const n = new THREE.Vector3().crossVectors(b.clone().sub(a), c.clone().sub(a));
+  if (n.lengthSq() < 1e-12) return false;
+  n.normalize();
+  for (const i of t2) {
+    const off = p(i).sub(a).dot(n);
+    if (Math.abs(off) > 1e-4) return false;
+  }
+  return true;
+}
+
+function _mergeTrianglePairsToQuads(tris, verts) {
   const used = new Array(tris.length).fill(false);
   const out = [];
   for (let ti = 0; ti < tris.length; ti++) {
     if (used[ti]) continue;
     const t1 = tris[ti];
     let merged = false;
-    for (let e = 0; e < 3; e++) {
+    for (let e = 0; e < 3 && !merged; e++) {
       const a = t1[e], b = t1[(e + 1) % 3];
       for (let tj = 0; tj < tris.length; tj++) {
         if (tj === ti || used[tj]) continue;
         const t2 = tris[tj];
         if (!_triSharesUndirectedEdge(t2, a, b)) continue;
-        const verts = new Set([t1[0], t1[1], t1[2], t2[0], t2[1], t2[2]]);
-        if (verts.size !== 4) continue;
+        const set = new Set([t1[0], t1[1], t1[2], t2[0], t2[1], t2[2]]);
+        if (set.size !== 4) continue;
+        // Coplanar check prevents merging triangles that share an edge but
+        // bend over a feature (e.g. cube neighbours that share an edge
+        // across two perpendicular faces).
+        if (verts && !_trisCoplanar(t1, t2, verts)) continue;
         const quad = _orderedQuadFromTwoTris(t1, t2);
         if (!quad) continue;
         out.push(quad);
@@ -168,7 +189,6 @@ function _mergeTrianglePairsToQuads(tris) {
         merged = true;
         break;
       }
-      if (merged) break;
     }
     if (!merged) {
       out.push([t1[0], t1[1], t1[2]]);
@@ -192,21 +212,165 @@ function _cloneMeshDataDeep(md) {
   };
 }
 
-function _applyGrabAxisVisibility() {
-  if (!transform) return;
-  if (transformMode !== 'translate' || !grabAxisLock) {
-    transform.showX = transform.showY = transform.showZ = true;
-    return;
-  }
-  transform.showX = grabAxisLock === 'x';
-  transform.showY = grabAxisLock === 'y';
-  transform.showZ = grabAxisLock === 'z';
+/* Track last pointer position so G can compute a starting world point from
+   the cursor without needing a mousemove first. */
+function _onContainerPointerTrack(e) {
+  _lastMouseClientX = e.clientX;
+  _lastMouseClientY = e.clientY;
 }
 
-function _clearGrabAxisState() {
-  grabAwaitAxis = false;
-  grabAxisLock = null;
-  _applyGrabAxisVisibility();
+/* ────────────────────────────────────────────────────────────────────────
+   Blender-style modal grab
+   ──────────────────────────────────────────────────────────────────────── */
+function _projectMouseOntoGrabPlane(clientX, clientY, out) {
+  if (!grabState || !container) return false;
+  const rect = container.getBoundingClientRect();
+  pointer.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
+  pointer.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  return !!raycaster.ray.intersectPlane(grabState.dragPlane, out);
+}
+
+function _enterModalGrab() {
+  if (editorMode !== 'object') return;
+  if (!camera || !container) return;
+  const ids = [...selectedIds];
+  if (!ids.length && selectedId) ids.push(selectedId);
+  if (!ids.length) return;
+
+  const originalById = new Map();
+  ids.forEach(id => {
+    const m = objMeshes.get(id);
+    if (m) originalById.set(id, [m.position.x, m.position.y, m.position.z]);
+  });
+  if (originalById.size === 0) return;
+
+  const primary = objMeshes.get(selectedId) || objMeshes.get(ids[0]);
+  primary.updateWorldMatrix(true, false);
+  const anchor = new THREE.Vector3().setFromMatrixPosition(primary.matrixWorld);
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir.clone().negate(), anchor);
+
+  grabState = {
+    ids,
+    originalById,
+    axisLock: null,
+    anchor,
+    dragPlane,
+    dragStartWorld: null,
+    lastDelta: new THREE.Vector3(),
+  };
+
+  if (transform) {
+    transform.enabled = false;
+    transform.detach();
+  }
+  if (transformHelper) transformHelper.visible = false;
+  if (orbit) orbit.enabled = false;
+  window.slateScene3dBeginAction?.();
+
+  container.addEventListener('pointermove', _onGrabPointerMove, true);
+  _showGrabHint();
+
+  if (_lastMouseClientX != null) {
+    const start = new THREE.Vector3();
+    if (_projectMouseOntoGrabPlane(_lastMouseClientX, _lastMouseClientY, start)) {
+      grabState.dragStartWorld = start.clone();
+    }
+  }
+}
+
+function _onGrabPointerMove(ev) {
+  if (!grabState) return;
+  _lastMouseClientX = ev.clientX;
+  _lastMouseClientY = ev.clientY;
+  _applyGrabFromMouse(ev.clientX, ev.clientY);
+}
+
+function _applyGrabFromMouse(clientX, clientY) {
+  if (!grabState) return;
+  const cur = new THREE.Vector3();
+  if (!_projectMouseOntoGrabPlane(clientX, clientY, cur)) return;
+  if (!grabState.dragStartWorld) {
+    grabState.dragStartWorld = cur.clone();
+    return;
+  }
+  const delta = cur.clone().sub(grabState.dragStartWorld);
+  if (grabState.axisLock === 'x') { delta.y = 0; delta.z = 0; }
+  else if (grabState.axisLock === 'y') { delta.x = 0; delta.z = 0; }
+  else if (grabState.axisLock === 'z') { delta.x = 0; delta.y = 0; }
+  grabState.lastDelta.copy(delta);
+
+  grabState.originalById.forEach((orig, id) => {
+    const m = objMeshes.get(id);
+    if (!m) return;
+    m.position.set(orig[0] + delta.x, orig[1] + delta.y, orig[2] + delta.z);
+    window.slateScene3d?.setTransform(id, {
+      position: [m.position.x, m.position.y, m.position.z],
+    });
+  });
+  _updateGrabHint();
+}
+
+function _setGrabAxis(axis) {
+  if (!grabState) return;
+  grabState.axisLock = grabState.axisLock === axis ? null : axis;
+  if (_lastMouseClientX != null) _applyGrabFromMouse(_lastMouseClientX, _lastMouseClientY);
+  _updateGrabHint();
+}
+
+function _exitGrabCleanup() {
+  if (!grabState) return;
+  container.removeEventListener('pointermove', _onGrabPointerMove, true);
+  grabState = null;
+  if (transform) {
+    transform.enabled = true;
+    if (selectedId && objMeshes.has(selectedId)) transform.attach(objMeshes.get(selectedId));
+  }
+  if (transformHelper) transformHelper.visible = true;
+  if (orbit) orbit.enabled = true;
+  _hideGrabHint();
+}
+
+function _grabConfirm() {
+  _exitGrabCleanup();
+}
+
+function _grabCancel() {
+  if (!grabState) return;
+  grabState.originalById.forEach((orig, id) => {
+    const m = objMeshes.get(id);
+    if (m) {
+      m.position.set(orig[0], orig[1], orig[2]);
+      window.slateScene3d?.setTransform(id, { position: [...orig] });
+    }
+  });
+  _exitGrabCleanup();
+}
+
+let _grabHintEl = null;
+function _showGrabHint() {
+  if (!container) return;
+  if (!_grabHintEl) {
+    _grabHintEl = document.createElement('div');
+    _grabHintEl.className = 'fly-cam-hint';
+    container.appendChild(_grabHintEl);
+  }
+  _grabHintEl.style.display = '';
+  _updateGrabHint();
+}
+function _updateGrabHint() {
+  if (!_grabHintEl || !grabState) return;
+  const lock = grabState.axisLock ? ` · locked ${grabState.axisLock.toUpperCase()}` : '';
+  const d = grabState.lastDelta;
+  const dx = Number(d.x).toFixed(2);
+  const dy = Number(d.y).toFixed(2);
+  const dz = Number(d.z).toFixed(2);
+  _grabHintEl.textContent = `Grab${lock} · (${dx}, ${dy}, ${dz}) · X/Y/Z lock · click confirm · RMB / Esc cancel`;
+}
+function _hideGrabHint() {
+  if (_grabHintEl) _grabHintEl.style.display = 'none';
 }
 
 const ADD_PRIMITIVE_ORDER = [
@@ -292,6 +456,7 @@ function _openAddPrimitiveMenu(clientX, clientY) {
 
 function _onViewportContextMenu(e) {
   if (flyEnabled) return;
+  if (grabState) { e.preventDefault(); _grabCancel(); return; }
   if (transform?.dragging) return;
   const hit = pickObject(e.clientX, e.clientY);
   if (hit) return;
@@ -565,6 +730,17 @@ let _boxArmed = false;
 function onPointerDown(e) {
   if (!orbit) return;
   if (flyEnabled) return;
+  // Modal grab is active: left-click confirms, right-click cancels.
+  if (grabState) {
+    if (e.button === 0) {
+      e.preventDefault(); e.stopPropagation();
+      _grabConfirm();
+    } else if (e.button === 2) {
+      e.preventDefault(); e.stopPropagation();
+      _grabCancel();
+    }
+    return;
+  }
   // In object mode, Shift+left-drag starts a Blender-style box select.
   if (e.button === 0 && editorMode === 'object' && e.shiftKey) {
     e.preventDefault();
@@ -978,22 +1154,29 @@ function onKeyDown(e) {
 
   if (flyEnabled) return;
 
-  if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
-
-  if (e.key === 'Escape') {
-    if (grabAwaitAxis || grabAxisLock) {
+  // Modal grab takes priority over almost everything else.
+  if (grabState) {
+    if (e.key === 'Escape') { swallow(); _grabCancel(); return; }
+    if (e.key === 'Enter' || e.key === ' ') { swallow(); _grabConfirm(); return; }
+    const k = e.key.toLowerCase();
+    if ((k === 'x' || k === 'y' || k === 'z') && !e.ctrlKey && !e.metaKey) {
       swallow();
-      _clearGrabAxisState();
+      _setGrabAxis(k);
       return;
     }
+    // Swallow other keys so they don't trigger tool shortcuts.
+    swallow();
+    return;
   }
+
+  if (e.key === 'Tab') { swallow(); toggleEditMode(); return; }
 
   if (e.key === 'g' || e.key === 'G') {
     swallow();
     setTransformMode('translate');
-    grabAxisLock = null;
-    grabAwaitAxis = editorMode === 'object' && !!selectedId;
-    _applyGrabAxisVisibility();
+    if (editorMode === 'object' && (selectedId || selectedIds.size > 0)) {
+      _enterModalGrab();
+    }
     return;
   }
   if (e.key === 'r' || e.key === 'R') { swallow(); setTransformMode('rotate'); return; }
@@ -1002,17 +1185,6 @@ function onKeyDown(e) {
   if ((e.key === 'a' || e.key === 'A') && editorMode === 'object') { swallow(); selectAllObjects(); return; }
   if ((e.key === 'd' || e.key === 'D') && e.shiftKey && editorMode === 'object' && selectedId) {
     swallow(); duplicateSelected(); return;
-  }
-
-  if (editorMode === 'object' && selectedId && grabAwaitAxis && !e.ctrlKey && !e.metaKey) {
-    const k = e.key.toLowerCase();
-    if (k === 'x' || k === 'y' || k === 'z') {
-      swallow();
-      grabAxisLock = k;
-      grabAwaitAxis = false;
-      _applyGrabAxisVisibility();
-      return;
-    }
   }
 
   if (e.key === ',' && editorMode === 'object') { swallow(); cycleTransformSpace(); return; }
@@ -1056,8 +1228,6 @@ function onKeyDown(e) {
 
 function setTransformMode(mode) {
   transformMode = mode;
-  grabAwaitAxis = false;
-  grabAxisLock = null;
   if (transform) {
     transform.setMode(mode);
     transform.setSpace(transformSpace);
@@ -1126,17 +1296,77 @@ function leaveEditMode() {
   renderHierarchy();
 }
 
+/* Build a position-weld map: many primitives split coincident vertices for
+   per-face normals/UVs, but for editing we want ONE logical vertex per
+   distinct world position. Selection / transform / picking all run on the
+   welded logical indices so moving "a vertex" moves all of its duplicates. */
+function _weldKey(x, y, z) {
+  return `${Math.round(x * 1e5)}|${Math.round(y * 1e5)}|${Math.round(z * 1e5)}`;
+}
+function _buildWeldMap(posAttr) {
+  const logicalForIdx = new Int32Array(posAttr.count);
+  const logicalToIdxs = [];
+  const buckets = new Map();
+  for (let i = 0; i < posAttr.count; i++) {
+    const k = _weldKey(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+    let logical = buckets.get(k);
+    if (logical === undefined) {
+      logical = logicalToIdxs.length;
+      logicalToIdxs.push([]);
+      buckets.set(k, logical);
+    }
+    logicalForIdx[i] = logical;
+    logicalToIdxs[logical].push(i);
+  }
+  return { logicalForIdx, logicalToIdxs };
+}
+
+/* Make a topologically welded clone of a geometry, JUST for the
+   edges-overlay computation. BoxGeometry & friends ship with split corner
+   vertices (per-face normals) — that defeats EdgesGeometry's feature-edge
+   detection so every triangle edge gets drawn. Welding by position before
+   the EdgesGeometry pass means coplanar diagonals are hidden, so quads
+   look like one face. */
+function _weldedGeometryFor(geo) {
+  const posAttr = geo.getAttribute('position');
+  if (!posAttr) return geo;
+  const verts = [];
+  const buckets = new Map();
+  const weldFor = new Int32Array(posAttr.count);
+  for (let i = 0; i < posAttr.count; i++) {
+    const k = _weldKey(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+    let id = buckets.get(k);
+    if (id === undefined) {
+      id = verts.length / 3;
+      verts.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      buckets.set(k, id);
+    }
+    weldFor[i] = id;
+  }
+  const idx = [];
+  const indexAttr = geo.getIndex();
+  if (indexAttr) {
+    for (let i = 0; i < indexAttr.count; i++) idx.push(weldFor[indexAttr.getX(i)]);
+  } else {
+    for (let i = 0; i < posAttr.count; i++) idx.push(weldFor[i]);
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(verts), 3));
+  out.setIndex(idx);
+  out.computeVertexNormals();
+  return out;
+}
+
 function buildEditHelpers() {
   destroyEditHelpers();
   const mesh = objMeshes.get(editTargetId);
   if (!mesh) return;
 
-  // Ensure geometry has a position attribute we can clone for editing.
   const geo = mesh.geometry;
   const posAttr = geo.getAttribute('position');
   if (!posAttr) return;
 
-  // Hide the source mesh while editing (keep wireframe overlay for context).
+  // Hide the source mesh's fill while editing (keep an outline overlay).
   mesh.material = mesh.material.clone();
   mesh.material.transparent = true;
   mesh.material.opacity = 0.35;
@@ -1148,16 +1378,23 @@ function buildEditHelpers() {
   group.scale.copy(mesh.scale);
   scene.add(group);
 
-  // Wire overlay
-  const wireGeo = new THREE.WireframeGeometry(geo);
-  const wireMat = new THREE.LineBasicMaterial({ color: 0x22d3a5, depthTest: false, transparent: true, opacity: 0.85 });
-  const wire = new THREE.LineSegments(wireGeo, wireMat);
-  wire.renderOrder = 2;
-  group.add(wire);
+  // Feature-edges overlay (hides triangulation diagonals on coplanar faces
+  // so quads look like single faces, not split pairs of triangles).
+  const weldGeoForEdges = _weldedGeometryFor(geo);
+  const edgesGeo = new THREE.EdgesGeometry(weldGeoForEdges, 1);
+  weldGeoForEdges.dispose();
+  const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3a5, depthTest: false, transparent: true, opacity: 0.9 });
+  const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+  edges.renderOrder = 2;
+  group.add(edges);
 
-  // Vertex points (Points object) — local positions matching geometry
+  const weldMap = _buildWeldMap(posAttr);
+
+  // Vertex points — ONE point per welded logical vertex.
   const pointsGeo = new THREE.BufferGeometry();
-  pointsGeo.setAttribute('position', posAttr.clone());
+  pointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(
+    new Float32Array(weldMap.logicalToIdxs.length * 3), 3,
+  ));
   const pointsMat = new THREE.PointsMaterial({
     color: 0x000000, size: 8, sizeAttenuation: false, depthTest: false,
   });
@@ -1175,23 +1412,37 @@ function buildEditHelpers() {
   selPoints.renderOrder = 4;
   group.add(selPoints);
 
-  editHelpers = { group, wire, points, selPoints, posAttr };
+  editHelpers = { group, edges, points, selPoints, weldMap };
+  _refreshEditPoints();
+}
+
+function _refreshEditPoints() {
+  if (!editHelpers) return;
+  const mesh = objMeshes.get(editTargetId);
+  if (!mesh) return;
+  const posAttr = mesh.geometry.getAttribute('position');
+  const weld = editHelpers.weldMap;
+  const arr = new Float32Array(weld.logicalToIdxs.length * 3);
+  for (let i = 0; i < weld.logicalToIdxs.length; i++) {
+    const g = weld.logicalToIdxs[i][0];
+    arr[i * 3]     = posAttr.getX(g);
+    arr[i * 3 + 1] = posAttr.getY(g);
+    arr[i * 3 + 2] = posAttr.getZ(g);
+  }
+  editHelpers.points.geometry.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+  editHelpers.points.geometry.attributes.position.needsUpdate = true;
 }
 
 function refreshEditHelpers() {
   if (!editHelpers) return;
   const mesh = objMeshes.get(editTargetId);
   if (!mesh) return;
-  // Update wireframe geometry from current geometry
-  const newWire = new THREE.WireframeGeometry(mesh.geometry);
-  if (editHelpers.wire.geometry) editHelpers.wire.geometry.dispose();
-  editHelpers.wire.geometry = newWire;
-
-  // Update vertex points (positions match geometry)
-  const posAttr = mesh.geometry.getAttribute('position');
-  editHelpers.points.geometry.setAttribute('position', posAttr.clone());
-  editHelpers.points.geometry.attributes.position.needsUpdate = true;
-
+  const weldGeoForEdges = _weldedGeometryFor(mesh.geometry);
+  const newEdges = new THREE.EdgesGeometry(weldGeoForEdges, 1);
+  weldGeoForEdges.dispose();
+  if (editHelpers.edges.geometry) editHelpers.edges.geometry.dispose();
+  editHelpers.edges.geometry = newEdges;
+  _refreshEditPoints();
   refreshSelectionMarker();
 }
 
@@ -1200,16 +1451,18 @@ function refreshSelectionMarker() {
   const mesh = objMeshes.get(editTargetId);
   if (!mesh) return;
   const posAttr = mesh.geometry.getAttribute('position');
+  const weld = editHelpers.weldMap;
   const pts = [];
-  editSelection.forEach(i => {
-    if (i < posAttr.count) {
-      pts.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
-    }
+  editSelection.forEach(logical => {
+    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+    const g = weld.logicalToIdxs[logical][0];
+    pts.push(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g));
   });
   editHelpers.selPoints.geometry.setAttribute(
     'position',
-    new THREE.Float32BufferAttribute(new Float32Array(pts), 3)
+    new THREE.Float32BufferAttribute(new Float32Array(pts), 3),
   );
+  editHelpers.selPoints.geometry.attributes.position.needsUpdate = true;
 }
 
 function destroyEditHelpers() {
@@ -1221,33 +1474,35 @@ function destroyEditHelpers() {
     mesh.material.needsUpdate = true;
   }
   if (editHelpers.group) scene.remove(editHelpers.group);
-  if (editHelpers.wire?.geometry)    editHelpers.wire.geometry.dispose();
-  if (editHelpers.wire?.material)    editHelpers.wire.material.dispose();
-  if (editHelpers.points?.geometry)  editHelpers.points.geometry.dispose();
-  if (editHelpers.points?.material)  editHelpers.points.material.dispose();
+  if (editHelpers.edges?.geometry)    editHelpers.edges.geometry.dispose();
+  if (editHelpers.edges?.material)    editHelpers.edges.material.dispose();
+  if (editHelpers.points?.geometry)   editHelpers.points.geometry.dispose();
+  if (editHelpers.points?.material)   editHelpers.points.material.dispose();
   if (editHelpers.selPoints?.geometry) editHelpers.selPoints.geometry.dispose();
   if (editHelpers.selPoints?.material) editHelpers.selPoints.material.dispose();
   if (editDragHelper) { scene.remove(editDragHelper); editDragHelper = null; }
   editHelpers = null;
 }
 
-/** Convert clientX/Y to a NDC and find the closest vertex within a screen-space threshold. */
+/** Find the welded logical vertex closest to (clientX, clientY) in screen space. */
 function pickVertex(clientX, clientY) {
   const mesh = objMeshes.get(editTargetId);
-  if (!mesh) return -1;
+  if (!mesh || !editHelpers) return -1;
   const posAttr = mesh.geometry.getAttribute('position');
   if (!posAttr) return -1;
+  const weld = editHelpers.weldMap;
   const rect = container.getBoundingClientRect();
   const nx =  ((clientX - rect.left) / rect.width)  * 2 - 1;
   const ny = -((clientY - rect.top)  / rect.height) * 2 + 1;
 
   const worldMat = mesh.matrixWorld;
   const v = new THREE.Vector3();
-  let best = -1; let bestDist = Infinity;
+  let best = -1, bestDist = Infinity;
   const threshold = 0.04; // NDC units
-  for (let i = 0; i < posAttr.count; i++) {
-    v.fromBufferAttribute(posAttr, i).applyMatrix4(worldMat).project(camera);
-    if (v.z > 1) continue;
+  for (let i = 0; i < weld.logicalToIdxs.length; i++) {
+    const g = weld.logicalToIdxs[i][0];
+    v.fromBufferAttribute(posAttr, g).applyMatrix4(worldMat).project(camera);
+    if (v.z > 1 || v.z < -1) continue;
     const dx = v.x - nx, dy = v.y - ny;
     const d2 = dx * dx + dy * dy;
     if (d2 < bestDist) { bestDist = d2; best = i; }
@@ -1255,10 +1510,32 @@ function pickVertex(clientX, clientY) {
   return Math.sqrt(bestDist) <= threshold ? best : -1;
 }
 
-/** Get the set of vertex indices that make up the closest face under the cursor. */
-function pickFaceVertices(clientX, clientY) {
+function _logicalVertWorld(logical) {
   const mesh = objMeshes.get(editTargetId);
-  if (!mesh) return null;
+  if (!mesh || !editHelpers) return null;
+  const weld = editHelpers.weldMap;
+  if (logical < 0 || logical >= weld.logicalToIdxs.length) return null;
+  const posAttr = mesh.geometry.getAttribute('position');
+  const g = weld.logicalToIdxs[logical][0];
+  return new THREE.Vector3(posAttr.getX(g), posAttr.getY(g), posAttr.getZ(g))
+    .applyMatrix4(mesh.matrixWorld);
+}
+
+function _triNormalLogical(logical3) {
+  const a = _logicalVertWorld(logical3[0]);
+  const b = _logicalVertWorld(logical3[1]);
+  const c = _logicalVertWorld(logical3[2]);
+  if (!a || !b || !c) return null;
+  const e1 = b.sub(a);
+  const e2 = c.sub(a);
+  return new THREE.Vector3().crossVectors(e1, e2).normalize();
+}
+
+/** Return the logical vertices forming the face under the cursor, walking
+    coplanar neighbours so quads come back as 4 verts instead of 3. */
+function pickFaceLogical(clientX, clientY) {
+  const mesh = objMeshes.get(editTargetId);
+  if (!mesh || !editHelpers) return null;
   const rect = container.getBoundingClientRect();
   pointer.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
   pointer.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
@@ -1266,7 +1543,42 @@ function pickFaceVertices(clientX, clientY) {
   const hits = raycaster.intersectObject(mesh, false);
   if (!hits.length || !hits[0].face) return null;
   const f = hits[0].face;
-  return [f.a, f.b, f.c];
+  const weld = editHelpers.weldMap;
+  const baseTri = [weld.logicalForIdx[f.a], weld.logicalForIdx[f.b], weld.logicalForIdx[f.c]];
+  if (baseTri[0] === baseTri[1] || baseTri[1] === baseTri[2] || baseTri[0] === baseTri[2]) {
+    return [...new Set(baseTri)];
+  }
+  const baseSet = new Set(baseTri);
+  const baseNormal = _triNormalLogical(baseTri);
+  if (!baseNormal) return [...baseSet];
+
+  const indexAttr = mesh.geometry.getIndex();
+  const triCount = indexAttr ? (indexAttr.count / 3) : (mesh.geometry.getAttribute('position').count / 3);
+  const hitTri = hits[0].faceIndex;
+  for (let t = 0; t < triCount; t++) {
+    if (t === hitTri) continue;
+    let la, lb, lc;
+    if (indexAttr) {
+      la = weld.logicalForIdx[indexAttr.getX(t * 3)];
+      lb = weld.logicalForIdx[indexAttr.getX(t * 3 + 1)];
+      lc = weld.logicalForIdx[indexAttr.getX(t * 3 + 2)];
+    } else {
+      la = weld.logicalForIdx[t * 3];
+      lb = weld.logicalForIdx[t * 3 + 1];
+      lc = weld.logicalForIdx[t * 3 + 2];
+    }
+    if (la === lb || lb === lc || la === lc) continue;
+    const cand = [la, lb, lc];
+    const shared = cand.filter(v => baseSet.has(v)).length;
+    if (shared !== 2) continue;
+    const n2 = _triNormalLogical(cand);
+    if (!n2) continue;
+    if (Math.abs(baseNormal.dot(n2)) > 0.999) {
+      cand.forEach(v => baseSet.add(v));
+      break;
+    }
+  }
+  return [...baseSet];
 }
 
 function handleEditClick(e) {
@@ -1284,30 +1596,27 @@ function handleEditClick(e) {
       editSelection.clear(); changed = true;
     }
   } else if (editSubMode === 'face') {
-    const verts = pickFaceVertices(e.clientX, e.clientY);
-    if (verts) {
+    const verts = pickFaceLogical(e.clientX, e.clientY);
+    if (verts && verts.length) {
       if (!additive) editSelection.clear();
       verts.forEach(v => editSelection.add(v));
       changed = true;
     } else if (!additive) { editSelection.clear(); changed = true; }
   } else if (editSubMode === 'edge') {
-    // Approximate: pick two nearest vertices to the click
-    const verts = pickFaceVertices(e.clientX, e.clientY);
+    const verts = pickFaceLogical(e.clientX, e.clientY);
     if (verts && verts.length >= 2) {
       if (!additive) editSelection.clear();
-      // Pick the two vertices closest to the click in screen space
-      const candidates = [...new Set(verts)];
-      const screenSpaceDist = idx => {
-        const v = new THREE.Vector3();
-        const posAttr = objMeshes.get(editTargetId).geometry.getAttribute('position');
-        v.fromBufferAttribute(posAttr, idx).applyMatrix4(objMeshes.get(editTargetId).matrixWorld).project(camera);
-        const rect = container.getBoundingClientRect();
-        const nx =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
-        const ny = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
-        return Math.hypot(v.x - nx, v.y - ny);
+      const rect = container.getBoundingClientRect();
+      const nx =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+      const ny = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+      const screenSpaceDist = logical => {
+        const wp = _logicalVertWorld(logical);
+        if (!wp) return Infinity;
+        wp.project(camera);
+        return Math.hypot(wp.x - nx, wp.y - ny);
       };
-      candidates.sort((a, b) => screenSpaceDist(a) - screenSpaceDist(b));
-      candidates.slice(0, 2).forEach(v => editSelection.add(v));
+      verts.sort((a, b) => screenSpaceDist(a) - screenSpaceDist(b));
+      verts.slice(0, 2).forEach(v => editSelection.add(v));
       changed = true;
     } else if (!additive) { editSelection.clear(); changed = true; }
   }
@@ -1323,13 +1632,16 @@ function attachGizmoToEditSelection() {
   const mesh = objMeshes.get(editTargetId);
   const posAttr = mesh?.geometry.getAttribute('position');
   if (!posAttr || editSelection.size === 0) { transform?.detach(); return; }
+  const weld = editHelpers.weldMap;
 
-  // Centroid in world space
+  // Centroid in world space across welded logical verts.
   const c = new THREE.Vector3();
   let n = 0;
   const tmp = new THREE.Vector3();
-  editSelection.forEach(i => {
-    tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mesh.matrixWorld);
+  editSelection.forEach(logical => {
+    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+    const g = weld.logicalToIdxs[logical][0];
+    tmp.fromBufferAttribute(posAttr, g).applyMatrix4(mesh.matrixWorld);
     c.add(tmp); n++;
   });
   if (n === 0) { transform?.detach(); return; }
@@ -1354,6 +1666,7 @@ function applyEditTransformDelta() {
   if (!mesh) return;
   const posAttr = mesh.geometry.getAttribute('position');
   if (!posAttr) return;
+  const weld = editHelpers.weldMap;
 
   const invWorld = new THREE.Matrix4().copy(mesh.matrixWorld).invert();
   const last = editDragHelper.userData.lastPos.clone();
@@ -1363,38 +1676,37 @@ function applyEditTransformDelta() {
   const lastScl = editDragHelper.userData.lastScale.clone();
   const currScl = editDragHelper.scale.clone();
 
-  // Local-space pivot = last gizmo center in local space.
   const pivotLocal = last.clone().applyMatrix4(invWorld);
   const newPivotLocal = curr.clone().applyMatrix4(invWorld);
 
-  // Compute local quaternion delta. Convert delta from world space to local.
   const deltaQuatW = currQuat.clone().multiply(lastQuat.clone().invert());
   const meshWorldQuat = new THREE.Quaternion();
   mesh.getWorldQuaternion(meshWorldQuat);
   const invMeshQuat = meshWorldQuat.clone().invert();
   const deltaQuatL = invMeshQuat.clone().multiply(deltaQuatW).multiply(meshWorldQuat);
 
-  // Scale ratio
   const sx = (currScl.x || 1) / (lastScl.x || 1);
   const sy = (currScl.y || 1) / (lastScl.y || 1);
   const sz = (currScl.z || 1) / (lastScl.z || 1);
 
   const v = new THREE.Vector3();
-  editSelection.forEach(i => {
-    v.fromBufferAttribute(posAttr, i);
-    // Apply: subtract old pivot → scale → rotate → add new pivot
-    v.sub(pivotLocal);
-    if (transformMode === 'scale')      v.set(v.x * sx, v.y * sy, v.z * sz);
-    if (transformMode === 'rotate')     v.applyQuaternion(deltaQuatL);
-    v.add(newPivotLocal);
-    posAttr.setXYZ(i, v.x, v.y, v.z);
+  editSelection.forEach(logical => {
+    if (logical < 0 || logical >= weld.logicalToIdxs.length) return;
+    const idxs = weld.logicalToIdxs[logical];
+    for (const g of idxs) {
+      v.fromBufferAttribute(posAttr, g);
+      v.sub(pivotLocal);
+      if (transformMode === 'scale')  v.set(v.x * sx, v.y * sy, v.z * sz);
+      if (transformMode === 'rotate') v.applyQuaternion(deltaQuatL);
+      v.add(newPivotLocal);
+      posAttr.setXYZ(g, v.x, v.y, v.z);
+    }
   });
   posAttr.needsUpdate = true;
   mesh.geometry.computeVertexNormals();
   mesh.geometry.computeBoundingSphere();
   refreshEditHelpers();
 
-  // Refresh "lasts" so subsequent gizmo motion is delta-based.
   editDragHelper.userData.lastPos = curr.clone();
   editDragHelper.userData.lastQuat = currQuat.clone();
   editDragHelper.userData.lastScale = currScl.clone();
@@ -1406,24 +1718,60 @@ function commitEditChanges() {
   if (!mesh) return;
   const posAttr = mesh.geometry.getAttribute('position');
   if (!posAttr) return;
-  const vertices = Array.from(posAttr.array);
-  const indexAttr = mesh.geometry.getIndex();
-  let facesOut;
-  if (indexAttr) {
-    const indexArr = Array.from(indexAttr.array);
-    const tris = [];
-    for (let i = 0; i < indexArr.length; i += 3) {
-      tris.push([indexArr[i], indexArr[i + 1], indexArr[i + 2]]);
+
+  // Weld coincident verts so primitives that ship with split corners
+  // (BoxGeometry has 24 verts for 8 corners, etc.) collapse to one logical
+  // vertex each. Stored faces use the welded indices so a cube round-trips
+  // as 8 verts + 6 quads instead of 24 + 12 triangles.
+  const weldVerts = [];
+  const buckets = new Map();
+  const weldFor = new Int32Array(posAttr.count);
+  for (let i = 0; i < posAttr.count; i++) {
+    const x = posAttr.getX(i), y = posAttr.getY(i), z = posAttr.getZ(i);
+    const k = _weldKey(x, y, z);
+    let id = buckets.get(k);
+    if (id === undefined) {
+      id = weldVerts.length / 3;
+      weldVerts.push(x, y, z);
+      buckets.set(k, id);
     }
-    facesOut = _mergeTrianglePairsToQuads(tris);
-  } else {
-    const tris = [];
-    for (let i = 0; i + 2 < posAttr.count; i += 3) {
-      tris.push([i, i + 1, i + 2]);
-    }
-    facesOut = _mergeTrianglePairsToQuads(tris);
+    weldFor[i] = id;
   }
-  window.slateScene3d?.setMeshData(editTargetId, { vertices, faces: facesOut });
+
+  const tris = [];
+  const indexAttr = mesh.geometry.getIndex();
+  if (indexAttr) {
+    const arr = indexAttr.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      const a = weldFor[arr[i]], b = weldFor[arr[i + 1]], c = weldFor[arr[i + 2]];
+      if (a !== b && b !== c && a !== c) tris.push([a, b, c]);
+    }
+  } else {
+    for (let i = 0; i + 2 < posAttr.count; i += 3) {
+      const a = weldFor[i], b = weldFor[i + 1], c = weldFor[i + 2];
+      if (a !== b && b !== c && a !== c) tris.push([a, b, c]);
+    }
+  }
+  const facesOut = _mergeTrianglePairsToQuads(tris, weldVerts);
+  window.slateScene3d?.setMeshData(editTargetId, { vertices: weldVerts, faces: facesOut });
+
+  // setMeshData synchronously triggers syncSceneFromDoc, which rebuilds the
+  // mesh geometry from the new welded data. Our edit overlays are now stale
+  // (their weldMap indexes the OLD posAttr). Rebuild them and re-attach the
+  // gizmo to the same logical selection so the user can keep editing.
+  if (editorMode === 'edit' && editTargetId && editHelpers) {
+    const prevSelection = [...editSelection];
+    buildEditHelpers();
+    editSelection.clear();
+    // After welding, new logical N == old logical N (insertion order preserved),
+    // so the selection survives the rebuild.
+    const weldCount = editHelpers ? editHelpers.weldMap.logicalToIdxs.length : 0;
+    prevSelection.forEach(logical => {
+      if (logical >= 0 && logical < weldCount) editSelection.add(logical);
+    });
+    refreshSelectionMarker();
+    attachGizmoToEditSelection();
+  }
 }
 
 function setEditSubMode(mode) {
@@ -1569,6 +1917,7 @@ function bindEvents() {
   window.addEventListener('keydown', onKeyDown, true);
   container.addEventListener('pointerdown', onPointerDown);
   container.addEventListener('pointerup',   onPointerUp);
+  container.addEventListener('pointermove', _onContainerPointerTrack);
   if (window.visualViewport && !vvResizeBound) {
     vvResizeBound = true;
     window.visualViewport.addEventListener('resize', onVisualViewportChange);
@@ -1585,6 +1934,7 @@ function unbindEvents() {
   if (container) {
     container.removeEventListener('pointerdown', onPointerDown);
     container.removeEventListener('pointerup',   onPointerUp);
+    container.removeEventListener('pointermove', _onContainerPointerTrack);
   }
   if (window.visualViewport && vvResizeBound) {
     vvResizeBound = false;
@@ -1639,9 +1989,43 @@ function bindToolbar() {
   document.getElementById('t3d-grid-btn')?.addEventListener('click', toggleGrid);
   document.getElementById('t3d-snap-btn')?.addEventListener('click', toggleSnap);
   document.getElementById('t3d-space-btn')?.addEventListener('click', cycleTransformSpace);
-  document.getElementById('t3d-mirror-x-btn')?.addEventListener('click', () => mirrorOnAxis(0));
-  document.getElementById('t3d-mirror-y-btn')?.addEventListener('click', () => mirrorOnAxis(1));
-  document.getElementById('t3d-mirror-z-btn')?.addEventListener('click', () => mirrorOnAxis(2));
+  document.getElementById('t3d-mirror-btn')?.addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    _openMirrorMenu(r.left, r.bottom + 4);
+  });
+}
+
+function _openMirrorMenu(clientX, clientY) {
+  _closeViewportCtxMenu();
+  const div = document.createElement('div');
+  div.className = 't3d-viewport-ctx';
+  div.innerHTML = `<div class="t3d-ctx-head">Mirror</div>
+    <button type="button" data-axis="0">X axis</button>
+    <button type="button" data-axis="1">Y axis</button>
+    <button type="button" data-axis="2">Z axis</button>`;
+  document.body.appendChild(div);
+  _ctxMenuEl = div;
+  div.querySelectorAll('button[data-axis]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mirrorOnAxis(Number(btn.dataset.axis));
+      _closeViewportCtxMenu();
+    });
+  });
+  const pad = 8;
+  div.style.left = `${clientX}px`;
+  div.style.top  = `${clientY}px`;
+  requestAnimationFrame(() => {
+    const w = div.offsetWidth, h = div.offsetHeight;
+    let x = clientX, y = clientY;
+    if (x + w + pad > window.innerWidth)  x = Math.max(pad, window.innerWidth  - w - pad);
+    if (y + h + pad > window.innerHeight) y = Math.max(pad, window.innerHeight - h - pad);
+    div.style.left = `${x}px`;
+    div.style.top  = `${y}px`;
+  });
+  setTimeout(() => {
+    window.addEventListener('pointerdown', _onDocCloseCtx, true);
+    window.addEventListener('keydown', _onKeyCloseCtx, true);
+  }, 0);
 }
 
 function addPrimitive(kind) {
@@ -1977,6 +2361,16 @@ export function initEditor3D(rootEl) {
   renderer.domElement.style.touchAction = 'none';
   renderer.domElement.addEventListener('contextmenu', _onViewportContextMenu);
 
+  // Orbit first so its pointer listeners register before TransformControls'.
+  // TransformControls stops propagation when the gizmo grabs the pointer,
+  // so Orbit never sees pointer events on those clicks.
+  orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.mouseButtons.RIGHT = -1;
+  orbit.enableDamping = true;
+  orbit.dampingFactor = 0.06;
+  orbit.target.set(0, 0.4, 0);
+  orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
   transform = new TransformControls(camera, renderer.domElement);
   transform.setMode(transformMode);
   transform.setSpace(transformSpace);
@@ -1989,7 +2383,6 @@ export function initEditor3D(rootEl) {
       window.slateScene3dBeginAction?.();
     } else {
       transform.setSize(1.05);
-      _clearGrabAxisState();
     }
     if (ev.value && editorMode === 'edit' && editDragHelper) {
       editDragHelper.userData.lastPos   = editDragHelper.position.clone();
@@ -2014,14 +2407,13 @@ export function initEditor3D(rootEl) {
       });
     }
   });
-  scene.add(transform);
-
-  orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.mouseButtons.RIGHT = -1;
-  orbit.enableDamping = true;
-  orbit.dampingFactor = 0.06;
-  orbit.target.set(0, 0.4, 0);
-  orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  // three r170+: TransformControls extends Controls (not Object3D). The
+  // visible/interactive gizmo lives on transform.getHelper() — add THAT to the
+  // scene. Without this the axis arrows are invisible / non-clickable.
+  transformHelper = typeof transform.getHelper === 'function'
+    ? transform.getHelper()
+    : transform;
+  scene.add(transformHelper);
 
   resize();
   bindEvents();
@@ -2054,7 +2446,7 @@ export function disposeEditor3D() {
     _flyUiUpBound = false;
   }
   _flyBtnHeldFromUi = false;
-  _clearGrabAxisState();
+  if (grabState) _grabCancel();
 
   _clearAllPeerCameras();
   selectedIds.clear();
@@ -2070,7 +2462,8 @@ export function disposeEditor3D() {
 
   if (transform) {
     transform.detach();
-    if (scene) scene.remove(transform);
+    if (transformHelper && scene) scene.remove(transformHelper);
+    transformHelper = null;
     if (typeof transform.dispose === 'function') transform.dispose();
     transform = null;
   }

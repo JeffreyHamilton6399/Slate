@@ -1610,27 +1610,40 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   }
   #sidebar.open { transform: translateX(0); }
 
-  #member-panel, #chat-panel {
+  /* Chat panel remains a slide-in drawer on mobile. */
+  #chat-panel {
     position: fixed; top: 0; right: 0; bottom: 0;
     transform: translateX(110%);
     transition: transform 0.25s ease;
     z-index: 60; width: min(220px, 78vw);
     box-shadow: -4px 0 24px rgba(0,0,0,0.5);
-    /* override the new fixed-square style on mobile */
     border-radius: 0; border: none; padding: 0;
     flex-direction: column;
   }
-  #member-panel { top: 0; width: min(200px, 70vw); }
-  #member-panel.open { transform: translateX(0); display: flex; }
-  #member-panel:hover { width: min(200px, 70vw); }
-  /* show names always on mobile expanded panel */
-  #member-panel.open .member-info { display: flex; }
-  #member-panel.open .member-panel-title { max-width: 120px; opacity: 1; }
-  #member-panel.open .member-row { justify-content: flex-start; }
   #chat-panel.open   { transform: translateX(0); display: flex; }
 
+  /* Members panel keeps the desktop compact-square layout on mobile too —
+     same small floating square that expands on hover. */
+  #member-panel {
+    position: fixed;
+    top: auto; left: auto; right: 10px; bottom: 60px;
+    transform: none;
+    width: 44px; height: auto; max-height: 220px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    padding: 6px 0 4px;
+    background: var(--bg2);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    flex-direction: column; align-items: center;
+    overflow: visible;
+    z-index: 60;
+    transition: width 0.2s ease, background 0.15s;
+  }
+  #member-panel:hover { width: 160px; overflow: hidden; }
+  #member-panel.open  { /* legacy class no longer needed on mobile */ }
+
   #sidebar-toggle { display: flex; }
-  #members-toggle { display: flex; }
+  #members-toggle { display: none; }
 
   #board-header { gap: 6px; padding: 0 10px; }
   #board-topic-input { display: none; }
@@ -1655,7 +1668,6 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   #zoom-wrap { flex-direction: row; }
   #zoom-label { writing-mode: horizontal-tb; font-size: 0.7rem; min-width: 34px; }
   #canvas-area { margin-right: 0; margin-bottom: 52px; }
-  #member-panel { position: fixed; bottom: 60px; right: 8px; top: auto; width: 44px; border-radius: 8px; padding: 6px 0; max-height: 200px; }
   .toolbar-spacer { display: flex; flex: 1; }
 
   /* iOS Safari auto-zooms when focusing inputs whose font-size is < 16px,
@@ -1674,7 +1686,7 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   body.mode-3d #toolbar-3d { left: 8px; right: 8px; transform: none; max-width: calc(100vw - 16px); overflow-x: auto; }
   body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
   body.mode-3d #toolbar-3d .t3d-btn { min-width: 32px; height: 32px; padding: 0 5px; }
-  body.mode-3d #toolbar-3d .t3d-mirror-btn { font-size: 0.62rem; padding: 0 4px; min-width: 28px; }
+  body.mode-3d #toolbar-3d .t3d-mirror-btn { padding: 0 6px; min-width: 50px; }
   #editor-pane { min-height: 0; }
   #canvas-area-3d { min-height: 0; touch-action: none; }
   body.mode-3d #toolbar-3d { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
@@ -1719,15 +1731,16 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   }
   #sidebar.open { transform: translateX(0); }
   #sidebar-toggle { display: flex; }
-  #members-toggle { display: flex; }
+  #members-toggle { display: none; }
 
-  #member-panel, #chat-panel {
+  /* Chat panel remains a slide-in drawer. Member panel stays a compact
+     floating square (same as desktop, just nudged above the bottom toolbar). */
+  #chat-panel {
     position: fixed; top: 0; right: 0; bottom: 0;
     transform: translateX(110%);
     transition: transform 0.25s ease;
     z-index: 60; width: min(200px, 72vw);
   }
-  #member-panel.open { transform: translateX(0); display: flex; }
   #chat-panel.open   { transform: translateX(0); display: flex; }
 
   #board-topic-input { display: none; }
@@ -2199,12 +2212,13 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 
       <div class="toolbar-sep"></div>
 
-      <div class="t3d-group" title="Transform space & snapping">
+      <div class="t3d-group" title="Transform space, snapping & mirror">
         <button class="t3d-btn" id="t3d-space-btn" title="Global / Local (&comma;)">W</button>
         <button class="t3d-btn" id="t3d-snap-btn" title="Toggle move / rotate / scale snap">Snap</button>
-        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-x-btn" title="Mirror on X">Mx</button>
-        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-y-btn" title="Mirror on Y">My</button>
-        <button class="t3d-btn t3d-mirror-btn" id="t3d-mirror-z-btn" title="Mirror on Z">Mz</button>
+        <button type="button" class="t3d-btn t3d-mirror-btn" id="t3d-mirror-btn" title="Mirror selected on an axis">
+          <span style="font-size:.66rem">Mirror</span>
+          <span style="font-size:.55rem;margin-left:2px;opacity:.85">▾</span>
+        </button>
       </div>
 
       <div class="toolbar-spacer"></div>

@@ -162,6 +162,24 @@
     pop:          () => _blip({ freq: 980, dur: 0.06, peak: 0.04, slide: -300, type: 'sine' }),
     success:      () => _chord([880, 1318.5], { dur: 0.32, peak: 0.045, stagger: 0.05 }),
     notify:       () => _chord([1318.5, 1760], { dur: 0.28, peak: 0.035, stagger: 0.04 }),
+
+    /* — 3D viewport & editing — */
+    select:       () => _blip({ freq: 1620, dur: 0.05, peak: 0.04,  slide: 180, type: 'sine' }),
+    deselect:     () => _blip({ freq: 820,  dur: 0.06, peak: 0.03,  slide: -260, type: 'sine' }),
+    'grab-start': () => _blip({ freq: 1100, dur: 0.07, peak: 0.045, slide: 380, type: 'triangle' }),
+    'grab-confirm': () => _chord([880, 1318.5], { dur: 0.18, peak: 0.04, stagger: 0.025 }),
+    'grab-cancel':() => _blip({ freq: 540,  dur: 0.10, peak: 0.04,  slide: -300, type: 'sawtooth' }),
+    'axis-lock':  () => _blip({ freq: 1900, dur: 0.04, peak: 0.035, slide: -120, type: 'square' }),
+    'view-snap':  () => { _whoosh({ dur: 0.22, peak: 0.025, startFreq: 2200, endFreq: 1100 }); _blip({ freq: 1600, dur: 0.05, peak: 0.035, slide: -400 }); },
+    'gizmo-tick': () => _blip({ freq: 2400, dur: 0.018, peak: 0.018, slide: 0 }),
+    add:          () => _chord([783.99, 1046.5, 1318.5], { dur: 0.22, peak: 0.04, stagger: 0.022 }),
+
+    /* — 2D drawing — */
+    swatch:       () => _blip({ freq: 1750, dur: 0.045, peak: 0.038, slide: 220, type: 'triangle' }),
+    'tool-switch':() => _blip({ freq: 1450, dur: 0.05,  peak: 0.04,  slide: -180, type: 'sine' }),
+    undo:         () => _blip({ freq: 700,  dur: 0.09,  peak: 0.04,  slide: -260, type: 'triangle' }),
+    redo:         () => _blip({ freq: 900,  dur: 0.09,  peak: 0.04,  slide:  320, type: 'triangle' }),
+    'zoom-tick':  () => _blip({ freq: 1700, dur: 0.022, peak: 0.022, slide: 0 }),
   };
 
   function play(name, opts = {}) {

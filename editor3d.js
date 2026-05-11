@@ -272,6 +272,7 @@ function _enterModalGrab() {
 
   container.addEventListener('pointermove', _onGrabPointerMove, true);
   _showGrabHint();
+  try { window.slateSfx?.play('grab-start'); } catch (_) {}
 
   if (_lastMouseClientX != null) {
     const start = new THREE.Vector3();
@@ -318,6 +319,7 @@ function _setGrabAxis(axis) {
   grabState.axisLock = grabState.axisLock === axis ? null : axis;
   if (_lastMouseClientX != null) _applyGrabFromMouse(_lastMouseClientX, _lastMouseClientY);
   _updateGrabHint();
+  try { window.slateSfx?.play('axis-lock'); } catch (_) {}
 }
 
 function _exitGrabCleanup() {
@@ -335,6 +337,7 @@ function _exitGrabCleanup() {
 
 function _grabConfirm() {
   _exitGrabCleanup();
+  try { window.slateSfx?.play('grab-confirm'); } catch (_) {}
 }
 
 function _grabCancel() {
@@ -347,6 +350,7 @@ function _grabCancel() {
     }
   });
   _exitGrabCleanup();
+  try { window.slateSfx?.play('grab-cancel'); } catch (_) {}
 }
 
 let _grabHintEl = null;
@@ -455,13 +459,11 @@ function _openAddPrimitiveMenu(clientX, clientY) {
 }
 
 function _onViewportContextMenu(e) {
-  if (flyEnabled) return;
-  if (grabState) { e.preventDefault(); _grabCancel(); return; }
-  if (transform?.dragging) return;
-  const hit = pickObject(e.clientX, e.clientY);
-  if (hit) return;
+  // We always suppress the browser's native menu — it is replaced by either an
+  // orbit/pan drag (right-mouse drag) or our own add-object menu, decided in
+  // onPointerUp once we know whether the user dragged or not.
   e.preventDefault();
-  _openAddPrimitiveMenu(e.clientX, e.clientY);
+  if (grabState) _grabCancel();
 }
 
 function _onFreeLookHoldKeyDown(e) {
@@ -594,6 +596,8 @@ function syncSceneFromDoc() {
         const newGeo = makeGeometryFor(obj);
         if (mesh.geometry) mesh.geometry.dispose();
         mesh.geometry = newGeo;
+        // Wireframe overlay (if enabled) needs to rebuild against new geometry.
+        if (_wireframeOverlay) { _removeWireOverlayFor(mesh); _addWireOverlayFor(mesh); }
       }
       mesh.userData.objType = obj.type;
       mesh.userData.paramsHash = newHash;
@@ -606,6 +610,7 @@ function syncSceneFromDoc() {
     if (!seen.has(id)) {
       const m = objMeshes.get(id);
       if (m === transform?.object) transform.detach();
+      _removeWireOverlayFor(m);
       scene.remove(m);
       disposeMesh(m);
       objMeshes.delete(id);
@@ -634,6 +639,12 @@ function syncSceneFromDoc() {
   objMeshes.forEach(m => {
     if (m.visible && m.userData.selectable) _selectableList.push(m);
   });
+
+  // Keep the wireframe overlay (if enabled) in sync with current meshes —
+  // newly added objects need overlays attached, deleted ones already lost
+  // their overlay as a child of their disposed mesh.
+  if (_wireframeOverlay) _syncWireOverlays();
+  _updateObjectColorPicker();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -672,6 +683,7 @@ function selectById(id, additive = false) {
   }
   _refreshSelectionOutlines();
   renderHierarchy();
+  _updateObjectColorPicker();
 }
 
 function selectAllObjects() {
@@ -727,6 +739,7 @@ function duplicateSelected() {
 
 let _downX = 0, _downY = 0, _downAt = 0;
 let _boxArmed = false;
+let _rmbDownX = 0, _rmbDownY = 0, _rmbArmed = false;
 function onPointerDown(e) {
   if (!orbit) return;
   if (flyEnabled) return;
@@ -739,6 +752,14 @@ function onPointerDown(e) {
       e.preventDefault(); e.stopPropagation();
       _grabCancel();
     }
+    return;
+  }
+  // Track right-button presses so onPointerUp can decide: drag (orbit/pan
+  // already handled by OrbitControls) vs. tap (open add-object menu).
+  if (e.button === 2) {
+    _rmbArmed = true;
+    _rmbDownX = e.clientX;
+    _rmbDownY = e.clientY;
     return;
   }
   // In object mode, Shift+left-drag starts a Blender-style box select.
@@ -771,6 +792,19 @@ function onPointerUp(e) {
     boxSelect = null;
     return;
   }
+  // Right-mouse: decide between a drag (already consumed by Orbit pan) and a
+  // click → open the add-object context menu (only on empty space).
+  if (e.button === 2 && _rmbArmed) {
+    _rmbArmed = false;
+    if (grabState) return;
+    if (transform?.dragging) return;
+    const moved = Math.hypot(e.clientX - _rmbDownX, e.clientY - _rmbDownY);
+    if (moved > 5) return;
+    const hit = pickObject(e.clientX, e.clientY);
+    if (hit) return;
+    _openAddPrimitiveMenu(e.clientX, e.clientY);
+    return;
+  }
   if (e.button !== 0) return;
   if (transform?.dragging) return;
   // Treat as a click only when pointer barely moved (i.e. not a drag-orbit).
@@ -782,8 +816,15 @@ function onPointerUp(e) {
     return;
   }
   const hit = pickObject(e.clientX, e.clientY);
-  if (hit && hit.userData.objId) selectById(hit.userData.objId, e.shiftKey);
-  else if (!e.shiftKey)          selectById(null);
+  if (hit && hit.userData.objId) {
+    selectById(hit.userData.objId, e.shiftKey);
+    try { window.slateSfx?.play('select'); } catch (_) {}
+  } else if (!e.shiftKey) {
+    if (selectedId || selectedIds.size) {
+      try { window.slateSfx?.play('deselect'); } catch (_) {}
+    }
+    selectById(null);
+  }
 }
 
 function _onBoxMove(e) {
@@ -1267,6 +1308,7 @@ function frameSelected() {
    Edit mode (Blender-style mesh editing)
 ───────────────────────────────────────────────────────────────────────── */
 function toggleEditMode() {
+  _animateModeToggle();
   if (editorMode === 'object') enterEditMode();
   else leaveEditMode();
 }
@@ -1281,6 +1323,8 @@ function enterEditMode() {
   updateModeButtons();
   updateToolbarVisibility();
   renderHierarchy();
+  _updateObjectColorPicker();
+  try { window.slateSfx?.play('mode-switch'); } catch (_) {}
 }
 
 function leaveEditMode() {
@@ -1294,6 +1338,8 @@ function leaveEditMode() {
   updateModeButtons();
   updateToolbarVisibility();
   renderHierarchy();
+  _updateObjectColorPicker();
+  try { window.slateSfx?.play('mode-switch'); } catch (_) {}
 }
 
 /* Build a position-weld map: many primitives split coincident vertices for
@@ -1785,9 +1831,28 @@ function setEditSubMode(mode) {
 }
 
 function updateModeButtons() {
-  document.querySelectorAll('#toolbar-3d .t3d-mode-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === editorMode);
-  });
+  const btn = document.getElementById('t3d-mode-toggle-btn');
+  const lbl = document.getElementById('t3d-mode-toggle-label');
+  if (btn) {
+    const isEdit = editorMode === 'edit';
+    btn.classList.toggle('active', isEdit);
+    btn.setAttribute('aria-pressed', isEdit ? 'true' : 'false');
+    btn.title = isEdit
+      ? 'Currently in Edit mode — click or press Tab to return to Object mode'
+      : 'Currently in Object mode — click or press Tab to enter Edit mode';
+  }
+  if (lbl) lbl.textContent = editorMode === 'edit' ? 'Edit' : 'Object';
+}
+
+// Small label-flip animation when toggling the mode button, so the change
+// reads as a deliberate state swap rather than a static text update.
+function _animateModeToggle() {
+  const btn = document.getElementById('t3d-mode-toggle-btn');
+  if (!btn) return;
+  btn.classList.remove('is-swapping');
+  void btn.offsetWidth;
+  btn.classList.add('is-swapping');
+  setTimeout(() => btn.classList.remove('is-swapping'), 320);
 }
 function updateToolbarVisibility() {
   const editGroup = document.getElementById('t3d-edit-select-group');
@@ -1835,6 +1900,145 @@ function toggleGrid() {
   if (_axesHelper) _axesHelper.visible = _gridHelper?.visible !== false;
   const btn = document.getElementById('t3d-grid-btn');
   if (btn) btn.classList.toggle('active', _gridHelper?.visible !== false);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Wireframe overlay — adds thin black/white edge lines on top of shaded
+   meshes so the topology is always visible (Blender-style "wire" view).
+───────────────────────────────────────────────────────────────────────── */
+let _wireframeOverlay = false;
+const _wireOverlays = new Map(); // objId → LineSegments overlay child
+function _addWireOverlayFor(mesh) {
+  if (!mesh || _wireOverlays.has(mesh.userData.objId)) return;
+  try {
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 1);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x111111, transparent: true, opacity: 0.55, depthTest: true,
+    });
+    const lines = new THREE.LineSegments(edges, mat);
+    lines.renderOrder = 999;
+    lines.userData._wireOverlay = true;
+    mesh.add(lines);
+    _wireOverlays.set(mesh.userData.objId, lines);
+  } catch (_) {}
+}
+function _removeWireOverlayFor(mesh) {
+  if (!mesh) return;
+  const id = mesh.userData?.objId;
+  const lines = id ? _wireOverlays.get(id) : null;
+  if (lines) {
+    if (lines.parent) lines.parent.remove(lines);
+    lines.geometry?.dispose();
+    lines.material?.dispose();
+    _wireOverlays.delete(id);
+  }
+}
+function _syncWireOverlays() {
+  if (_wireframeOverlay) {
+    objMeshes.forEach((mesh) => _addWireOverlayFor(mesh));
+  } else {
+    objMeshes.forEach((mesh) => _removeWireOverlayFor(mesh));
+  }
+}
+function toggleWireframeOverlay() {
+  _wireframeOverlay = !_wireframeOverlay;
+  _syncWireOverlays();
+  const btn = document.getElementById('t3d-wireframe-btn');
+  if (btn) btn.classList.toggle('active', _wireframeOverlay);
+}
+
+/* Reset the camera to its default "home" position. */
+function resetCameraHome() {
+  if (!orbit || !camera) return;
+  orbit.target.set(0, 0.4, 0);
+  camera.position.set(4, 3.5, 6);
+  camera.up.set(0, 1, 0);
+  orbit.update();
+}
+
+/* Snap the camera onto an axis-aligned view (Blender numpad-style). */
+function setCameraViewPreset(name) {
+  if (!orbit || !camera) return;
+  const dist = Math.max(4, camera.position.distanceTo(orbit.target));
+  const t = orbit.target.clone();
+  switch (name) {
+    case 'front':  camera.position.set(t.x, t.y,         t.z + dist); break;
+    case 'back':   camera.position.set(t.x, t.y,         t.z - dist); break;
+    case 'right':  camera.position.set(t.x + dist, t.y, t.z);         break;
+    case 'left':   camera.position.set(t.x - dist, t.y, t.z);         break;
+    case 'top':    camera.position.set(t.x, t.y + dist, t.z + 0.001); break;
+    case 'bottom': camera.position.set(t.x, t.y - dist, t.z + 0.001); break;
+    case 'persp':
+    default:       camera.position.set(t.x + dist * 0.6, t.y + dist * 0.55, t.z + dist * 0.9); break;
+  }
+  camera.up.set(0, 1, 0);
+  camera.lookAt(orbit.target);
+  orbit.update();
+}
+
+/* Open a small context menu next to the View button so the user can pick
+   one of the camera presets. Reuses the .t3d-viewport-ctx style. */
+function _openViewMenu(clientX, clientY) {
+  _closeViewportCtxMenu();
+  const div = document.createElement('div');
+  div.className = 't3d-viewport-ctx';
+  div.innerHTML = `<div class="t3d-ctx-head">Camera</div>
+    <button type="button" data-v="front">Front (–Z facing)</button>
+    <button type="button" data-v="back">Back</button>
+    <button type="button" data-v="right">Right</button>
+    <button type="button" data-v="left">Left</button>
+    <button type="button" data-v="top">Top</button>
+    <button type="button" data-v="bottom">Bottom</button>
+    <button type="button" data-v="persp">Perspective (home)</button>`;
+  document.body.appendChild(div);
+  _ctxMenuEl = div;
+  div.querySelectorAll('button[data-v]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setCameraViewPreset(btn.dataset.v);
+      _closeViewportCtxMenu();
+      try { window.slateSfx?.play('view-snap'); } catch (_) {}
+    });
+  });
+  const pad = 8;
+  div.style.left = `${clientX}px`;
+  div.style.top  = `${clientY}px`;
+  requestAnimationFrame(() => {
+    const w = div.offsetWidth, h = div.offsetHeight;
+    let x = clientX, y = clientY;
+    if (x + w + pad > window.innerWidth)  x = Math.max(pad, window.innerWidth  - w - pad);
+    if (y + h + pad > window.innerHeight) y = Math.max(pad, window.innerHeight - h - pad);
+    div.style.left = `${x}px`;
+    div.style.top  = `${y}px`;
+  });
+  setTimeout(() => {
+    window.addEventListener('pointerdown', _onDocCloseCtx, true);
+    window.addEventListener('keydown', _onKeyCloseCtx, true);
+  }, 0);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Object color (toolbar swatch) — sets the material color of the currently
+   selected mesh and round-trips it through the scene API so peers see it.
+───────────────────────────────────────────────────────────────────────── */
+function _updateObjectColorPicker() {
+  const wrap = document.getElementById('t3d-object-color-wrap');
+  const inp  = document.getElementById('t3d-object-color');
+  if (!wrap || !inp) return;
+  const api  = window.slateScene3d;
+  const obj  = (selectedId && api) ? api.find(selectedId) : null;
+  const show = !!(obj && obj.type !== 'folder' && editorMode === 'object');
+  wrap.style.display = show ? 'inline-flex' : 'none';
+  if (show) {
+    // Strip any alpha suffix on the stored color and re-clip to 7 chars.
+    const c = (obj.color || '#7c6aff').slice(0, 7);
+    if (inp.value !== c) inp.value = c;
+  }
+}
+function _onObjectColorInput(e) {
+  if (!selectedId) return;
+  const api = window.slateScene3d;
+  if (!api) return;
+  api.setColor(selectedId, e.target.value);
 }
 
 function toggleSnap() {
@@ -1960,13 +2164,13 @@ function bindToolbar() {
     const r = e.currentTarget.getBoundingClientRect();
     _openAddPrimitiveMenu(r.left, r.bottom + 4);
   });
-  tb.querySelectorAll('.t3d-mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const want = btn.dataset.mode;
-      if (want === editorMode) return;
-      if (want === 'edit') enterEditMode(); else leaveEditMode();
+  const modeToggle = tb.querySelector('#t3d-mode-toggle-btn');
+  if (modeToggle) {
+    modeToggle.addEventListener('click', () => {
+      _animateModeToggle();
+      if (editorMode === 'edit') leaveEditMode(); else enterEditMode();
     });
-  });
+  }
   tb.querySelectorAll('.t3d-esel-btn').forEach(btn => {
     btn.addEventListener('click', () => setEditSubMode(btn.dataset.sel));
   });
@@ -1993,6 +2197,16 @@ function bindToolbar() {
     const r = e.currentTarget.getBoundingClientRect();
     _openMirrorMenu(r.left, r.bottom + 4);
   });
+  document.getElementById('t3d-home-btn')?.addEventListener('click', () => {
+    resetCameraHome();
+    try { window.slateSfx?.play('view-snap'); } catch (_) {}
+  });
+  document.getElementById('t3d-wireframe-btn')?.addEventListener('click', toggleWireframeOverlay);
+  document.getElementById('t3d-view-btn')?.addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    _openViewMenu(r.left, r.bottom + 4);
+  });
+  document.getElementById('t3d-object-color')?.addEventListener('input', _onObjectColorInput);
 }
 
 function _openMirrorMenu(clientX, clientY) {
@@ -2028,6 +2242,39 @@ function _openMirrorMenu(clientX, clientY) {
   }, 0);
 }
 
+/**
+ * Customize the TransformControls gizmo to match Blender's single-direction look:
+ *   • Hide the negative-direction arrows for X / Y / Z (translate)
+ *   • Hide the long thin axis-line shafts (lineGeometry2 cylinders)
+ *   • Hide the negative-direction pickers so they aren't draggable either
+ * Visibility flags are flipped on the gizmo's own internal hierarchy, so the
+ * customization survives mode switches (the helper just toggles whole groups).
+ */
+function _customizeTransformGizmo() {
+  if (!transform) return;
+  const gz = transform._gizmo;
+  if (!gz) return;
+  const groups = [gz.gizmo?.translate, gz.picker?.translate].filter(Boolean);
+  for (const group of groups) {
+    for (const child of group.children) {
+      if (!child || !child.name) continue;
+      const axis = child.name;
+      if (axis !== 'X' && axis !== 'Y' && axis !== 'Z') continue;
+      const p  = child.position;
+      const gp = child.geometry?.parameters || {};
+      // Axis line shaft: thin cylinder spanning ~0.5 units from origin.
+      const isLineShaft = gp.radiusTop === 0.0075 && gp.height === 0.5;
+      // Negative-direction handle / picker.
+      const isNeg = (
+        (axis === 'X' && p.x < -1e-4) ||
+        (axis === 'Y' && p.y < -1e-4) ||
+        (axis === 'Z' && p.z < -1e-4)
+      );
+      if (isLineShaft || isNeg) child.visible = false;
+    }
+  }
+}
+
 function addPrimitive(kind) {
   if (!window.slateScene3d) return;
   window.slateScene3dBeginAction?.();
@@ -2040,6 +2287,7 @@ function addPrimitive(kind) {
   };
   const obj = window.slateScene3d.add(spec);
   if (obj) selectById(obj.id);
+  try { window.slateSfx?.play('add'); } catch (_) {}
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -2365,7 +2613,9 @@ export function initEditor3D(rootEl) {
   // TransformControls stops propagation when the gizmo grabs the pointer,
   // so Orbit never sees pointer events on those clicks.
   orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.mouseButtons.RIGHT = -1;
+  // Right-mouse drags the viewport (pan); a right-click *without* drag opens
+  // the add-object context menu — see onPointerDown / onPointerUp below.
+  orbit.mouseButtons.RIGHT = THREE.MOUSE.PAN;
   orbit.enableDamping = true;
   orbit.dampingFactor = 0.06;
   orbit.target.set(0, 0.4, 0);
@@ -2414,6 +2664,7 @@ export function initEditor3D(rootEl) {
     ? transform.getHelper()
     : transform;
   scene.add(transformHelper);
+  _customizeTransformGizmo();
 
   resize();
   bindEvents();

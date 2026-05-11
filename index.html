@@ -757,6 +757,55 @@ input, textarea { font-family: var(--sans); }
 }
 #color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 #color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+/* Quick color palette + recents — grid of tiny swatches in the side toolbar. */
+#color-palette, #color-recents {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 4px; padding: 4px 6px;
+  width: 100%;
+}
+#color-recents {
+  border-top: 1px dashed var(--border);
+  padding-top: 6px; margin-top: 2px;
+}
+.swatch-btn {
+  width: 14px; height: 14px;
+  margin: 0 auto;
+  border: 1.5px solid rgba(255,255,255,0.12);
+  border-radius: 4px; cursor: pointer; padding: 0;
+  background: transparent;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .18s ease;
+  position: relative;
+}
+.swatch-btn:hover {
+  transform: scale(1.18);
+  border-color: rgba(255,255,255,0.55);
+  box-shadow: 0 0 0 2px rgba(124,106,255,0.18);
+}
+.swatch-btn:active { transform: scale(0.92); }
+.swatch-btn.is-fg {
+  border-color: var(--accent, #7c6aff);
+  box-shadow: 0 0 0 2px rgba(124,106,255,0.32);
+}
+@keyframes slate-swatch-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.32); }
+  100% { transform: scale(1); }
+}
+.swatch-btn.just-picked { animation: slate-swatch-pop .26s ease; }
+
+/* Stroke opacity slider — mirrors #stroke-size layout. */
+#stroke-opacity-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 0; width: 100%;
+}
+#stroke-opacity {
+  width: 32px; accent-color: var(--accent);
+  writing-mode: vertical-lr; direction: rtl;
+  height: 44px;
+  -webkit-appearance: slider-vertical;
+}
+
 .toolbar-spacer { display: none; }
 
 /* ── 3D toolbar (horizontal strip across top of workspace) ── */
@@ -788,11 +837,93 @@ input, textarea { font-family: var(--sans); }
   background: var(--accent-dim); color: var(--accent);
   border-color: rgba(124,106,255,0.4);
 }
+/* Combined Object / Edit toggle — single button that swaps label & color. */
+.t3d-mode-toggle-btn {
+  gap: 6px; padding: 0 10px; font-weight: 600; min-width: 84px;
+  position: relative; overflow: hidden;
+}
+.t3d-mode-toggle-btn .t3d-mode-toggle-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 0 rgba(255,255,255,0);
+  transition: background .18s ease, box-shadow .25s ease, transform .18s ease;
+}
+.t3d-mode-toggle-btn.active .t3d-mode-toggle-dot {
+  background: #ffb84d;
+  box-shadow: 0 0 6px 1px rgba(255,184,77,0.55);
+}
+.t3d-mode-toggle-btn:not(.active) .t3d-mode-toggle-dot {
+  background: var(--accent, #7c6aff);
+  box-shadow: 0 0 6px 1px rgba(124,106,255,0.45);
+}
+.t3d-mode-toggle-btn.active {
+  background: rgba(255,184,77,0.12); color: #ffb84d;
+  border-color: rgba(255,184,77,0.42);
+}
+.t3d-mode-toggle-btn .t3d-mode-toggle-label {
+  display: inline-block; min-width: 36px; text-align: left;
+  transition: color .18s ease, transform .22s ease, opacity .18s ease;
+}
+.t3d-mode-toggle-btn.is-swapping .t3d-mode-toggle-label {
+  animation: slate-mode-flip .28s ease;
+}
+@keyframes slate-mode-flip {
+  0%   { transform: translateY(0);    opacity: 1; }
+  45%  { transform: translateY(-7px); opacity: 0; }
+  55%  { transform: translateY(7px);  opacity: 0; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
 #toolbar-3d .toolbar-sep {
   width: 1px; height: 18px; background: var(--border);
   margin: 0 4px; flex-shrink: 0;
 }
 #toolbar-3d .toolbar-spacer { display: none; }
+#t3d-object-color-wrap {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 2px; border-radius: 6px;
+  border: 1px solid var(--border2);
+  transition: border-color .14s ease;
+}
+#t3d-object-color-wrap:hover { border-color: var(--accent, #7c6aff); }
+#t3d-object-color {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: none; cursor: pointer;
+}
+#t3d-object-color::-webkit-color-swatch-wrapper { padding: 0; }
+#t3d-object-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+/* Subtle press-and-bounce animation for the home camera button. */
+#t3d-home-btn:active svg { animation: slate-home-bounce .35s ease; }
+@keyframes slate-home-bounce {
+  0%   { transform: translateY(0)   scale(1); }
+  35%  { transform: translateY(-3px) scale(1.08); }
+  70%  { transform: translateY(1px)  scale(0.95); }
+  100% { transform: translateY(0)   scale(1); }
+}
+/* Wireframe button: when active, draw a faint scanline overlay. */
+#t3d-wireframe-btn.active {
+  background-image:
+    repeating-linear-gradient(45deg,
+      transparent 0 3px,
+      rgba(124,106,255,0.14) 3px 5px);
+}
+/* Mirror / view / add menu buttons: small chevron nudge on hover. */
+.t3d-btn[id$="-menu-btn"]:hover span:last-child,
+#t3d-mirror-btn:hover span:last-child,
+#t3d-view-btn:hover span:last-child {
+  transform: translateY(1px);
+  transition: transform .14s ease;
+}
+
+/* Selected mesh outline pulse — a tiny breathing glow on the active mode
+   toggle dot when an edit is in progress (no impact in object mode). */
+.t3d-mode-toggle-btn.active .t3d-mode-toggle-dot {
+  animation: slate-mode-dot-pulse 2.4s ease-in-out infinite;
+}
+@keyframes slate-mode-dot-pulse {
+  0%, 100% { box-shadow: 0 0 6px 1px rgba(255,184,77,0.55); }
+  50%      { box-shadow: 0 0 9px 2px rgba(255,184,77,0.85); }
+}
 
 /* ── 3D outliner (Blender-style hierarchy panel) ── */
 .outliner-row {
@@ -1662,8 +1793,12 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   #draw-toolbar .toolbar-sep { width: 1px; height: 24px; margin: 0 2px; }
   #stroke-size { width: 52px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
   #stroke-size-wrap { flex-direction: row; gap: 4px; width: auto; }
+  #stroke-opacity { width: 46px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
+  #stroke-opacity-wrap { flex-direction: row; gap: 4px; width: auto; padding: 4px 6px; }
   #color-fgbg { margin: 0 4px; }
   #fill-toggle-wrap { flex-direction: row; }
+  /* Hide quick-palette / recents on horizontal mobile toolbar to save space. */
+  #color-palette, #color-recents { display: none; }
   #font-size-wrap { flex-direction: row; }
   #zoom-wrap { flex-direction: row; }
   #zoom-label { writing-mode: horizontal-tb; font-size: 0.7rem; min-width: 34px; }
@@ -1687,6 +1822,8 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
   body.mode-3d #toolbar-3d .t3d-grouplabel { display: none; }
   body.mode-3d #toolbar-3d .t3d-btn { min-width: 32px; height: 32px; padding: 0 5px; }
   body.mode-3d #toolbar-3d .t3d-mirror-btn { padding: 0 6px; min-width: 50px; }
+  body.mode-3d #toolbar-3d .t3d-mode-toggle-btn { padding: 0 8px; min-width: 72px; }
+  body.mode-3d #toolbar-3d #t3d-object-color-wrap { width: 32px; height: 32px; }
   #editor-pane { min-height: 0; }
   #canvas-area-3d { min-height: 0; touch-action: none; }
   body.mode-3d #toolbar-3d { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
@@ -2119,6 +2256,21 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
         </button>
       </div>
 
+      <!-- Quick color palette: click a swatch to set foreground; right-click to set background. -->
+      <div id="color-palette" role="group" aria-label="Quick colors" title="Click: set foreground · Right-click: set background"></div>
+
+      <!-- Recently used colors (auto-tracked). -->
+      <div id="color-recents" role="group" aria-label="Recent colors" title="Recent colors" style="display:none"></div>
+
+      <!-- Stroke opacity (applied to new strokes / shapes). -->
+      <div id="stroke-opacity-wrap" title="Stroke opacity">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" style="opacity:0.55">
+          <rect x="2" y="2" width="10" height="10" rx="2"/>
+          <path d="M2 8l4-3 4 3 2-1.5" />
+        </svg>
+        <input id="stroke-opacity" type="range" min="10" max="100" value="100" title="Stroke opacity">
+      </div>
+
       <!-- Fill toggle (no-fill / use BG as fill) -->
       <div id="fill-toggle-wrap" title="Toggle shape fill">
         <button class="fill-none-btn active" id="fill-none-btn" title="No fill (use stroke only)">∅</button>
@@ -2169,8 +2321,10 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
     <!-- 3D toolbar -->
     <div id="toolbar-3d" role="toolbar" aria-label="3D tools" style="display:none">
       <div class="t3d-group" id="t3d-mode-group">
-        <button class="t3d-btn t3d-mode-btn active" data-mode="object" title="Object mode (Tab)">Object</button>
-        <button class="t3d-btn t3d-mode-btn" data-mode="edit" title="Edit mode (Tab)">Edit</button>
+        <button type="button" class="t3d-btn t3d-mode-toggle-btn" id="t3d-mode-toggle-btn" title="Toggle Object / Edit mode (Tab)" aria-pressed="false">
+          <span class="t3d-mode-toggle-dot" aria-hidden="true"></span>
+          <span class="t3d-mode-toggle-label" id="t3d-mode-toggle-label">Object</span>
+        </button>
       </div>
 
       <div class="toolbar-sep"></div>
@@ -2245,6 +2399,25 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
             <path d="M2 5h10M2 9h10M5 2v10M9 2v10"/>
           </svg>
         </button>
+        <button class="t3d-btn" id="t3d-wireframe-btn" title="Wireframe overlay on selected mesh">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round">
+            <path d="M2 3l5-1 5 1-2 8-3 1-3-1z"/><path d="M2 3l5 4 5-4M7 7v6"/>
+          </svg>
+        </button>
+        <button type="button" class="t3d-btn" id="t3d-view-btn" title="Camera view presets (Front / Top / Side / Persp)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+            <rect x="2" y="2" width="10" height="10" rx="1.5"/><path d="M2 7l5-3 5 3"/>
+          </svg>
+          <span style="font-size:.55rem;margin-left:1px;opacity:.85">▾</span>
+        </button>
+        <button type="button" class="t3d-btn" id="t3d-home-btn" title="Reset camera to home view">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M2 7l5-5 5 5"/><path d="M3.5 6.5V12h7V6.5"/>
+          </svg>
+        </button>
+        <div id="t3d-object-color-wrap" title="Selected object color" style="display:none">
+          <input type="color" id="t3d-object-color" value="#7c6aff" aria-label="Object color">
+        </div>
       </div>
     </div>
 
@@ -4851,6 +5024,24 @@ let strokeSize    = 4;
 let fillColor     = '#e8e6ff';
 let useFill       = false;
 let fontSize      = 18;
+let strokeOpacity = 1;        // 0..1 — appended to FG hex as alpha for new strokes
+function _alphaHexSuffix(opacity) {
+  if (!Number.isFinite(opacity) || opacity >= 0.999) return '';
+  const a = Math.max(0, Math.min(255, Math.round(opacity * 255)));
+  return a.toString(16).padStart(2, '0');
+}
+function currentDrawColor(base) {
+  const c = base ?? strokeColor;
+  return (typeof c === 'string' && c.length === 7 && c.startsWith('#'))
+    ? c + _alphaHexSuffix(strokeOpacity)
+    : c;
+}
+function currentFillColor(base) {
+  const c = base ?? fillColor;
+  return (typeof c === 'string' && c.length === 7 && c.startsWith('#'))
+    ? c + _alphaHexSuffix(strokeOpacity)
+    : c;
+}
 let isPanDragging = false;
 let panStart      = null;
 
@@ -5331,7 +5522,8 @@ function onPointerDown(e) {
   if (currentTool === 'pen' || currentTool === 'highlighter') {
     isDrawing = true;
     const size = currentTool === 'highlighter' ? Math.max(strokeSize, 16) : strokeSize;
-    const color = currentTool === 'highlighter' ? (strokeColor === '#1a1a2e' ? '#facc15' : strokeColor) : strokeColor;
+    const baseColor = currentTool === 'highlighter' ? (strokeColor === '#1a1a2e' ? '#facc15' : strokeColor) : strokeColor;
+    const color = currentDrawColor(baseColor);
     currentStroke = { id: genId(), peerId: state.myId, color, size, points: [[wx, wy]], t: Date.now(), highlighter: currentTool === 'highlighter' };
     if (typeof window.__slateActiveLayerId === 'string') currentStroke._layer = window.__slateActiveLayerId;
     scheduleRender();
@@ -5644,14 +5836,15 @@ function makeShape(wx, wy, preview = false) {
   const y = Math.min(shapeStart.wy, wy);
   const w = Math.abs(wx - shapeStart.wx) || 1;
   const h = Math.abs(wy - shapeStart.wy) || 1;
-  const fill = useFill ? fillColor : null;
+  const fill = useFill ? currentFillColor() : null;
+  const drawColor = currentDrawColor();
   let shape;
   switch (currentTool) {
-    case 'rect':     shape = { id, type: 'rect',     x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
-    case 'ellipse':  shape = { id, type: 'ellipse',  x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
-    case 'triangle': shape = { id, type: 'triangle', x, y, w, h, color: strokeColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
-    case 'line':     shape = { id, type: 'line',     x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
-    case 'arrow':    shape = { id, type: 'arrow',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: strokeColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    case 'rect':     shape = { id, type: 'rect',     x, y, w, h, color: drawColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'ellipse':  shape = { id, type: 'ellipse',  x, y, w, h, color: drawColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'triangle': shape = { id, type: 'triangle', x, y, w, h, color: drawColor, strokeWidth: strokeSize, fill, peerId: state.myId, t: Date.now() }; break;
+    case 'line':     shape = { id, type: 'line',     x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: drawColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
+    case 'arrow':    shape = { id, type: 'arrow',    x: shapeStart.wx, y: shapeStart.wy, w: wx - shapeStart.wx, h: wy - shapeStart.wy, color: drawColor, strokeWidth: strokeSize, peerId: state.myId, t: Date.now() }; break;
     default: return null;
   }
   if (shape && !preview && typeof window.__slateActiveLayerId === 'string') {
@@ -5943,7 +6136,7 @@ function commitText() {
   const wrapW = textBoxSw / vp.zoom;
   const shape = { id: genId(), type: 'text', x: textPos.wx, y: textPos.wy,
     w: wrapW, h: textBoxSh / vp.zoom,
-    color: strokeColor, fontSize, text, peerId: state.myId, t: Date.now() };
+    color: currentDrawColor(), fontSize, text, peerId: state.myId, t: Date.now() };
   if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
   doc.shapes.set(shape.id, shape);
   undoStack.push({ kind: 'shape', action: 'add', id: shape.id });
@@ -6047,7 +6240,9 @@ function redo() {
 // ── Tool selection ──
 function setTool(tool) {
   if (tool !== 'select') { selItems = []; selBox = null; selHandle = null; selDragStart = null; }
+  const prev = currentTool;
   currentTool = tool;
+  if (prev !== tool) { try { window.slateSfx?.play('tool-switch'); } catch (_) {} }
   document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
   });
@@ -6075,8 +6270,14 @@ document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
   btn.addEventListener('click', () => setTool(btn.dataset.tool));
 });
 
-document.getElementById('undo-btn').addEventListener('click', undo);
-document.getElementById('redo-btn').addEventListener('click', redo);
+document.getElementById('undo-btn').addEventListener('click', () => {
+  undo();
+  try { window.slateSfx?.play('undo'); } catch (_) {}
+});
+document.getElementById('redo-btn').addEventListener('click', () => {
+  redo();
+  try { window.slateSfx?.play('redo'); } catch (_) {}
+});
 document.getElementById('clear-btn').addEventListener('click', () => {
   if (!state.currentBoard) return;
   initiateVoteClear();
@@ -6090,6 +6291,7 @@ document.getElementById('stroke-size').addEventListener('input', e => {
    BG = shape fill color. The two pickers are nested inside #color-fgbg. */
 document.getElementById('color-picker').addEventListener('input', e => {
   strokeColor = e.target.value;
+  if (typeof _highlightActiveSwatch === 'function') _highlightActiveSwatch();
 });
 document.getElementById('fill-color').addEventListener('input', e => {
   fillColor = e.target.value;
@@ -6108,6 +6310,7 @@ document.getElementById('cfg-swap-btn')?.addEventListener('click', () => {
   const a = fg.value, b = bg.value;
   fg.value = b; bg.value = a;
   strokeColor = b; fillColor = a;
+  if (typeof _highlightActiveSwatch === 'function') _highlightActiveSwatch();
 });
 
 document.getElementById('cfg-default-btn')?.addEventListener('click', () => {
@@ -6115,7 +6318,99 @@ document.getElementById('cfg-default-btn')?.addEventListener('click', () => {
   const bg = document.getElementById('fill-color');
   fg.value = '#000000'; bg.value = '#ffffff';
   strokeColor = '#000000'; fillColor = '#ffffff';
+  _highlightActiveSwatch();
 });
+
+/* ── Stroke opacity slider ── */
+document.getElementById('stroke-opacity')?.addEventListener('input', e => {
+  strokeOpacity = Math.max(0.1, Math.min(1, Number(e.target.value) / 100));
+});
+
+/* ── Quick color palette + recent colors ──
+   Click a swatch → set foreground (and update the color picker).
+   Right-click   → set background. Recently picked color-picker colors are
+   auto-tracked into the recents row below. */
+const PALETTE_COLORS = [
+  '#1a1a2e', '#ffffff', '#f87171', '#fb923c',
+  '#facc15', '#34d399', '#22d3ee', '#7c6aff',
+  '#c084fc', '#f472b6', '#94a3b8', '#0ea5e9',
+];
+const RECENTS_LS_KEY = 'slate_color_recents';
+let recentColors = [];
+try {
+  const raw = JSON.parse(localStorage.getItem(RECENTS_LS_KEY) || '[]');
+  if (Array.isArray(raw)) recentColors = raw.filter(c => typeof c === 'string').slice(0, 8);
+} catch (_) {}
+
+function _setFgFromSwatch(hex) {
+  strokeColor = hex;
+  const fg = document.getElementById('color-picker');
+  if (fg) fg.value = hex;
+  _highlightActiveSwatch();
+  try { window.slateSfx?.play('swatch'); } catch (_) {}
+}
+function _setBgFromSwatch(hex) {
+  fillColor = hex;
+  const bg = document.getElementById('fill-color');
+  if (bg) bg.value = hex;
+  try { window.slateSfx?.play('swatch'); } catch (_) {}
+}
+function _buildSwatch(hex, opts = {}) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'swatch-btn';
+  b.dataset.color = hex;
+  b.style.background = hex;
+  b.title = opts.title || `${hex} (click: FG · right-click: BG)`;
+  b.addEventListener('click', e => {
+    e.preventDefault();
+    _setFgFromSwatch(hex);
+    b.classList.remove('just-picked');
+    void b.offsetWidth;
+    b.classList.add('just-picked');
+  });
+  b.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    _setBgFromSwatch(hex);
+    b.classList.remove('just-picked');
+    void b.offsetWidth;
+    b.classList.add('just-picked');
+  });
+  return b;
+}
+function _renderPalette() {
+  const pal = document.getElementById('color-palette');
+  if (!pal) return;
+  pal.innerHTML = '';
+  PALETTE_COLORS.forEach(c => pal.appendChild(_buildSwatch(c)));
+  _highlightActiveSwatch();
+}
+function _renderRecents() {
+  const row = document.getElementById('color-recents');
+  if (!row) return;
+  row.innerHTML = '';
+  if (!recentColors.length) { row.style.display = 'none'; return; }
+  row.style.display = '';
+  recentColors.slice(0, 8).forEach(c => row.appendChild(_buildSwatch(c, { title: `Recent: ${c}` })));
+}
+function _highlightActiveSwatch() {
+  document.querySelectorAll('#color-palette .swatch-btn, #color-recents .swatch-btn').forEach(b => {
+    b.classList.toggle('is-fg', b.dataset.color?.toLowerCase() === String(strokeColor).toLowerCase());
+  });
+}
+function _pushRecent(hex) {
+  if (!hex || typeof hex !== 'string') return;
+  const norm = hex.toLowerCase();
+  if (PALETTE_COLORS.map(c => c.toLowerCase()).includes(norm)) return;
+  recentColors = [norm, ...recentColors.filter(c => c.toLowerCase() !== norm)].slice(0, 8);
+  try { localStorage.setItem(RECENTS_LS_KEY, JSON.stringify(recentColors)); } catch (_) {}
+  _renderRecents();
+}
+document.getElementById('color-picker')?.addEventListener('change', e => {
+  _pushRecent(e.target.value);
+});
+_renderPalette();
+_renderRecents();
 
 document.addEventListener('keydown', e => {
   const tag = document.activeElement?.tagName;
@@ -6270,9 +6565,18 @@ function drawShapeOn(c, s) {
   c.restore();
 }
 
-document.getElementById('zoom-reset-btn').addEventListener('click', () => { fitViewport(); updateZoomLabel(); scheduleRender(); });
-document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(vp.zoom * 1.25));
-document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(vp.zoom / 1.25));
+document.getElementById('zoom-reset-btn').addEventListener('click', () => {
+  fitViewport(); updateZoomLabel(); scheduleRender();
+  try { window.slateSfx?.play('view-snap'); } catch (_) {}
+});
+document.getElementById('zoom-in-btn').addEventListener('click', () => {
+  setZoom(vp.zoom * 1.25);
+  try { window.slateSfx?.play('zoom-tick'); } catch (_) {}
+});
+document.getElementById('zoom-out-btn').addEventListener('click', () => {
+  setZoom(vp.zoom / 1.25);
+  try { window.slateSfx?.play('zoom-tick'); } catch (_) {}
+});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {

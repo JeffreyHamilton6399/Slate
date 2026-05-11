@@ -262,7 +262,84 @@ input, textarea { font-family: var(--sans); }
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px;
+  display: none;
 }
+#sidebar.boards-list-open #board-scroll {
+  display: block;
+  max-height: min(42vh, 360px);
+}
+.boards-tab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 4px;
+}
+#boards-tab-toggle {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: var(--bg3);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .12s, color .12s, border-color .12s;
+}
+#boards-tab-toggle:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+#sidebar.boards-list-open #boards-tab-toggle {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.shape-tools-dropdown-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+#shapes-menu-btn .shape-caret {
+  font-size: 0.55rem;
+  margin-left: 1px;
+  opacity: 0.75;
+}
+.shapes-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 158px;
+  padding: 4px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.shapes-menu[hidden] { display: none !important; }
+.shapes-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+}
+.shapes-menu button:hover { background: var(--bg3); }
+.shapes-menu button .sk { font-size: 0.62rem; color: var(--text-dim); font-family: var(--mono); }
 
 .board-item {
   display: flex; align-items: center;
@@ -713,7 +790,9 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center;
   padding: 0 14px; gap: 10px;
+  padding-top: max(0px, env(safe-area-inset-top, 0px));
   flex-shrink: 0; z-index: 5;
+  box-sizing: border-box;
 }
 #sidebar-toggle {
   display: none;
@@ -750,9 +829,28 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   gap: 2px;
   flex-shrink: 0; z-index: 39;
   overflow-y: auto; scrollbar-width: none;
-  max-height: calc(100vh - var(--header-h) - 100px); /* leaves room for members (bottom-left) + chat (bottom-right) */
+  max-height: calc(100vh - var(--header-h) - 100px);
+  max-height: calc(100dvh - var(--header-h) - 100px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
+#draw-toolbar.toolbar-floating {
+  max-height: calc(100dvh - 24px);
+  z-index: 45;
+}
+.toolbar-drag-handle {
+  flex-shrink: 0; width: 100%; height: 9px; margin: 0 0 3px;
+  border-radius: 5px; cursor: grab; opacity: 0.55;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+}
+.toolbar-drag-handle:active, #draw-toolbar.dragging-toolbar .toolbar-drag-handle { cursor: grabbing; }
+#draw-toolbar.dragging-toolbar { opacity: 0.97; }
+.t3d-toolbar-drag-handle {
+  flex-shrink: 0; width: 10px; min-height: 26px; margin: 0 4px 0 0;
+  border-radius: 5px; cursor: grab; opacity: 0.55;
+  background: linear-gradient(180deg, transparent, var(--border2), transparent);
+}
+.t3d-toolbar-drag-handle:active, #toolbar-3d.dragging-toolbar .t3d-toolbar-drag-handle { cursor: grabbing; }
+#toolbar-3d.dragging-toolbar { opacity: 0.97; }
 #draw-toolbar::-webkit-scrollbar { display: none; }
 #draw-toolbar .tool-btn {
   width: 34px; height: 34px;
@@ -792,42 +890,6 @@ body.compact-ui .panel-body { padding: 6px 8px; }
 }
 #color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 #color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
-
-/* Quick color palette + recents — grid of tiny swatches in the side toolbar. */
-#color-palette, #color-recents {
-  display: grid; grid-template-columns: repeat(2, 1fr);
-  gap: 4px; padding: 4px 6px;
-  width: 100%;
-}
-#color-recents {
-  border-top: 1px dashed var(--border);
-  padding-top: 6px; margin-top: 2px;
-}
-.swatch-btn {
-  width: 14px; height: 14px;
-  margin: 0 auto;
-  border: 1.5px solid rgba(255,255,255,0.12);
-  border-radius: 4px; cursor: pointer; padding: 0;
-  background: transparent;
-  transition: transform .14s ease, border-color .14s ease, box-shadow .18s ease;
-  position: relative;
-}
-.swatch-btn:hover {
-  transform: scale(1.18);
-  border-color: rgba(255,255,255,0.55);
-  box-shadow: 0 0 0 2px rgba(124,106,255,0.18);
-}
-.swatch-btn:active { transform: scale(0.92); }
-.swatch-btn.is-fg {
-  border-color: var(--accent, #7c6aff);
-  box-shadow: 0 0 0 2px rgba(124,106,255,0.32);
-}
-@keyframes slate-swatch-pop {
-  0%   { transform: scale(1); }
-  50%  { transform: scale(1.32); }
-  100% { transform: scale(1); }
-}
-.swatch-btn.just-picked { animation: slate-swatch-pop .26s ease; }
 
 /* Stroke opacity slider — mirrors #stroke-size layout. */
 #stroke-opacity-wrap {
@@ -944,8 +1006,7 @@ body.compact-ui .panel-body { padding: 6px 8px; }
 }
 /* Mirror / view / add menu buttons: small chevron nudge on hover. */
 .t3d-btn[id$="-menu-btn"]:hover span:last-child,
-#t3d-mirror-btn:hover span:last-child,
-#t3d-view-btn:hover span:last-child {
+#t3d-mirror-btn:hover span:last-child {
   transform: translateY(1px);
   transition: transform .14s ease;
 }
@@ -1478,7 +1539,9 @@ body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !imp
 .settings-panel {
   background: var(--bg2); border: 1px solid var(--border2);
   border-radius: 14px; width: 320px; max-width: calc(100vw - 24px);
-  max-height: calc(100vh - 24px); overflow-y: auto;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
   box-shadow: 0 24px 60px rgba(0,0,0,0.55);
   display: flex; flex-direction: column;
 }
@@ -1705,6 +1768,60 @@ body.mode-3d #chat-panel {
 }
 #chat-panel.open { display: flex; }
 #chat-panel.dragging { transition: none; user-select: none; }
+
+/* Notes — floating panel (same interaction model as chat) */
+.notes-popout {
+  position: fixed;
+  right: 14px;
+  bottom: calc(14px + 340px + 10px);
+  width: 300px;
+  height: min(380px, 42vh);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: none;
+  flex-direction: column;
+  z-index: 79;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  overflow: hidden;
+}
+.notes-popout.open { display: flex; }
+.notes-popout.dragging { transition: none; user-select: none; }
+.notes-popout-head {
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  cursor: grab;
+  background: var(--bg3);
+}
+.notes-popout-head:active { cursor: grabbing; }
+.notes-popout.dragging .notes-popout-head { cursor: grabbing; }
+.notes-popout-title {
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+.notes-popout-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+@media (max-width: 768px) {
+  .notes-popout {
+    width: min(300px, calc(100vw - 20px));
+    height: min(360px, 50vh);
+    right: 10px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 8px);
+  }
+}
+
 .chat-header {
   padding: 8px 10px 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -1800,6 +1917,9 @@ body.mode-3d #chat-panel {
 /* Highlighter cursor */
 #board-canvas.tool-highlighter { cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='24' viewBox='0 0 20 24'><rect x='5' y='2' width='10' height='16' rx='4' fill='rgba(250,204,21,0.6)' stroke='%23333' stroke-width='1.5'/><rect x='8' y='18' width='4' height='4' rx='1' fill='%23333'/></svg>") 10 22, crosshair; }
 #board-canvas.tool-arrow      { cursor: crosshair; }
+#board-canvas.tool-rect,
+#board-canvas.tool-ellipse,
+#board-canvas.tool-line       { cursor: crosshair; }
 #board-canvas.tool-triangle   { cursor: crosshair; }
 #board-canvas.tool-sticky     { cursor: crosshair; }
 #board-canvas.tool-eyedropper { cursor: copy; }
@@ -1875,6 +1995,10 @@ body.mode-3d #chat-panel {
     box-shadow: 0 -4px 18px rgba(0,0,0,0.35);
   }
   #draw-toolbar::-webkit-scrollbar { display: none; }
+  #draw-toolbar .toolbar-drag-handle {
+    width: 12px; height: auto; min-height: 40px; margin: 0 4px 0 0;
+    background: linear-gradient(180deg, transparent, var(--border2), transparent);
+  }
   #draw-toolbar .tool-btn { width: 40px; height: 40px; flex-shrink: 0; }
   #draw-toolbar .toolbar-sep { width: 1px; height: 28px; margin: 0 2px; }
   #stroke-size { width: 60px; height: auto; writing-mode: horizontal-tb; direction: ltr; -webkit-appearance: auto; }
@@ -1884,7 +2008,6 @@ body.mode-3d #chat-panel {
   #color-fgbg { margin: 0 4px; }
   #fill-toggle-wrap { flex-direction: row; align-items: center; }
   /* Quick-palette / recents would overflow the bottom strip on phones. */
-  #color-palette, #color-recents { display: none; }
   #font-size-wrap { flex-direction: row; align-items: center; }
   #zoom-wrap { flex-direction: row; align-items: center; }
   #zoom-label { writing-mode: horizontal-tb; font-size: 0.72rem; min-width: 36px; }
@@ -2173,7 +2296,12 @@ body.mode-3d #chat-panel {
     </div>
 
     <div class="sidebar-section">
-      <div class="sidebar-section-label">Boards</div>
+      <div class="sidebar-section-label boards-tab-row">
+        <span>Boards</span>
+        <button type="button" id="boards-tab-toggle" title="Show or hide boards list" aria-expanded="false" aria-controls="board-scroll">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+      </div>
     </div>
     <div id="board-scroll">
       <!-- board items rendered by renderBoards() -->
@@ -2289,6 +2417,12 @@ body.mode-3d #chat-panel {
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2H11V11H8"/><line x1="4" y1="6.5" x2="10" y2="6.5"/><polyline points="6,4.5 4,6.5 6,8.5"/></svg>
         <span class="btn-label">Leave</span>
       </button>
+      <button id="notes-header-btn" class="btn-icon" aria-label="Toggle notes" title="Notes" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 2.5h8a1 1 0 0 1 1 1v10.5l-2.5-1.5H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z"/>
+          <line x1="5" y1="6" x2="11" y2="6"/><line x1="5" y1="8.5" x2="9" y2="8.5"/>
+        </svg>
+      </button>
       <button id="chat-btn" class="btn-icon" aria-label="Toggle chat" title="Chat">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M2 3h12v8H9l-3 2v-2H2z"/>
@@ -2312,6 +2446,7 @@ body.mode-3d #chat-panel {
 
     <!-- Drawing toolbar -->
     <div id="draw-toolbar" role="toolbar" aria-label="Drawing tools">
+      <div class="toolbar-drag-handle" title="Drag to move toolbar" aria-hidden="true"></div>
       <!-- Pen tool -->
       <button class="tool-btn active" data-tool="pen" title="Pen (P)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -2325,42 +2460,28 @@ body.mode-3d #chat-panel {
           <line x1="9" y1="3" x2="13" y2="7"/>
         </svg>
       </button>
-      <!-- Rect -->
-      <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="4" width="12" height="8" rx="1.5"/>
-        </svg>
-      </button>
-      <!-- Ellipse -->
-      <button class="tool-btn" data-tool="ellipse" title="Ellipse (O)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
-          <ellipse cx="8" cy="8" rx="6" ry="4"/>
-        </svg>
-      </button>
-      <!-- Triangle -->
-      <button class="tool-btn" data-tool="triangle" title="Triangle (G)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
-          <path d="M8 2.5L14 13.5H2z"/>
-        </svg>
-      </button>
+      <div class="shape-tools-dropdown-wrap">
+        <button type="button" class="tool-btn" id="shapes-menu-btn" title="Shapes (R, O, G, L, A)" aria-expanded="false" aria-haspopup="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+            <rect x="2" y="3" width="7" height="6" rx="1"/>
+            <path d="M10 4l4 3.5-4 3.5"/>
+            <path d="M4 11l3 3 3-3"/>
+          </svg>
+          <span class="shape-caret">▾</span>
+        </button>
+        <div id="shapes-menu" class="shapes-menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-shape-tool="rect"><span>Rectangle</span><span class="sk">R</span></button>
+          <button type="button" role="menuitem" data-shape-tool="ellipse"><span>Ellipse</span><span class="sk">O</span></button>
+          <button type="button" role="menuitem" data-shape-tool="triangle"><span>Triangle</span><span class="sk">G</span></button>
+          <button type="button" role="menuitem" data-shape-tool="line"><span>Line</span><span class="sk">L</span></button>
+          <button type="button" role="menuitem" data-shape-tool="arrow"><span>Arrow</span><span class="sk">A</span></button>
+        </div>
+      </div>
       <!-- Highlighter -->
       <button class="tool-btn" data-tool="highlighter" title="Highlighter (Y)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 13h10"/>
           <rect x="4" y="2" width="8" height="9" rx="3" fill="rgba(250,204,21,0.35)" stroke="currentColor"/>
-        </svg>
-      </button>
-      <!-- Line -->
-      <button class="tool-btn" data-tool="line" title="Line (L)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-          <line x1="2" y1="13" x2="14" y2="3"/>
-        </svg>
-      </button>
-      <!-- Arrow -->
-      <button class="tool-btn" data-tool="arrow" title="Arrow (A)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="2" y1="14" x2="13" y2="3"/>
-          <polyline points="7,3 13,3 13,9"/>
         </svg>
       </button>
       <!-- Text -->
@@ -2454,12 +2575,6 @@ body.mode-3d #chat-panel {
         </button>
       </div>
 
-      <!-- Quick color palette: click a swatch to set foreground; right-click to set background. -->
-      <div id="color-palette" role="group" aria-label="Quick colors" title="Click: set foreground · Right-click: set background"></div>
-
-      <!-- Recently used colors (auto-tracked). -->
-      <div id="color-recents" role="group" aria-label="Recent colors" title="Recent colors" style="display:none"></div>
-
       <!-- Stroke opacity (applied to new strokes / shapes). -->
       <div id="stroke-opacity-wrap" title="Stroke opacity">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" style="opacity:0.55">
@@ -2518,6 +2633,7 @@ body.mode-3d #chat-panel {
 
     <!-- 3D toolbar -->
     <div id="toolbar-3d" role="toolbar" aria-label="3D tools" style="display:none">
+      <div class="t3d-toolbar-drag-handle" title="Drag to move 3D toolbar" aria-hidden="true"></div>
       <div class="t3d-group" id="t3d-mode-group">
         <button type="button" class="t3d-btn t3d-mode-toggle-btn" id="t3d-mode-toggle-btn" title="Toggle Object / Edit mode (Tab)" aria-pressed="false">
           <span class="t3d-mode-toggle-dot" aria-hidden="true"></span>
@@ -2650,12 +2766,6 @@ body.mode-3d #chat-panel {
             <path d="M2 3l5-1 5 1-2 8-3 1-3-1z"/><path d="M2 3l5 4 5-4M7 7v6"/>
           </svg>
         </button>
-        <button type="button" class="t3d-btn" id="t3d-view-btn" title="Camera view presets (Front / Top / Side / Persp)">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
-            <rect x="2" y="2" width="10" height="10" rx="1.5"/><path d="M2 7l5-3 5 3"/>
-          </svg>
-          <span style="font-size:.55rem;margin-left:1px;opacity:.85">▾</span>
-        </button>
         <button type="button" class="t3d-btn" id="t3d-home-btn" title="Reset camera to home view">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
             <path d="M2 7l5-5 5 5"/><path d="M3.5 6.5V12h7V6.5"/>
@@ -2719,6 +2829,16 @@ body.mode-3d #chat-panel {
       <div id="member-list"></div>
     </aside>
 
+    <aside id="notes-popout" class="notes-popout" aria-label="Board notes">
+      <div class="notes-popout-head">
+        <span class="notes-popout-title">Notes</span>
+        <button type="button" id="notes-close-btn" class="btn-icon" style="padding:4px" aria-label="Close notes">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>
+        </button>
+      </div>
+      <div id="notes-mount" class="notes-popout-body"></div>
+    </aside>
+
   </div><!-- /#main -->
 
 </div><!-- /#app -->
@@ -2726,7 +2846,7 @@ body.mode-3d #chat-panel {
 <!-- Vote-to-clear overlay -->
 <div id="vote-clear-overlay">
   <div class="vote-clear-card">
-    <div class="vote-clear-title">🗑️ Clear the board?</div>
+    <div class="vote-clear-title">Clear the board?</div>
     <div class="vote-clear-sub" id="vote-clear-sub">A member wants to clear the board. Vote yes to erase everything.</div>
     <div class="vote-progress" id="vote-progress"></div>
     <div class="vote-clear-btns">
@@ -2998,16 +3118,31 @@ body.mode-3d #chat-panel {
         </div>
       </div>
 
+      <!-- CAD-style measurements (readouts use world units; scale is display-only) -->
+      <div class="settings-section">
+        <div class="settings-section-title">CAD &amp; measurements</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-row-label">Paper unit scale</div>
+            <div class="setting-row-sub">Multiply 2D world distances in readouts (e.g. 1 = generic unit)</div>
+          </div>
+          <input id="cad-unit-factor" type="number" min="0.0001" max="1000000" step="any" value="1"
+            style="width:100px;padding:6px 8px;border-radius:6px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono)">
+        </div>
+        <div id="cad-live-readout" style="font-size:0.78rem;font-family:var(--mono);color:var(--text-mid);line-height:1.65;padding:8px 0 4px;border-top:1px solid var(--border)">
+        </div>
+      </div>
+
       <!-- Board management -->
       <div class="settings-section">
         <div class="settings-section-title">Boards</div>
         <div class="setting-row">
           <div>
             <div class="setting-row-label">Auto-remove empty boards</div>
-            <div class="setting-row-sub">Remove boards with no members on startup</div>
+            <div class="setting-row-sub">After ~45s on load, drop boards with no lobby members (off by default)</div>
           </div>
           <label class="toggle-switch">
-            <input type="checkbox" id="autoclean-toggle" checked>
+            <input type="checkbox" id="autoclean-toggle">
             <span class="toggle-track"></span>
           </label>
         </div>
@@ -3043,6 +3178,7 @@ body.mode-3d #chat-panel {
         <div style="font-size:0.83rem;color:var(--text-mid);line-height:1.6">
           <strong style="color:var(--text)">Slate</strong> — real-time collaborative whiteboard.<br>
           Peer-to-peer via WebRTC · no accounts · no server-side state.<br>
+          <span style="color:var(--text-mid);font-size:0.78rem">Everyone should open the <strong>same site URL</strong> so signaling matches. Extra ICE servers: <code style="font-size:0.72rem">localStorage slate_ice_servers</code> JSON array.</span><br>
           <span style="color:var(--text-dim);font-family:var(--mono);font-size:0.78rem">v1.0.0</span>
         </div>
       </div>
@@ -3470,16 +3606,31 @@ function setConnUI(state_str, label) {
 ═══════════════════════════════════════════ */
 function makePeerConfig() {
   const broker = BROKERS[brokerIdx % BROKERS.length] || {};
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
+    { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ];
+  try {
+    const raw = localStorage.getItem('slate_ice_servers');
+    if (raw) {
+      const extra = JSON.parse(raw);
+      if (Array.isArray(extra)) {
+        extra.forEach(s => {
+          if (!s) return;
+          if (s.urls) iceServers.push(s);
+          else if (s.url) iceServers.push({ urls: s.url, username: s.username, credential: s.credential });
+        });
+      }
+    }
+  } catch (_) {}
   const cfg = {
     debug: 0,
-    config: { iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' },
-      { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-    ]},
+    config: { iceServers },
   };
   ['host', 'port', 'path', 'secure', 'key'].forEach(k => {
     if (broker[k] !== undefined) cfg[k] = broker[k];
@@ -4146,11 +4297,7 @@ function handleData(peerId, data) {
       if (data.strokes)    data.strokes.forEach(s    => doc.strokes.set(s.id, s));
       if (data.delStrokes) data.delStrokes.forEach(id => doc.strokes.delete(id));
       if (Array.isArray(data.layers)) {
-        doc.layers = data.layers.map(l => ({
-          id: String(l.id),
-          name: String(l.name || 'Layer'),
-          visible: l.visible !== false,
-        }));
+        doc.layers = data.layers.map(_coerceLayer);
         if (typeof window.slateLayers?._onLayersReplaced === 'function') {
           window.slateLayers._onLayersReplaced();
         }
@@ -4672,6 +4819,8 @@ function leaveBoard() {
   syncInviteHash(null);
   try { window.slateScene3dRpc?.clearAllPeerCameras?.(); } catch (_) {}
   applyWorkspaceMode(null);
+  document.getElementById('notes-popout')?.classList.remove('open');
+  document.getElementById('chat-panel')?.classList.remove('open');
 
   try { state.wakeLock?.release(); state.wakeLock = null; } catch {}
   stopAutoSave();
@@ -4847,8 +4996,19 @@ function markBoardActivity(peerId) {
 // A "shape" covers rects, ellipses, lines.
 // A "stroke" is a free-pen path (list of points).
 // Default layer stack (top-to-bottom in UI = first element rendered last/on top).
+function _coerceLayer(l) {
+  if (!l || typeof l !== 'object') return { id: 'l1', name: 'Layer 1', visible: true, opacity: 1 };
+  const op = Number(l.opacity);
+  return {
+    id: String(l.id),
+    name: String(l.name || 'Layer'),
+    visible: l.visible !== false,
+    opacity: Number.isFinite(op) ? Math.max(0, Math.min(1, op)) : 1,
+  };
+}
+
 function _defaultLayers() {
-  return [{ id: 'l1', name: 'Layer 1', visible: true }];
+  return [{ id: 'l1', name: 'Layer 1', visible: true, opacity: 1 }];
 }
 
 // Default 3D scene — one cube on the grid origin.
@@ -4911,11 +5071,7 @@ function docApplySnapshot(snap) {
   if (snap.shapes)  snap.shapes.forEach(s  => doc.shapes.set(s.id, s));
   if (snap.strokes) snap.strokes.forEach(s  => doc.strokes.set(s.id, s));
   if (Array.isArray(snap.layers) && snap.layers.length) {
-    doc.layers = snap.layers.map(l => ({
-      id: String(l.id),
-      name: String(l.name || 'Layer'),
-      visible: l.visible !== false,
-    }));
+    doc.layers = snap.layers.map(_coerceLayer);
   }
   if (snap.scene3d && Array.isArray(snap.scene3d.objects)) {
     doc.scene3d = { objects: snap.scene3d.objects.map(_normalizeSceneObject) };
@@ -4991,11 +5147,7 @@ function docMergeRemoteSnapshot(snap) {
     const isLocalDefault =
       doc.layers.length === 1 && doc.layers[0].id === 'l1' && doc.layers[0].name === 'Layer 1';
     if (isLocalDefault) {
-      doc.layers = snap.layers.map(l => ({
-        id: String(l.id),
-        name: String(l.name || 'Layer'),
-        visible: l.visible !== false,
-      }));
+      doc.layers = snap.layers.map(_coerceLayer);
       if (typeof window.slateLayers?._onLayersReplaced === 'function') {
         window.slateLayers._onLayersReplaced();
       }
@@ -5040,7 +5192,7 @@ function docSerialize() {
   return {
     shapes:  [...doc.shapes.values()],
     strokes: [...doc.strokes.values()],
-    layers:  doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible })),
+    layers:  doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity })),
     scene3d: { objects: doc.scene3d.objects.map(_normalizeSceneObject) },
     notes:   { sections: doc.notes.sections.map(_normalizeNoteSection) },
   };
@@ -5075,7 +5227,7 @@ function _genNoteId() {
    Photoshop-style layers panel + sync)
 ═══════════════════════════════════════════ */
 function _broadcastLayers() {
-  pendingDiff.layers = doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible }));
+  pendingDiff.layers = doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity }));
   scheduleDiff();
 }
 
@@ -5099,7 +5251,7 @@ window.slateLayers = {
       .filter(Boolean)
       .map(m => parseInt(m[1], 10));
     const next = (usedNumbers.length ? Math.max(...usedNumbers) : doc.layers.length) + 1;
-    const layer = { id: _genLayerId(), name: 'Layer ' + next, visible: true };
+    const layer = { id: _genLayerId(), name: 'Layer ' + next, visible: true, opacity: 1 };
     doc.layers.unshift(layer);
     window.__slateActiveLayerId = layer.id;
     invalidateStatic(); scheduleRender();
@@ -5137,6 +5289,18 @@ window.slateLayers = {
     const next = visible !== false;
     if (layer.visible === next) return false;
     layer.visible = next;
+    invalidateStatic(); scheduleRender();
+    _broadcastLayers();
+    return true;
+  },
+  setOpacity(id, opacity) {
+    const layer = doc.layers.find(l => l.id === id);
+    if (!layer) return false;
+    const v = Number(opacity);
+    if (!Number.isFinite(v)) return false;
+    const next = Math.max(0, Math.min(1, v));
+    if (layer.opacity === next) return false;
+    layer.opacity = next;
     invalidateStatic(); scheduleRender();
     _broadcastLayers();
     return true;
@@ -5622,6 +5786,11 @@ function drawDocInLayerOrder(c) {
     const layer = layers[i];
     if (!layer || layer.visible === false) continue;
     const lid = layer.id;
+    const lo = layer.opacity != null && Number.isFinite(layer.opacity)
+      ? Math.max(0, Math.min(1, layer.opacity))
+      : 1;
+    c.save();
+    c.globalAlpha = lo;
     const isBottom = lid === bottomId;
     doc.shapes.forEach(s => {
       const sl = s._layer;
@@ -5633,6 +5802,7 @@ function drawDocInLayerOrder(c) {
       const itemLayer = sl && knownIds.has(sl) ? sl : null;
       if (itemLayer ? itemLayer === lid : isBottom) drawStrokeOn(c, s);
     });
+    c.restore();
   }
 }
 
@@ -5669,6 +5839,9 @@ let fillColor     = '#e8e6ff';
 let useFill       = false;
 let fontSize      = 200;
 let strokeOpacity = 1;        // 0..1 — appended to FG hex as alpha for new strokes
+/** Sticky notes use a fixed neutral pad + ink (text only; not tied to stroke swatches). */
+const SLATE_STICKY_BG  = '#f0f0f4';
+const SLATE_STICKY_INK = '#1a1a2e';
 function _alphaHexSuffix(opacity) {
   if (!Number.isFinite(opacity) || opacity >= 0.999) return '';
   const a = Math.max(0, Math.min(255, Math.round(opacity * 255)));
@@ -5839,10 +6012,12 @@ function worldToScreen(wx, wy) {
   return { sx: wx * vp.zoom + vp.panX, sy: wy * vp.zoom + vp.panY };
 }
 
+function zoomBounds() {
+  return { min: fitZoom * 0.2, max: fitZoom * 16 };
+}
+
 function setZoom(z, cx, cy) {
-  // Allow zoom from 20% to 1600% of fitZoom (full-fit)
-  const min = fitZoom * 0.2;
-  const max = fitZoom * 16;
+  const { min, max } = zoomBounds();
   const clamped = Math.max(min, Math.min(max, z));
   const { wx, wy } = screenToWorld(cx ?? canvas.width / 2, cy ?? canvas.height / 2);
   vp.zoom = clamped;
@@ -5857,6 +6032,7 @@ function updateZoomLabel() {
   const el = document.getElementById('zoom-label');
   // 100% means "whole canvas fits screen" — i.e., vp.zoom === fitZoom
   if (el && fitZoom > 0) el.textContent = Math.round((vp.zoom / fitZoom) * 100) + '%';
+  try { window.refreshCadReadout?.(); } catch (_) {}
 }
 
 // RAF render
@@ -5993,9 +6169,9 @@ function drawShape(s, preview = false) {
       ctx.stroke();
       break;
     case 'sticky': {
-      // Sticky = rounded rect with optional inset text; uses fill color as bg.
+      // Sticky = rounded rect with optional inset text; neutral pad (not user palette).
       const rx = Math.min(8, Math.abs(s.w) / 6);
-      const bg = s.fill || '#fef3c7';
+      const bg = SLATE_STICKY_BG;
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') ctx.roundRect(s.x, s.y, s.w, s.h, rx);
       else ctx.rect(s.x, s.y, s.w, s.h);
@@ -6004,7 +6180,7 @@ function drawShape(s, preview = false) {
       ctx.fillStyle = 'rgba(0,0,0,0.08)';
       ctx.fillRect(s.x, s.y + s.h - 4, s.w, 4);
       if (s.text) {
-        ctx.fillStyle = s.color || '#1a1a2e';
+        ctx.fillStyle = SLATE_STICKY_INK;
         const fs = s.fontSize || 16;
         ctx.font = `${fs}px Inter, sans-serif`;
         const lines = s.text.split('\n');
@@ -6283,7 +6459,8 @@ function onPointerMove(e) {
       if (lastPinchDist > 10) {
         const ratio  = dist / lastPinchDist;
         const { wx, wy } = screenToWorld(cx, cy);
-        vp.zoom  = Math.max(0.1, Math.min(8, vp.zoom * ratio));
+        const { min, max } = zoomBounds();
+        vp.zoom  = Math.max(min, Math.min(max, vp.zoom * ratio));
         vp.panX  = cx - wx * vp.zoom;
         vp.panY  = cy - wy * vp.zoom;
       }
@@ -6340,7 +6517,7 @@ function onPointerMove(e) {
     const sw = Math.abs(wx - shapeStart.wx) || 140, sh = Math.abs(wy - shapeStart.wy) || 140;
     shapePreview = {
       id: '__preview__', type: 'sticky', x: sx, y: sy, w: sw, h: sh,
-      color: '#1a1a2e', fill: '#fef3c7', strokeWidth: 1,
+      color: SLATE_STICKY_INK, fill: SLATE_STICKY_BG, strokeWidth: 1,
       peerId: state.myId, t: Date.now(),
     };
     scheduleRender();
@@ -6443,8 +6620,8 @@ function onPointerUp(e) {
     const shape = {
       id: genId(), type: 'sticky',
       x, y, w, h,
-      color: '#1a1a2e',
-      fill: fillColor && fillColor !== '#ffffff' ? fillColor : '#fef3c7',
+      color: SLATE_STICKY_INK,
+      fill: SLATE_STICKY_BG,
       text: '',
       fontSize: 18,
       peerId: state.myId, t: Date.now(),
@@ -6687,33 +6864,90 @@ function deleteSelectedItems() {
   scheduleRender();
 }
 
+/** Split a polyline into contiguous runs of points outside eraser radius. */
+function _splitStrokePointsOutside(points, wx, wy, r2) {
+  const runs = [];
+  let cur = [];
+  for (const pt of points) {
+    const px = pt[0], py = pt[1];
+    const d2 = (px - wx) * (px - wx) + (py - wy) * (py - wy);
+    if (d2 < r2) {
+      if (cur.length >= 2) runs.push(cur);
+      cur = [];
+    } else {
+      cur.push(pt);
+    }
+  }
+  if (cur.length >= 2) runs.push(cur);
+  return runs;
+}
+
+function _distPointToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const qx = x1 + t * dx, qy = y1 + t * dy;
+  return Math.hypot(px - qx, py - qy);
+}
+
+function _distPointToShape(wx, wy, s) {
+  if (!s) return Infinity;
+  if (s.type === 'line' || s.type === 'arrow') {
+    return _distPointToSeg(wx, wy, s.x, s.y, s.x + (s.w || 0), s.y + (s.h || 0));
+  }
+  const x = s.x, y = s.y, w = s.w || 0, h = s.h || 0;
+  const l = Math.min(x, x + w), r = Math.max(x, x + w);
+  const t = Math.min(y, y + h), b = Math.max(y, y + h);
+  const cx = Math.max(l, Math.min(wx, r));
+  const cy = Math.max(t, Math.min(wy, b));
+  return Math.hypot(wx - cx, wy - cy);
+}
+
 function eraseAt(wx, wy) {
-  const r = (strokeSize * 2 + 8) / vp.zoom;
+  const r = (strokeSize * 2 + 6) / vp.zoom;
+  const r2 = r * r;
   let changed = false;
-  doc.strokes.forEach((s, id) => {
-    if (s.peerId !== state.myId && !state.isBoardHost) return;
-    for (const [px, py] of (s.points || [])) {
-      if (Math.hypot(px - wx, py - wy) < r) {
+  const strokeIds = [...doc.strokes.keys()];
+  for (const id of strokeIds) {
+    const s = doc.strokes.get(id);
+    if (!s || (s.peerId !== state.myId && !state.isBoardHost)) continue;
+    const pts = s.points;
+    if (!pts || !pts.length) continue;
+    if (pts.length === 1) {
+      const d2 = (pts[0][0] - wx) ** 2 + (pts[0][1] - wy) ** 2;
+      if (d2 < r2) {
         doc.strokes.delete(id);
         pendingDiff.delStrokes.push(id);
-        scheduleDiff();
         changed = true;
-        break;
       }
+      continue;
     }
-  });
+    const runs = _splitStrokePointsOutside(pts, wx, wy, r2);
+    if (runs.length === 1 && runs[0].length === pts.length) continue;
+    doc.strokes.delete(id);
+    pendingDiff.delStrokes.push(id);
+    runs.forEach(seg => {
+      const ns = { ...s, id: genId(), points: seg, t: Date.now() };
+      doc.strokes.set(ns.id, ns);
+      pendingDiff.strokes.push({ ...ns });
+    });
+    changed = true;
+  }
   doc.shapes.forEach((s, id) => {
     if (s.peerId !== state.myId && !state.isBoardHost) return;
-    const cx = s.x + (s.w || 0) / 2;
-    const cy = s.y + (s.h || 0) / 2;
-    if (Math.hypot(cx - wx, cy - wy) < r + Math.max(Math.abs(s.w || 0), Math.abs(s.h || 0)) / 2) {
+    if (_distPointToShape(wx, wy, s) < r) {
       doc.shapes.delete(id);
       pendingDiff.removed.push(id);
-      scheduleDiff();
       changed = true;
     }
   });
-  if (changed) { invalidateStatic(); scheduleRender(); }
+  if (changed) {
+    scheduleDiff();
+    invalidateStatic();
+    scheduleRender();
+  }
 }
 
 function hitTest(wx, wy) {
@@ -6976,15 +7210,27 @@ function redo() {
   invalidateStatic(); scheduleRender();
 }
 
+const _shapeToolIds = ['rect', 'ellipse', 'triangle', 'line', 'arrow'];
+function _closeShapesMenu() {
+  const m = document.getElementById('shapes-menu');
+  const b = document.getElementById('shapes-menu-btn');
+  if (m) { m.hidden = true; }
+  if (b) { b.setAttribute('aria-expanded', 'false'); }
+}
+function _isShapeTool(t) { return _shapeToolIds.includes(t); }
+
 // ── Tool selection ──
 function setTool(tool) {
   if (tool !== 'select') { selItems = []; selBox = null; selHandle = null; selDragStart = null; }
   const prev = currentTool;
   currentTool = tool;
   if (prev !== tool) { try { window.slateSfx?.play('tool-switch'); } catch (_) {} }
+  _closeShapesMenu();
   document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
   });
+  const smBtn = document.getElementById('shapes-menu-btn');
+  if (smBtn) smBtn.classList.toggle('active', _isShapeTool(tool));
   const cv = document.getElementById('board-canvas');
   cv.className = '';
   if (tool === 'select')      cv.classList.add('tool-select');
@@ -6993,6 +7239,9 @@ function setTool(tool) {
   else if (tool === 'pan')    cv.classList.add('tool-pan');
   else if (tool === 'highlighter') cv.classList.add('tool-highlighter');
   else if (tool === 'arrow')  cv.classList.add('tool-arrow');
+  else if (tool === 'rect')   cv.classList.add('tool-rect');
+  else if (tool === 'ellipse')cv.classList.add('tool-ellipse');
+  else if (tool === 'line')   cv.classList.add('tool-line');
   else if (tool === 'eyedropper') cv.classList.add('tool-eyedropper');
   else if (tool === 'fill')   cv.classList.add('tool-fill');
   else if (tool === 'sticky') cv.classList.add('tool-sticky');
@@ -7008,6 +7257,30 @@ function setTool(tool) {
 document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
   btn.addEventListener('click', () => setTool(btn.dataset.tool));
 });
+
+(function wireShapesMenu() {
+  const btn = document.getElementById('shapes-menu-btn');
+  const menu = document.getElementById('shapes-menu');
+  if (!btn || !menu) return;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  menu.querySelectorAll('[data-shape-tool]').forEach(item => {
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      const t = item.getAttribute('data-shape-tool');
+      if (t) setTool(t);
+    });
+  });
+  document.addEventListener('mousedown', e => {
+    if (menu.hidden) return;
+    if (btn.contains(e.target) || menu.contains(e.target)) return;
+    _closeShapesMenu();
+  }, true);
+})();
 
 document.getElementById('undo-btn').addEventListener('click', () => {
   undo();
@@ -7030,7 +7303,6 @@ document.getElementById('stroke-size').addEventListener('input', e => {
    BG = shape fill color. The two pickers are nested inside #color-fgbg. */
 document.getElementById('color-picker').addEventListener('input', e => {
   strokeColor = e.target.value;
-  if (typeof _highlightActiveSwatch === 'function') _highlightActiveSwatch();
 });
 document.getElementById('fill-color').addEventListener('input', e => {
   fillColor = e.target.value;
@@ -7049,7 +7321,6 @@ document.getElementById('cfg-swap-btn')?.addEventListener('click', () => {
   const a = fg.value, b = bg.value;
   fg.value = b; bg.value = a;
   strokeColor = b; fillColor = a;
-  if (typeof _highlightActiveSwatch === 'function') _highlightActiveSwatch();
 });
 
 document.getElementById('cfg-default-btn')?.addEventListener('click', () => {
@@ -7057,99 +7328,12 @@ document.getElementById('cfg-default-btn')?.addEventListener('click', () => {
   const bg = document.getElementById('fill-color');
   fg.value = '#000000'; bg.value = '#ffffff';
   strokeColor = '#000000'; fillColor = '#ffffff';
-  _highlightActiveSwatch();
 });
 
 /* ── Stroke opacity slider ── */
 document.getElementById('stroke-opacity')?.addEventListener('input', e => {
   strokeOpacity = Math.max(0.1, Math.min(1, Number(e.target.value) / 100));
 });
-
-/* ── Quick color palette + recent colors ──
-   Click a swatch → set foreground (and update the color picker).
-   Right-click   → set background. Recently picked color-picker colors are
-   auto-tracked into the recents row below. */
-const PALETTE_COLORS = [
-  '#1a1a2e', '#ffffff', '#f87171', '#fb923c',
-  '#facc15', '#34d399', '#22d3ee', '#7c6aff',
-  '#c084fc', '#f472b6', '#94a3b8', '#0ea5e9',
-];
-const RECENTS_LS_KEY = 'slate_color_recents';
-let recentColors = [];
-try {
-  const raw = JSON.parse(localStorage.getItem(RECENTS_LS_KEY) || '[]');
-  if (Array.isArray(raw)) recentColors = raw.filter(c => typeof c === 'string').slice(0, 8);
-} catch (_) {}
-
-function _setFgFromSwatch(hex) {
-  strokeColor = hex;
-  const fg = document.getElementById('color-picker');
-  if (fg) fg.value = hex;
-  _highlightActiveSwatch();
-  try { window.slateSfx?.play('swatch'); } catch (_) {}
-}
-function _setBgFromSwatch(hex) {
-  fillColor = hex;
-  const bg = document.getElementById('fill-color');
-  if (bg) bg.value = hex;
-  try { window.slateSfx?.play('swatch'); } catch (_) {}
-}
-function _buildSwatch(hex, opts = {}) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'swatch-btn';
-  b.dataset.color = hex;
-  b.style.background = hex;
-  b.title = opts.title || `${hex} (click: FG · right-click: BG)`;
-  b.addEventListener('click', e => {
-    e.preventDefault();
-    _setFgFromSwatch(hex);
-    b.classList.remove('just-picked');
-    void b.offsetWidth;
-    b.classList.add('just-picked');
-  });
-  b.addEventListener('contextmenu', e => {
-    e.preventDefault();
-    _setBgFromSwatch(hex);
-    b.classList.remove('just-picked');
-    void b.offsetWidth;
-    b.classList.add('just-picked');
-  });
-  return b;
-}
-function _renderPalette() {
-  const pal = document.getElementById('color-palette');
-  if (!pal) return;
-  pal.innerHTML = '';
-  PALETTE_COLORS.forEach(c => pal.appendChild(_buildSwatch(c)));
-  _highlightActiveSwatch();
-}
-function _renderRecents() {
-  const row = document.getElementById('color-recents');
-  if (!row) return;
-  row.innerHTML = '';
-  if (!recentColors.length) { row.style.display = 'none'; return; }
-  row.style.display = '';
-  recentColors.slice(0, 8).forEach(c => row.appendChild(_buildSwatch(c, { title: `Recent: ${c}` })));
-}
-function _highlightActiveSwatch() {
-  document.querySelectorAll('#color-palette .swatch-btn, #color-recents .swatch-btn').forEach(b => {
-    b.classList.toggle('is-fg', b.dataset.color?.toLowerCase() === String(strokeColor).toLowerCase());
-  });
-}
-function _pushRecent(hex) {
-  if (!hex || typeof hex !== 'string') return;
-  const norm = hex.toLowerCase();
-  if (PALETTE_COLORS.map(c => c.toLowerCase()).includes(norm)) return;
-  recentColors = [norm, ...recentColors.filter(c => c.toLowerCase() !== norm)].slice(0, 8);
-  try { localStorage.setItem(RECENTS_LS_KEY, JSON.stringify(recentColors)); } catch (_) {}
-  _renderRecents();
-}
-document.getElementById('color-picker')?.addEventListener('change', e => {
-  _pushRecent(e.target.value);
-});
-_renderPalette();
-_renderRecents();
 
 document.addEventListener('keydown', e => {
   const tag = document.activeElement?.tagName;
@@ -7373,7 +7557,10 @@ document.getElementById('import-file-input')?.addEventListener('change', async e
 // Render to a specific context (for export)
 function drawStrokeOn(c, s) {
   c.save();
-  if (s.highlighter) { c.globalAlpha = 0.38; c.globalCompositeOperation = 'multiply'; }
+  if (s.highlighter) {
+    c.globalAlpha *= 0.38;
+    c.globalCompositeOperation = 'multiply';
+  }
   if (!s.points || s.points.length < 2) {
     if (s.points?.length === 1) {
       c.beginPath();
@@ -7422,6 +7609,36 @@ function drawShapeOn(c, s) {
       c.moveTo(x2,y2); c.lineTo(x2-hw*(ux*Math.cos(sp)+uy*Math.sin(sp)), y2-hw*(uy*Math.cos(sp)-ux*Math.sin(sp)));
       c.moveTo(x2,y2); c.lineTo(x2-hw*(ux*Math.cos(sp)-uy*Math.sin(sp)), y2-hw*(uy*Math.cos(sp)+ux*Math.sin(sp)));
       c.stroke(); break;
+    }
+    case 'triangle': {
+      c.beginPath();
+      c.moveTo(s.x + s.w / 2, s.y);
+      c.lineTo(s.x + s.w, s.y + s.h);
+      c.lineTo(s.x, s.y + s.h);
+      c.closePath();
+      if (s.fill) { c.fillStyle = s.fill; c.fill(); }
+      c.stroke();
+      break;
+    }
+    case 'sticky': {
+      const rx = Math.min(8, Math.abs(s.w) / 6);
+      const bg = SLATE_STICKY_BG;
+      c.beginPath();
+      if (typeof c.roundRect === 'function') c.roundRect(s.x, s.y, s.w, s.h, rx);
+      else c.rect(s.x, s.y, s.w, s.h);
+      c.fillStyle = bg; c.fill();
+      c.fillStyle = 'rgba(0,0,0,0.08)';
+      c.fillRect(s.x, s.y + s.h - 4, s.w, 4);
+      if (s.text) {
+        c.fillStyle = SLATE_STICKY_INK;
+        const fs = s.fontSize || 16;
+        c.font = `${fs}px Inter, sans-serif`;
+        const lines = s.text.split('\n');
+        const lh = fs * 1.4;
+        const pad = 10;
+        lines.forEach((line, i) => c.fillText(line, s.x + pad, s.y + pad + (i + 0.85) * lh));
+      }
+      break;
     }
     case 'text':
       c.font = `${s.fontSize || 18}px Inter,sans-serif`;
@@ -7647,9 +7864,9 @@ function renderMembers() {
     const peerAudioMuted = !m.isMe && peerOutVol < 0.01;
     const voiceCtl = m.isMe
       ? `<button type="button" class="member-voice-btn no-mic" id="member-self-voice-btn" title="Microphone" aria-label="Microphone">
-          <svg class="member-mic-icon" width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="1" width="5" height="7" rx="2.5"/>
-            <path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>
+          <svg class="member-mic-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3z"/>
+            <path d="M19 11a7 7 0 0 1-14 0M12 18v3M9 21h6"/>
           </svg>
           <div class="mic-bar" aria-hidden="true">
             <div class="mic-bar-seg" style="height:3px"></div>
@@ -7824,6 +8041,8 @@ function updateBoardControls() {
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
   const leaveBtn = document.getElementById('leave-board-btn');
   if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
+  const notesHead = document.getElementById('notes-header-btn');
+  if (notesHead) notesHead.style.display = state.currentBoard ? 'flex' : 'none';
   updateMuteBtn();
   updateHostControlsBar();
 }
@@ -8081,6 +8300,24 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
   const openBtn    = document.getElementById('sidebar-settings-btn');
   const closeBtn   = document.getElementById('settings-close');
 
+  function refreshCadReadout() {
+    const el = document.getElementById('cad-live-readout');
+    if (!el) return;
+    let f = 1;
+    try { f = parseFloat(localStorage.getItem('slate_cad_unit_factor') || '1') || 1; } catch (_) {}
+    const W0 = typeof WORLD_W !== 'undefined' ? WORLD_W : 9600;
+    const H0 = typeof WORLD_H !== 'undefined' ? WORLD_H : 6400;
+    const wf = W0 * f;
+    const hf = H0 * f;
+    let strokeU = '—';
+    if (typeof strokeSize !== 'undefined' && Number.isFinite(strokeSize)) strokeU = (strokeSize * f).toFixed(2);
+    let zoomT = '';
+    if (typeof fitZoom !== 'undefined' && typeof vp !== 'undefined' && fitZoom > 0) {
+      zoomT = ` · 2D view ${Math.round((vp.zoom / fitZoom) * 100)}%`;
+    }
+    el.textContent = `Paper (2D): ${wf.toFixed(0)} × ${hf.toFixed(0)} · Stroke width: ${strokeU}${zoomT} · 3D grid: 1 cell = 1 scene unit`;
+  }
+
   function openSettings() {
     const nameInput = document.getElementById('name-change-input');
     if (nameInput) nameInput.value = state.myName || '';
@@ -8090,6 +8327,13 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     const sfxVol    = document.getElementById('sfx-volume-slider');
     if (sfxToggle && window.slateSfx) sfxToggle.checked = window.slateSfx.isEnabled();
     if (sfxVol    && window.slateSfx) sfxVol.value      = String(window.slateSfx.getVolume());
+    const cadIn = document.getElementById('cad-unit-factor');
+    if (cadIn) {
+      const v = localStorage.getItem('slate_cad_unit_factor');
+      const n = v != null ? parseFloat(v) : 1;
+      cadIn.value = String(Number.isFinite(n) && n > 0 ? n : 1);
+    }
+    refreshCadReadout();
     overlay.classList.add('show');
     try { window.slateSfx?.play('panel-open'); } catch (_) {}
   }
@@ -8108,6 +8352,12 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
   });
   document.getElementById('sfx-volume-slider')?.addEventListener('change', () => {
     try { window.slateSfx?.play('click'); } catch (_) {}
+  });
+
+  document.getElementById('cad-unit-factor')?.addEventListener('change', e => {
+    const n = parseFloat(e.target.value);
+    if (Number.isFinite(n) && n > 0) localStorage.setItem('slate_cad_unit_factor', String(n));
+    refreshCadReadout();
   });
 
   openBtn?.addEventListener('click', openSettings);
@@ -8269,7 +8519,7 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
   // ── Board management ──
   const autocleanToggle = document.getElementById('autoclean-toggle');
   if (autocleanToggle) {
-    autocleanToggle.checked = localStorage.getItem('slate_autoclean') !== '0';
+    autocleanToggle.checked = localStorage.getItem('slate_autoclean') === '1';
     autocleanToggle.addEventListener('change', () => {
       localStorage.setItem('slate_autoclean', autocleanToggle.checked ? '1' : '0');
     });
@@ -8400,6 +8650,7 @@ document.getElementById('knock-deny-btn').addEventListener('click', () => {
     });
   }
 
+  window.refreshCadReadout = refreshCadReadout;
 })();
 
 /* ═══════════════════════════════════════════
@@ -9011,12 +9262,14 @@ function updateMuteBtn() {
   }
   const icon = btn.querySelector('.member-mic-icon');
   if (icon) {
+    const micOn = '<path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M9 21h6"/>';
+    const micOff = micOn + '<line x1="3" y1="3" x2="21" y2="21" stroke="var(--danger)" stroke-width="1.65"/>';
     if (!voiceState.localStream) {
-      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>';
+      icon.innerHTML = micOn;
     } else if (voiceState.isMuted) {
-      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/><line x1="2" y1="11" x2="11" y2="2" stroke="var(--danger)" stroke-width="1.5"/>';
+      icon.innerHTML = micOff;
     } else {
-      icon.innerHTML = '<rect x="4" y="1" width="5" height="7" rx="2.5"/><path d="M2 6.5A4.5 4.5 0 0 0 11 6.5M6.5 11v1.5"/>';
+      icon.innerHTML = micOn;
     }
   }
 }
@@ -9146,6 +9399,7 @@ document.getElementById('chat-btn').addEventListener('click', () => {
   const panel = document.getElementById('chat-panel');
   panel.classList.toggle('open');
   if (panel.classList.contains('open')) {
+    document.getElementById('notes-popout')?.classList.remove('open');
     // Floating panels overlap on phones — close siblings so chat actually
     // gets the foreground when the user opens it.
     if (window.innerWidth <= 768) {
@@ -9171,6 +9425,32 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
   document.getElementById('chat-panel').classList.remove('open');
 });
 
+document.getElementById('notes-header-btn')?.addEventListener('click', () => {
+  const np = document.getElementById('notes-popout');
+  if (!np) return;
+  np.classList.toggle('open');
+  if (np.classList.contains('open')) {
+    document.getElementById('chat-panel')?.classList.remove('open');
+    if (window.innerWidth <= 768) {
+      document.getElementById('right-dock')?.classList.remove('dock-open');
+      document.getElementById('mobile-dock-backdrop')?.classList.remove('visible');
+      document.getElementById('member-panel')?.classList.remove('expanded');
+    }
+  }
+});
+
+document.getElementById('notes-close-btn')?.addEventListener('click', () => {
+  document.getElementById('notes-popout')?.classList.remove('open');
+});
+
+document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
+  const sb = document.getElementById('sidebar');
+  const btn = document.getElementById('boards-tab-toggle');
+  if (!sb || !btn) return;
+  const open = sb.classList.toggle('boards-list-open');
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
 /* ═══════════════════════════════════════════
    DRAGGABLE FLOATING PANELS — chat + members
    Click-and-drag on the header to move; position persists per panel.
@@ -9179,6 +9459,7 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
   const panels = [
     { panelId: 'chat-panel',   handleSel: '.chat-header',         storageKey: 'slate_chat_pos' },
     { panelId: 'member-panel', handleSel: '.member-panel-header', storageKey: 'slate_member_pos' },
+    { panelId: 'notes-popout', handleSel: '.notes-popout-head',    storageKey: 'slate_notes_pos' },
   ];
 
   function clampToViewport(x, y, w, h) {
@@ -9277,12 +9558,106 @@ document.getElementById('chat-close-btn').addEventListener('click', () => {
 
   panels.forEach(p => wire(p.panelId, p.handleSel, p.storageKey));
 
+  function wireFloatingToolbar(panelId, handleSel, storageKey) {
+    const panel = document.getElementById(panelId);
+    const handle = panel?.querySelector(handleSel);
+    if (!panel || !handle) return;
+    const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+    function clearFloat() {
+      panel.classList.remove('toolbar-floating', 'dragging-toolbar');
+      panel.style.position = '';
+      panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = '';
+    }
+
+    function applyStoredToolbar() {
+      if (isMobile()) { clearFloat(); return; }
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        const { x, y } = JSON.parse(raw);
+        if (typeof x !== 'number' || typeof y !== 'number') return;
+        const rect = panel.getBoundingClientRect();
+        const w = rect.width || 80;
+        const h = rect.height || 80;
+        const c = clampToViewport(x, y, w, h);
+        panel.classList.add('toolbar-floating');
+        panel.style.position = 'fixed';
+        panel.style.left = c.x + 'px';
+        panel.style.top = c.y + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      } catch (_) {}
+    }
+
+    applyStoredToolbar();
+    window.addEventListener('resize', () => {
+      if (isMobile()) clearFloat();
+      else applyStoredToolbar();
+    });
+
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || isMobile()) return;
+      e.preventDefault();
+      if (e.target.closest('button, input, textarea, select')) return;
+
+      let rect = panel.getBoundingClientRect();
+      if (!panel.classList.contains('toolbar-floating')) {
+        panel.classList.add('toolbar-floating');
+        panel.style.position = 'fixed';
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      }
+
+      rect = panel.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origX = rect.left;
+      const origY = rect.top;
+      const w = rect.width;
+      const h = rect.height;
+      let moved = false;
+      panel.classList.add('dragging-toolbar');
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+
+      function onMove(ev) {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) < 4) return;
+        moved = true;
+        const c = clampToViewport(origX + dx, origY + dy, w, h);
+        panel.style.left = c.x + 'px';
+        panel.style.top = c.y + 'px';
+      }
+      function onUp(ev) {
+        panel.classList.remove('dragging-toolbar');
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
+        if (moved) {
+          const r = panel.getBoundingClientRect();
+          try { localStorage.setItem(storageKey, JSON.stringify({ x: r.left, y: r.top })); } catch (_) {}
+        }
+      }
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+  }
+
+  wireFloatingToolbar('draw-toolbar', '.toolbar-drag-handle', 'slate_toolbar_2d_pos');
+  wireFloatingToolbar('toolbar-3d', '.t3d-toolbar-drag-handle', 'slate_toolbar_3d_pos');
+
   // Re-clamp on window resize so panels don't end up off-screen.
   window.addEventListener('resize', () => {
     panels.forEach(({ panelId }) => {
       const panel = document.getElementById(panelId);
       if (!panel) return;
       if (panelId === 'chat-panel' && document.body.classList.contains('mode-3d') && window.matchMedia('(min-width: 769px)').matches) return;
+      if (panelId === 'notes-popout' && !panel.classList.contains('open')) return;
       const rect = panel.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
       const c = clampToViewport(rect.left, rect.top, rect.width, rect.height);
@@ -9301,10 +9676,10 @@ function startApp() {
   const app = document.getElementById('app');
   app.classList.add('ready');
 
-  // Auto-prune empty boards on startup
-  if (localStorage.getItem('slate_autoclean') !== '0') {
-    // After a short delay so lobbyRegistry has time to populate
-    setTimeout(pruneEmptyBoards, 8000);
+  if (localStorage.getItem('slate_autoclean') === '1') {
+    setTimeout(() => {
+      if (state.lobbyConn?.open || state.isLobbyHost) pruneEmptyBoards();
+    }, 45000);
   }
 
   // Size canvas
@@ -9448,8 +9823,21 @@ function saveBoardSnapshot(folderName, opts = {}) {
     ts: Date.now(),
     snapshot: docSerialize(),
   };
-  savedBoards[folderName].unshift(snap);
-  if (savedBoards[folderName].length > 20) savedBoards[folderName].length = 20;
+  if (opts.silent) {
+    const arr = savedBoards[folderName];
+    const idx = arr.findIndex(s => s && s.name === board);
+    if (idx >= 0) {
+      const prev = arr[idx];
+      snap.id = prev.id || snap.id;
+      arr[idx] = { ...snap };
+    } else {
+      arr.unshift(snap);
+      if (arr.length > 20) arr.length = 20;
+    }
+  } else {
+    savedBoards[folderName].unshift(snap);
+    if (savedBoards[folderName].length > 20) savedBoards[folderName].length = 20;
+  }
   persistSavedBoards(savedBoards);
   renderSavedBoards();
   _manuallySavedBoards.add(board);

@@ -19,6 +19,17 @@ featureCSS.textContent = `
     border:1px solid var(--border2);border-radius:8px;overflow:hidden;
     box-shadow:0 4px 20px rgba(0,0,0,.5);transition:opacity .2s;cursor:crosshair; }
   #minimap-wrap:hover { opacity:1 !important; }
+  @media (max-width:768px) {
+    #minimap-wrap {
+      bottom: calc(70px + env(safe-area-inset-bottom, 0px)) !important;
+      right: max(10px, env(safe-area-inset-right, 0px)) !important;
+      border-radius: 12px;
+      opacity: 0.96 !important;
+      max-width: min(220px, 46vw);
+      box-shadow: 0 8px 28px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.05);
+    }
+    #minimap-cvs { display: block; width: 100%; height: auto; border-radius: 10px; }
+  }
 
   #layers-panel { position:absolute;top:56px;right:16px;z-index:30;width:164px;
     border:1px solid var(--border2);border-radius:8px;background:var(--bg2);
@@ -357,8 +368,8 @@ function minimapClick(e) {
   if (typeof vp === 'undefined' || typeof WORLD_W === 'undefined') return;
   const mc = e.currentTarget;
   const rect = mc.getBoundingClientRect();
-  const mx = (e.clientX - rect.left) / mc.width;
-  const my = (e.clientY - rect.top)  / mc.height;
+  const mx = (e.clientX - rect.left) / rect.width;
+  const my = (e.clientY - rect.top)  / rect.height;
   const wx = mx * WORLD_W - WORLD_W / 2;
   const wy = my * WORLD_H - WORLD_H / 2;
   vp.panX = canvas.width  / 2 - wx * vp.zoom;
@@ -373,8 +384,23 @@ function renderMinimap() {
   if (!mm || !wrap || wrap.style.display === 'none') return;
   if (typeof doc === 'undefined' || typeof vp === 'undefined' || typeof WORLD_W === 'undefined') return;
 
+  const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 768px)').matches;
+  const logW = mobile ? Math.min(200, Math.max(120, wrap.clientWidth - 2 || 150)) : 180;
+  const logH = Math.round(logW * (110 / 180));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const bw = Math.max(1, Math.floor(logW * dpr));
+  const bh = Math.max(1, Math.floor(logH * dpr));
+  if (mm.width !== bw || mm.height !== bh) {
+    mm.width = bw;
+    mm.height = bh;
+    mm.style.width = logW + 'px';
+    mm.style.height = logH + 'px';
+  }
+
   const mc = mm.getContext('2d');
-  const W = mm.width, H = mm.height;
+  mc.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = logW;
+  const H = logH;
   const scX = W / WORLD_W, scY = H / WORLD_H;
   const offX = WORLD_W / 2, offY = WORLD_H / 2;
 
@@ -498,6 +524,7 @@ function renderLayersList() {
 
   list.innerHTML = layers.map(l => {
     const active = l.id === activeId;
+    const op = typeof l.opacity === 'number' && Number.isFinite(l.opacity) ? Math.round(l.opacity * 100) : 100;
     return `<div class="layer-row" draggable="true" data-lid="${l.id}" style="
       background:${active ? 'var(--bg4)' : 'transparent'};
       border-left-color:${active ? 'var(--accent)' : 'transparent'};
@@ -511,16 +538,34 @@ function renderLayersList() {
         }
       </button>
       <span class="layer-name" data-lid="${l.id}" draggable="false" title="Double-click to rename" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;user-select:none;cursor:text">${_escape(l.name)}</span>
+      <input type="range" class="layer-opacity" data-lid="${l.id}" min="0" max="100" value="${op}" title="Layer opacity"
+        style="width:52px;flex-shrink:0;accent-color:var(--accent);opacity:${l.visible ? 1 : 0.35}" />
       <button class="layer-del-btn" data-lid="${l.id}" title="Delete layer" style="background:none;border:none;color:var(--text-dim);cursor:pointer;padding:0 2px;opacity:0.55;line-height:1;flex-shrink:0">
         <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
       </button>
     </div>`;
   }).join('');
 
+  list.querySelectorAll('.layer-opacity').forEach(sl => {
+    sl.addEventListener('click', e => e.stopPropagation());
+    sl.addEventListener('pointerdown', e => e.stopPropagation());
+    const apply = () => {
+      window.slateLayers?.setOpacity(sl.dataset.lid, Number(sl.value) / 100);
+    };
+    sl.addEventListener('input', e => {
+      e.stopPropagation();
+      apply();
+    });
+    sl.addEventListener('change', e => {
+      e.stopPropagation();
+      apply();
+    });
+  });
+
   list.querySelectorAll('.layer-row').forEach(row => {
     row.addEventListener('click', e => {
       if (e.detail > 1) return;
-      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn')) return;
+      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn') || e.target.closest('.layer-opacity')) return;
       if (row.querySelector('.layer-name input')) return;
       window.slateLayers?.setActive(row.dataset.lid);
       renderLayersList();
@@ -664,10 +709,8 @@ function injectShortcutsOverlay() {
     { key: 'P',           label: 'Pen' },
     { key: 'Y',           label: 'Highlighter' },
     { key: 'E',           label: 'Eraser' },
-    { key: 'R',           label: 'Rectangle' },
-    { key: 'O',           label: 'Ellipse' },
-    { key: 'L',           label: 'Line' },
-    { key: 'A',           label: 'Arrow' },
+    { key: '(toolbar)', label: 'Shapes menu — rectangle, ellipse, triangle, line, arrow' },
+    { key: 'R O G L A', label: 'Keyboard for the same shape tools' },
     { key: 'T',           label: 'Text (drag to size)' },
     { key: 'S',           label: 'Select / box-select' },
     { key: 'H or Space',  label: 'Pan (hand tool)' },

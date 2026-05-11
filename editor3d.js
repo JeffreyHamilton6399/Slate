@@ -75,8 +75,14 @@ let flyHint    = null;
  *  quaternion every frame the mouse moves while in fly mode. */
 let _flyYaw   = 0;
 let _flyPitch = 0;
-/** Peer camera markers. peerId -> { group, label, color } */
+/** Peer camera markers. peerId -> { group, label, color, tgtPos, tgtQuat } */
 const peerCams = new Map();
+/** Smooth orthographic view snap when using the corner axis gizmo. */
+let _camViewAnim = null;
+const _camAnimFromPos = new THREE.Vector3();
+const _camAnimToPos = new THREE.Vector3();
+const _camAnimTarget = new THREE.Vector3();
+const _peerCamQuatTmp = new THREE.Quaternion();
 /** Throttle for camera broadcasts. */
 let _lastCamBroadcast = 0;
 let _lastCamSent = null;
@@ -291,6 +297,10 @@ function _cloneMeshDataDeep(md) {
 function _onContainerPointerTrack(e) {
   _lastMouseClientX = e.clientX;
   _lastMouseClientY = e.clientY;
+  if (document.body.classList.contains('mode-3d') && container && !flyEnabled && !_camViewAnim) {
+    const over = _viewGizmoPickView(e.clientX, e.clientY);
+    container.style.cursor = over ? 'pointer' : '';
+  }
   // Movement during an RMB hold → enter fly mode early instead of waiting for
   // the full hold timer. Keeps the gesture feeling instant when you start
   // dragging right away.
@@ -1014,7 +1024,7 @@ function onPointerDown(e) {
     const gv = _viewGizmoPickView(e.clientX, e.clientY);
     if (gv) {
       e.preventDefault(); e.stopPropagation();
-      setCameraViewPreset(gv);
+      beginCameraViewPresetAnim(gv);
       try { window.slateSfx?.play('view-snap'); } catch (_) {}
       return;
     }
@@ -1368,20 +1378,27 @@ function applyPeerCamera(peerId, msg, meta) {
   } else if (meta?.name && entry.label && entry.label.textContent !== meta.name) {
     entry.label.textContent = meta.name;
   }
-  entry.group.position.set(msg.pos[0], msg.pos[1], msg.pos[2]);
+  if (!entry.tgtPos) {
+    entry.tgtPos = new THREE.Vector3();
+    entry.tgtQuat = new THREE.Quaternion();
+    entry.tgtPos.copy(entry.group.position);
+    entry.tgtQuat.copy(entry.group.quaternion);
+  }
+  entry.tgtPos.set(msg.pos[0], msg.pos[1], msg.pos[2]);
   if (Array.isArray(msg.quat) && msg.quat.length === 4) {
-    entry.group.quaternion.set(
+    entry.tgtQuat.set(
       Number(msg.quat[0]),
       Number(msg.quat[1]),
       Number(msg.quat[2]),
       Number(msg.quat[3]),
-    );
+    ).normalize();
   } else {
-    /* Legacy peers: Object3D.lookAt aligns +Z toward the target, but our
-       frustum / camera convention uses −Z as forward — flip 180° on Y. */
+    _peerCamQuatTmp.copy(entry.group.quaternion);
     entry.group.rotation.set(0, 0, 0);
     entry.group.lookAt(msg.target[0], msg.target[1], msg.target[2]);
     entry.group.rotateY(Math.PI);
+    entry.tgtQuat.copy(entry.group.quaternion);
+    entry.group.quaternion.copy(_peerCamQuatTmp);
   }
 }
 
@@ -1402,17 +1419,37 @@ function _peerColorFromId(id) {
 
 function _buildCamMarker(color) {
   const g = new THREE.Group();
-  /* Camera body — a small box positioned at the marker origin. The whole
-     group is reoriented every frame via lookAt(targetVec), so we model the
-     marker in local space with -Z = forward, matching THREE.PerspectiveCamera
-     and Blender's convention. */
-  const bodyGeo = new THREE.BoxGeometry(0.18, 0.14, 0.22);
+  /* Polished “video camera” silhouette: rounded body + lens ring, −Z forward. */
   const bodyMat = new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity: 0.92, depthTest: true,
+    color,
+    transparent: true,
+    opacity: 0.94,
+    depthTest: true,
   });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  body.position.set(0, 0, 0.08);
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.065, 0.082, 0.14, 20, 1, false),
+    bodyMat,
+  );
+  body.rotation.x = Math.PI / 2;
+  body.position.set(0, 0, 0.06);
   g.add(body);
+  const lensMat = new THREE.MeshBasicMaterial({
+    color: 0x1a1a24,
+    transparent: true,
+    opacity: 0.92,
+    depthTest: true,
+  });
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.052, 0.04, 24, 1, false), lensMat);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0, 0, -0.02);
+  g.add(lens);
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.056, 0.008, 10, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthTest: true }),
+  );
+  ring.rotation.y = Math.PI / 2;
+  ring.position.set(0, 0, -0.04);
+  g.add(ring);
 
   /* View frustum — a proper pyramid with a rectangular base, apex at the
      camera origin and base out in -Z. Clearly shows the look direction. */
@@ -1469,6 +1506,7 @@ function _updatePeerCamMarkers() {
   if (!camera || !container) return;
   const allowVisible = _persistedPeerCamsVisible;
   const rect = container.getBoundingClientRect();
+  const k = 0.24;
   peerCams.forEach(entry => {
     if (!entry.group || !entry.label) return;
     if (!allowVisible) {
@@ -1477,6 +1515,10 @@ function _updatePeerCamMarkers() {
       return;
     }
     entry.group.visible = true;
+    if (entry.tgtPos && entry.tgtQuat) {
+      entry.group.position.lerp(entry.tgtPos, k);
+      entry.group.quaternion.slerp(entry.tgtQuat, k);
+    }
     _camLabelTmp.copy(entry.group.position).project(camera);
     if (_camLabelTmp.z > 1 || _camLabelTmp.z < -1) {
       entry.label.style.display = 'none';
@@ -3847,6 +3889,14 @@ function _initViewGizmo() {
   addArrow(new THREE.Vector3(0, -1, 0), 0x228844, 'bottom');
   addArrow(new THREE.Vector3(0, 0, 1), 0x5599ff, 'front');
   addArrow(new THREE.Vector3(0, 0, -1), 0x3366cc, 'back');
+
+  const ctr = new THREE.Mesh(
+    new THREE.SphereGeometry(0.082, 18, 14),
+    new THREE.MeshBasicMaterial({ color: 0xb8b8e8, transparent: true, opacity: 0.95 }),
+  );
+  ctr.userData.axisView = 'persp';
+  viewGizmoPickables.push(ctr);
+  viewGizmoRoot.add(ctr);
 }
 
 function _disposeViewGizmo() {
@@ -3889,19 +3939,31 @@ function _renderViewGizmo() {
 function _viewGizmoPickView(clientX, clientY) {
   if (!renderer?.domElement || !viewGizmoScene || !viewGizmoCam || !viewGizmoRaycaster) return null;
   if (!document.body.classList.contains('mode-3d')) return null;
-  const rect = renderer.domElement.getBoundingClientRect();
-  const bufH = renderer.domElement.height;
+  const el = renderer.domElement;
+  const rect = el.getBoundingClientRect();
+  const bufW = el.width;
+  const bufH = el.height;
+  if (bufW < 8 || bufH < 8) return null;
   const sz = Math.max(72, Math.min(130, Math.round(bufH * 0.2)));
   const pad = Math.round(Math.max(10, bufH * 0.02));
-  const gx0 = rect.right - sz - pad;
-  const gy0 = rect.top + pad;
-  if (clientX < gx0 || clientX > gx0 + sz || clientY < gy0 || clientY > gy0 + sz) return null;
-  const x = ((clientX - gx0) / sz) * 2 - 1;
-  const y = -((clientY - gy0) / sz) * 2 + 1;
+  const vx = bufW - sz - pad;
+  const vy = bufH - sz - pad;
+  const sx = rect.width / bufW;
+  const sy = rect.height / bufH;
+  const left = rect.left + vx * sx;
+  const right = rect.left + (vx + sz) * sx;
+  const top = rect.top + rect.height - (vy + sz) * sy;
+  const bottom = rect.top + rect.height - vy * sy;
+  if (clientX < left || clientX > right || clientY < top || clientY > bottom) return null;
+  const u = (clientX - left) / (right - left);
+  const v = (clientY - top) / (bottom - top);
+  const x = u * 2 - 1;
+  const y = -(v * 2 - 1);
   viewGizmoRaycaster.setFromCamera({ x, y }, viewGizmoCam);
   const hits = viewGizmoRaycaster.intersectObjects(viewGizmoPickables, false);
-  const v = hits[0]?.object?.userData?.axisView;
-  return typeof v === 'string' ? v : null;
+  const hit = hits[0]?.object;
+  const axis = hit?.userData?.axisView;
+  return typeof axis === 'string' ? axis : null;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -4003,64 +4065,58 @@ function resetCameraHome() {
   orbit.update();
 }
 
-/* Snap the camera onto an axis-aligned view (Blender numpad-style). */
+/** Compute camera position for an axis view; writes into `out`. */
+function _cameraPositionForPreset(name, target, dist, out) {
+  const t = target;
+  switch (name) {
+    case 'front':  out.set(t.x, t.y,         t.z + dist); break;
+    case 'back':   out.set(t.x, t.y,         t.z - dist); break;
+    case 'right':  out.set(t.x + dist, t.y, t.z);         break;
+    case 'left':   out.set(t.x - dist, t.y, t.z);         break;
+    case 'top':    out.set(t.x, t.y + dist, t.z + 0.001); break;
+    case 'bottom': out.set(t.x, t.y - dist, t.z + 0.001); break;
+    case 'persp':
+    default:       out.set(t.x + dist * 0.6, t.y + dist * 0.55, t.z + dist * 0.9); break;
+  }
+  return out;
+}
+
+/* Snap the camera onto an axis-aligned view (instant — used by hotkeys / API). */
 function setCameraViewPreset(name) {
   if (!orbit || !camera) return;
   const dist = Math.max(4, camera.position.distanceTo(orbit.target));
-  const t = orbit.target.clone();
-  switch (name) {
-    case 'front':  camera.position.set(t.x, t.y,         t.z + dist); break;
-    case 'back':   camera.position.set(t.x, t.y,         t.z - dist); break;
-    case 'right':  camera.position.set(t.x + dist, t.y, t.z);         break;
-    case 'left':   camera.position.set(t.x - dist, t.y, t.z);         break;
-    case 'top':    camera.position.set(t.x, t.y + dist, t.z + 0.001); break;
-    case 'bottom': camera.position.set(t.x, t.y - dist, t.z + 0.001); break;
-    case 'persp':
-    default:       camera.position.set(t.x + dist * 0.6, t.y + dist * 0.55, t.z + dist * 0.9); break;
-  }
+  _cameraPositionForPreset(name, orbit.target, dist, camera.position);
   camera.up.set(0, 1, 0);
   camera.lookAt(orbit.target);
   orbit.update();
 }
 
-/* Open a small context menu next to the View button so the user can pick
-   one of the camera presets. Reuses the .t3d-viewport-ctx style. */
-function _openViewMenu(clientX, clientY) {
-  _closeViewportCtxMenu();
-  const div = document.createElement('div');
-  div.className = 't3d-viewport-ctx';
-  div.innerHTML = `<div class="t3d-ctx-head">Camera</div>
-    <button type="button" data-v="front">Front (–Z facing)</button>
-    <button type="button" data-v="back">Back</button>
-    <button type="button" data-v="right">Right</button>
-    <button type="button" data-v="left">Left</button>
-    <button type="button" data-v="top">Top</button>
-    <button type="button" data-v="bottom">Bottom</button>
-    <button type="button" data-v="persp">Perspective (home)</button>`;
-  document.body.appendChild(div);
-  _ctxMenuEl = div;
-  div.querySelectorAll('button[data-v]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      setCameraViewPreset(btn.dataset.v);
-      _closeViewportCtxMenu();
-      try { window.slateSfx?.play('view-snap'); } catch (_) {}
-    });
-  });
-  const pad = 8;
-  div.style.left = `${clientX}px`;
-  div.style.top  = `${clientY}px`;
-  requestAnimationFrame(() => {
-    const w = div.offsetWidth, h = div.offsetHeight;
-    let x = clientX, y = clientY;
-    if (x + w + pad > window.innerWidth)  x = Math.max(pad, window.innerWidth  - w - pad);
-    if (y + h + pad > window.innerHeight) y = Math.max(pad, window.innerHeight - h - pad);
-    div.style.left = `${x}px`;
-    div.style.top  = `${y}px`;
-  });
-  setTimeout(() => {
-    window.addEventListener('pointerdown', _onDocCloseCtx, true);
-    window.addEventListener('keydown', _onKeyCloseCtx, true);
-  }, 0);
+/** Animate from current pose into a preset (used by the corner view gizmo). */
+function beginCameraViewPresetAnim(name) {
+  if (!orbit || !camera || flyEnabled) return;
+  const dist = Math.max(4, camera.position.distanceTo(orbit.target));
+  _camAnimTarget.copy(orbit.target);
+  _cameraPositionForPreset(name, _camAnimTarget, dist, _camAnimToPos);
+  _camAnimFromPos.copy(camera.position);
+  const dur = name === 'persp' ? 420 : 280;
+  _camViewAnim = { t0: performance.now(), dur, orbitWasEnabled: orbit.enabled };
+  orbit.enabled = false;
+}
+
+function _stepCameraViewAnim(nowMs) {
+  if (!_camViewAnim || !camera || !orbit) return;
+  const { t0, dur, orbitWasEnabled } = _camViewAnim;
+  const u = Math.min(1, (nowMs - t0) / dur);
+  const k = u * u * (3 - 2 * u);
+  camera.position.lerpVectors(_camAnimFromPos, _camAnimToPos, k);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(_camAnimTarget);
+  orbit.target.copy(_camAnimTarget);
+  orbit.update();
+  if (u >= 1) {
+    _camViewAnim = null;
+    orbit.enabled = orbitWasEnabled !== false;
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -4174,7 +4230,8 @@ function loop() {
   const dt = Math.min(0.1, (now - (_lastLoopTs || now)) / 1000);
   _lastLoopTs = now;
   if (flyEnabled) _stepFlyCamera(dt);
-  if (orbit && !flyEnabled) orbit.update();
+  else if (_camViewAnim) _stepCameraViewAnim(now);
+  else if (orbit && !flyEnabled) orbit.update();
   _loopFrame++;
   if ((_loopFrame & 1) === 0) _updatePeerCamMarkers();
   _maybeBroadcastCamera(now);
@@ -4288,10 +4345,6 @@ function bindToolbar() {
     try { window.slateSfx?.play('view-snap'); } catch (_) {}
   });
   document.getElementById('t3d-wireframe-btn')?.addEventListener('click', toggleWireframeOverlay);
-  document.getElementById('t3d-view-btn')?.addEventListener('click', e => {
-    const r = e.currentTarget.getBoundingClientRect();
-    _openViewMenu(r.left, r.bottom + 4);
-  });
   document.getElementById('t3d-object-color')?.addEventListener('input', _onObjectColorInput);
   // Mesh-editing operators (only enabled while in edit mode).
   document.getElementById('t3d-extrude-btn')  ?.addEventListener('click', () => _runMeshOp('Extrude',   () => extrudeSelectedFaces()));
@@ -4864,6 +4917,7 @@ export function disposeEditor3D() {
     if (typeof transform.dispose === 'function') transform.dispose();
     transform = null;
   }
+  _camViewAnim = null;
   if (orbit) { orbit.dispose(); orbit = null; }
 
   if (renderer && renderer.domElement && renderer.domElement.parentNode) {

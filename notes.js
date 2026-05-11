@@ -6,8 +6,8 @@
  * All edits sync live to peers via the existing window.slateNotes API +
  * pendingDiff plumbing in index.html.
  *
- * The panel registers itself with window.slateDock once the dock is ready,
- * so it slots into the same right-side dock used by Layers / Hierarchy.
+ * The panel mounts into #notes-mount in the floating #notes-popout (header
+ * toggle + drag), not the right dock.
  *
  * Loaded as a plain <script> tag at the end of index.html. Top-level vars
  * in index.html (doc, state, slateNotes) are accessible via window.* here.
@@ -259,8 +259,7 @@
     rootEl = document.createElement('div');
     rootEl.id = 'notes-panel';
     rootEl.innerHTML = `
-      <div class="nt-head">
-        <span class="nt-head-title">Notes</span>
+      <div class="nt-head" style="justify-content:flex-end">
         <button type="button" class="nt-head-btn" id="nt-add-section-btn" title="New section">
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
             <line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/>
@@ -743,30 +742,22 @@
     return '';
   }
 
-  /* ─── Registration with the dock ───────────────────────────────────── */
-  function registerWithDock() {
-    if (!window.slateDock || typeof window.slateDock.registerPanel !== 'function') {
-      requestAnimationFrame(registerWithDock);
+  /* ─── Mount into floating notes panel (header toggle + drag — see index.html) ─ */
+  function registerNotesUi() {
+    const mount = document.getElementById('notes-mount');
+    if (!mount) {
+      requestAnimationFrame(registerNotesUi);
       return;
     }
-    window.slateDock.registerPanel({
-      id: 'notes',
-      title: 'Notes',
-      order: 6, // between Hierarchy (4) and Layers (10)
-      mount(el) { buildPanel(el); },
-    });
-    // Subscribe to live model changes so remote diffs trigger a re-render
-    // (the model knows when to call _emit() — see index.html slateNotes API).
+    buildPanel(mount);
     window.slateNotes?.onChange(() => {
-      // If the user is actively typing, the input-registry-based diff render
-      // will preserve their caret position.
       renderAll();
     });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', registerWithDock, { once: true });
+    document.addEventListener('DOMContentLoaded', registerNotesUi, { once: true });
   } else {
-    registerWithDock();
+    registerNotesUi();
   }
 })();

@@ -261,7 +261,7 @@
         dismissedPanels.delete(id);
         const tab = tabs.querySelector(`.dock-tab[data-panel="${id}"]`);
         tab?.classList.remove('dock-tab-dismissed');
-        if (tab) tab.title = `${def.title} (drag tab to detach)`;
+        if (tab) tab.title = `${def.title} — click to focus · drag to float · double-click to pop out`;
       }
       if (!panelEl) return;
 
@@ -320,7 +320,7 @@
         tab.style.display = '';
         tab.classList.remove('dock-tab-dismissed');
         const def = panels.find(p => p.id === id);
-        if (def) tab.title = `${def.title} (drag tab to detach)`;
+        if (def) tab.title = `${def.title} — click to focus · drag to float · double-click to pop out`;
       }
       window.slateDock.setActive(id);
       try { window.slateSfx?.play('panel-close'); } catch (_) {}
@@ -395,7 +395,7 @@
     tab.className = 'dock-tab';
     tab.dataset.panel = p.id;
     tab.textContent = p.title;
-    tab.title = `${p.title} (drag tab to detach)`;
+    tab.title = `${p.title} — click to focus · drag to float · double-click to pop out`;
     tab.addEventListener('click', () => window.slateDock.setActive(p.id));
     _bindTabDetach(tab);
     const insertBefore = [...tabs.children].find(ch => {
@@ -448,6 +448,19 @@
     });
     tab.addEventListener('pointerup', () => { isDown = false; });
     tab.addEventListener('pointercancel', () => { isDown = false; });
+    tab.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (_isMobile()) return;
+      const id = tab.dataset.panel;
+      if (floats.has(id)) return;
+      const r = tab.getBoundingClientRect();
+      window.slateDock.detachPanel(id, {
+        left: Math.max(12, r.left),
+        top: Math.max(52, r.top + 28),
+        width: 300,
+        height: 360,
+      });
+    });
   }
 
   function boot() {

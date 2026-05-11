@@ -641,8 +641,14 @@ input, textarea { font-family: var(--sans); }
   opacity: 0.7;
 }
 .panel-float-resize:hover { opacity: 1; }
+/* Flex child so the 3D viewport keeps height when #canvas-area is display:none
+   (absolutely positioned children do not establish flex line height reliably). */
 #canvas-area-3d {
-  position: absolute; inset: 0; z-index: 4; background: #12121a;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  z-index: 4;
+  background: #12121a;
   touch-action: none;
 }
 #canvas-area-3d canvas {
@@ -1136,22 +1142,26 @@ body.mode-3d .left-dock-mount .dock-panel[data-panel="hierarchy"] {
   border-radius: 0;
 }
 body.mode-2d #toolbar-3d,
-body.mode-2d #left-dock,
 body.mode-2d .dock-tab[data-panel="hierarchy"],
 body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !important; }
+/* 2D: Scene tab is N/A — only Boards in the left rail (same shell as 3D). */
+body.mode-2d .left-dock-tab[data-left-tab="scene"] { display: none !important; }
+body.mode-2d .left-dock-tab[data-left-tab="boards"] { flex: 1; }
 
-/* Left outliner (3D) — between sidebar and main */
+/* Left rail — Scene / Boards under the Slate header (inside #sidebar) */
 #left-dock {
   display: none;
-  width: var(--left-dock-w, 220px);
+  width: 100%;
+  flex: 1;
+  min-height: 0;
   flex-shrink: 0;
   flex-direction: column;
-  min-height: 0;
   background: var(--bg2);
-  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   z-index: 9;
 }
-body.mode-3d #left-dock {
+body.mode-3d #left-dock,
+body.mode-2d #left-dock {
   display: flex;
   align-self: stretch;
   min-height: 0;
@@ -1248,6 +1258,14 @@ body.mode-3d #left-dock {
   border-radius: 0;
   border: none;
 }
+/* Floating shell already has × — hide duplicate in panel chrome */
+.panel-float-body #chat-panel.slate-dock-hosted #chat-close-btn,
+.panel-float-body #notes-popout.slate-dock-hosted #notes-close-btn {
+  display: none !important;
+}
+/* Chat / Notes moved to dock tabs — keep header uncluttered */
+#chat-btn,
+#notes-header-btn { display: none !important; }
 
 /* 3D: full-width top toolbar + viewport inset */
 body.mode-3d #toolbar-3d {
@@ -1263,8 +1281,9 @@ body.mode-3d #toolbar-3d {
   padding: 4px 8px 8px;
   padding-top: max(4px, env(safe-area-inset-top, 0px));
 }
-body.mode-3d #canvas-area-3d {
-  top: var(--t3d-toolbar-strip-h, 54px);
+body.mode-3d #editor-view-stack {
+  padding-top: var(--t3d-toolbar-strip-h, 54px);
+  box-sizing: border-box;
 }
 
 /* 2D desktop: horizontal toolbar along top (floating still works) */
@@ -2565,6 +2584,17 @@ body.mode-3d #canvas-area-3d {
       </button>
     </div>
 
+  <aside id="left-dock" class="left-dock" aria-label="Scene and boards">
+    <div class="left-dock-tabs" role="tablist" aria-label="Left panels">
+      <button type="button" class="left-dock-tab active" data-left-tab="scene" role="tab" aria-selected="true">Scene</button>
+      <button type="button" class="left-dock-tab" data-left-tab="boards" role="tab" aria-selected="false">Boards</button>
+    </div>
+    <div id="left-dock-body" class="left-dock-body">
+      <div class="left-dock-panel active" data-left-tab="scene" role="tabpanel">
+        <div id="left-dock-mount" class="left-dock-mount"></div>
+      </div>
+      <div class="left-dock-panel" data-left-tab="boards" role="tabpanel">
+        <div id="left-dock-boards-mount" class="left-dock-boards-mount">
     <div id="sidebar-workspace-nav">
     <div class="sidebar-section">
       <div class="sidebar-section-label boards-tab-row">
@@ -2632,24 +2662,12 @@ body.mode-3d #canvas-area-3d {
       </div>
     </div>
     </div><!-- /#sidebar-workspace-nav -->
-  </nav>
-  <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
-
-  <!-- 3D: left column — Scene (hierarchy) + Boards tabs -->
-  <aside id="left-dock" class="left-dock" aria-label="Scene and boards">
-    <div class="left-dock-tabs" role="tablist" aria-label="Left panels">
-      <button type="button" class="left-dock-tab active" data-left-tab="scene" role="tab" aria-selected="true">Scene</button>
-      <button type="button" class="left-dock-tab" data-left-tab="boards" role="tab" aria-selected="false">Boards</button>
-    </div>
-    <div id="left-dock-body" class="left-dock-body">
-      <div class="left-dock-panel active" data-left-tab="scene" role="tabpanel">
-        <div id="left-dock-mount" class="left-dock-mount"></div>
-      </div>
-      <div class="left-dock-panel" data-left-tab="boards" role="tabpanel">
-        <div id="left-dock-boards-mount" class="left-dock-boards-mount"></div>
+        </div>
       </div>
     </div>
   </aside>
+  </nav>
+  <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
 
   <!-- MAIN -->
   <div id="main">
@@ -8236,8 +8254,7 @@ function updateBoardControls() {
   if (clearBtn) clearBtn.style.display = state.currentBoard ? '' : 'none';
   const leaveBtn = document.getElementById('leave-board-btn');
   if (leaveBtn) leaveBtn.style.display = state.currentBoard ? 'flex' : 'none';
-  const notesHead = document.getElementById('notes-header-btn');
-  if (notesHead) notesHead.style.display = state.currentBoard ? 'flex' : 'none';
+  /* Notes toggle lives in the right dock (Notes tab); header control removed. */
   updateMuteBtn();
   updateHostControlsBar();
 }
@@ -8270,24 +8287,22 @@ window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
   }
 };
 
-window.slateRelocateBoardsNav = function slateRelocateBoardsNav(workspaceMode) {
+window.slateRelocateBoardsNav = function slateRelocateBoardsNav(_workspaceMode) {
   const nav = document.getElementById('sidebar-workspace-nav');
-  const sidebar = document.getElementById('sidebar');
-  const header = sidebar?.querySelector('.sidebar-header');
   const mount = document.getElementById('left-dock-boards-mount');
-  if (!nav || !sidebar || !header || !mount) return;
-  if (workspaceMode === '3d') mount.appendChild(nav);
-  else header.insertAdjacentElement('afterend', nav);
+  if (!nav || !mount) return;
+  if (nav.parentElement !== mount) mount.appendChild(nav);
 };
 
 (function initSlateLeftDockTabs() {
+  const LS = 'slate_left_dock_tab';
   function bind() {
     const tabs = document.querySelectorAll('.left-dock-tab');
     const panels = document.querySelectorAll('.left-dock-panel');
     if (!tabs.length) return;
-    const LS = 'slate_left_dock_tab';
     function setTab(id) {
       if (id !== 'scene' && id !== 'boards') id = 'scene';
+      if (document.body.classList.contains('mode-2d') && id === 'scene') id = 'boards';
       tabs.forEach(t => {
         const on = t.dataset.leftTab === id;
         t.classList.toggle('active', on);
@@ -8296,10 +8311,12 @@ window.slateRelocateBoardsNav = function slateRelocateBoardsNav(workspaceMode) {
       panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === id));
       try { localStorage.setItem(LS, id); } catch (_) {}
     }
+    window.slateSetLeftDockTab = setTab;
     tabs.forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.leftTab)));
     try {
       const saved = localStorage.getItem(LS);
       if (saved === 'boards' || saved === 'scene') setTab(saved);
+      else if (document.body.classList.contains('mode-2d')) setTab('boards');
     } catch (_) {}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
@@ -8376,6 +8393,7 @@ function applyWorkspaceMode(board) {
     try { window.slateEnsurePropsPanel?.(); } catch (_) {}
     try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
     try { window.slateRelocateBoardsNav?.('3d'); } catch (_) {}
+    try { window.slateSetLeftDockTab?.('scene'); } catch (_) {}
     requestAnimationFrame(() => {
       const t = document.getElementById('toolbar-3d');
       if (t && t.offsetHeight) {
@@ -8395,6 +8413,7 @@ function applyWorkspaceMode(board) {
     resetChatDockStyles();
     try { window.slateRelocateHierarchy?.('2d'); } catch (_) {}
     try { window.slateRelocateBoardsNav?.('2d'); } catch (_) {}
+    try { window.slateSetLeftDockTab?.('boards'); } catch (_) {}
     if (window.slateDock && typeof window.slateDock.setActive === 'function') {
       requestAnimationFrame(() => window.slateDock.setActive('layers'));
     }
@@ -8408,6 +8427,7 @@ function applyWorkspaceMode(board) {
 window.addEventListener('slate-3d-activate', () => {
   try { window.slateRelocateHierarchy?.('3d'); } catch (_) {}
   try { window.slateRelocateBoardsNav?.('3d'); } catch (_) {}
+  try { window.slateSetLeftDockTab?.('scene'); } catch (_) {}
   requestAnimationFrame(() => {
     const t = document.getElementById('toolbar-3d');
     if (t && t.offsetHeight) {

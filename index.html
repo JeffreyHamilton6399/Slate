@@ -653,7 +653,7 @@ input, textarea { font-family: var(--sans); }
   overflow: hidden;
 }
 #canvas-area-3d canvas {
-  display: block; width: 100% !important; height: 100% !important;
+  display: block; width: 100%; height: 100%;
   touch-action: none;
 }
 .box-select-overlay {
@@ -1135,8 +1135,8 @@ body.mode-3d #minimap-wrap,
 body.mode-3d .dock-tab[data-panel="layers"],
 body.mode-3d #dock-body .dock-panel[data-panel="layers"],
 body.mode-3d .dock-tab[data-panel="hierarchy"] { display: none !important; }
-body.mode-3d #left-dock-mount .dock-panel[data-panel="hierarchy"],
-body.mode-3d .left-dock-mount .dock-panel[data-panel="hierarchy"] {
+/* Left dock: Scene + Boards use the same draggable dock tabs as the right rail */
+body.mode-3d #dock-body-left .dock-panel[data-panel="hierarchy"] {
   display: flex !important;
   flex: 1;
   min-height: 0;
@@ -1146,11 +1146,8 @@ body.mode-3d .left-dock-mount .dock-panel[data-panel="hierarchy"] {
 body.mode-2d #toolbar-3d,
 body.mode-2d .dock-tab[data-panel="hierarchy"],
 body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !important; }
-/* 2D: Scene tab is N/A — only Boards in the left rail (same shell as 3D). */
-body.mode-2d .left-dock-tab[data-left-tab="scene"] { display: none !important; }
-body.mode-2d .left-dock-tab[data-left-tab="boards"] { flex: 1; }
 
-/* Left rail — Scene / Boards under the Slate header (inside #sidebar) */
+/* Left rail — draggable dock tabs (layout-dock) under the Slate header (inside #sidebar) */
 #left-dock {
   display: none;
   width: 100%;
@@ -1169,90 +1166,33 @@ body.mode-2d #left-dock {
   min-height: 0;
   position: relative;
 }
-/* slateDock left chrome (tabs + body) — mounted without destroying Scene/Boards; collapsed so it does not steal flex space */
-#left-dock > .dock-left-chrome {
-  flex: 0 0 0 !important;
-  min-height: 0 !important;
-  max-height: 0 !important;
-  overflow: hidden !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  opacity: 0;
-  pointer-events: none;
-}
-.left-dock-tabs {
-  display: flex;
+#left-dock > .dock-tabs,
+#left-dock > #dock-tabs-left {
   flex-shrink: 0;
-  gap: 2px;
-  padding: 6px 6px 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
 }
-.left-dock-tab {
-  flex: 1 1 0;
-  padding: 7px 8px;
-  font-size: 0.72rem;
-  font-weight: 500;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-family: var(--sans);
-}
-.left-dock-tab:hover { color: var(--text); background: var(--bg3); }
-.left-dock-tab.active {
-  color: var(--accent);
-  background: var(--bg2);
-  border-color: var(--border2);
-  border-bottom-color: var(--bg2);
-  margin-bottom: -1px;
-}
-.left-dock-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  overflow: hidden;
-}
-.left-dock-panel {
-  display: none;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-}
-.left-dock-panel.active { display: flex; }
-.left-dock-mount {
+#left-dock > .dock-body,
+#left-dock > #dock-body-left {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.left-dock-boards-mount {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-}
-.left-dock-boards-mount #sidebar-workspace-nav {
+#dock-body-left .dock-panel[data-panel="boards"] #sidebar-workspace-nav {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.left-dock-boards-mount #sidebar-workspace-nav #board-scroll {
+#dock-body-left .dock-panel[data-panel="boards"] #sidebar-workspace-nav #board-scroll {
   flex: 1;
   min-height: 0;
 }
 
 /* Chat / notes when hosted inside the right dock or a float shell */
+#dock-body-left .dock-panel #chat-panel.slate-dock-hosted,
+#dock-body-left .dock-panel #notes-popout.slate-dock-hosted,
 #dock-body .dock-panel #chat-panel.slate-dock-hosted,
 #dock-body .dock-panel #notes-popout.slate-dock-hosted,
 .panel-float-body #chat-panel.slate-dock-hosted,
@@ -2480,7 +2420,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
      on top of the panel. Hide them so the drawer is unambiguously the
      foreground. The JS auto-closes them as well; this is just a backup
      in case state drifts. */
-  body:has(#right-dock.dock-open) #chat-panel,
+  body:has(#right-dock.dock-open) #chat-panel:not(.slate-dock-hosted),
   body:has(#right-dock.dock-open) #member-panel { display: none !important; }
   #dock-resize-handle   { display: none; }
   /* The fixed-position toolbar shouldn't try to dodge the dock. */
@@ -2657,17 +2597,8 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
       </button>
     </div>
 
-  <aside id="left-dock" class="left-dock" aria-label="Scene and boards">
-    <div class="left-dock-tabs" role="tablist" aria-label="Left panels">
-      <button type="button" class="left-dock-tab active" data-left-tab="scene" role="tab" aria-selected="true">Scene</button>
-      <button type="button" class="left-dock-tab" data-left-tab="boards" role="tab" aria-selected="false">Boards</button>
-    </div>
-    <div id="left-dock-body" class="left-dock-body">
-      <div class="left-dock-panel active" data-left-tab="scene" role="tabpanel">
-        <div id="left-dock-mount" class="left-dock-mount"></div>
-      </div>
-      <div class="left-dock-panel" data-left-tab="boards" role="tabpanel">
-        <div id="left-dock-boards-mount" class="left-dock-boards-mount">
+  <aside id="left-dock" class="left-dock" aria-label="Scene and boards panels"></aside>
+  <div id="boards-nav-pool" hidden aria-hidden="true">
     <div id="sidebar-workspace-nav">
     <div class="sidebar-section">
       <div class="sidebar-section-label boards-tab-row">
@@ -2735,10 +2666,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
       </div>
     </div>
     </div><!-- /#sidebar-workspace-nav -->
-        </div>
-      </div>
-    </div>
-  </aside>
+  </div>
   </nav>
   <div id="sidebar-resize-handle" class="split-handle split-handle-v" title="Drag to resize sidebar" role="separator" aria-orientation="vertical"></div>
 
@@ -8385,77 +8313,23 @@ function getBoardDocMode(board) {
   return boardDocModes[board] === '3d' ? '3d' : '2d';
 }
 
-/** Move the 3D hierarchy dock panel into the Scene column (or back into the dock for 2D). */
-window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
-  const rightBody = document.getElementById('dock-body');
-  const leftBody = document.getElementById('dock-body-left');
-  const mount = document.getElementById('left-dock-mount');
-  const panel = document.querySelector('.dock-panel[data-panel="hierarchy"]');
-  if (!panel) return;
-  if (workspaceMode === '3d') {
-    if (!mount) return;
-    mount.appendChild(panel);
-    panel.style.display = 'flex';
-    panel.style.flex = '1';
-    panel.style.flexDirection = 'column';
-    panel.style.minHeight = '0';
-    panel.style.overflow = 'hidden';
-    try { window.slateRefreshHierarchy?.(); } catch (_) {}
-  } else {
-    const target = leftBody || rightBody;
-    if (!target) return;
-    target.appendChild(panel);
-    panel.style.display = 'none';
-    panel.style.flex = '';
-    panel.style.flexDirection = '';
-    panel.style.minHeight = '';
-    panel.style.overflow = '';
-  }
+/** Hierarchy stays in the left dock chrome; refresh DOM after mode switches. */
+window.slateRelocateHierarchy = function slateRelocateHierarchy(_workspaceMode) {
+  try { window.slateRefreshHierarchy?.(); } catch (_) {}
 };
 
+/** Keep the boards list inside the Boards dock panel (same mount in 2D and 3D). */
 window.slateRelocateBoardsNav = function slateRelocateBoardsNav(_workspaceMode) {
   const nav = document.getElementById('sidebar-workspace-nav');
-  const mount = document.getElementById('left-dock-boards-mount');
-  if (!nav || !mount) return;
-  if (nav.parentElement !== mount) mount.appendChild(nav);
+  const panel = document.querySelector('#dock-body-left .dock-panel[data-panel="boards"]')
+    || document.querySelector('.dock-panel[data-panel="boards"]');
+  if (!nav || !panel) return;
+  if (nav.parentElement !== panel) panel.appendChild(nav);
 };
-
-(function initSlateLeftDockTabs() {
-  const LS = 'slate_left_dock_tab';
-  function bind() {
-    const tabs = document.querySelectorAll('.left-dock-tab');
-    const panels = document.querySelectorAll('.left-dock-panel');
-    if (!tabs.length) return;
-    function setTab(id) {
-      if (id !== 'scene' && id !== 'boards') id = 'scene';
-      if (document.body.classList.contains('mode-2d') && id === 'scene') id = 'boards';
-      tabs.forEach(t => {
-        const on = t.dataset.leftTab === id;
-        t.classList.toggle('active', on);
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === id));
-      try { localStorage.setItem(LS, id); } catch (_) {}
-      const dockPid = id === 'scene' ? 'hierarchy' : id === 'boards' ? 'boards' : null;
-      if (dockPid && window.slateDock && typeof window.slateDock.setActive === 'function') {
-        try { window.slateDock.setActive(dockPid); } catch (_) {}
-      }
-    }
-    window.slateSetLeftDockTab = setTab;
-    tabs.forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.leftTab)));
-    try {
-      const saved = localStorage.getItem(LS);
-      if (saved === 'boards' || saved === 'scene') setTab(saved);
-      else if (document.body.classList.contains('mode-2d')) setTab('boards');
-    } catch (_) {}
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
-  else bind();
-})();
 
 function slateFocusDefaultDockTab3d() {
   if (!window.slateDock || typeof window.slateDock.setActive !== 'function') return;
-  const prefer = ['props', 'layers'];
+  const prefer = ['props', 'layers', 'chat'];
   for (const id of prefer) {
     const tab = document.querySelector(`.dock-tab[data-panel="${id}"]`);
     if (!tab || tab.classList.contains('dock-tab-dismissed')) continue;

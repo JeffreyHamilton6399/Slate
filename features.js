@@ -1005,6 +1005,7 @@ function init() {
   injectToolbarExtras();
   patchZoomLabel();
   hookMinimapToBoard();
+  try { window.slateRelocateBoardsNav?.(); } catch (_) {}
 }
 
 if (document.readyState === 'loading') {

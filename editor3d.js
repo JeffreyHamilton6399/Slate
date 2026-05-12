@@ -4058,6 +4058,10 @@ function _viewGizmoPickView(clientX, clientY) {
 
 /* ─────────────────────────────────────────────────────────────────────────
    Scene setup / render loop
+   (Design cues: Blender outliner / gizmo / edit ops — upstream ref is their
+   source tree, e.g. https://projects.blender.org/blender/blender or a local
+   git checkout; Windows installs often under
+   %ProgramFiles%\\Blender Foundation\\Blender <ver>\\<ver>\\)
 ───────────────────────────────────────────────────────────────────────── */
 function ensureScene() {
   if (scene) return;
@@ -4329,6 +4333,14 @@ function loop() {
   _loopFrame++;
   if ((_loopFrame & 1) === 0) _updatePeerCamMarkers();
   _maybeBroadcastCamera(now);
+  const rw = renderer.domElement.width;
+  const rh = renderer.domElement.height;
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, rw, rh);
+  renderer.autoClear = true;
+  if (scene?.background?.isColor) {
+    try { renderer.setClearColor(scene.background, 1); } catch (_) {}
+  }
   renderer.render(scene, camera);
   _renderViewGizmo();
 }
@@ -4908,12 +4920,27 @@ export function initEditor3D(rootEl) {
     window.matchMedia('(max-width: 768px)').matches ||
     window.matchMedia('(pointer: coarse)').matches
   ));
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 2));
+  renderer.setPixelRatio(Math.min(Math.max(1, window.devicePixelRatio || 1), coarse ? 1.25 : 2));
   renderer.shadowMap.enabled = false;
+  if (THREE.SRGBColorSpace && 'outputColorSpace' in renderer) {
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+  }
+  if (THREE.ColorManagement && typeof THREE.ColorManagement === 'object') {
+    try { THREE.ColorManagement.enabled = true; } catch (_) {}
+  }
   container.appendChild(renderer.domElement);
   const cvs = renderer.domElement;
   cvs.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;';
   cvs.addEventListener('contextmenu', _onViewportContextMenu);
+  cvs.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    cancelAnimationFrame(raf);
+  }, false);
+  cvs.addEventListener('webglcontextrestored', () => {
+    try { resize(); } catch (_) {}
+    cancelAnimationFrame(raf);
+    loop();
+  }, false);
 
   // Orbit first so its pointer listeners register before TransformControls'.
   // TransformControls stops propagation when the gizmo grabs the pointer,

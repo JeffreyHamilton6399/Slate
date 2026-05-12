@@ -475,7 +475,7 @@
           p.style.display = 'none';
         });
       }
-      // Panel may live outside dock chrome (e.g. Scene hierarchy in #left-dock-mount).
+      // Panel may live in a float shell while detached from dock chrome.
       if (globalPanel && !floats.has(id) && !dismissedPanels.has(id)) {
         const inFloat = globalPanel.closest('.panel-float-body');
         if (!inFloat && globalPanel.parentElement !== body) {
@@ -639,7 +639,7 @@
     },
   };
 
-  /** Ensure shared left-dock chrome exists without destroying Scene / Boards markup. */
+  /** Ensure left-dock tab strip + body exist inside #left-dock. */
   function ensureLeftDockChrome() {
     if (document.getElementById('dock-tabs-left')) return;
     const aside = document.getElementById('left-dock');
@@ -668,22 +668,20 @@
     });
 
     window.slateSetLeftDockTab = function (id) {
-      let tabId = id;
-      if (tabId !== 'scene' && tabId !== 'boards') tabId = 'scene';
+      let tabId = id === 'scene' || id === 'boards' ? id : 'scene';
       if (document.body.classList.contains('mode-2d') && tabId === 'scene') tabId = 'boards';
-      const tabs = document.querySelectorAll('.left-dock-tab');
-      const panels = document.querySelectorAll('.left-dock-panel');
-      tabs.forEach(t => {
-        const on = t.dataset.leftTab === tabId;
-        t.classList.toggle('active', on);
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === tabId));
       try { localStorage.setItem('slate_left_dock_tab', tabId); } catch (_) {}
       const m = { scene: 'hierarchy', boards: 'boards' };
-      const pid = m[tabId] || tabId;
-      if (window.slateDock && typeof window.slateDock.setActive === 'function') window.slateDock.setActive(pid);
+      const pid = m[tabId] || 'hierarchy';
+      if (window.slateDock && typeof window.slateDock.setActive === 'function') {
+        try { window.slateDock.setActive(pid); } catch (_) {}
+      }
     };
+
+    try {
+      const saved = localStorage.getItem('slate_left_dock_tab');
+      window.slateSetLeftDockTab(saved === 'boards' ? 'boards' : 'scene');
+    } catch (_) {}
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

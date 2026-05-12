@@ -1134,6 +1134,7 @@ body.mode-3d #minimap-wrap,
 body.mode-3d .dock-tab[data-panel="layers"],
 body.mode-3d #dock-body .dock-panel[data-panel="layers"],
 body.mode-3d .dock-tab[data-panel="hierarchy"] { display: none !important; }
+body.mode-3d #left-dock-mount .dock-panel[data-panel="hierarchy"],
 body.mode-3d .left-dock-mount .dock-panel[data-panel="hierarchy"] {
   display: flex !important;
   flex: 1;
@@ -1165,6 +1166,19 @@ body.mode-2d #left-dock {
   display: flex;
   align-self: stretch;
   min-height: 0;
+  position: relative;
+}
+/* slateDock left chrome (tabs + body) — mounted without destroying Scene/Boards; collapsed so it does not steal flex space */
+#left-dock > .dock-left-chrome {
+  flex: 0 0 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  opacity: 0;
+  pointer-events: none;
 }
 .left-dock-tabs {
   display: flex;
@@ -1362,6 +1376,9 @@ body.mode-3d #editor-view-stack {
   background: linear-gradient(90deg, rgba(255,255,255,0.07), transparent);
 }
 #draw-toolbar .toolbar-move-handle:active { cursor: grabbing; }
+body.mode-2d #draw-toolbar .toolbar-move-handle {
+  display: none !important;
+}
 #draw-toolbar.toolbar-floating {
   right: auto !important;
   width: min(92vw, 720px) !important;
@@ -8263,13 +8280,15 @@ function getBoardDocMode(board) {
   return boardDocModes[board] === '3d' ? '3d' : '2d';
 }
 
-/** Move the 3D hierarchy dock panel between the right dock and the left outliner. */
+/** Move the 3D hierarchy dock panel into the Scene column (or back into the dock for 2D). */
 window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
-  const body = document.getElementById('dock-body');
+  const rightBody = document.getElementById('dock-body');
+  const leftBody = document.getElementById('dock-body-left');
   const mount = document.getElementById('left-dock-mount');
   const panel = document.querySelector('.dock-panel[data-panel="hierarchy"]');
-  if (!panel || !body || !mount) return;
+  if (!panel) return;
   if (workspaceMode === '3d') {
+    if (!mount) return;
     mount.appendChild(panel);
     panel.style.display = 'flex';
     panel.style.flex = '1';
@@ -8278,7 +8297,9 @@ window.slateRelocateHierarchy = function slateRelocateHierarchy(workspaceMode) {
     panel.style.overflow = 'hidden';
     try { window.slateRefreshHierarchy?.(); } catch (_) {}
   } else {
-    body.appendChild(panel);
+    const target = leftBody || rightBody;
+    if (!target) return;
+    target.appendChild(panel);
     panel.style.display = 'none';
     panel.style.flex = '';
     panel.style.flexDirection = '';
@@ -8310,6 +8331,10 @@ window.slateRelocateBoardsNav = function slateRelocateBoardsNav(_workspaceMode) 
       });
       panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === id));
       try { localStorage.setItem(LS, id); } catch (_) {}
+      const dockPid = id === 'scene' ? 'hierarchy' : id === 'boards' ? 'boards' : null;
+      if (dockPid && window.slateDock && typeof window.slateDock.setActive === 'function') {
+        try { window.slateDock.setActive(dockPid); } catch (_) {}
+      }
     }
     window.slateSetLeftDockTab = setTab;
     tabs.forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.leftTab)));
@@ -8353,6 +8378,13 @@ function applyWorkspaceMode(board) {
   const tb = document.getElementById('draw-toolbar');
   const tb3 = document.getElementById('toolbar-3d');
   if (!area2 || !area3) return;
+  const dockDrawToolbarTop = () => {
+    if (!tb) return;
+    tb.classList.remove('toolbar-floating');
+    tb.style.position = '';
+    tb.style.left = tb.style.top = tb.style.right = tb.style.bottom = '';
+  };
+  dockDrawToolbarTop();
   const prevMode = document.body.classList.contains('mode-3d') ? '3d' : '2d';
   if (prevMode !== mode && board) {
     try { window.slateSfx?.play('mode-switch'); } catch (_) {}
@@ -10019,8 +10051,6 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
       handle.addEventListener('pointercancel', onUp);
     });
   }
-
-  wireFloatingToolbar('draw-toolbar', '.toolbar-move-handle', 'slate_toolbar_2d_pos');
 
   function wireToolbarResize(panelId, handleSel, storageKeyW, storageKeyH) {
     const panel = document.getElementById(panelId);

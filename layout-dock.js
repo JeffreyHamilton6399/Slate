@@ -11,6 +11,7 @@
   const LS_FLOATS = 'slate_dock_floats';
   const LS_ACTIVE_LEFT = 'slate_dock_active_left';
   const LS_ACTIVE_RIGHT = 'slate_dock_active_right';
+  const LS_PANEL_SIDES = 'slate_dock_panel_sides';
 
   function clamp(n, a, b) {
     return Math.max(a, Math.min(b, n));
@@ -174,6 +175,43 @@
     return side === 'left' ? LS_ACTIVE_LEFT : LS_ACTIVE_RIGHT;
   }
 
+  function _readPanelSides() {
+    try {
+      const raw = localStorage.getItem(LS_PANEL_SIDES);
+      const o = raw ? JSON.parse(raw) : {};
+      return o && typeof o === 'object' ? o : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function _persistPanelSide(panelId, side) {
+    try {
+      const o = _readPanelSides();
+      o[panelId] = side === 'left' ? 'left' : 'right';
+      localStorage.setItem(LS_PANEL_SIDES, JSON.stringify(o));
+    } catch (_) {}
+  }
+
+  function _initialDockSideForPanel(panelId, defSide) {
+    const saved = _readPanelSides()[panelId];
+    if (saved === 'left' || saved === 'right') return saved;
+    return defSide === 'left' ? 'left' : 'right';
+  }
+
+  /** Prefer geometry over elementFromPoint — the dragged tab often sits on top and steals hits. */
+  function _pointInElClientRect(x, y, el) {
+    if (!el) return false;
+    try {
+      const st = getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
   function _insertTabSorted(tabs, tab, panelId) {
     const po = _entry(panelId);
     const insertBefore = [...tabs.children].find(ch => {
@@ -270,20 +308,35 @@
       const fromSide = tab.closest('#dock-tabs-left') ? 'left' : 'right';
       const hit = document.elementFromPoint(lastX, lastY);
       const onFloat = hit && hit.closest && hit.closest('.panel-float');
-      const onLeft = hit && hit.closest && (hit.closest('#dock-tabs-left') || hit.closest('#dock-body-left'));
-      const onRight = hit && hit.closest && (hit.closest('#dock-tabs') || hit.closest('#dock-body'));
-      if (!onFloat && fromSide === 'right' && onLeft) {
-        window.slateDock.transferPanel(panelId, 'left');
-      } else if (!onFloat && fromSide === 'left' && onRight) {
-        window.slateDock.transferPanel(panelId, 'right');
-      } else {
-        window.slateDock.detachPanel(panelId, {
-          left: Math.max(12, Math.min(lastX - 100, window.innerWidth - 312)),
-          top: Math.max(52, lastY - 20),
-          width: 300,
-          height: 360,
-        });
+      const sidebar = document.getElementById('sidebar');
+      const rightDock = document.getElementById('right-dock');
+      const inSidebar = _pointInElClientRect(lastX, lastY, sidebar);
+      const inRightDock = _pointInElClientRect(lastX, lastY, rightDock);
+      const geom = {
+        left: Math.max(12, Math.min(lastX - 100, window.innerWidth - 312)),
+        top: Math.max(52, lastY - 20),
+        width: 300,
+        height: 360,
+      };
+      let xfer = null;
+      if (!onFloat) {
+        if (fromSide === 'right' && inSidebar && !inRightDock) xfer = 'left';
+        else if (fromSide === 'left' && inRightDock && !inSidebar) xfer = 'right';
+        else if (fromSide === 'right' && inSidebar && inRightDock) {
+          const sr = sidebar.getBoundingClientRect();
+          const rr = rightDock.getBoundingClientRect();
+          const mid = sr.right > rr.left ? (sr.right + rr.left) / 2 : window.innerWidth / 2;
+          xfer = lastX < mid ? 'left' : null;
+        } else if (fromSide === 'left' && inSidebar && inRightDock) {
+          const sr = sidebar.getBoundingClientRect();
+          const rr = rightDock.getBoundingClientRect();
+          const mid = sr.right > rr.left ? (sr.right + rr.left) / 2 : window.innerWidth / 2;
+          xfer = lastX >= mid ? 'right' : null;
+        }
       }
+      if (xfer === 'left') window.slateDock.transferPanel(panelId, 'left');
+      else if (xfer === 'right') window.slateDock.transferPanel(panelId, 'right');
+      else window.slateDock.detachPanel(panelId, geom);
       beyond = false;
     });
     tab.addEventListener('pointercancel', () => { down = false; beyond = false; });
@@ -302,7 +355,9 @@
   }
 
   function appendDockPanel(entry) {
-    const side = entry.dockSide === 'left' ? 'left' : 'right';
+    const defSide = entry.dockSide === 'left' ? 'left' : 'right';
+    const side = _initialDockSideForPanel(entry.id, defSide);
+    entry.dockSide = side;
     const { tabs, body } = _tabsBody(side);
     if (!tabs || !body) return;
 
@@ -368,6 +423,7 @@
       _insertTabSorted(dest.tabs, tab, id);
       dest.body.appendChild(panelEl);
       entry.dockSide = side;
+      _persistPanelSide(id, side);
       window.slateDock.setActive(id);
       try { window.slateSfx?.play('panel-open'); } catch (_) {}
     },
@@ -394,6 +450,12 @@
       if (dockedTarget) {
         body.querySelectorAll(':scope > .dock-panel').forEach(p => {
           p.style.display = p === dockedTarget ? 'flex' : 'none';
+        });
+      } else {
+        // Panel DOM may be relocated (e.g. hierarchy in #left-dock-mount) — still hide
+        // siblings that remain in this dock body so two stacks don't show at once.
+        body.querySelectorAll(':scope > .dock-panel').forEach(p => {
+          p.style.display = 'none';
         });
       }
       try { localStorage.setItem(_lsActiveKey(side), id); } catch (_) {}
@@ -537,6 +599,7 @@
       win.remove();
       floats.delete(id);
       if (entry) entry.dockSide = side;
+      _persistPanelSide(id, side);
       const tab = _findTab(id);
       if (tab) {
         tab.style.display = '';
@@ -549,39 +612,25 @@
     },
   };
 
-  /** Replace legacy left-dock markup with shared dock chrome (ids used by slateDock). */
+  /** Ensure shared left-dock chrome exists without destroying Scene / Boards markup. */
   function ensureLeftDockChrome() {
     if (document.getElementById('dock-tabs-left')) return;
     const aside = document.getElementById('left-dock');
     if (!aside) return;
-    const nav = document.getElementById('sidebar-workspace-nav');
-    const frag = document.createDocumentFragment();
-    if (nav) frag.appendChild(nav);
-    aside.textContent = '';
     const tabs = document.createElement('div');
     tabs.id = 'dock-tabs-left';
-    tabs.className = 'dock-tabs';
-    aside.appendChild(tabs);
+    tabs.className = 'dock-tabs dock-left-chrome';
+    tabs.setAttribute('aria-label', 'Left tool panels');
     const body = document.createElement('div');
     body.id = 'dock-body-left';
-    body.className = 'dock-body';
+    body.className = 'dock-body dock-left-chrome';
+    body.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;';
+    aside.appendChild(tabs);
     aside.appendChild(body);
-    if (frag.childNodes.length) aside.appendChild(frag);
-  }
-
-  function ensure3dToolbarMoveHandle() {
-    const tb = document.getElementById('toolbar-3d');
-    if (!tb || tb.querySelector('.toolbar-move-handle')) return;
-    const h = document.createElement('div');
-    h.className = 'toolbar-move-handle';
-    h.title = 'Drag to float toolbar';
-    h.setAttribute('aria-hidden', 'true');
-    tb.insertBefore(h, tb.firstChild);
   }
 
   function boot() {
     ensureLeftDockChrome();
-    ensure3dToolbarMoveHandle();
     applySidebarW(readNum(LS_SIDEBAR, 260));
     applyDockW(readNum(LS_DOCK, 220));
     initSidebarResize();
@@ -591,17 +640,21 @@
       applyDockW(parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || readNum(LS_DOCK, 220));
     });
 
-    window.slateRelocateHierarchy = function (mode) {
-      try { if (mode === '3d') window.slateRefreshHierarchy?.(); } catch (_) {}
-    };
-    window.slateRelocateBoardsNav = function () {
-      const nav = document.getElementById('sidebar-workspace-nav');
-      const host = document.querySelector('#dock-body-left .dock-panel[data-panel="boards"]');
-      if (nav && host && nav.parentElement !== host) host.appendChild(nav);
-    };
     window.slateSetLeftDockTab = function (id) {
+      let tabId = id;
+      if (tabId !== 'scene' && tabId !== 'boards') tabId = 'scene';
+      if (document.body.classList.contains('mode-2d') && tabId === 'scene') tabId = 'boards';
+      const tabs = document.querySelectorAll('.left-dock-tab');
+      const panels = document.querySelectorAll('.left-dock-panel');
+      tabs.forEach(t => {
+        const on = t.dataset.leftTab === tabId;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      panels.forEach(p => p.classList.toggle('active', p.dataset.leftTab === tabId));
+      try { localStorage.setItem('slate_left_dock_tab', tabId); } catch (_) {}
       const m = { scene: 'hierarchy', boards: 'boards' };
-      const pid = m[id] || id;
+      const pid = m[tabId] || tabId;
       if (window.slateDock && typeof window.slateDock.setActive === 'function') window.slateDock.setActive(pid);
     };
   }

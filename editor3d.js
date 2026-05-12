@@ -5039,15 +5039,23 @@ ensureHierarchyPanel();
 function _boot3dIfNeeded() {
   const el = document.getElementById('canvas-area-3d');
   if (!el || !document.body.classList.contains('mode-3d')) return;
-  try {
-    if (getComputedStyle(el).display === 'none') return;
-  } catch (_) {}
-  initEditor3D(el);
+  requestAnimationFrame(() => {
+    initEditor3D(el);
+    requestAnimationFrame(() => {
+      try { resize(); } catch (_) {}
+    });
+  });
 }
 
 window.addEventListener('slate-3d-activate', () => {
   const el = document.getElementById('canvas-area-3d');
-  if (el) initEditor3D(el);
+  if (!el) return;
+  requestAnimationFrame(() => {
+    initEditor3D(el);
+    requestAnimationFrame(() => {
+      try { resize(); } catch (_) {}
+    });
+  });
 });
 window.addEventListener('slate-3d-deactivate', () => {
   disposeEditor3D();

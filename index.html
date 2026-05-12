@@ -486,7 +486,7 @@ input, textarea { font-family: var(--sans); }
 }
 #editor-pane {
   flex: 1; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column;
-  /* toolbar is now fixed-position on the right, no horizontal space needed here */
+  /* 2D / 3D toolbars are absolutely positioned at the top of this pane so they never cover #right-dock. */
 }
 #editor-view-stack {
   flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column;
@@ -650,6 +650,7 @@ input, textarea { font-family: var(--sans); }
   z-index: 4;
   background: #12121a;
   touch-action: none;
+  overflow: hidden;
 }
 #canvas-area-3d canvas {
   display: block; width: 100% !important; height: 100% !important;
@@ -1300,13 +1301,20 @@ body.mode-3d #editor-view-stack {
   box-sizing: border-box;
 }
 
-/* 2D desktop: horizontal toolbar along top (floating still works) */
+/* 2D desktop: reserve top strip + horizontal toolbar inside #editor-pane (aligned like 3D). */
 @media (min-width: 769px) {
+  body.mode-2d #editor-view-stack {
+    padding-top: var(--draw-toolbar-strip-h, 52px);
+    box-sizing: border-box;
+  }
   body.mode-2d #draw-toolbar:not(.toolbar-floating) {
-    top: calc(var(--header-h) + 6px);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     bottom: auto;
-    left: 12px;
-    right: calc(var(--dock-w, 0px) + 12px);
+    transform: none;
+    max-width: none;
     width: auto;
     height: var(--draw-toolbar-strip-h, 52px);
     max-height: var(--draw-toolbar-strip-h, 52px);
@@ -1317,11 +1325,12 @@ body.mode-3d #editor-view-stack {
     padding-left: 4px;
     overflow-x: auto;
     overflow-y: hidden;
-    max-width: none;
     scrollbar-width: none;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.25);
+    z-index: 30;
   }
   body.mode-2d #draw-toolbar:not(.toolbar-floating) .toolbar-resize-edge-2d {
     left: 0;
@@ -1340,7 +1349,7 @@ body.mode-3d #editor-view-stack {
   body.mode-2d #canvas-area {
     margin-right: 0;
     margin-bottom: 0;
-    margin-top: calc(var(--header-h) + var(--draw-toolbar-strip-h, 52px) + 18px);
+    margin-top: 0;
   }
   body.mode-2d #stroke-size,
   body.mode-2d #stroke-opacity {
@@ -8436,6 +8445,11 @@ function applyWorkspaceMode(board) {
       requestAnimationFrame(() => slateFocusDefaultDockTab3d());
     }
     window.dispatchEvent(new CustomEvent('slate-3d-activate'));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try { window.slateEditor3dResize?.(); } catch (_) {}
+      });
+    });
   } else {
     window.dispatchEvent(new CustomEvent('slate-3d-deactivate'));
     area3.style.display = 'none';
@@ -8452,6 +8466,10 @@ function applyWorkspaceMode(board) {
     requestAnimationFrame(() => {
       if (typeof resizeCanvas === 'function') resizeCanvas();
       if (typeof scheduleRender === 'function') scheduleRender();
+      const dtb = document.getElementById('draw-toolbar');
+      if (dtb && dtb.offsetHeight && window.matchMedia('(min-width: 769px)').matches) {
+        document.documentElement.style.setProperty('--draw-toolbar-strip-h', dtb.offsetHeight + 'px');
+      }
     });
   }
 }
@@ -8465,6 +8483,9 @@ window.addEventListener('slate-3d-activate', () => {
     if (t && t.offsetHeight) {
       document.documentElement.style.setProperty('--t3d-toolbar-strip-h', t.offsetHeight + 'px');
     }
+    requestAnimationFrame(() => {
+      try { window.slateEditor3dResize?.(); } catch (_) {}
+    });
   });
 });
 
@@ -10714,12 +10735,14 @@ renderSavedBoards();
 <script src="features.js"></script>
 <script src="notes.js"></script>
 <script>
-// Move the 3D toolbar inside #editor-pane so its absolute positioning is
-// anchored to the editor area (and it overlays the 3D viewport correctly).
-(function relocateToolbar3d() {
-  const tb = document.getElementById('toolbar-3d');
+// Move 2D + 3D toolbars into #editor-pane so they sit above the viewport only,
+// never over the right dock tabs (fixed viewport toolbars used to overlap).
+(function relocateEditorToolbars() {
   const pane = document.getElementById('editor-pane');
-  if (tb && pane && tb.parentElement !== pane) pane.appendChild(tb);
+  const tb2 = document.getElementById('draw-toolbar');
+  const tb3 = document.getElementById('toolbar-3d');
+  if (pane && tb2 && tb2.parentElement !== pane) pane.appendChild(tb2);
+  if (pane && tb3 && tb3.parentElement !== pane) pane.appendChild(tb3);
 })();
 </script>
 <script type="module" src="editor3d.js"></script>

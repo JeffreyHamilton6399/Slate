@@ -132,9 +132,13 @@
   }
 
   function _findPanelEl(id) {
-    return document.querySelector(
-      `#dock-body .dock-panel[data-panel="${id}"], #dock-body-left .dock-panel[data-panel="${id}"]`
-    );
+    const nodes = document.querySelectorAll(`.dock-panel[data-panel="${id}"]`);
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      if (el.closest('#dock-dismissed-pool')) continue;
+      return el;
+    }
+    return null;
   }
 
   function _findTab(id) {
@@ -210,6 +214,20 @@
     }
     const r = el.getBoundingClientRect();
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
+  /** Widen hit targets so tabs snap when dropped near (not only inside) a dock. */
+  function _pointNearDockZone(x, y, el, pad) {
+    if (!el) return false;
+    try {
+      const st = getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    const r = el.getBoundingClientRect();
+    const p = pad || 56;
+    return x >= r.left - p && x <= r.right + p && y >= r.top - p && y <= r.bottom + p;
   }
 
   function _insertTabSorted(tabs, tab, panelId) {
@@ -310,8 +328,8 @@
       const onFloat = hit && hit.closest && hit.closest('.panel-float');
       const sidebar = document.getElementById('sidebar');
       const rightDock = document.getElementById('right-dock');
-      const inSidebar = _pointInElClientRect(lastX, lastY, sidebar);
-      const inRightDock = _pointInElClientRect(lastX, lastY, rightDock);
+      const inSidebar = _pointNearDockZone(lastX, lastY, sidebar, 64);
+      const inRightDock = _pointNearDockZone(lastX, lastY, rightDock, 64);
       const geom = {
         left: Math.max(12, Math.min(lastX - 100, window.innerWidth - 312)),
         top: Math.max(52, lastY - 20),
@@ -447,16 +465,25 @@
         t.classList.toggle('active', t.dataset.panel === id);
       });
       const dockedTarget = body.querySelector(`:scope > .dock-panel[data-panel="${id}"]`);
+      const globalPanel = _findPanelEl(id);
       if (dockedTarget) {
         body.querySelectorAll(':scope > .dock-panel').forEach(p => {
           p.style.display = p === dockedTarget ? 'flex' : 'none';
         });
       } else {
-        // Panel DOM may be relocated (e.g. hierarchy in #left-dock-mount) — still hide
-        // siblings that remain in this dock body so two stacks don't show at once.
         body.querySelectorAll(':scope > .dock-panel').forEach(p => {
           p.style.display = 'none';
         });
+      }
+      // Panel may live outside dock chrome (e.g. Scene hierarchy in #left-dock-mount).
+      if (globalPanel && !floats.has(id) && !dismissedPanels.has(id)) {
+        const inFloat = globalPanel.closest('.panel-float-body');
+        if (!inFloat && globalPanel.parentElement !== body) {
+          globalPanel.style.display = 'flex';
+          globalPanel.style.flexDirection = 'column';
+          globalPanel.style.flex = '1';
+          globalPanel.style.minHeight = '0';
+        }
       }
       try { localStorage.setItem(_lsActiveKey(side), id); } catch (_) {}
       try { localStorage.setItem('slate_dock_active', id); } catch (_) {}

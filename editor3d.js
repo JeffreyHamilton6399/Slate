@@ -4299,6 +4299,10 @@ function resize() {
   }
 }
 
+if (typeof window !== 'undefined') {
+  window.slateEditor3dResize = resize;
+}
+
 let _resizeObserver = null;
 function _attachContainerResizeObserver(el) {
   if (_resizeObserver || !el || typeof ResizeObserver !== 'function') return;
@@ -4881,9 +4885,25 @@ export function initEditor3D(rootEl) {
   disposeEditor3D();
   container = rootEl;
   container.style.touchAction = 'none';
+  container.querySelector?.('.slate-3d-webgl-fail')?.remove();
   ensureScene();
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+  try {
+    renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance',
+    });
+  } catch (err) {
+    console.error('WebGLRenderer', err);
+    renderer = null;
+  }
+  if (!renderer || !renderer.getContext()) {
+    container.innerHTML = `<div class="slate-3d-webgl-fail" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;text-align:center;font:0.82rem/1.45 var(--sans,system-ui,sans-serif);color:var(--text-dim,#999);background:#12121a;box-sizing:border-box">
+      <div><strong style="color:var(--text,#eee)">3D view unavailable</strong><br>WebGL could not be initialized. Try another browser or disable overlays that block the GPU.</div>
+    </div>`;
+    return;
+  }
   const coarse = (typeof window !== 'undefined' && window.matchMedia && (
     window.matchMedia('(max-width: 768px)').matches ||
     window.matchMedia('(pointer: coarse)').matches
@@ -4891,8 +4911,9 @@ export function initEditor3D(rootEl) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 2));
   renderer.shadowMap.enabled = false;
   container.appendChild(renderer.domElement);
-  renderer.domElement.style.touchAction = 'none';
-  renderer.domElement.addEventListener('contextmenu', _onViewportContextMenu);
+  const cvs = renderer.domElement;
+  cvs.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;';
+  cvs.addEventListener('contextmenu', _onViewportContextMenu);
 
   // Orbit first so its pointer listeners register before TransformControls'.
   // TransformControls stops propagation when the gizmo grabs the pointer,
@@ -5016,6 +5037,12 @@ export function disposeEditor3D() {
     renderer.domElement.parentNode.removeChild(renderer.domElement);
   }
   if (renderer) { renderer.dispose(); renderer = null; }
+
+  if (container) {
+    try {
+      container.querySelectorAll('.slate-3d-webgl-fail').forEach((n) => n.remove());
+    } catch (_) {}
+  }
 
   if (scene) {
     scene.traverse(o => {

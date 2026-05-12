@@ -443,6 +443,9 @@
       entry.dockSide = side;
       _persistPanelSide(id, side);
       window.slateDock.setActive(id);
+      requestAnimationFrame(() => {
+        try { window.slateDock.setActive(id); } catch (_) {}
+      });
       try { window.slateSfx?.play('panel-open'); } catch (_) {}
     },
 

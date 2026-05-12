@@ -17,7 +17,7 @@ featureCSS.textContent = `
   }
   body.mode-2d #dock-tabs-left .dock-tab[data-panel="hierarchy"],
   body.mode-2d #dock-body-left .dock-panel[data-panel="hierarchy"] { display:none !important; }
-  /* index hides .dock-tab[data-panel=hierarchy] for legacy right dock — re-show on left strip */
+  /* index hides hierarchy on the right dock in 3d — re-show on left strip */
   body.mode-3d #dock-tabs-left .dock-tab[data-panel="hierarchy"] { display:inline-flex !important; }
   #opacity-wrap { display:flex;align-items:center;gap:5px;flex-shrink:0;padding:0 6px; }
   #opacity-slider { width:54px;accent-color:var(--accent);cursor:pointer; }
@@ -76,12 +76,6 @@ featureCSS.textContent = `
   .sc-head { grid-column:1/-1;margin-top:12px;margin-bottom:4px;font-size:.65rem;
     font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.12em; }
 
-  #layers-toolbar-btn { display:flex;flex-shrink:0;align-items:center;gap:5px;
-    padding:6px 11px;border-radius:6px;font-size:.78rem;font-weight:500;
-    background:var(--bg3);border:1px solid var(--border2);color:var(--text-mid);
-    cursor:pointer;transition:background .15s,color .15s,border-color .15s; }
-  #layers-toolbar-btn.active { color:var(--accent);background:rgba(124,106,255,.1);
-    border-color:rgba(124,106,255,.4); }
   #shortcuts-hint-btn { font-size:.85rem;font-weight:600;color:var(--text-dim); }
   #zoom-label { cursor:pointer; }
   #zoom-label:hover { color:var(--accent); }
@@ -686,25 +680,27 @@ function _bindLayerDragEvents(row) {
 
 function toggleLayersPanel() {
   const panel = document.getElementById('layers-panel');
-  const btn   = document.getElementById('layers-toolbar-btn');
-  if (panel && panel.closest('#dock-body') && window.slateDock) {
+  if (!panel) return;
+  const onRight = !!panel.closest('#dock-body');
+  const onLeft = !!panel.closest('#dock-body-left');
+  if (onLeft && window.slateDock?.setActive) {
+    window.slateDock.setActive('layers');
+    return;
+  }
+  if (onRight && window.slateDock) {
     const dock = document.getElementById('right-dock');
     const collapsed = dock?.classList.contains('dock-user-collapsed');
     const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || 0;
     if (collapsed || w < 48) {
       window.slateDock.revealPanel('layers');
-      btn?.classList.add('active');
     } else {
       window.slateDock.toggleCollapsed();
-      btn?.classList.remove('active');
     }
     return;
   }
-  if (!panel) return;
   const open = panel.style.display !== 'none';
   panel.style.display = open ? 'none' : 'flex';
   panel.style.flexDirection = 'column';
-  btn?.classList.toggle('active', !open);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -737,7 +733,7 @@ function injectShortcutsOverlay() {
     { key: 'Shift + draw',     label: 'Constrain to square / snap to 15°' },
     { head: 'View' },
     { key: 'M',           label: 'Toggle minimap' },
-    { key: 'F2',          label: 'Toggle layers panel' },
+    { key: 'F2',          label: 'Layers — focus tab / toggle right dock' },
     { key: 'Ctrl+0',      label: 'Fit canvas (100%)' },
     { key: '+  /  −',     label: 'Zoom in / out' },
     { key: '?',           label: 'This shortcuts panel' },
@@ -802,27 +798,13 @@ if (_makeShapeBase) {
 
 
 /* ─────────────────────────────────────────────────────────────────────────
-   TOOLBAR BUTTONS: Layers + Shortcuts-hint
+   TOOLBAR EXTRAS: Shortcuts hint (layers use the dock tab only)
 ───────────────────────────────────────────────────────────────────────── */
 function injectToolbarExtras() {
   const toolbar = document.getElementById('draw-toolbar');
   if (!toolbar) return;
 
-  if (!document.getElementById('layers-toolbar-btn')) {
-    const btn = document.createElement('button');
-    btn.id = 'layers-toolbar-btn';
-    btn.title = 'Layers (F2)';
-    btn.innerHTML = `
-      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"
-        stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-        <rect x="1" y="1" width="11" height="2.5" rx="1"/>
-        <rect x="1" y="5.25" width="11" height="2.5" rx="1"/>
-        <rect x="1" y="9.5" width="11" height="2" rx="1"/>
-      </svg>
-      Layers`;
-    btn.addEventListener('click', toggleLayersPanel);
-    toolbar.appendChild(btn);
-  }
+  document.getElementById('layers-toolbar-btn')?.remove();
 
   if (!document.getElementById('shortcuts-hint-btn')) {
     const btn = document.createElement('button');
@@ -936,8 +918,12 @@ function injectBoardsDockPanel() {
     order: 20,
     mount(el) {
       el.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;padding:0;overflow:hidden;';
+      el.classList.add('boards-list-open');
       const nav = document.getElementById('sidebar-workspace-nav');
       if (nav && nav.parentElement !== el) el.appendChild(nav);
+      try {
+        document.getElementById('boards-tab-toggle')?.setAttribute('aria-expanded', 'true');
+      } catch (_) {}
     },
   });
   _boardsDockRegistered = true;

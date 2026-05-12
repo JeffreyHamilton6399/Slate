@@ -263,13 +263,20 @@ input, textarea { font-family: var(--sans); }
 
 #board-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 4px 8px;
   display: none;
 }
+/* Sidebar rail: list hidden until user expands (legacy toggle) */
 #sidebar.boards-list-open #board-scroll {
   display: block;
   max-height: min(42vh, 360px);
+}
+/* Boards dock tab: follow .boards-list-open on the panel (class added in mount) */
+.dock-panel[data-panel="boards"].boards-list-open #board-scroll {
+  display: block !important;
+  max-height: none;
 }
 .boards-tab-row {
   display: flex;
@@ -304,6 +311,7 @@ input, textarea { font-family: var(--sans); }
   position: relative;
   display: flex;
   align-items: center;
+  z-index: 2;
 }
 #shapes-menu-btn .shape-caret {
   font-size: 0.55rem;
@@ -320,7 +328,7 @@ input, textarea { font-family: var(--sans); }
   border: 1px solid var(--border2);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.45);
-  z-index: 120;
+  z-index: 6100;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -843,7 +851,10 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   display: flex; align-items: center;
   padding: 0 14px; gap: 10px;
   padding-top: max(0px, env(safe-area-inset-top, 0px));
-  flex-shrink: 0; z-index: 5;
+  flex-shrink: 0;
+  /* Above #draw-toolbar (z-index 30–39) so File menu dropdown stacks on top */
+  z-index: 50;
+  position: relative;
   box-sizing: border-box;
 }
 #sidebar-toggle {
@@ -879,8 +890,12 @@ body.compact-ui .panel-body { padding: 6px 8px; }
   align-items: center;
   padding: 6px 0;
   gap: 2px;
-  flex-shrink: 0; z-index: 39;
-  overflow-y: auto; scrollbar-width: none;
+  flex-shrink: 0;
+  z-index: 38;
+  /* Let shapes / nested menus paint outside the bar */
+  overflow-x: visible;
+  overflow-y: auto;
+  scrollbar-width: none;
   max-height: calc(100vh - var(--header-h) - 100px);
   max-height: calc(100dvh - var(--header-h) - 100px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
@@ -1134,7 +1149,8 @@ body.mode-3d #draw-toolbar,
 body.mode-3d #minimap-wrap,
 body.mode-3d .dock-tab[data-panel="layers"],
 body.mode-3d #dock-body .dock-panel[data-panel="layers"],
-body.mode-3d .dock-tab[data-panel="hierarchy"] { display: none !important; }
+/* Hide Scene tab on the right rail only — left dock keeps hierarchy */
+body.mode-3d #dock-tabs .dock-tab[data-panel="hierarchy"] { display: none !important; }
 /* Left dock: Scene + Boards use the same draggable dock tabs as the right rail */
 body.mode-3d #dock-body-left .dock-panel[data-panel="hierarchy"] {
   display: flex !important;
@@ -1144,8 +1160,9 @@ body.mode-3d #dock-body-left .dock-panel[data-panel="hierarchy"] {
   border-radius: 0;
 }
 body.mode-2d #toolbar-3d,
-body.mode-2d .dock-tab[data-panel="hierarchy"],
-body.mode-2d #dock-body .dock-panel[data-panel="hierarchy"] { display: none !important; }
+/* 2D: Scene lives on the left only — do not hide hierarchy if user moved it to the right dock */
+body.mode-2d #dock-tabs-left .dock-tab[data-panel="hierarchy"],
+body.mode-2d #dock-body-left .dock-panel[data-panel="hierarchy"] { display: none !important; }
 
 /* Left rail — draggable dock tabs (layout-dock) under the Slate header (inside #sidebar) */
 #left-dock {
@@ -1264,7 +1281,7 @@ body.mode-3d #editor-view-stack {
     padding: 4px 8px 6px;
     padding-left: 4px;
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: visible;
     scrollbar-width: none;
     border-radius: 0;
     border: none;
@@ -1972,6 +1989,10 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
 .vis-toggle .vis-label { display: none; }
 
 /* ── File menu dropdown ── */
+#file-menu-wrap {
+  position: relative;
+  z-index: 2;
+}
 .file-dropdown-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -1982,7 +2003,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
   border: 1px solid var(--border2);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.45);
-  z-index: 200;
+  z-index: 6000;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -5076,9 +5097,9 @@ function joinBoard(board) {
   if (nameEl)  nameEl.textContent = board;
   if (noHint)  noHint.classList.add('hidden');
   const exportBtn = document.getElementById('export-btn');
-  if (exportBtn) exportBtn.style.display = 'flex';
+  if (exportBtn) exportBtn.style.display = 'none';
   const saveBoardBtn = document.getElementById('save-board-btn');
-  if (saveBoardBtn) saveBoardBtn.style.display = 'flex';
+  if (saveBoardBtn) saveBoardBtn.style.display = 'none';
 
   updateBoardChip();
   updateTopicInput();
@@ -9832,10 +9853,15 @@ document.getElementById('notes-close-btn')?.addEventListener('click', () => {
 });
 
 document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
+  const nav = document.getElementById('sidebar-workspace-nav');
+  const panel = document.querySelector('.dock-panel[data-panel="boards"]');
   const sb = document.getElementById('sidebar');
   const btn = document.getElementById('boards-tab-toggle');
-  if (!sb || !btn) return;
-  const open = sb.classList.toggle('boards-list-open');
+  if (!btn) return;
+  const inDock = !!(nav && panel && panel.contains(nav));
+  const target = inDock ? panel : sb;
+  if (!target) return;
+  const open = target.classList.toggle('boards-list-open');
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 });
 

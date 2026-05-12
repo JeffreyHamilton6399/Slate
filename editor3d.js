@@ -4282,8 +4282,18 @@ function resize() {
   // Round to whole CSS pixels so the renderer doesn't pick up sub-pixel sizes
   // that drift away from container.aspect — fixes the stretched-on-resize bug
   // when the dock-resize-handle shifts the viewport mid-frame.
-  const w = Math.max(1, Math.round(container.clientWidth  || 1));
-  const h = Math.max(1, Math.round(container.clientHeight || 1));
+  let w = Math.max(1, Math.round(container.clientWidth  || 0));
+  let h = Math.max(1, Math.round(container.clientHeight || 0));
+  if (w < 2 || h < 2) {
+    try {
+      const r = container.getBoundingClientRect();
+      w = Math.max(1, Math.round(r.width  || 1));
+      h = Math.max(1, Math.round(r.height || 1));
+    } catch (_) {
+      w = Math.max(1, w || 1);
+      h = Math.max(1, h || 1);
+    }
+  }
   renderer.setSize(w, h, false);
   const coarse = (typeof window !== 'undefined' && window.matchMedia && (
     window.matchMedia('(max-width: 768px)').matches ||
@@ -4338,8 +4348,11 @@ function loop() {
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, rw, rh);
   renderer.autoClear = true;
-  if (scene?.background?.isColor) {
-    try { renderer.setClearColor(scene.background, 1); } catch (_) {}
+  try {
+    if (scene?.background?.isColor) renderer.setClearColor(scene.background, 1);
+    else renderer.setClearColor(0x12121a, 1);
+  } catch (_) {
+    try { renderer.setClearColor(0x12121a, 1); } catch (_) {}
   }
   renderer.render(scene, camera);
   _renderViewGizmo();

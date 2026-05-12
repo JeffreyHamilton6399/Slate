@@ -141,10 +141,41 @@
     return null;
   }
 
-  function _findTab(id) {
-    return document.querySelector(
-      `#dock-tabs .dock-tab[data-panel="${id}"], #dock-tabs-left .dock-tab[data-panel="${id}"]`
-    );
+  /** Tab for `panelId` in a specific dock strip (left sidebar vs right dock). */
+  function _findTabOnSide(panelId, side) {
+    const { tabs } = _tabsBody(side);
+    return tabs?.querySelector(`.dock-tab[data-panel="${panelId}"]`) || null;
+  }
+
+  /**
+   * Prefer the strip that matches `entry.dockSide`, then the other strip.
+   * Avoids `querySelector('#dock-tabs …, #dock-tabs-left …')` which follows
+   * document order and can return the wrong duplicate when both strips briefly
+   * contain the same `data-panel` (ghost tab after cross-dock drag).
+   */
+  function _findTab(panelId) {
+    const entry = _entry(panelId);
+    if (entry) {
+      const canonical = entry.dockSide === 'left' ? 'left' : 'right';
+      const t = _findTabOnSide(panelId, canonical);
+      if (t) return t;
+    }
+    return _findTabOnSide(panelId, 'left') || _findTabOnSide(panelId, 'right');
+  }
+
+  /** Remove duplicate `.dock-tab[data-panel]` nodes; keep `keep` if still connected. */
+  function _dedupeDockTabsForPanel(panelId, keep) {
+    const all = [];
+    for (const side of ['left', 'right']) {
+      const { tabs } = _tabsBody(side);
+      if (!tabs) continue;
+      all.push(...tabs.querySelectorAll(`.dock-tab[data-panel="${panelId}"]`));
+    }
+    const keeper = keep && keep.isConnected ? keep : (all[0] || null);
+    if (!keeper) return;
+    for (const el of all) {
+      if (el !== keeper) el.remove();
+    }
   }
 
   function _defaultFloatGeomBR() {
@@ -388,6 +419,7 @@
     tab.addEventListener('click', () => window.slateDock.setActive(entry.id));
     _bindTabDetach(tab, entry.id);
     _insertTabSorted(tabs, tab, entry.id);
+    _dedupeDockTabsForPanel(entry.id, tab);
 
     const mount = document.createElement('div');
     mount.className = 'dock-panel';
@@ -428,13 +460,15 @@
     transferPanel(id, targetSide) {
       const entry = _entry(id);
       const panelEl = _findPanelEl(id);
-      const tab = _findTab(id);
-      if (!entry || !panelEl || !tab || floats.has(id)) return;
       const side = targetSide === 'left' ? 'left' : 'right';
+      if (!entry || !panelEl || floats.has(id)) return;
       if (entry.dockSide === side) return;
+      const fromSide = entry.dockSide === 'left' ? 'left' : 'right';
+      let tab = _findTabOnSide(id, fromSide);
+      if (!tab) tab = _findTabOnSide(id, side === 'left' ? 'right' : 'left');
+      if (!tab) return;
       const dest = _tabsBody(side);
       if (!dest.tabs || !dest.body) return;
-      const oldTabs = tab.parentElement;
       tab.remove();
       tab.classList.remove('dock-tab-dismissed');
       tab.style.display = '';
@@ -442,6 +476,7 @@
       dest.body.appendChild(panelEl);
       entry.dockSide = side;
       _persistPanelSide(id, side);
+      _dedupeDockTabsForPanel(id, tab);
       window.slateDock.setActive(id);
       requestAnimationFrame(() => {
         try { window.slateDock.setActive(id); } catch (_) {}
@@ -464,8 +499,11 @@
       const side = entry.dockSide === 'left' ? 'left' : 'right';
       const { tabs, body } = _tabsBody(side);
       if (!tabs || !body) return;
-      tabs.querySelectorAll('.dock-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.panel === id);
+      ['left', 'right'].forEach((s) => {
+        const tRoot = _tabsBody(s).tabs;
+        tRoot?.querySelectorAll('.dock-tab').forEach(t => {
+          t.classList.toggle('active', t.dataset.panel === id);
+        });
       });
       const dockedTarget = body.querySelector(`:scope > .dock-panel[data-panel="${id}"]`);
       const globalPanel = _findPanelEl(id);
@@ -635,6 +673,7 @@
         tab.style.display = '';
         tab.classList.remove('dock-tab-dismissed');
         if (entry) tab.title = `${entry.title} — click · drag to other dock or float`;
+        _dedupeDockTabsForPanel(id, tab);
       }
       window.slateDock.setActive(id);
       try { window.slateSfx?.play('panel-close'); } catch (_) {}

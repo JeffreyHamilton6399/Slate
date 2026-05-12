@@ -7808,7 +7808,7 @@ async function exportScene3D(ext) {
   }
 }
 
-/* 3D import — file picker hooked up via #import-btn → #import-file-input. */
+/* 3D import — #import-file-input change handler below; File menu opens the input in 3D mode. */
 document.getElementById('import-btn')?.addEventListener('click', () => {
   document.getElementById('import-file-input')?.click();
 });
@@ -8401,12 +8401,7 @@ function applyWorkspaceMode(board) {
     if (label) label.textContent = mode === '3d' ? 'Export' : 'Export';
   }
   const importBtn = document.getElementById('import-btn');
-  if (importBtn) {
-    // Import is 3D-only — it makes no sense for 2D boards. The inline
-    // `display:none` defaults the button to hidden, so we need `flex`
-    // (not empty string) to override it.
-    importBtn.style.display = mode === '3d' ? 'flex' : 'none';
-  }
+  if (importBtn) importBtn.style.display = 'none';
   const chatPanel = document.getElementById('chat-panel');
   const resetChatDockStyles = () => {
     if (!chatPanel) return;
@@ -10796,15 +10791,13 @@ renderSavedBoards();
     document.getElementById('export-btn')?.click();
   });
 
-  // Import — trigger the real import-btn click (or open file input directly for 3D)
+  // Import — open hidden file input in 3D mode (no header button)
   document.getElementById('file-import-btn')?.addEventListener('click', () => {
     closeMenu();
-    const importBtn = document.getElementById('import-btn');
-    if (importBtn && importBtn.style.display !== 'none') {
-      importBtn.click();
-    } else {
-      // 2D mode: no model import, show toast if available
-      if (typeof toast === 'function') toast('Import is available in 3D mode', 'yellow');
+    if (document.body.classList.contains('mode-3d')) {
+      document.getElementById('import-file-input')?.click();
+    } else if (typeof toast === 'function') {
+      toast('Import is available in 3D mode', 'yellow');
     }
   });
 

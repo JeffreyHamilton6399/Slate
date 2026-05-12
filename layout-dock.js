@@ -335,6 +335,7 @@
 
   window.slateDock = {
     registerPanel(def) {
+      ensureLeftDockChrome();
       if (!def || !def.id || !def.title || typeof def.mount !== 'function') return;
       if (panels.some(p => p.id === def.id)) return;
       const entry = {
@@ -548,7 +549,39 @@
     },
   };
 
+  /** Replace legacy left-dock markup with shared dock chrome (ids used by slateDock). */
+  function ensureLeftDockChrome() {
+    if (document.getElementById('dock-tabs-left')) return;
+    const aside = document.getElementById('left-dock');
+    if (!aside) return;
+    const nav = document.getElementById('sidebar-workspace-nav');
+    const frag = document.createDocumentFragment();
+    if (nav) frag.appendChild(nav);
+    aside.textContent = '';
+    const tabs = document.createElement('div');
+    tabs.id = 'dock-tabs-left';
+    tabs.className = 'dock-tabs';
+    aside.appendChild(tabs);
+    const body = document.createElement('div');
+    body.id = 'dock-body-left';
+    body.className = 'dock-body';
+    aside.appendChild(body);
+    if (frag.childNodes.length) aside.appendChild(frag);
+  }
+
+  function ensure3dToolbarMoveHandle() {
+    const tb = document.getElementById('toolbar-3d');
+    if (!tb || tb.querySelector('.toolbar-move-handle')) return;
+    const h = document.createElement('div');
+    h.className = 'toolbar-move-handle';
+    h.title = 'Drag to float toolbar';
+    h.setAttribute('aria-hidden', 'true');
+    tb.insertBefore(h, tb.firstChild);
+  }
+
   function boot() {
+    ensureLeftDockChrome();
+    ensure3dToolbarMoveHandle();
     applySidebarW(readNum(LS_SIDEBAR, 260));
     applyDockW(readNum(LS_DOCK, 220));
     initSidebarResize();
@@ -557,6 +590,20 @@
       applySidebarW(parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10) || readNum(LS_SIDEBAR, 260));
       applyDockW(parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock-w'), 10) || readNum(LS_DOCK, 220));
     });
+
+    window.slateRelocateHierarchy = function (mode) {
+      try { if (mode === '3d') window.slateRefreshHierarchy?.(); } catch (_) {}
+    };
+    window.slateRelocateBoardsNav = function () {
+      const nav = document.getElementById('sidebar-workspace-nav');
+      const host = document.querySelector('#dock-body-left .dock-panel[data-panel="boards"]');
+      if (nav && host && nav.parentElement !== host) host.appendChild(nav);
+    };
+    window.slateSetLeftDockTab = function (id) {
+      const m = { scene: 'hierarchy', boards: 'boards' };
+      const pid = m[id] || id;
+      if (window.slateDock && typeof window.slateDock.setActive === 'function') window.slateDock.setActive(pid);
+    };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

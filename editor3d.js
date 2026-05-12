@@ -4566,7 +4566,8 @@ function ensureHierarchyPanel() {
   }
   window.slateDock.registerPanel({
     id: 'hierarchy',
-    title: 'Hierarchy',
+    title: 'Scene',
+    side: 'left',
     order: 4,   // dock tab order: before Properties / Layers (far right)
     mount(el) {
       el.innerHTML = `

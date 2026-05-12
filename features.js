@@ -11,6 +11,14 @@
 ───────────────────────────────────────────────────────────────────────── */
 const featureCSS = document.createElement('style');
 featureCSS.textContent = `
+  #dock-body-left { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  body.mode-3d #dock-body-left .dock-panel[data-panel="hierarchy"] {
+    display:flex !important; flex:1; min-height:0; border:none; border-radius:0;
+  }
+  body.mode-2d #dock-tabs-left .dock-tab[data-panel="hierarchy"],
+  body.mode-2d #dock-body-left .dock-panel[data-panel="hierarchy"] { display:none !important; }
+  /* index hides .dock-tab[data-panel=hierarchy] for legacy right dock — re-show on left strip */
+  body.mode-3d #dock-tabs-left .dock-tab[data-panel="hierarchy"] { display:inline-flex !important; }
   #opacity-wrap { display:flex;align-items:center;gap:5px;flex-shrink:0;padding:0 6px; }
   #opacity-slider { width:54px;accent-color:var(--accent);cursor:pointer; }
   #opacity-label  { font-size:0.68rem;color:var(--text-dim);min-width:26px;text-align:right;
@@ -34,6 +42,8 @@ featureCSS.textContent = `
   #layers-panel { position:absolute;top:56px;right:16px;z-index:30;width:164px;
     border:1px solid var(--border2);border-radius:8px;background:var(--bg2);
     box-shadow:0 4px 20px rgba(0,0,0,.5);flex-direction:column;overflow:hidden; }
+  #dock-body-left .dock-panel #chat-panel.slate-dock-hosted,
+  #dock-body-left .dock-panel #notes-popout.slate-dock-hosted,
   #dock-body #layers-panel,
   .dock-panel #layers-panel {
     position: relative !important; top: auto !important; right: auto !important;
@@ -914,6 +924,25 @@ function injectPropsDockPlaceholder() {
 }
 window.slateEnsurePropsPanel = injectPropsDockPlaceholder;
 
+let _boardsDockRegistered = false;
+/** Boards list lives in the left dock like Scene — same float / drag / dock rules as other panels. */
+function injectBoardsDockPanel() {
+  if (_boardsDockRegistered) return;
+  if (!window.slateDock || typeof window.slateDock.registerPanel !== 'function') return;
+  window.slateDock.registerPanel({
+    id: 'boards',
+    title: 'Boards',
+    side: 'left',
+    order: 20,
+    mount(el) {
+      el.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;padding:0;overflow:hidden;';
+      const nav = document.getElementById('sidebar-workspace-nav');
+      if (nav && nav.parentElement !== el) el.appendChild(nav);
+    },
+  });
+  _boardsDockRegistered = true;
+}
+
 let _chatNotesDockRegistered = false;
 /** Register Chat + Notes as right-dock tabs so they can be docked, floated, and reordered like Properties. */
 function injectChatNotesDockPanels() {
@@ -970,6 +999,7 @@ function init() {
   injectOpacityControl();
   injectMinimap();
   injectLayersPanel();
+  injectBoardsDockPanel();
   injectChatNotesDockPanels();
   injectShortcutsOverlay();
   injectToolbarExtras();

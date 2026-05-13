@@ -550,8 +550,10 @@ function renderLayersList() {
         }
       </button>
       <span class="layer-name" data-lid="${l.id}" draggable="false" title="Double-click to rename" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;user-select:none;cursor:text">${_escape(l.name)}</span>
+      <span class="layer-opacity-wrap" data-lid="${l.id}" style="flex-shrink:0;display:inline-flex;align-items:center;touch-action:none">
       <input type="range" class="layer-opacity" data-lid="${l.id}" min="0" max="100" value="${op}" title="Layer opacity"
         style="width:52px;flex-shrink:0;accent-color:var(--accent);opacity:${l.visible ? 1 : 0.35}" />
+      </span>
       <button class="layer-del-btn" data-lid="${l.id}" title="Delete layer" style="background:none;border:none;color:var(--text-dim);cursor:pointer;padding:0 2px;opacity:0.55;line-height:1;flex-shrink:0">
         <svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 4h7M5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4 4l.5 6.5a1 1 0 0 0 1 .9h2a1 1 0 0 0 1-.9L9 4"/></svg>
       </button>
@@ -559,8 +561,20 @@ function renderLayersList() {
   }).join('');
 
   list.querySelectorAll('.layer-opacity').forEach(sl => {
-    sl.addEventListener('click', e => e.stopPropagation());
-    sl.addEventListener('pointerdown', e => e.stopPropagation());
+    sl.addEventListener('click', e => { e.stopPropagation(); e.stopImmediatePropagation(); }, true);
+    sl.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      try { sl.setPointerCapture(e.pointerId); } catch (_) {}
+    }, true);
+    sl.addEventListener('pointermove', e => {
+      if (!sl.hasPointerCapture(e.pointerId)) return;
+      e.stopPropagation();
+    }, true);
+    sl.addEventListener('pointerup', e => {
+      try { if (sl.hasPointerCapture(e.pointerId)) sl.releasePointerCapture(e.pointerId); } catch (_) {}
+      e.stopPropagation();
+    }, true);
     const apply = () => {
       window.slateLayers?.setOpacity(sl.dataset.lid, Number(sl.value) / 100);
     };
@@ -577,7 +591,7 @@ function renderLayersList() {
   list.querySelectorAll('.layer-row').forEach(row => {
     row.addEventListener('click', e => {
       if (e.detail > 1) return;
-      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn') || e.target.closest('.layer-opacity') || e.target.closest('.layer-grip')) return;
+      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn') || e.target.closest('.layer-opacity-wrap') || e.target.closest('.layer-opacity') || e.target.closest('.layer-grip')) return;
       if (row.querySelector('.layer-name input')) return;
       window.slateLayers?.setActive(row.dataset.lid);
       renderLayersList();
@@ -665,25 +679,40 @@ function _bindLayerDragEvents(row) {
   grip.addEventListener('dragend', () => {
     row.style.opacity = '';
     _dragLayerId = null;
-    document.querySelectorAll('.layer-row').forEach(r => r.style.borderTopColor = '');
+    document.querySelectorAll('.layer-row').forEach(r => {
+      r.style.borderTop = '';
+      r.style.borderBottom = '';
+    });
   });
   row.addEventListener('dragover', e => {
     if (!_dragLayerId || _dragLayerId === row.dataset.lid) return;
     e.preventDefault();
     try { e.dataTransfer.dropEffect = 'move'; } catch {}
-    row.style.borderTop = '2px solid var(--accent)';
+    const rect = row.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height * 0.5;
+    row.style.borderTop = '';
+    row.style.borderBottom = '';
+    if (after) row.style.borderBottom = '2px solid var(--accent)';
+    else row.style.borderTop = '2px solid var(--accent)';
   });
-  row.addEventListener('dragleave', () => { row.style.borderTop = ''; });
+  row.addEventListener('dragleave', () => {
+    row.style.borderTop = '';
+    row.style.borderBottom = '';
+  });
   row.addEventListener('drop', e => {
     e.preventDefault();
     row.style.borderTop = '';
+    row.style.borderBottom = '';
     if (!_dragLayerId || _dragLayerId === row.dataset.lid) return;
     const api = window.slateLayers;
     if (!api) return;
     const list = api.list;
-    const dropIdx = list.findIndex(l => l.id === row.dataset.lid);
-    if (dropIdx < 0) return;
-    api.move(_dragLayerId, dropIdx);
+    const targetIdx = list.findIndex(l => l.id === row.dataset.lid);
+    if (targetIdx < 0) return;
+    const rect = row.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height * 0.5;
+    const toIdx = after ? targetIdx + 1 : targetIdx;
+    api.move(_dragLayerId, toIdx);
     renderLayersList();
   });
 }

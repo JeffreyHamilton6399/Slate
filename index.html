@@ -586,10 +586,20 @@ input, textarea { font-family: var(--sans); }
 }
 .dock-tab {
   flex: 0 0 auto;
-  padding: 6px 10px; font-size: 0.72rem; font-weight: 500;
+  padding: 6px 10px; font-size: var(--dock-tab-font, 0.72rem); font-weight: 500;
   border: 1px solid transparent; border-bottom: none;
   border-radius: 6px 6px 0 0; background: transparent; color: var(--text-dim);
   cursor: pointer; font-family: var(--sans);
+}
+#dock-tabs-left .dock-tab {
+  font-size: var(--dock-tab-font-left, var(--dock-tab-font, 0.72rem));
+}
+#sidebar.dock-drop-hover-left {
+  outline: 3px solid var(--accent, #7c6aff);
+  outline-offset: -2px;
+}
+#right-dock.dock-drop-hover-right {
+  box-shadow: inset 0 0 0 3px var(--accent, #7c6aff);
 }
 .dock-tab:hover { color: var(--text); background: var(--bg3); }
 .dock-tab.active {
@@ -782,12 +792,13 @@ body.compact-ui .panel-body { padding: 6px 8px; }
     60%  { transform: scale(1.08); }
     100% { transform: scale(1); }
   }
-  /* Mode-switch fade for the canvas areas */
+  /* Mode-switch fade: only fade the outgoing surface so the active viewport
+     (e.g. 3D WebGL) is never stuck at opacity:0 for the whole transition. */
   #canvas-area, #canvas-area-3d {
     transition: opacity .25s ease;
   }
-  body.mode-switching #canvas-area,
-  body.mode-switching #canvas-area-3d { opacity: 0; }
+  body.mode-switching.mode-3d #canvas-area { opacity: 0; }
+  body.mode-switching.mode-2d #canvas-area-3d { opacity: 0; }
 
   /* Slide-in for the right dock on mobile and floating panels everywhere. */
   .panel-float { animation: slate-panel-pop .22s ease; }
@@ -2720,14 +2731,29 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
             <span>Save</span>
             <span class="file-menu-shortcut">Ctrl+S</span>
           </button>
-          <button type="button" id="file-export-btn" class="file-menu-item">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/><path d="M1 10h11v2H1z"/></svg>
-            <span class="file-export-label">Export</span>
-          </button>
-          <button type="button" id="file-import-btn" class="file-menu-item">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 12V5M4 7.5l2.5-2.5L9 7.5"/><path d="M1 1h11v2H1z"/></svg>
-            <span>Import</span>
-          </button>
+          <div id="file-export-row" class="file-menu-item" style="display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:10px 12px;cursor:default">
+            <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-dim)">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M4 5.5l2.5 2.5L9 5.5"/><path d="M1 10h11v2H1z"/></svg>
+              <span>Export</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="file-export-format" aria-label="Export format" style="flex:1;min-width:0;font:inherit;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:5px 6px"></select>
+              <button type="button" id="file-export-run" class="btn" style="white-space:nowrap;padding:5px 10px;font-size:0.76rem">Go</button>
+            </div>
+          </div>
+          <div id="file-import-row" class="file-menu-item" style="display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:10px 12px;cursor:default">
+            <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-dim)">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 12V5M4 7.5l2.5-2.5L9 7.5"/><path d="M1 1h11v2H1z"/></svg>
+              <span>Import</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="file-import-format" aria-label="Import kind" style="flex:1;min-width:0;font:inherit;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:5px 6px">
+                <option value="2d-image">2D — image / SVG</option>
+                <option value="3d-model">3D — model (OBJ/STL/…)</option>
+              </select>
+              <button type="button" id="file-import-run" class="btn" style="white-space:nowrap;padding:5px 10px;font-size:0.76rem">Go</button>
+            </div>
+          </div>
           <button type="button" id="file-board-paper-btn" class="file-menu-item">
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2" width="10" height="9" rx="1"/><path d="M3.5 11L9 4l2 2"/></svg>
             <span>Board background…</span>
@@ -2743,6 +2769,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
 
       <!-- Hidden inputs for import actions (still wired by existing JS) -->
       <input id="import-file-input" type="file" accept=".obj,.stl,.ply,.gltf,.glb,.fbx" style="display:none">
+      <input id="import-board-image-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml,.svg" style="display:none">
       <!-- Save board snapshot (hidden — triggered via file menu) -->
       <button id="save-board-btn" style="display:none">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -2928,7 +2955,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
         <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" style="opacity:0.5">
           <circle cx="7" cy="7" r="2.5"/>
         </svg>
-        <input id="stroke-size" type="range" min="1" max="40" value="4" title="Stroke size">
+        <input id="stroke-size" type="range" min="1" max="200" value="8" title="Stroke size">
       </div>
 
       <!-- Foreground / Background color (Photoshop-style) -->
@@ -3155,6 +3182,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
         <div id="editor-view-stack">
           <div id="canvas-area">
             <canvas id="board-canvas"></canvas>
+            <div id="brush-cursor-ring" aria-hidden="true" style="display:none;position:absolute;pointer-events:none;border:2px solid rgba(255,255,255,0.75);border-radius:50%;z-index:45;box-shadow:0 0 0 1px rgba(0,0,0,0.4),inset 0 0 0 1px rgba(0,0,0,0.25)"></div>
             <div id="no-board-hint">
               <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
                 <rect x="8" y="8" width="56" height="56" rx="8" stroke="#7c6aff" stroke-width="2.5"/>
@@ -3605,6 +3633,7 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
 })();
 </script>
 
+<script src="slate-diff-throttle.js"></script>
 <!-- ═══════════════════════════════════════════
      SLATE APP
 ═══════════════════════════════════════════ -->
@@ -3615,9 +3644,9 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
 const LOBBY_ID             = 'slate-lobby-0001';
 const PRESENCE_TTL         = 90000;   // ms — stale peer removal
 const ACTIVITY_TTL         = 6000;    // ms — "recently drew" highlight
-const PEER_RECONNECT_GRACE = 30000;   // ms — before declaring peer gone
+const PEER_RECONNECT_GRACE = 52000;   // ms — flaky networks / tab backgrounding
 const MAX_RECONNECT_ATTEMPTS = 8;
-const DIFF_THROTTLE_MS     = 33;      // ~30 Hz canvas diff broadcast
+const DIFF_THROTTLE_MS     = 33;      // fallback when slate-diff-throttle.js is absent
 const PRESENCE_HZ_MS       = 100;     // ~10 Hz cursor broadcast
 
 /* ═══════════════════════════════════════════
@@ -3806,6 +3835,8 @@ const state = {
   isDrawMuted: false,       // am I muted by host?
   wakeLock: null,
   dirtyBoards: new Set(),   // boards with unsaved local changes
+  awaitingBoardDocSync: false,
+  docSyncRetryTimer: null,
 };
 
 // Voice state declared here so renderMembers (defined later) can reference it safely
@@ -4458,7 +4489,7 @@ function setupDataConn(conn, incoming = false) {
         try { conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
       }
       // Also ask the new peer to share what they have, in case we just rejoined.
-      try { conn.send({ type: 'doc-req' }); } catch {}
+      try { conn.send({ type: 'doc-req', board: state.currentBoard }); } catch {}
     }
     tryBoardLoadSyncAdvance();
   });
@@ -4486,7 +4517,7 @@ function handlePeerConnectionLoss(peerId, conn) {
       const latest = state.connections[peerId];
       if (!latest || latest.conn?.open || latest.board !== state.currentBoard) return;
       connectToPeer(peerId, latest.joinTime, true);
-    }, 1200);
+    }, 2200);
   }
 
   clearTimeout(state.peerReconnectTimers[peerId]);
@@ -4644,29 +4675,43 @@ function handleData(peerId, data) {
 
     case 'doc-snap':
       if (data.doc && state.currentBoard) {
-        // Merge instead of replace: lets concurrent local edits survive a remote rejoin snapshot.
-        docMergeRemoteSnapshot(data.doc);
+        if (state.awaitingBoardDocSync && joinDocCanvasEmpty()) {
+          docApplySnapshot(data.doc);
+          state.awaitingBoardDocSync = false;
+          clearDocSyncRetries();
+        } else {
+          docMergeRemoteSnapshot(data.doc);
+        }
         noteBoardDocSynced();
         scheduleRender();
       }
       break;
 
-    case 'doc-req':
-      if (state.currentBoard && state.connections[peerId]?.board === state.currentBoard) {
-        const hasContent =
-          doc.shapes.size > 0 || doc.strokes.size > 0 ||
-          (doc.layers && doc.layers.length > 1) ||
-          (doc.scene3d && doc.scene3d.objects.length > 1) ||
-          (doc.notes && doc.notes.sections.length > 0) ||
-          (typeof doc.boardPaper === 'string' && doc.boardPaper !== DEFAULT_BOARD_PAPER);
-        if (hasContent) {
-          try { state.connections[peerId]?.conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
-        }
+    case 'doc-req': {
+      const reqBoard = data.board || state.connections[peerId]?.board;
+      if (!state.currentBoard || reqBoard !== state.currentBoard) break;
+      const hasContent =
+        doc.shapes.size > 0 || doc.strokes.size > 0 ||
+        (doc.layers && doc.layers.length > 1) ||
+        (doc.scene3d && doc.scene3d.objects.length > 1) ||
+        (doc.notes && doc.notes.sections.length > 0) ||
+        (typeof doc.boardPaper === 'string' && doc.boardPaper !== DEFAULT_BOARD_PAPER);
+      if (hasContent) {
+        try { state.connections[peerId]?.conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
       }
       break;
+    }
 
     case 'doc-diff':
       if (state.mutedDrawers.has(peerId)) break;
+      if (state.awaitingBoardDocSync && (
+        (Array.isArray(data.added) && data.added.length) ||
+        (Array.isArray(data.strokes) && data.strokes.length) ||
+        (Array.isArray(data.updated) && data.updated.length)
+      )) {
+        state.awaitingBoardDocSync = false;
+        clearDocSyncRetries();
+      }
       if (typeof data.boardPaper === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.boardPaper)) {
         doc.boardPaper = data.boardPaper;
       }
@@ -5123,10 +5168,8 @@ function joinBoard(board) {
   syncBoardPeers();
   syncBoardHostState();
   broadcastAll(helloPayload());
-  setTimeout(() => {
-    if (state.currentBoard !== board) return;
-    broadcastAll({ type: 'doc-req' });
-  }, 450);
+  state.awaitingBoardDocSync = true;
+  scheduleDocSyncRetries();
   requestWakeLock();
   scheduleRender();
   updateMuteBtn();
@@ -5171,6 +5214,8 @@ function leaveBoardWithSavePrompt(andThen) {
 function leaveBoard() {
   if (!state.currentBoard) return;
   finishBoardLoadSync(); // clears loading overlay if mid-sync
+  state.awaitingBoardDocSync = false;
+  clearDocSyncRetries();
   const leftBoard = state.currentBoard;
   try { window.slateSfx?.play('leave'); } catch (_) {}
   broadcastAll({ type: 'leave', board: leftBoard, name: state.myName });
@@ -5444,6 +5489,40 @@ function docClear() {
     window.slateNotes._onNotesReplaced();
   }
   invalidateStatic();
+}
+
+/** True when the 2D canvas layer has no user strokes/shapes (used after join). */
+function joinDocCanvasEmpty() {
+  return doc.shapes.size === 0 && doc.strokes.size === 0;
+}
+
+function clearDocSyncRetries() {
+  if (state.docSyncRetryTimer) {
+    clearTimeout(state.docSyncRetryTimer);
+    state.docSyncRetryTimer = null;
+  }
+}
+
+/** After joinBoard, re-ask peers for a full snapshot until we receive strokes/shapes. */
+function scheduleDocSyncRetries() {
+  clearDocSyncRetries();
+  let attempts = 0;
+  const step = () => {
+    state.docSyncRetryTimer = null;
+    if (!state.awaitingBoardDocSync || !state.currentBoard) return;
+    if (!joinDocCanvasEmpty()) {
+      state.awaitingBoardDocSync = false;
+      return;
+    }
+    try { broadcastAll({ type: 'doc-req', board: state.currentBoard }); } catch (_) {}
+    attempts++;
+    if (attempts >= 14) {
+      state.awaitingBoardDocSync = false;
+      return;
+    }
+    state.docSyncRetryTimer = setTimeout(step, 850);
+  };
+  state.docSyncRetryTimer = setTimeout(step, 400);
 }
 
 function docApplyShape(shape) {
@@ -6232,11 +6311,13 @@ function clampViewport() {
 // Active tool
 let currentTool   = 'pen';
 let strokeColor   = '#1a1a2e'; // dark ink on light paper (matches first swatch)
-let strokeSize    = 4;
+let strokeSize    = 8;
 let fillColor     = '#e8e6ff';
 let useFill       = false;
 let fontSize      = 200;
 let strokeOpacity = 1;        // 0..1 — appended to FG hex as alpha for new strokes
+/** World-space vertical / horizontal lines while moving a snapped selection (Google Slides style). */
+let snapGuideWorld = { vx: null, vy: null };
 /** Sticky notes use a fixed neutral pad + ink (text only; not tied to stroke swatches). */
 const SLATE_STICKY_BG  = '#f0f0f4';
 const SLATE_STICKY_INK = '#1a1a2e';
@@ -6325,7 +6406,10 @@ function flushDiff() {
 
 function scheduleDiff() {
   if (state.currentBoard) state.dirtyBoards.add(state.currentBoard);
-  if (!diffTimer) diffTimer = setTimeout(flushDiff, DIFF_THROTTLE_MS);
+  const throttleMs = (typeof slateGetDiffThrottleMs === 'function')
+    ? slateGetDiffThrottleMs(doc)
+    : DIFF_THROTTLE_MS;
+  if (!diffTimer) diffTimer = setTimeout(flushDiff, throttleMs);
   scheduleSilentAutoSave();
 }
 
@@ -6374,28 +6458,45 @@ function getCachedImage(src) {
 }
 
 function resizeImageToDataURL(file, maxW = 1200, maxH = 900) {
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const img = new Image();
-      img.onload = () => {
-        let { width: w, height: h } = img;
-        const scale = Math.min(1, maxW / w, maxH / h);
-        w = Math.round(w * scale); h = Math.round(h * scale);
+  return (async () => {
+    try {
+      if (typeof createImageBitmap === 'function') {
+        const bmp = await createImageBitmap(file, {
+          resizeWidth: maxW,
+          resizeHeight: maxH,
+          resizeQuality: 'high',
+        });
         const off = document.createElement('canvas');
-        off.width = w; off.height = h;
-        off.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve({ dataUrl: off.toDataURL('image/jpeg', 0.82), w, h });
+        off.width = bmp.width;
+        off.height = bmp.height;
+        off.getContext('2d').drawImage(bmp, 0, 0);
+        try { bmp.close(); } catch (_) {}
+        return { dataUrl: off.toDataURL('image/jpeg', 0.82), w: bmp.width, h: bmp.height };
+      }
+    } catch (_) { /* fall through */ }
+    return await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => {
+          let { width: w, height: h } = img;
+          const scale = Math.min(1, maxW / w, maxH / h);
+          w = Math.round(w * scale); h = Math.round(h * scale);
+          const off = document.createElement('canvas');
+          off.width = w; off.height = h;
+          off.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve({ dataUrl: off.toDataURL('image/jpeg', 0.82), w, h });
+        };
+        img.src = ev.target.result;
       };
-      img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
+      reader.readAsDataURL(file);
+    });
+  })();
 }
 
 function placeImage(file, wx, wy) {
-  if (!state.currentBoard) return;
-  resizeImageToDataURL(file).then(({ dataUrl, w, h }) => {
+  if (!state.currentBoard) return Promise.resolve();
+  return resizeImageToDataURL(file).then(({ dataUrl, w, h }) => {
     const shape = { id: genId(), type: 'image', x: wx - w/2, y: wy - h/2, w, h, src: dataUrl, peerId: state.myId, t: Date.now() };
     if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
     doc.shapes.set(shape.id, shape);
@@ -6405,6 +6506,43 @@ function placeImage(file, wx, wy) {
     redoStack.length = 0;
     scheduleRender();
   });
+}
+
+/** 2D board import: raster images via `placeImage`, SVG as a placed image shape (data URL). */
+async function importBoardImageOrSvg(file, wx, wy) {
+  if (!state.currentBoard) { toast('Join a board first', 'red'); return; }
+  const isSvg = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name);
+  if (isSvg) {
+    let txt;
+    try { txt = await file.text(); }
+    catch (e) { toast('Could not read SVG file', 'red'); return; }
+    const dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(txt);
+    const img = new Image();
+    try {
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('decode'));
+        img.src = dataUrl;
+      });
+    } catch (_) {
+      toast('Invalid or unsupported SVG', 'red');
+      return;
+    }
+    const w = img.naturalWidth || 512;
+    const h = img.naturalHeight || 512;
+    const shape = { id: genId(), type: 'image', x: wx - w / 2, y: wy - h / 2, w, h, src: dataUrl, peerId: state.myId, t: Date.now() };
+    if (typeof window.__slateActiveLayerId === 'string') shape._layer = window.__slateActiveLayerId;
+    doc.shapes.set(shape.id, shape);
+    pendingDiff.added.push(shape);
+    scheduleDiff();
+    undoStack.push({ action: 'add', id: shape.id, kind: 'shape' });
+    redoStack.length = 0;
+    scheduleRender();
+    toast('SVG placed on board', 'green');
+    return;
+  }
+  await placeImage(file, wx, wy);
+  toast('Image placed on board', 'green');
 }
 
 // World ↔ screen helpers
@@ -6794,6 +6932,10 @@ function getPos(e) {
 
 canvas.addEventListener('pointerdown', onPointerDown);
 canvas.addEventListener('pointermove', onPointerMove);
+canvas.addEventListener('pointerleave', () => {
+  const brushRing = document.getElementById('brush-cursor-ring');
+  if (brushRing) brushRing.style.display = 'none';
+});
 canvas.addEventListener('pointerup',   onPointerUp);
 canvas.addEventListener('pointercancel', onPointerUp);
 canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -6980,6 +7122,23 @@ function onPointerDown(e) {
 function onPointerMove(e) {
   e.preventDefault();
 
+  const brushRing = document.getElementById('brush-cursor-ring');
+  if (brushRing && state.currentBoard && document.body.classList.contains('mode-2d')) {
+    const carect = document.getElementById('canvas-area')?.getBoundingClientRect();
+    const showTool = currentTool === 'pen' || currentTool === 'highlighter' || currentTool === 'eraser';
+    if (carect && showTool && e.clientX >= carect.left && e.clientX <= carect.right && e.clientY >= carect.top && e.clientY <= carect.bottom) {
+      const rad = Math.max(2, (currentTool === 'eraser' ? strokeSize * 1.1 : strokeSize) * 0.5 * vp.zoom);
+      brushRing.style.display = 'block';
+      brushRing.style.width = brushRing.style.height = (rad * 2) + 'px';
+      brushRing.style.left = (e.clientX - carect.left - rad) + 'px';
+      brushRing.style.top = (e.clientY - carect.top - rad) + 'px';
+    } else {
+      brushRing.style.display = 'none';
+    }
+  } else if (brushRing) {
+    brushRing.style.display = 'none';
+  }
+
   // Update pointer position
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -7062,6 +7221,8 @@ function onPointerMove(e) {
       let dx = wx - selDragStart.wx, dy = wy - selDragStart.wy;
       const sp = _snapSelectDelta(dx, dy, e);
       dx = sp.dx; dy = sp.dy;
+      snapGuideWorld.vx = sp.vx;
+      snapGuideWorld.vy = sp.vy;
       selItems.forEach((it, i) => {
         const orig = selOrigins[i];
         if (!orig) return;
@@ -7074,6 +7235,8 @@ function onPointerMove(e) {
         }
       });
       scheduleRender();
+    } else {
+      snapGuideWorld.vx = snapGuideWorld.vy = null;
     }
   }
 }
@@ -7173,6 +7336,7 @@ function onPointerUp(e) {
       selDragStart = null; selOrigins = [];
       invalidateStatic();
     }
+    snapGuideWorld.vx = snapGuideWorld.vy = null;
   }
 
   if (currentTool === 'eraser' && Array.isArray(_eraserGestureOps) && _eraserGestureOps.length) {
@@ -7253,7 +7417,7 @@ function getSelectionBounds() {
     }
   });
   if (!isFinite(minX)) return null;
-  const pad = 10 / vp.zoom;
+  const pad = 2.5 / vp.zoom;
   return { x: minX-pad, y: minY-pad, w: maxX-minX+pad*2, h: maxY-minY+pad*2 };
 }
 
@@ -7277,10 +7441,11 @@ function _selectionBoundsShapesOnly() {
 
 /** Snap selection move to nearby shape edges (hold Shift to skip). */
 function _snapSelectDelta(dx, dy, ev) {
-  if (ev && ev.shiftKey) return { dx, dy };
-  if (!selItems.every(it => it.kind === 'shape')) return { dx, dy };
+  const empty = { dx, dy, vx: null, vy: null };
+  if (ev && ev.shiftKey) return empty;
+  if (!selItems.every(it => it.kind === 'shape')) return empty;
   const bb = _selectionBoundsShapesOnly();
-  if (!bb) return { dx, dy };
+  if (!bb) return empty;
   const snap = Math.max(5, 14 / vp.zoom);
   const selIds = new Set(selItems.map(it => it.id));
   const xs = [];
@@ -7290,20 +7455,24 @@ function _snapSelectDelta(dx, dy, ev) {
     if (s.peerId !== state.myId && !state.isBoardHost) return;
     const l = Math.min(s.x, s.x + (s.w || 0)), r = Math.max(s.x, s.x + (s.w || 0));
     const t = Math.min(s.y, s.y + (s.h || 0)), b = Math.max(s.y, s.y + (s.h || 0));
-    xs.push(l, r);
-    ys.push(t, b);
+    xs.push(l, r, (l + r) / 2);
+    ys.push(t, b, (t + b) / 2);
   });
   let ndx = dx, ndy = dy;
+  let guideVx = null, guideHy = null;
   const curL = bb.l + dx, curR = bb.r + dx, curT = bb.t + dy, curB = bb.b + dy;
+  const curMx = (bb.l + bb.r) / 2 + dx, curMy = (bb.t + bb.b) / 2 + dy;
   for (const x of xs) {
-    if (Math.abs(curL - x) <= snap) ndx = x - bb.l;
-    else if (Math.abs(curR - x) <= snap) ndx = x - bb.r;
+    if (Math.abs(curL - x) <= snap) { ndx = x - bb.l; guideVx = x; }
+    else if (Math.abs(curR - x) <= snap) { ndx = x - bb.r; guideVx = x; }
+    else if (Math.abs(curMx - x) <= snap) { ndx = x - (bb.l + bb.r) / 2; guideVx = x; }
   }
   for (const y of ys) {
-    if (Math.abs(curT - y) <= snap) ndy = y - bb.t;
-    else if (Math.abs(curB - y) <= snap) ndy = y - bb.b;
+    if (Math.abs(curT - y) <= snap) { ndy = y - bb.t; guideHy = y; }
+    else if (Math.abs(curB - y) <= snap) { ndy = y - bb.b; guideHy = y; }
+    else if (Math.abs(curMy - y) <= snap) { ndy = y - (bb.t + bb.b) / 2; guideHy = y; }
   }
-  return { dx: ndx, dy: ndy };
+  return { dx: ndx, dy: ndy, vx: guideVx, vy: guideHy };
 }
 
 const HANDLE_HIT_R = 10; // screen px
@@ -7404,6 +7573,29 @@ function drawSelectionOverlay() {
     }
   }
 
+  if (snapGuideWorld.vx != null) {
+    ctx.strokeStyle = 'rgba(255, 106, 214, 0.95)';
+    ctx.lineWidth = 1.2 / vp.zoom;
+    ctx.setLineDash([5 / vp.zoom, 4 / vp.zoom]);
+    const gx = snapGuideWorld.vx;
+    ctx.beginPath();
+    ctx.moveTo(gx, -12000);
+    ctx.lineTo(gx, 12000);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (snapGuideWorld.vy != null) {
+    ctx.strokeStyle = 'rgba(255, 106, 214, 0.95)';
+    ctx.lineWidth = 1.2 / vp.zoom;
+    ctx.setLineDash([5 / vp.zoom, 4 / vp.zoom]);
+    const gy = snapGuideWorld.vy;
+    ctx.beginPath();
+    ctx.moveTo(-12000, gy);
+    ctx.lineTo(12000, gy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   ctx.restore();
 }
 
@@ -7457,6 +7649,17 @@ function _distPointToShape(wx, wy, s) {
   if (s.type === 'line' || s.type === 'arrow') {
     return _distPointToSeg(wx, wy, s.x, s.y, s.x + (s.w || 0), s.y + (s.h || 0));
   }
+  if (s.type === 'ellipse') {
+    const x = Math.min(s.x, s.x + (s.w || 0)), w0 = Math.abs(s.w || 0);
+    const y = Math.min(s.y, s.y + (s.h || 0)), h0 = Math.abs(s.h || 0);
+    const rx = w0 / 2, ry = h0 / 2;
+    if (rx < 1e-8 || ry < 1e-8) return Infinity;
+    const cx = x + rx, cy = y + ry;
+    const nx = (wx - cx) / rx, ny = (wy - cy) / ry;
+    const e = nx * nx + ny * ny;
+    if (e <= 1) return 0;
+    return (Math.sqrt(e) - 1) * Math.min(rx, ry);
+  }
   const x = s.x, y = s.y, w = s.w || 0, h = s.h || 0;
   const l = Math.min(x, x + w), r = Math.max(x, x + w);
   const t = Math.min(y, y + h), b = Math.max(y, y + h);
@@ -7473,10 +7676,10 @@ function _maybeRecordEraserOp(op) {
 }
 
 function eraseAt(wx, wy) {
-  const r = (strokeSize * 2 + 6) / vp.zoom;
-  const r2 = r * r;
+  const rWorld = Math.max(0.75 / vp.zoom, (strokeSize * 0.5) / vp.zoom);
+  const r2 = rWorld * rWorld;
   if (typeof _lastEraseWx === 'number' && typeof _lastEraseWy === 'number' && Number.isFinite(_lastEraseWx) && Number.isFinite(_lastEraseWy)) {
-    const step = r * 0.14;
+    const step = rWorld * 0.22;
     if ((wx - _lastEraseWx) ** 2 + (wy - _lastEraseWy) ** 2 < step * step) return;
   }
   _lastEraseWx = wx;
@@ -7516,7 +7719,7 @@ function eraseAt(wx, wy) {
   }
   doc.shapes.forEach((s, id) => {
     if (s.peerId !== state.myId && !state.isBoardHost) return;
-    if (_distPointToShape(wx, wy, s) < r) {
+    if (_distPointToShape(wx, wy, s) < rWorld) {
       _maybeRecordEraserOp({ type: 'del-shape', id, data: _cloneForUndo(s) });
       doc.shapes.delete(id);
       pendingDiff.removed.push(id);
@@ -7531,12 +7734,9 @@ function eraseAt(wx, wy) {
 }
 
 function hitTest(wx, wy) {
-  for (const [id, s] of doc.shapes) {
-    const minX = Math.min(s.x, s.x + (s.w || 0)) - 8;
-    const maxX = Math.max(s.x, s.x + (s.w || 0)) + 8;
-    const minY = Math.min(s.y, s.y + (s.h || 0)) - 8;
-    const maxY = Math.max(s.y, s.y + (s.h || 0)) + 8;
-    if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY) return s;
+  const tol = 3 / vp.zoom;
+  for (const [, s] of doc.shapes) {
+    if (_distPointToShape(wx, wy, s) <= tol) return s;
   }
   return null;
 }
@@ -7544,14 +7744,11 @@ function hitTest(wx, wy) {
 /* Topmost shape under a world-space point — newest first.
    Returns the shape object (mutable), or null. */
 function hitTestShapeAt(wx, wy) {
+  const tol = 3 / vp.zoom;
   const arr = [...doc.shapes.values()];
   for (let i = arr.length - 1; i >= 0; i--) {
     const s = arr[i];
-    const minX = Math.min(s.x, s.x + (s.w || 0)) - 4;
-    const maxX = Math.max(s.x, s.x + (s.w || 0)) + 4;
-    const minY = Math.min(s.y, s.y + (s.h || 0)) - 4;
-    const maxY = Math.max(s.y, s.y + (s.h || 0)) + 4;
-    if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY) return s;
+    if (_distPointToShape(wx, wy, s) <= tol) return s;
   }
   return null;
 }
@@ -7910,7 +8107,9 @@ document.getElementById('clear-btn').addEventListener('click', () => {
 });
 
 document.getElementById('stroke-size').addEventListener('input', e => {
-  strokeSize = Number(e.target.value);
+  const v = Math.max(1, Math.min(200, Number(e.target.value) || 8));
+  strokeSize = v;
+  e.target.value = String(v);
 });
 
 /* Photoshop-style foreground / background picker. FG = stroke / pen color,
@@ -8028,7 +8227,7 @@ function _openExportMenu(btn) {
   const rect = (() => {
     let r = btn.getBoundingClientRect();
     if (r.width < 2 && r.height < 2) {
-      const alt = document.getElementById('file-export-btn') || document.getElementById('file-menu-btn');
+      const alt = document.getElementById('file-export-format') || document.getElementById('file-menu-btn');
       if (alt) r = alt.getBoundingClientRect();
     }
     return r;
@@ -8144,10 +8343,68 @@ async function exportScene3D(ext) {
   }
 }
 
+/* Hooks for the header File menu (`wireFileMenu` lives in a later script tag). */
+window.__slateWireFileMenuHooks = {
+  refillExportSelect() {
+    const sel = document.getElementById('file-export-format');
+    if (!sel) return;
+    const board = state.currentBoard;
+    const mode = board ? (boardDocModes[board] || '2d') : '2d';
+    const list = mode === '3d' ? EXPORT_FORMATS_3D : EXPORT_FORMATS_2D;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const f of list) {
+      const o = document.createElement('option');
+      o.value = f.ext;
+      o.textContent = f.label;
+      sel.appendChild(o);
+    }
+    if (prev && [...sel.options].some(x => x.value === prev)) sel.value = prev;
+  },
+  runExport() {
+    const sel = document.getElementById('file-export-format');
+    const ext = sel?.value || 'png';
+    const board = state.currentBoard;
+    const mode = board ? (boardDocModes[board] || '2d') : '2d';
+    if (mode === '3d') exportScene3D(ext);
+    else exportBoardImage(ext);
+  },
+  runImportFromMenu() {
+    const kind = document.getElementById('file-import-format')?.value || '2d-image';
+    if (kind === '3d-model') {
+      if (!document.body.classList.contains('mode-3d')) {
+        toast('Switch to 3D mode to import models', 'yellow');
+        return;
+      }
+      document.getElementById('import-file-input')?.click();
+      return;
+    }
+    if (document.body.classList.contains('mode-3d')) {
+      toast('Switch to 2D mode to place images on the board', 'yellow');
+      return;
+    }
+    if (!state.currentBoard) { toast('Join a board first', 'red'); return; }
+    document.getElementById('import-board-image-input')?.click();
+  },
+};
+
 /* 3D import — #import-file-input change handler below; File menu opens the input in 3D mode. */
 document.getElementById('import-btn')?.addEventListener('click', () => {
   document.getElementById('import-file-input')?.click();
 });
+document.getElementById('import-board-image-input')?.addEventListener('change', async e => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || !state.currentBoard) return;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const { wx, wy } = screenToWorld(cx, cy);
+  toast(`Importing ${file.name}…`, 'gray');
+  try {
+    await importBoardImageOrSvg(file, wx, wy);
+  } catch (_) { /* importBoardImageOrSvg already toasts */ }
+});
+
 document.getElementById('import-file-input')?.addEventListener('change', async e => {
   const file = e.target.files?.[0];
   e.target.value = '';
@@ -8727,6 +8984,8 @@ function applyWorkspaceMode(board) {
     // Brief fade-out / fade-in so the canvas swap doesn't snap.
     document.body.classList.add('mode-switching');
     setTimeout(() => document.body.classList.remove('mode-switching'), 220);
+    // Failsafe: never leave the UI stuck transparent if a transition aborts.
+    setTimeout(() => document.body.classList.remove('mode-switching'), 500);
   }
   document.body.classList.toggle('mode-3d', mode === '3d');
   document.body.classList.toggle('mode-2d', mode !== '3d');
@@ -9699,22 +9958,27 @@ const voteState = { active: false, isInitiator: false, votes: {}, total: 0, time
 
 function initiateVoteClear() {
   if (voteState.active) return;
+
+  if (state.isBoardHost) {
+    docClear(); scheduleRender();
+    broadcastAll({ type: 'doc-clear' });
+    toast('Board cleared', 'red');
+    return;
+  }
+
+  const boardPeers = Object.values(state.connections).filter(c => c.board === state.currentBoard);
+  if (boardPeers.length === 0) {
+    toast('Only the host can clear this board. Wait for the host or create your own board.', 'yellow');
+    return;
+  }
+
   voteState.active      = true;
   voteState.isInitiator = true;
   voteState.votes       = {};
-  const boardPeers = Object.values(state.connections).filter(c => c.board === state.currentBoard);
-  voteState.total  = 1 + boardPeers.length;
-  // Auto-vote yes for initiator
+  voteState.total       = 1 + boardPeers.length;
   voteState.votes[state.myId] = true;
   broadcastAll({ type: 'vote-clear-req', initiator: state.myId, name: state.myName });
   showVoteClearUI(state.myName, true);
-  // Alone in the board? Just clear immediately
-  if (boardPeers.length === 0) {
-    voteState.active = false; voteState.isInitiator = false;
-    hideVoteClearUI();
-    docClear(); scheduleRender();
-    toast('Board cleared', 'red');
-  }
 }
 
 function handleVoteResp(peerId, vote) {
@@ -10198,6 +10462,10 @@ document.getElementById('boards-tab-toggle')?.addEventListener('click', () => {
   if (!target) return;
   const open = target.classList.toggle('boards-list-open');
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+document.getElementById('boards-tab-toggle')?.addEventListener('dblclick', (e) => {
+  e.stopPropagation();
+  e.preventDefault();
 });
 
 /* ═══════════════════════════════════════════
@@ -11088,6 +11356,7 @@ renderSavedBoards();
   function openMenu() {
     menu.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
+    try { window.__slateWireFileMenuHooks?.refillExportSelect?.(); } catch (_) {}
   }
   function closeMenu() {
     menu.hidden = true;
@@ -11108,36 +11377,25 @@ renderSavedBoards();
     if (e.key === 'Escape' && !menu.hidden) closeMenu();
   });
 
-  // Mirror the export-label text from the hidden #export-btn into the file menu item.
-  function syncExportLabel() {
-    const src = document.querySelector('#export-btn .export-label');
-    const dst = menu.querySelector('.file-export-label');
-    if (src && dst) dst.textContent = src.textContent || 'Export';
-  }
-  const obs = new MutationObserver(syncExportLabel);
-  const exportBtnEl = document.getElementById('export-btn');
-  if (exportBtnEl) obs.observe(exportBtnEl, { childList: true, subtree: true, characterData: true });
-  syncExportLabel();
-
   // Save
   document.getElementById('file-save-btn')?.addEventListener('click', () => {
     closeMenu();
     document.getElementById('save-board-btn')?.click();
   });
 
-  // Export — trigger the real export-btn click (it has the full handler)
-  document.getElementById('file-export-btn')?.addEventListener('click', () => {
+  document.getElementById('file-export-run')?.addEventListener('click', () => {
     closeMenu();
-    document.getElementById('export-btn')?.click();
+    try { window.__slateWireFileMenuHooks?.runExport?.(); } catch (err) {
+      console.error(err);
+      if (typeof toast === 'function') toast('Export failed', 'red');
+    }
   });
 
-  // Import — open hidden file input in 3D mode (no header button)
-  document.getElementById('file-import-btn')?.addEventListener('click', () => {
+  document.getElementById('file-import-run')?.addEventListener('click', () => {
     closeMenu();
-    if (document.body.classList.contains('mode-3d')) {
-      document.getElementById('import-file-input')?.click();
-    } else if (typeof toast === 'function') {
-      toast('Import is available in 3D mode', 'yellow');
+    try { window.__slateWireFileMenuHooks?.runImportFromMenu?.(); } catch (err) {
+      console.error(err);
+      if (typeof toast === 'function') toast('Import failed', 'red');
     }
   });
 

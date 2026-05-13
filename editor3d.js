@@ -4077,8 +4077,10 @@ function ensureScene() {
   camera = new THREE.PerspectiveCamera(_persistedFov, 1, 0.05, 500);
   camera.position.set(4, 3.5, 6);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
+  // Intensities tuned for r155+ physical lighting (legacy multipliers removed).
+  // Without this, MeshStandardMaterial can read nearly black against #12121a.
+  scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+  const dir = new THREE.DirectionalLight(0xffffff, 2.4);
   dir.position.set(4, 10, 6);
   scene.add(dir);
 
@@ -4324,6 +4326,21 @@ function resize() {
   if (transform && typeof transform.update === 'function') {
     try { transform.update(); } catch (_) {}
   }
+}
+
+let _viewportStabilizeTimeouts = [];
+function _clearViewportStabilize() {
+  _viewportStabilizeTimeouts.forEach((t) => clearTimeout(t));
+  _viewportStabilizeTimeouts = [];
+}
+/** After mode switches / flex relayout, WebGL can briefly size to 1×1 — retry. */
+function scheduleViewportResizeStabilize() {
+  _clearViewportStabilize();
+  [16, 48, 160, 400].forEach((ms) => {
+    _viewportStabilizeTimeouts.push(setTimeout(() => {
+      try { resize(); } catch (_) {}
+    }, ms));
+  });
 }
 
 if (typeof window !== 'undefined') {
@@ -4918,6 +4935,7 @@ export function initEditor3D(rootEl) {
     resize(); bindEvents();
     _attachContainerResizeObserver(container);
     cancelAnimationFrame(raf); loop();
+    scheduleViewportResizeStabilize();
     return;
   }
   disposeEditor3D();
@@ -4953,6 +4971,10 @@ export function initEditor3D(rootEl) {
   }
   if (THREE.ColorManagement && typeof THREE.ColorManagement === 'object') {
     try { THREE.ColorManagement.enabled = true; } catch (_) {}
+  }
+  if (THREE.ACESFilmicToneMapping != null) {
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
   }
   container.appendChild(renderer.domElement);
   const cvs = renderer.domElement;
@@ -5050,10 +5072,12 @@ export function initEditor3D(rootEl) {
 
   cancelAnimationFrame(raf);
   loop();
+  scheduleViewportResizeStabilize();
 }
 
 export function disposeEditor3D() {
   cancelAnimationFrame(raf);
+  _clearViewportStabilize();
   unbindEvents();
   _detachContainerResizeObserver();
 
@@ -5131,6 +5155,7 @@ function _boot3dIfNeeded() {
       initEditor3D(el);
       requestAnimationFrame(() => {
         try { resize(); } catch (_) {}
+        scheduleViewportResizeStabilize();
       });
     });
   });
@@ -5148,6 +5173,7 @@ window.addEventListener('slate-3d-activate', () => {
       initEditor3D(el);
       requestAnimationFrame(() => {
         try { resize(); } catch (_) {}
+        scheduleViewportResizeStabilize();
       });
     });
   });

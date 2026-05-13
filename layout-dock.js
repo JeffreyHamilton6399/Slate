@@ -25,6 +25,8 @@
   function applySidebarW(px) {
     const w = clamp(px, 200, Math.min(480, Math.floor(window.innerWidth * 0.55)));
     document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    const tabL = clamp(0.65 + (w - 200) / 280 * 0.24, 0.63, 0.94);
+    document.documentElement.style.setProperty('--dock-tab-font-left', tabL + 'rem');
     try { localStorage.setItem(LS_SIDEBAR, String(w)); } catch (_) {}
   }
 
@@ -37,6 +39,8 @@
       v = clamp(px, 120, Math.min(520, Math.floor(window.innerWidth * 0.5)));
     }
     document.documentElement.style.setProperty('--dock-w', v + 'px');
+    const tabRem = clamp(0.66 + (v - 120) / 400 * 0.26, 0.64, 0.96);
+    document.documentElement.style.setProperty('--dock-tab-font', tabRem + 'rem');
     try { localStorage.setItem(LS_DOCK, String(v)); } catch (_) {}
     const dock = document.getElementById('right-dock');
     if (dock) dock.classList.toggle('dock-collapsed', mobile ? v < 8 : v < 24);
@@ -261,6 +265,36 @@
     return x >= r.left - p && x <= r.right + p && y >= r.top - p && y <= r.bottom + p;
   }
 
+  function _clearDockDropHover() {
+    document.getElementById('sidebar')?.classList.remove('dock-drop-hover-left');
+    document.getElementById('right-dock')?.classList.remove('dock-drop-hover-right');
+  }
+
+  /** While dragging a tab, highlight which dock will receive the drop. */
+  function _updateDockDropHover(clientX, clientY, fromSide) {
+    const sidebar = document.getElementById('sidebar');
+    const rightDock = document.getElementById('right-dock');
+    const inSidebar = _pointNearDockZone(clientX, clientY, sidebar, 64);
+    const inRightDock = _pointNearDockZone(clientX, clientY, rightDock, 64);
+    _clearDockDropHover();
+    let xfer = null;
+    if (fromSide === 'right' && inSidebar && !inRightDock) xfer = 'left';
+    else if (fromSide === 'left' && inRightDock && !inSidebar) xfer = 'right';
+    else if (fromSide === 'right' && inSidebar && inRightDock) {
+      const sr = sidebar.getBoundingClientRect();
+      const rr = rightDock.getBoundingClientRect();
+      const mid = sr.right > rr.left ? (sr.right + rr.left) / 2 : window.innerWidth / 2;
+      xfer = clientX < mid ? 'left' : null;
+    } else if (fromSide === 'left' && inSidebar && inRightDock) {
+      const sr = sidebar.getBoundingClientRect();
+      const rr = rightDock.getBoundingClientRect();
+      const mid = sr.right > rr.left ? (sr.right + rr.left) / 2 : window.innerWidth / 2;
+      xfer = clientX >= mid ? 'right' : null;
+    }
+    if (xfer === 'left' && sidebar) sidebar.classList.add('dock-drop-hover-left');
+    if (xfer === 'right' && rightDock) rightDock.classList.add('dock-drop-hover-right');
+  }
+
   function _insertTabSorted(tabs, tab, panelId) {
     const po = _entry(panelId);
     const insertBefore = [...tabs.children].find(ch => {
@@ -348,11 +382,16 @@
       if (!down) return;
       lastX = e.clientX; lastY = e.clientY;
       if (Math.hypot(lastX - sx, lastY - sy) > 18) beyond = true;
+      if (beyond) {
+        const fromSide = tab.closest('#dock-tabs-left') ? 'left' : 'right';
+        _updateDockDropHover(lastX, lastY, fromSide);
+      }
     });
     tab.addEventListener('pointerup', e => {
       if (!down) return;
       down = false;
       try { tab.releasePointerCapture(e.pointerId); } catch (_) {}
+      _clearDockDropHover();
       if (_isMobile() || !beyond) return;
       const fromSide = tab.closest('#dock-tabs-left') ? 'left' : 'right';
       const hit = document.elementFromPoint(lastX, lastY);
@@ -388,11 +427,15 @@
       else window.slateDock.detachPanel(panelId, geom);
       beyond = false;
     });
-    tab.addEventListener('pointercancel', () => { down = false; beyond = false; });
+    tab.addEventListener('pointercancel', () => {
+      down = false; beyond = false;
+      _clearDockDropHover();
+    });
     tab.addEventListener('dblclick', ev => {
       ev.preventDefault();
       if (_isMobile()) return;
       if (floats.has(panelId)) return;
+      if (ev.target !== tab) return;
       const r = tab.getBoundingClientRect();
       window.slateDock.detachPanel(panelId, {
         left: Math.max(12, r.left),
@@ -462,10 +505,18 @@
       const panelEl = _findPanelEl(id);
       const side = targetSide === 'left' ? 'left' : 'right';
       if (!entry || !panelEl || floats.has(id)) return;
-      if (entry.dockSide === side) return;
-      const fromSide = entry.dockSide === 'left' ? 'left' : 'right';
-      let tab = _findTabOnSide(id, fromSide);
+      const host = panelEl.closest('#dock-body-left, #dock-body');
+      const domSide = host && host.id === 'dock-body-left' ? 'left' : 'right';
+      if (domSide === side) {
+        if (entry.dockSide !== side) {
+          entry.dockSide = side;
+          _persistPanelSide(id, side);
+        }
+        return;
+      }
+      let tab = _findTabOnSide(id, domSide);
       if (!tab) tab = _findTabOnSide(id, side === 'left' ? 'right' : 'left');
+      if (!tab) tab = _findTab(id);
       if (!tab) return;
       const dest = _tabsBody(side);
       if (!dest.tabs || !dest.body) return;

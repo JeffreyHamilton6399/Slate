@@ -1,0 +1,45 @@
+{
+  "name": "slate",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Slate v2 — real-time collaborative 2D whiteboard and Blender-style 3D editor.",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @slate/client dev",
+    "dev:server": "pnpm --filter @slate/server dev",
+    "dev:all": "pnpm --parallel --filter @slate/client --filter @slate/server dev",
+    "build": "pnpm -r --filter=./packages/* build && pnpm -r --filter=./apps/* build",
+    "build:packages": "pnpm -r --filter=./packages/* build",
+    "build:client": "pnpm --filter @slate/client build",
+    "build:server": "pnpm --filter @slate/server build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css,html,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css,html,yml,yaml}\"",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @slate/client test:e2e",
+    "clean": "pnpm -r exec rimraf dist .turbo node_modules/.cache",
+    "start": "node apps/server/dist/index.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react": "^7.37.4",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "prettier-plugin-tailwindcss": "^0.6.9",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}

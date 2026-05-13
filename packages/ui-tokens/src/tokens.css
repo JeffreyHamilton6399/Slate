@@ -1,0 +1,45 @@
+/**
+ * Slate design tokens — single source of truth for CSS variables.
+ * Mirrors packages/ui-tokens/src/index.ts.
+ */
+:root {
+  --bg: #0c0c0e;
+  --bg2: #111114;
+  --bg3: #18181d;
+  --bg4: #1e1e26;
+  --border: #252530;
+  --border2: #2e2e3a;
+  --accent: #7c6aff;
+  --accent2: #a855f7;
+  --accent-dim: #3d3580;
+  --accent-glow: rgba(124, 106, 255, 0.15);
+  --green: #22d3a5;
+  --green-dim: #0d6b52;
+  --danger: #f87171;
+  --warn: #fbbf24;
+  --text: #e0dff5;
+  --text-dim: #6b6a80;
+  --text-mid: #9d9baf;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --sidebar-w: 260px;
+  --dock-w: 220px;
+  --left-dock-w: 220px;
+  --header-h: 52px;
+  --toolbar-h: 52px;
+}
+
+@supports (padding: max(0px)) {
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+}

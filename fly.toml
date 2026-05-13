@@ -1,5 +1,6 @@
 # Slate v2 — Fly.io deployment.
-app = "slate-v2"
+# Fly app slug (lowercase). Must match the app name in your Fly dashboard.
+app = "slate"
 primary_region = "iad"
 kill_signal = "SIGINT"
 kill_timeout = "10s"

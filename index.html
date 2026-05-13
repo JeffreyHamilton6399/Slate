@@ -2728,6 +2728,10 @@ body.mode-2d #draw-toolbar .toolbar-move-handle {
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 12V5M4 7.5l2.5-2.5L9 7.5"/><path d="M1 1h11v2H1z"/></svg>
             <span>Import</span>
           </button>
+          <button type="button" id="file-board-paper-btn" class="file-menu-item">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2" width="10" height="9" rx="1"/><path d="M3.5 11L9 4l2 2"/></svg>
+            <span>Board background…</span>
+          </button>
           <div class="file-menu-sep"></div>
           <button type="button" id="file-print-btn" class="file-menu-item">
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="9" height="6" rx="1"/><path d="M4 4V2h5v2"/><path d="M4 10v1h5v-1"/><circle cx="9.5" cy="7" r="0.7" fill="currentColor" stroke="none"/></svg>
@@ -4447,7 +4451,9 @@ function setupDataConn(conn, incoming = false) {
       const hasContent =
         doc.shapes.size > 0 || doc.strokes.size > 0 ||
         (doc.layers && doc.layers.length > 1) ||
-        (doc.scene3d && doc.scene3d.objects.length > 1);
+        (doc.scene3d && doc.scene3d.objects.length > 1) ||
+        (doc.notes && doc.notes.sections.length > 0) ||
+        (typeof doc.boardPaper === 'string' && doc.boardPaper !== DEFAULT_BOARD_PAPER);
       if (hasContent) {
         try { conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
       }
@@ -4651,7 +4657,8 @@ function handleData(peerId, data) {
           doc.shapes.size > 0 || doc.strokes.size > 0 ||
           (doc.layers && doc.layers.length > 1) ||
           (doc.scene3d && doc.scene3d.objects.length > 1) ||
-          (doc.notes && doc.notes.sections.length > 0);
+          (doc.notes && doc.notes.sections.length > 0) ||
+          (typeof doc.boardPaper === 'string' && doc.boardPaper !== DEFAULT_BOARD_PAPER);
         if (hasContent) {
           try { state.connections[peerId]?.conn.send({ type: 'doc-snap', doc: docSerialize() }); } catch {}
         }
@@ -4660,6 +4667,9 @@ function handleData(peerId, data) {
 
     case 'doc-diff':
       if (state.mutedDrawers.has(peerId)) break;
+      if (typeof data.boardPaper === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.boardPaper)) {
+        doc.boardPaper = data.boardPaper;
+      }
       if (data.added)      data.added.forEach(s      => doc.shapes.set(s.id, s));
       if (data.updated)    data.updated.forEach(s    => doc.shapes.set(s.id, s));
       if (data.removed)    data.removed.forEach(id   => doc.shapes.delete(id));
@@ -5113,6 +5123,10 @@ function joinBoard(board) {
   syncBoardPeers();
   syncBoardHostState();
   broadcastAll(helloPayload());
+  setTimeout(() => {
+    if (state.currentBoard !== board) return;
+    broadcastAll({ type: 'doc-req' });
+  }, 450);
   requestWakeLock();
   scheduleRender();
   updateMuteBtn();
@@ -5403,12 +5417,14 @@ function _defaultNotes() {
   return { sections: [] };
 }
 
+const DEFAULT_BOARD_PAPER = '#f8f7f4';
 const doc = {
   shapes:  new Map(),  // id -> Shape
   strokes: new Map(),  // id -> Stroke
   layers:  _defaultLayers(),
   scene3d: _defaultScene3d(),
   notes:   _defaultNotes(),
+  boardPaper: DEFAULT_BOARD_PAPER,
 };
 
 function docClear() {
@@ -5417,6 +5433,7 @@ function docClear() {
   doc.layers = _defaultLayers();
   doc.scene3d = _defaultScene3d();
   doc.notes   = _defaultNotes();
+  doc.boardPaper = DEFAULT_BOARD_PAPER;
   if (typeof window.slateLayers?._onLayersReplaced === 'function') {
     window.slateLayers._onLayersReplaced();
   }
@@ -5447,6 +5464,9 @@ function docApplySnapshot(snap) {
   }
   if (snap.notes && Array.isArray(snap.notes.sections)) {
     doc.notes = { sections: snap.notes.sections.map(_normalizeNoteSection) };
+  }
+  if (typeof snap.boardPaper === 'string' && /^#[0-9a-fA-F]{6}$/.test(snap.boardPaper)) {
+    doc.boardPaper = snap.boardPaper;
   }
   if (typeof window.slateLayers?._onLayersReplaced === 'function') {
     window.slateLayers._onLayersReplaced();
@@ -5553,6 +5573,9 @@ function docMergeRemoteSnapshot(snap) {
       window.slateNotes._onNotesReplaced();
     }
   }
+  if (typeof snap.boardPaper === 'string' && /^#[0-9a-fA-F]{6}$/.test(snap.boardPaper)) {
+    doc.boardPaper = snap.boardPaper;
+  }
   invalidateStatic();
   noteBoardDocSynced();
 }
@@ -5564,6 +5587,8 @@ function docSerialize() {
     layers:  doc.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity })),
     scene3d: { objects: doc.scene3d.objects.map(_normalizeSceneObject) },
     notes:   { sections: doc.notes.sections.map(_normalizeNoteSection) },
+    boardPaper: (typeof doc.boardPaper === 'string' && /^#[0-9a-fA-F]{6}$/.test(doc.boardPaper))
+      ? doc.boardPaper : DEFAULT_BOARD_PAPER,
   };
 }
 
@@ -6089,6 +6114,10 @@ const vp = { panX: 0, panY: 0, zoom: 1 };
 const WORLD_W = 9600;  // px in world space
 const WORLD_H = 6400;
 const PAPER_COLOR  = '#f8f7f4';
+function boardPaperFill() {
+  const p = doc.boardPaper;
+  return (typeof p === 'string' && /^#[0-9a-fA-F]{6}$/.test(p)) ? p : DEFAULT_BOARD_PAPER;
+}
 const PAPER_RADIUS = 16;
 
 // fitZoom = zoom level where the whole page fits the viewport (= "100%" to the user)
@@ -6245,6 +6274,10 @@ let selDragStart = null; // { wx, wy } when moving selection
 let selHandle   = null;  // 'tl'|'tr'|'bl'|'br' for resize handle dragging
 let selHandleOriginBox = null; // original selection bbox when handle drag starts
 let selResizeItems = [];       // snapshot of item data at resize start
+/** One eraser stroke (pointer down → up): ops for undo. */
+let _eraserGestureOps = null;
+let _lastEraseWx = null;
+let _lastEraseWy = null;
 
 // Pinch-zoom state
 let pointers = new Map();   // pointerId -> {x,y}
@@ -6256,7 +6289,7 @@ const redoStack = [];
 
 // Deferred diff to batch changes
 function _freshPendingDiff() {
-  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null, scene3dFull: null, notesAdd: [], notesUpd: [], notesDel: [], notesOrder: null };
+  return { added: [], updated: [], removed: [], strokes: [], delStrokes: [], layers: null, scene3dAdd: [], scene3dUpd: [], scene3dDel: [], scene3dOrder: null, scene3dFull: null, notesAdd: [], notesUpd: [], notesDel: [], notesOrder: null, boardPaper: null };
 }
 let pendingDiff = _freshPendingDiff();
 let diffTimer   = null;
@@ -6269,7 +6302,8 @@ function flushDiff() {
                 !d.strokes.length && !d.delStrokes.length && !d.layers &&
                 !d.scene3dAdd.length && !d.scene3dUpd.length && !d.scene3dDel.length &&
                 !d.scene3dOrder && !d.scene3dFull &&
-                !d.notesAdd.length && !d.notesUpd.length && !d.notesDel.length && !d.notesOrder;
+                !d.notesAdd.length && !d.notesUpd.length && !d.notesDel.length && !d.notesOrder &&
+                !d.boardPaper;
   if (empty) return;
   if (state.isDrawMuted) return;
   const msg = { type: 'doc-diff', added: d.added, updated: d.updated, removed: d.removed, strokes: d.strokes, delStrokes: d.delStrokes };
@@ -6285,6 +6319,7 @@ function flushDiff() {
   if (d.notesUpd.length) msg.notesUpd = d.notesUpd;
   if (d.notesDel.length) msg.notesDel = d.notesDel;
   if (d.notesOrder)      msg.notesOrder = d.notesOrder;
+  if (d.boardPaper)     msg.boardPaper = d.boardPaper;
   broadcastAll(msg);
 }
 
@@ -6410,6 +6445,124 @@ function scheduleRender() {
   if (!rafPending) { rafPending = true; requestAnimationFrame(renderFrame); }
 }
 
+window.slateSetBoardPaper = function slateSetBoardPaper(hex) {
+  if (typeof state === 'undefined' || !state.currentBoard) {
+    if (typeof toast === 'function') toast('Join a board first', 'red');
+    return false;
+  }
+  const raw = String(hex || '').trim();
+  const m = raw.match(/^#?([0-9a-fA-F]{6})$/i);
+  if (!m) return false;
+  const norm = '#' + m[1].toLowerCase();
+  doc.boardPaper = norm;
+  pendingDiff.boardPaper = norm;
+  scheduleDiff();
+  invalidateStatic();
+  scheduleRender();
+  if (typeof toast === 'function') toast('Background synced to board', 'green');
+  return true;
+};
+
+(function _initBoardPaperPicker() {
+  let pop; let cv; let cctx; let hueEl; let nativeInp; let selHex = '#f8f7f4';
+  function hsvToRgb(h, s, v) {
+    const i = Math.floor(h * 6); const f = h * 6 - i;
+    const p = v * (1 - s); const q = v * (1 - f * s); const t = v * (1 - (1 - f) * s);
+    let r = 0; let g = 0; let b = 0;
+    switch (i % 6) {
+      case 0: r = v; g = t; b = p; break;
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      case 5: r = v; g = p; b = q; break;
+    }
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
+  function paintGrad() {
+    if (!cv || !cctx || !hueEl) return;
+    const W = cv.width; const H = cv.height;
+    const d = cctx.createImageData(W, H);
+    const h = Number(hueEl.value) / 360;
+    let p = 0;
+    for (let y = 0; y < H; y++) {
+      const vv = 1 - y / Math.max(1, H - 1);
+      for (let x = 0; x < W; x++) {
+        const s = x / Math.max(1, W - 1);
+        const rgb = hsvToRgb(h, s, vv);
+        d.data[p++] = rgb.r; d.data[p++] = rgb.g; d.data[p++] = rgb.b; d.data[p++] = 255;
+      }
+    }
+    cctx.putImageData(d, 0, 0);
+  }
+  window.slateOpenBoardPaperPicker = function (anchorEl) {
+    if (typeof state === 'undefined' || !state.currentBoard) {
+      if (typeof toast === 'function') toast('Join a board first', 'red');
+      return;
+    }
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'slate-board-paper-pop';
+      pop.style.cssText = 'position:fixed;z-index:10050;width:280px;padding:14px;display:none;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5)';
+      pop.innerHTML = '<div style="font-weight:600;font-size:0.86rem;margin-bottom:10px;color:var(--text)">Board background</div>'
+        + '<canvas id="slate-bp-sv" width="200" height="120" style="display:block;border-radius:8px;cursor:crosshair;border:1px solid var(--border2)"></canvas>'
+        + '<div style="margin:10px 0"><label style="font-size:0.72rem;color:var(--text-dim)">Hue</label><input type="range" id="slate-bp-hue" min="0" max="360" value="42" style="width:100%"></div>'
+        + '<div id="slate-bp-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
+        + '<input type="color" id="slate-bp-native" style="width:44px;height:32px;padding:0;border:none;background:transparent">'
+        + '<button type="button" id="slate-bp-plus" class="btn btn-ghost" style="font-size:1.1rem;padding:4px 10px" title="Full color chooser">+</button></div>'
+        + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">'
+        + '<button type="button" id="slate-bp-cancel" class="btn btn-ghost">Cancel</button>'
+        + '<button type="button" id="slate-bp-apply" class="btn btn-primary">Apply</button></div>';
+      document.body.appendChild(pop);
+      cv = pop.querySelector('#slate-bp-sv');
+      cctx = cv.getContext('2d');
+      hueEl = pop.querySelector('#slate-bp-hue');
+      nativeInp = pop.querySelector('#slate-bp-native');
+      const presets = ['#f8f7f4', '#e8e4d9', '#dbeafe', '#fce7f3', '#ecfccb', '#1a1a2e', '#0f172a', '#7c6aff'];
+      const row = pop.querySelector('#slate-bp-presets');
+      presets.forEach((pc) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('aria-label', 'Preset');
+        b.style.cssText = 'width:28px;height:28px;border-radius:6px;border:2px solid var(--border2);background:' + pc + ';cursor:pointer;padding:0';
+        b.addEventListener('click', () => { selHex = pc; nativeInp.value = pc; paintGrad(); });
+        row.appendChild(b);
+      });
+      hueEl.addEventListener('input', paintGrad);
+      cv.addEventListener('click', (e) => {
+        const rect = cv.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        const h = Number(hueEl.value) / 360;
+        const s = Math.max(0, Math.min(1, x));
+        const vv = Math.max(0, Math.min(1, 1 - y));
+        const rgb = hsvToRgb(h, s, vv);
+        selHex = '#' + [rgb.r, rgb.g, rgb.b].map((n) => ('0' + n.toString(16)).slice(-2)).join('');
+        nativeInp.value = selHex;
+      });
+      nativeInp.addEventListener('input', () => { selHex = nativeInp.value; });
+      pop.querySelector('#slate-bp-plus').addEventListener('click', () => nativeInp.click());
+      pop.querySelector('#slate-bp-cancel').addEventListener('click', () => { pop.style.display = 'none'; });
+      pop.querySelector('#slate-bp-apply').addEventListener('click', () => {
+        window.slateSetBoardPaper(selHex);
+        pop.style.display = 'none';
+        const fm = document.getElementById('file-menu');
+        if (fm) fm.hidden = true;
+        const fmb = document.getElementById('file-menu-btn');
+        if (fmb) fmb.setAttribute('aria-expanded', 'false');
+      });
+    }
+    selHex = boardPaperFill();
+    nativeInp.value = selHex.length === 7 ? selHex : '#f8f7f4';
+    paintGrad();
+    pop.style.display = 'block';
+    const ar = (anchorEl || document.getElementById('file-menu-btn')).getBoundingClientRect();
+    pop.style.left = Math.min(window.innerWidth - 292, Math.max(8, ar.left)) + 'px';
+    pop.style.top = (ar.bottom + 8) + 'px';
+  };
+})();
+
 function resizeCanvas() {
   const area = document.getElementById('canvas-area');
   if (!area || area.offsetParent === null || area.clientWidth < 4) return;
@@ -6437,12 +6590,12 @@ function renderFrame() {
   ctx.shadowColor   = 'rgba(0,0,0,0.6)';
   ctx.shadowBlur    = Math.min(40, 40 / vp.zoom) * vp.zoom; // limit cost at low zoom
   ctx.shadowOffsetY = 5;
-  ctx.fillStyle     = PAPER_COLOR;
+  ctx.fillStyle     = boardPaperFill();
   ctx.fill(getPaperPath2D());
   ctx.restore();
 
   // ── 3. Paper fill ──
-  ctx.fillStyle = PAPER_COLOR;
+  ctx.fillStyle = boardPaperFill();
   ctx.fill(getPaperPath2D());
 
   ctx.restore();
@@ -6646,6 +6799,17 @@ canvas.addEventListener('pointercancel', onPointerUp);
 canvas.addEventListener('wheel', onWheel, { passive: false });
 canvas.addEventListener('contextmenu', e => e.preventDefault()); // block right-click menu
 
+(function initMobileWorkspaceDismiss() {
+  const stack = document.getElementById('editor-view-stack');
+  if (!stack) return;
+  stack.addEventListener('pointerdown', e => {
+    if (!window.matchMedia('(max-width: 768px)').matches) return;
+    if (!e.target.closest('#canvas-area') && !e.target.closest('#canvas-area-3d')) return;
+    document.getElementById('sidebar')?.classList.remove('open');
+    document.getElementById('right-dock')?.classList.remove('dock-open');
+  }, { passive: true });
+})();
+
 // Image drag & drop
 const canvasArea = document.getElementById('canvas-area');
 canvasArea.addEventListener('dragover', e => { e.preventDefault(); canvasArea.classList.add('drag-over'); });
@@ -6727,6 +6891,9 @@ function onPointerDown(e) {
     scheduleRender();
   } else if (currentTool === 'eraser') {
     isDrawing = true;
+    _eraserGestureOps = [];
+    _lastEraseWx = null;
+    _lastEraseWy = null;
     eraseAt(wx, wy);
   } else if (currentTool === 'select') {
     // Check resize handles first
@@ -6892,7 +7059,9 @@ function onPointerMove(e) {
       applyHandleResize(wx, wy);
       scheduleRender();
     } else if (selDragStart && selItems.length) {
-      const dx = wx - selDragStart.wx, dy = wy - selDragStart.wy;
+      let dx = wx - selDragStart.wx, dy = wy - selDragStart.wy;
+      const sp = _snapSelectDelta(dx, dy, e);
+      dx = sp.dx; dy = sp.dy;
       selItems.forEach((it, i) => {
         const orig = selOrigins[i];
         if (!orig) return;
@@ -7006,6 +7175,14 @@ function onPointerUp(e) {
     }
   }
 
+  if (currentTool === 'eraser' && Array.isArray(_eraserGestureOps) && _eraserGestureOps.length) {
+    undoStack.push({ kind: 'erase-batch', ops: _eraserGestureOps });
+    redoStack.length = 0;
+  }
+  _eraserGestureOps = null;
+  _lastEraseWx = null;
+  _lastEraseWy = null;
+
   isDrawing = false;
   scheduleRender();
 }
@@ -7078,6 +7255,55 @@ function getSelectionBounds() {
   if (!isFinite(minX)) return null;
   const pad = 10 / vp.zoom;
   return { x: minX-pad, y: minY-pad, w: maxX-minX+pad*2, h: maxY-minY+pad*2 };
+}
+
+/** World bounds of selected shapes only (for snapping while moving). */
+function _selectionBoundsShapesOnly() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let any = false;
+  selItems.forEach(it => {
+    if (it.kind !== 'shape') return;
+    const s = doc.shapes.get(it.id);
+    if (!s) return;
+    any = true;
+    const l = Math.min(s.x, s.x + (s.w || 0)), r = Math.max(s.x, s.x + (s.w || 0));
+    const t = Math.min(s.y, s.y + (s.h || 0)), b = Math.max(s.y, s.y + (s.h || 0));
+    minX = Math.min(minX, l); maxX = Math.max(maxX, r);
+    minY = Math.min(minY, t); maxY = Math.max(maxY, b);
+  });
+  if (!any || !isFinite(minX)) return null;
+  return { l: minX, r: maxX, t: minY, b: maxY };
+}
+
+/** Snap selection move to nearby shape edges (hold Shift to skip). */
+function _snapSelectDelta(dx, dy, ev) {
+  if (ev && ev.shiftKey) return { dx, dy };
+  if (!selItems.every(it => it.kind === 'shape')) return { dx, dy };
+  const bb = _selectionBoundsShapesOnly();
+  if (!bb) return { dx, dy };
+  const snap = Math.max(5, 14 / vp.zoom);
+  const selIds = new Set(selItems.map(it => it.id));
+  const xs = [];
+  const ys = [];
+  doc.shapes.forEach((s, id) => {
+    if (selIds.has(id)) return;
+    if (s.peerId !== state.myId && !state.isBoardHost) return;
+    const l = Math.min(s.x, s.x + (s.w || 0)), r = Math.max(s.x, s.x + (s.w || 0));
+    const t = Math.min(s.y, s.y + (s.h || 0)), b = Math.max(s.y, s.y + (s.h || 0));
+    xs.push(l, r);
+    ys.push(t, b);
+  });
+  let ndx = dx, ndy = dy;
+  const curL = bb.l + dx, curR = bb.r + dx, curT = bb.t + dy, curB = bb.b + dy;
+  for (const x of xs) {
+    if (Math.abs(curL - x) <= snap) ndx = x - bb.l;
+    else if (Math.abs(curR - x) <= snap) ndx = x - bb.r;
+  }
+  for (const y of ys) {
+    if (Math.abs(curT - y) <= snap) ndy = y - bb.t;
+    else if (Math.abs(curB - y) <= snap) ndy = y - bb.b;
+  }
+  return { dx: ndx, dy: ndy };
 }
 
 const HANDLE_HIT_R = 10; // screen px
@@ -7239,9 +7465,23 @@ function _distPointToShape(wx, wy, s) {
   return Math.hypot(wx - cx, wy - cy);
 }
 
+function _cloneForUndo(obj) {
+  try { return JSON.parse(JSON.stringify(obj)); } catch (_) { return null; }
+}
+function _maybeRecordEraserOp(op) {
+  if (Array.isArray(_eraserGestureOps)) _eraserGestureOps.push(op);
+}
+
 function eraseAt(wx, wy) {
   const r = (strokeSize * 2 + 6) / vp.zoom;
   const r2 = r * r;
+  if (typeof _lastEraseWx === 'number' && typeof _lastEraseWy === 'number' && Number.isFinite(_lastEraseWx) && Number.isFinite(_lastEraseWy)) {
+    const step = r * 0.14;
+    if ((wx - _lastEraseWx) ** 2 + (wy - _lastEraseWy) ** 2 < step * step) return;
+  }
+  _lastEraseWx = wx;
+  _lastEraseWy = wy;
+
   let changed = false;
   const strokeIds = [...doc.strokes.keys()];
   for (const id of strokeIds) {
@@ -7252,6 +7492,7 @@ function eraseAt(wx, wy) {
     if (pts.length === 1) {
       const d2 = (pts[0][0] - wx) ** 2 + (pts[0][1] - wy) ** 2;
       if (d2 < r2) {
+        _maybeRecordEraserOp({ type: 'del-stroke', id, data: _cloneForUndo(s) });
         doc.strokes.delete(id);
         pendingDiff.delStrokes.push(id);
         changed = true;
@@ -7260,18 +7501,23 @@ function eraseAt(wx, wy) {
     }
     const runs = _splitStrokePointsOutside(pts, wx, wy, r2);
     if (runs.length === 1 && runs[0].length === pts.length) continue;
+    const oldCopy = _cloneForUndo(s);
+    const replacements = [];
     doc.strokes.delete(id);
     pendingDiff.delStrokes.push(id);
     runs.forEach(seg => {
       const ns = { ...s, id: genId(), points: seg, t: Date.now() };
+      replacements.push({ ...ns });
       doc.strokes.set(ns.id, ns);
       pendingDiff.strokes.push({ ...ns });
     });
+    _maybeRecordEraserOp({ type: 'stroke-split', oldId: id, oldStroke: oldCopy, replacements });
     changed = true;
   }
   doc.shapes.forEach((s, id) => {
     if (s.peerId !== state.myId && !state.isBoardHost) return;
     if (_distPointToShape(wx, wy, s) < r) {
+      _maybeRecordEraserOp({ type: 'del-shape', id, data: _cloneForUndo(s) });
       doc.shapes.delete(id);
       pendingDiff.removed.push(id);
       changed = true;
@@ -7464,6 +7710,30 @@ function undo() {
   if (!undoStack.length) return;
   const entry = undoStack.pop();
   const kind = entry.kind || entry.type; // backwards compat
+  if (kind === 'erase-batch' && Array.isArray(entry.ops)) {
+    for (let i = entry.ops.length - 1; i >= 0; i--) {
+      const op = entry.ops[i];
+      if (op.type === 'del-shape' && op.data) {
+        doc.shapes.set(op.id, op.data);
+        pendingDiff.added.push({ ...op.data });
+      } else if (op.type === 'del-stroke' && op.data) {
+        doc.strokes.set(op.id, op.data);
+        pendingDiff.strokes.push({ ...op.data });
+      } else if (op.type === 'stroke-split' && op.oldStroke && Array.isArray(op.replacements)) {
+        op.replacements.forEach(r => {
+          doc.strokes.delete(r.id);
+          pendingDiff.delStrokes.push(r.id);
+        });
+        doc.strokes.set(op.oldId, op.oldStroke);
+        pendingDiff.strokes.push({ ...op.oldStroke });
+      }
+    }
+    redoStack.push({ ...entry, kind: 'erase-batch' });
+    scheduleDiff();
+    invalidateStatic();
+    scheduleRender();
+    return;
+  }
   if (kind === 'stroke') {
     const s = doc.strokes.get(entry.id);
     if (!entry.data && s) entry.data = { ...s };
@@ -7483,6 +7753,29 @@ function redo() {
   if (!redoStack.length) return;
   const entry = redoStack.pop();
   const kind = entry.kind || entry.type;
+  if (kind === 'erase-batch' && Array.isArray(entry.ops)) {
+    entry.ops.forEach(op => {
+      if (op.type === 'del-shape') {
+        doc.shapes.delete(op.id);
+        pendingDiff.removed.push(op.id);
+      } else if (op.type === 'del-stroke') {
+        doc.strokes.delete(op.id);
+        pendingDiff.delStrokes.push(op.id);
+      } else if (op.type === 'stroke-split' && op.oldStroke && Array.isArray(op.replacements)) {
+        doc.strokes.delete(op.oldId);
+        pendingDiff.delStrokes.push(op.oldId);
+        op.replacements.forEach(r => {
+          doc.strokes.set(r.id, r);
+          pendingDiff.strokes.push({ ...r });
+        });
+      }
+    });
+    undoStack.push({ ...entry, kind: 'erase-batch' });
+    scheduleDiff();
+    invalidateStatic();
+    scheduleRender();
+    return;
+  }
   if (entry.data) {
     if (kind === 'stroke') {
       doc.strokes.set(entry.id, entry.data);
@@ -7500,7 +7793,17 @@ const _shapeToolIds = ['rect', 'ellipse', 'triangle', 'line', 'arrow'];
 function _closeShapesMenu() {
   const m = document.getElementById('shapes-menu');
   const b = document.getElementById('shapes-menu-btn');
-  if (m) { m.hidden = true; }
+  const wrap = document.querySelector('.shape-tools-dropdown-wrap');
+  if (m) {
+    m.hidden = true;
+    m.style.position = '';
+    m.style.left = '';
+    m.style.top = '';
+    m.style.right = '';
+    m.style.bottom = '';
+    m.style.zIndex = '';
+    if (wrap && m.parentElement !== wrap) wrap.appendChild(m);
+  }
   if (b) { b.setAttribute('aria-expanded', 'false'); }
 }
 function _isShapeTool(t) { return _shapeToolIds.includes(t); }
@@ -7546,24 +7849,50 @@ document.querySelectorAll('#draw-toolbar .tool-btn[data-tool]').forEach(btn => {
 (function wireShapesMenu() {
   const btn = document.getElementById('shapes-menu-btn');
   const menu = document.getElementById('shapes-menu');
-  if (!btn || !menu) return;
+  const wrap = document.querySelector('.shape-tools-dropdown-wrap');
+  if (!btn || !menu || !wrap) return;
+  function mountMenuFixed() {
+    const r = btn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = `${Math.max(8, Math.round(r.left))}px`;
+    menu.style.top = `${Math.round(r.bottom + 6)}px`;
+    menu.style.right = 'auto';
+    menu.style.bottom = 'auto';
+    menu.style.zIndex = '12000';
+    document.body.appendChild(menu);
+  }
+  function restoreMenuToWrap() {
+    menu.hidden = true;
+    menu.style.position = '';
+    menu.style.left = '';
+    menu.style.top = '';
+    menu.style.right = '';
+    menu.style.bottom = '';
+    menu.style.zIndex = '';
+    wrap.appendChild(menu);
+  }
   btn.addEventListener('click', e => {
     e.stopPropagation();
-    const open = menu.hidden;
-    menu.hidden = !open;
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const willOpen = menu.hidden;
+    if (willOpen) mountMenuFixed();
+    menu.hidden = !willOpen;
+    btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    if (!willOpen) restoreMenuToWrap();
   });
   menu.querySelectorAll('[data-shape-tool]').forEach(item => {
     item.addEventListener('click', e => {
       e.stopPropagation();
       const t = item.getAttribute('data-shape-tool');
       if (t) setTool(t);
+      restoreMenuToWrap();
+      btn.setAttribute('aria-expanded', 'false');
     });
   });
   document.addEventListener('mousedown', e => {
     if (menu.hidden) return;
     if (btn.contains(e.target) || menu.contains(e.target)) return;
-    _closeShapesMenu();
+    restoreMenuToWrap();
+    btn.setAttribute('aria-expanded', 'false');
   }, true);
 })();
 
@@ -7696,9 +8025,16 @@ function _openExportMenu(btn) {
     });
     menu.appendChild(item);
   });
-  const rect = btn.getBoundingClientRect();
+  const rect = (() => {
+    let r = btn.getBoundingClientRect();
+    if (r.width < 2 && r.height < 2) {
+      const alt = document.getElementById('file-export-btn') || document.getElementById('file-menu-btn');
+      if (alt) r = alt.getBoundingClientRect();
+    }
+    return r;
+  })();
   menu.style.top = `${Math.round(rect.bottom + 6)}px`;
-  // Right-align with the button to keep the menu visually anchored.
+  // Right-align with the anchor so the menu stays on-screen when opened from the file menu.
   menu.style.right = `${Math.round(window.innerWidth - rect.right)}px`;
   document.body.appendChild(menu);
   _exportMenuEl = menu;
@@ -7721,7 +8057,7 @@ function exportBoardImage(ext) {
   offscreen.height = WORLD_H * scale;
   const offCtx = offscreen.getContext('2d');
   // JPG can't be transparent — paint the paper colour first.
-  offCtx.fillStyle = PAPER_COLOR;
+  offCtx.fillStyle = boardPaperFill();
   offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
   offCtx.save();
   offCtx.setTransform(scale, 0, 0, scale, WORLD_W * scale / 2, WORLD_H * scale / 2);
@@ -7747,7 +8083,7 @@ function _exportBoardSvg(boardName, dateStamp) {
   // mirror of the canvas (no blur effects), but covers the standard case.
   const parts = [];
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-WORLD_W/2} ${-WORLD_H/2} ${WORLD_W} ${WORLD_H}" width="${WORLD_W}" height="${WORLD_H}">`);
-  parts.push(`<rect x="${-WORLD_W/2}" y="${-WORLD_H/2}" width="${WORLD_W}" height="${WORLD_H}" fill="${PAPER_COLOR}"/>`);
+  parts.push(`<rect x="${-WORLD_W/2}" y="${-WORLD_H/2}" width="${WORLD_W}" height="${WORLD_H}" fill="${boardPaperFill()}"/>`);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   // doc.strokes / doc.shapes are id→Item Maps; iterate values.
   const strokesArr = doc.strokes ? [...doc.strokes.values()] : [];
@@ -10798,6 +11134,14 @@ renderSavedBoards();
       document.getElementById('import-file-input')?.click();
     } else if (typeof toast === 'function') {
       toast('Import is available in 3D mode', 'yellow');
+    }
+  });
+
+  // Board background (2D paper color; synced like other doc fields)
+  document.getElementById('file-board-paper-btn')?.addEventListener('click', (e) => {
+    closeMenu();
+    if (typeof window.slateOpenBoardPaperPicker === 'function') {
+      window.slateOpenBoardPaperPicker(e.currentTarget);
     }
   });
 

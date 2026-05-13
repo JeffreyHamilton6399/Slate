@@ -59,6 +59,13 @@ featureCSS.textContent = `
   .layer-row.layer-drop-target { border-top-color: var(--accent) !important; }
   .layer-vis-btn { background:none;border:none;padding:0;cursor:pointer;flex-shrink:0;line-height:1; }
   .layer-del-btn { transition: opacity .12s, color .12s; }
+  .layer-grip {
+    flex-shrink:0;width:18px;padding:0 2px;border:none;background:transparent;
+    color:var(--text-dim);cursor:grab;line-height:1;font-size:10px;letter-spacing:-2px;
+    border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
+  }
+  .layer-grip:hover { color:var(--text); background:var(--bg3); }
+  .layer-grip:active { cursor:grabbing; }
   .layer-del-btn:hover { color: var(--danger) !important; opacity:1 !important; }
 
   #shortcuts-overlay { position:fixed;inset:0;z-index:9000;
@@ -529,11 +536,12 @@ function renderLayersList() {
   list.innerHTML = layers.map(l => {
     const active = l.id === activeId;
     const op = typeof l.opacity === 'number' && Number.isFinite(l.opacity) ? Math.round(l.opacity * 100) : 100;
-    return `<div class="layer-row" draggable="true" data-lid="${l.id}" style="
+    return `<div class="layer-row" draggable="false" data-lid="${l.id}" style="
       background:${active ? 'var(--bg4)' : 'transparent'};
       border-left-color:${active ? 'var(--accent)' : 'transparent'};
       color:${l.visible ? 'var(--text)' : 'var(--text-dim)'};
     ">
+      <button type="button" class="layer-grip" draggable="true" data-lid="${l.id}" title="Drag to reorder" aria-label="Reorder layer">⠿</button>
       <button class="layer-vis-btn" data-lid="${l.id}" title="Toggle visibility"
         style="color:${l.visible ? 'var(--text-mid)' : 'var(--border2)'}">
         ${l.visible
@@ -569,7 +577,7 @@ function renderLayersList() {
   list.querySelectorAll('.layer-row').forEach(row => {
     row.addEventListener('click', e => {
       if (e.detail > 1) return;
-      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn') || e.target.closest('.layer-opacity')) return;
+      if (e.target.closest('.layer-vis-btn') || e.target.closest('.layer-del-btn') || e.target.closest('.layer-opacity') || e.target.closest('.layer-grip')) return;
       if (row.querySelector('.layer-name input')) return;
       window.slateLayers?.setActive(row.dataset.lid);
       renderLayersList();
@@ -647,12 +655,14 @@ function _beginLayerRename(span) {
 
 let _dragLayerId = null;
 function _bindLayerDragEvents(row) {
-  row.addEventListener('dragstart', e => {
+  const grip = row.querySelector('.layer-grip');
+  if (!grip) return;
+  grip.addEventListener('dragstart', e => {
     _dragLayerId = row.dataset.lid;
     row.style.opacity = '0.4';
     try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', _dragLayerId); } catch {}
   });
-  row.addEventListener('dragend', () => {
+  grip.addEventListener('dragend', () => {
     row.style.opacity = '';
     _dragLayerId = null;
     document.querySelectorAll('.layer-row').forEach(r => r.style.borderTopColor = '');

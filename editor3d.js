@@ -8,6 +8,12 @@
  *    edited mesh is converted to a generic 'mesh' type and synced over the wire.
  *  • Hierarchy outliner panel is registered with the dock so it replaces the
  *    Layers panel while in 3D mode.
+ *
+ *  Blender reference in this workspace: `Blender/4.4/` (bundled scripts under
+ *  `scripts/`, assets under `datafiles/`). Viewport math helpers live in
+ *  `scripts/modules/bpy_extras/view3d_utils.py`; operators under
+ *  `scripts/startup/bl_operators/`. The C++ draw engine is not vendored here — use a full
+ *  blender.git checkout’s `source/blender/draw/` when you need GPU/viewport internals.
  */
 import * as THREE from 'three';
 import { OrbitControls }       from 'three/addons/controls/OrbitControls.js';
@@ -4944,6 +4950,13 @@ export function initEditor3D(rootEl) {
   container.appendChild(renderer.domElement);
   const cvs = renderer.domElement;
   cvs.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;';
+  // Match the first paint to scene.background (avoids a one-frame default clear).
+  try {
+    if (scene?.background?.isColor) renderer.setClearColor(scene.background, 1);
+    else renderer.setClearColor(0x12121a, 1);
+  } catch (_) {
+    try { renderer.setClearColor(0x12121a, 1); } catch (_) {}
+  }
   cvs.addEventListener('contextmenu', _onViewportContextMenu);
   cvs.addEventListener('webglcontextlost', (e) => {
     e.preventDefault();

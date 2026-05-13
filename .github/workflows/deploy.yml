@@ -1,3 +1,17 @@
+# Deploy to Fly.io. Auth failures are almost always the GitHub secret — see steps below.
+#
+# Fly.io no longer recommends short-lived `fly auth token` for CI. Use one of:
+#   cd <repo> && fly tokens create deploy -a slate --name github-actions --expiry 8760h
+#   (use the app slug from fly.toml after -a)
+# Copy the ENTIRE line Fly prints, including the leading "FlyV1 " — paste as FLY_API_TOKEN.
+#
+# If the app lives under a team org, either run the command with that org selected
+#   fly orgs switch <org>
+# or use: fly tokens create org --name github-actions --expiry 8760h
+#
+# GitHub: Settings → Secrets and variables → Actions → repository secret FLY_API_TOKEN
+# Do NOT paste a token that has extra quotes or line breaks in the secret value.
+
 name: Deploy
 
 on:
@@ -12,21 +26,23 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    # Intentionally no `environment:` here — a wrong/empty FLY_API_TOKEN on a GitHub
+    # Environment overrides the repo secret and causes Fly "unauthorized". Add
+    # `environment: production` back after setting FLY_API_TOKEN on that environment.
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Check Fly token
+      - name: Check Fly token present
         run: |
           if [ -z "${FLY_API_TOKEN}" ]; then
-            echo "::error::FLY_API_TOKEN is empty. Add a Fly deploy token:"
-            echo "  1. Locally: fly auth token   (or: fly tokens create deploy -x 999999h)"
-            echo "  2. GitHub repo → Settings → Secrets and variables → Actions"
-            echo "     New secret name exactly: FLY_API_TOKEN"
-            echo "  If this job uses environment 'production', also add the same secret under:"
-            echo "  Settings → Environments → production → Environment secrets"
+            echo "::error::FLY_API_TOKEN is empty. Add repository secret FLY_API_TOKEN (Fly deploy or org token — see workflow header comments)."
             exit 1
+          fi
+          len=${#FLY_API_TOKEN}
+          echo "FLY_API_TOKEN length: ${len} (sanity check only)"
+          if [ "${len}" -lt 80 ]; then
+            echo "::warning::Token looks very short — did you paste the full FlyV1 deploy token?"
           fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -40,3 +56,10 @@ jobs:
         run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: If deploy failed — token hints
+        if: failure()
+        run: |
+          echo "::notice::Unauthorized usually means: (1) wrong/stale secret, (2) short-lived fly auth token — use: fly tokens create deploy -a YOUR_APP_SLUG"
+          echo "::notice::Or delete a bad FLY_API_TOKEN under Settings → Environments → production (env secrets override repo secrets)."
+          exit 0

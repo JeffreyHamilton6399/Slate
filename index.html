@@ -8749,7 +8749,7 @@ function applyWorkspaceMode(board) {
 
   if (mode === '3d') {
     area2.style.display = 'none';
-    area3.style.display = 'block';
+    area3.style.display = 'flex';
     if (tb)  tb.style.display = 'none';
     if (tb3) tb3.style.display = 'flex';
     if (window.matchMedia('(min-width: 769px)').matches) resetChatDockStyles();
@@ -8767,9 +8767,13 @@ function applyWorkspaceMode(board) {
       requestAnimationFrame(() => slateFocusDefaultDockTab3d());
     }
     window.dispatchEvent(new CustomEvent('slate-3d-activate'));
+    // Triple-rAF mirrors the activation listener in editor3d.js so this resize
+    // fires after initEditor3D has run and Three.js has sized its canvas.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        try { window.slateEditor3dResize?.(); } catch (_) {}
+        requestAnimationFrame(() => {
+          try { window.slateEditor3dResize?.(); } catch (_) {}
+        });
       });
     });
   } else {

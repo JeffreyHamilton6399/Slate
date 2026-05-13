@@ -4300,6 +4300,13 @@ function resize() {
       h = Math.max(1, h || 1);
     }
   }
+  // If dimensions are still suspiciously small the browser hasn't committed
+  // the flex layout yet — schedule one more resize attempt and bail early so
+  // we don't lock the renderer to a 1×1 canvas.
+  if (w <= 1 || h <= 1) {
+    requestAnimationFrame(() => { try { resize(); } catch (_) {} });
+    return;
+  }
   renderer.setSize(w, h, false);
   const coarse = (typeof window !== 'undefined' && window.matchMedia && (
     window.matchMedia('(max-width: 768px)').matches ||
@@ -5120,9 +5127,11 @@ function _boot3dIfNeeded() {
   const el = document.getElementById('canvas-area-3d');
   if (!el || !document.body.classList.contains('mode-3d')) return;
   requestAnimationFrame(() => {
-    initEditor3D(el);
     requestAnimationFrame(() => {
-      try { resize(); } catch (_) {}
+      initEditor3D(el);
+      requestAnimationFrame(() => {
+        try { resize(); } catch (_) {}
+      });
     });
   });
 }
@@ -5130,10 +5139,16 @@ function _boot3dIfNeeded() {
 window.addEventListener('slate-3d-activate', () => {
   const el = document.getElementById('canvas-area-3d');
   if (!el) return;
+  // Two nested rAFs: the first lets the browser commit the flex layout change
+  // (display:flex on #canvas-area-3d so flex:1 resolves its height), the second
+  // runs initEditor3D once dimensions are non-zero, then a third does a final
+  // resize after Three.js has appended its canvas element.
   requestAnimationFrame(() => {
-    initEditor3D(el);
     requestAnimationFrame(() => {
-      try { resize(); } catch (_) {}
+      initEditor3D(el);
+      requestAnimationFrame(() => {
+        try { resize(); } catch (_) {}
+      });
     });
   });
 });

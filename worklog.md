@@ -128,3 +128,18 @@ Work Log:
 
 Stage Summary:
 - 7 files modified. Browser-verified: required project name (disabled→enabled), icon toggles flip (2D→3D), keyframe delete works (2→1). TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-6
+Agent: main (Z.ai Code)
+Task: Fix round 6 (white default material, units display, subdivide tool, wireframe edges, Object/Edit toggle)
+
+Work Log:
+- Default material color is now white (was accent) — new objects read as neutral clay, Blender-style.
+- Properties: added a read-only "Size" readout in the Transform section showing the object's bounding-box dimensions in the current unit (mm/cm/m/in/ft), with feet+inches formatting for ft (e.g. "3′ 2.5″"). CAD measurements now always visible.
+- Subdivide tool brought back as a primary toolbar icon (was buried in the Mesh dropdown). Removed the duplicate from the Mesh menu.
+- Wireframe mode now shows ONLY the real polygon face edges (not triangulated diagonals). The filled surface is hidden (opacity 0) and a separate lineSegments overlay draws each face's perimeter edges. VLM-verified: cube shows 12 edges, no diagonals.
+- Object/Edit mode is now a single toggle button (shows the current mode, click to flip) instead of two side-by-side buttons.
+
+Stage Summary:
+- 5 files modified. Browser-verified: single Object/Edit toggle flips, wireframe shows real face edges (VLM-confirmed), Size readout present, no errors. TypeScript + ESLint clean (0 errors).

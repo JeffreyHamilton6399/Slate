@@ -1,0 +1,1406 @@
+     1→     1→/**
+     2→     2→ * 3D viewport — react-three-fiber canvas wired up to:
+     3→     3→ *   - SceneObjects (mesh rendering from Yjs)
+     4→     4→ *   - Object selection (click + Shift+click)
+     5→     5→ *   - Camera (OrbitControls)
+     6→     6→ *   - Grid + axes + lighting
+     7→     7→ *   - GizmoHelper + view gizmo
+     8→     8→ *   - Modal tool driver (G / R / S)
+     9→     9→ *   - Toolbar3D + keyboard shortcuts
+    10→    10→ */
+    11→    11→
+    12→    12→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    13→    13→import { Canvas, useFrame, useThree } from '@react-three/fiber';
+    14→    14→import {
+    15→    15→  GizmoHelper,
+    16→    16→  GizmoViewport,
+    17→    17→  Grid,
+    18→    18→  Html,
+    19→    19→  OrbitControls,
+    20→    20→} from '@react-three/drei';
+    21→    21→import * as THREE from 'three';
+    22→    22→import type {
+    23→    23→  AwarenessState,
+    24→    24→  Object3D as Object3DSchema,
+    25→    25→  Transform,
+    26→    26→} from '@slate/sync-protocol';
+    27→    27→import type { SlateRoom } from '../sync/provider';
+    28→    28→import { useAppStore } from '../app/store';
+    29→    29→import { useBoardUnits } from '../sync/useBoardSettings';
+    30→    30→import { Toolbar3D } from './Toolbar3D';
+    31→    31→import { AddObjectMenu } from './AddObjectMenu';
+    32→    32→import { FlyMode } from './FlyMode';
+    33→    33→import { ObjectGizmo } from './ObjectGizmo';
+    34→    34→import { Timeline } from './Timeline';
+    35→    35→import { sampleAnim } from './animation';
+    36→    36→import { SceneObjects, type ElementHit } from './SceneObjects';
+    37→    37→import {
+    38→    38→  applyMeshModal,
+    39→    39→  applyMeshScalar,
+    40→    40→  cancelMeshModal,
+    41→    41→  meshModalLabel,
+    42→    42→  rotateVertices,
+    43→    43→  scaleVertices,
+    44→    44→  startMeshExtrude,
+    45→    45→  startMeshGrab,
+    46→    46→  startMeshScalar,
+    47→    47→  writeVertices,
+    48→    48→  type MeshModalKind,
+    49→    49→  type MeshModalState,
+    50→    50→} from './meshModal';
+    51→    51→import { useScene3DStore } from './store';
+    52→    52→import { instantiateAsset, readSceneSnapshot, setTransform, type SceneSnapshot } from './scene';
+    53→    53→import { importModel } from '../files/import3d';
+    54→    54→import { toast } from '../ui/Toast';
+    55→    55→import { useViewport3DShortcuts } from './useViewport3DShortcuts';
+    56→    56→import {
+    57→    57→  applyDelta,
+    58→    58→  axisDragAmount,
+    59→    59→  deltaFromModal,
+    60→    60→  handleModalKey,
+    61→    61→  modalLabel,
+    62→    62→  startObjectModal,
+    63→    63→  type CameraBasis,
+    64→    64→  type ModalKind,
+    65→    65→  type ObjectModalState,
+    66→    66→} from './modalTools';
+    67→    67→
+    68→    68→interface CameraInfo {
+    69→    69→  basis: CameraBasis;
+    70→    70→  /** World units per pixel at the orbit target's distance. */
+    71→    71→  pxScale: number;
+    72→    72→}
+    73→    73→
+    74→    74→interface Viewport3DProps {
+    75→    75→  room: SlateRoom;
+    76→    76→}
+    77→    77→
+    78→    78→/** Viewport chrome colors per app theme (bg: [normal, rendered]). */
+    79→    79→const VIEWPORT_COLORS = {
+    80→    80→  dark: { bg: ['#0c0c0e', '#08080a'], cell: '#252530', section: '#7c6aff' },
+    81→    81→  light: { bg: ['#dfdfe7', '#d4d4de'], cell: '#b9b9c8', section: '#6b58f0' },
+    82→    82→} as const;
+    83→    83→
+    84→    84→export function Viewport3D({ room }: Viewport3DProps) {
+    85→    85→  const [snapshot, setSnapshot] = useState<SceneSnapshot>(() =>
+    86→    86→    readSceneSnapshot(room.slate),
+    87→    87→  );
+    88→    88→  const selection = useScene3DStore((s) => s.selection);
+    89→    89→  const setSelection = useScene3DStore((s) => s.setSelection);
+    90→    90→  const toggleSelection = useScene3DStore((s) => s.toggleSelection);
+    91→    91→  const clearSelection = useScene3DStore((s) => s.clearSelection);
+    92→    92→  const showGrid = useScene3DStore((s) => s.showGrid);
+    93→    93→  const shading = useScene3DStore((s) => s.shading);
+    94→    94→  const flying = useScene3DStore((s) => s.flying);
+    95→    95→  const flySpeed = useScene3DStore((s) => s.flySpeed);
+    96→    96→  const theme = useAppStore((s) => s.theme);
+    97→    97→  const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
+    98→    98→  const showTransformHud = useAppStore((s) => s.showTransformHud);
+    99→    99→  const [units] = useBoardUnits(room);
+   100→   100→  const viewportColors = VIEWPORT_COLORS[theme];
+   101→   101→  // File → Background sets the board's shared paper color; like the 2D
+   102→   102→  // canvas, the 3D viewport shows it once "follows theme" is off.
+   103→   103→  const [paper, setPaper] = useState('#0c0c0e');
+   104→   104→  useEffect(() => {
+   105→   105→    const meta = room.slate.meta();
+   106→   106→    const apply = () => setPaper((meta.get('paper') as string) || '#0c0c0e');
+   107→   107→    apply();
+   108→   108→    meta.observe(apply);
+   109→   109→    return () => meta.unobserve(apply);
+   110→   110→  }, [room]);
+   111→   111→  const bgColor = paperFollowsTheme
+   112→   112→    ? viewportColors.bg[shading === 'rendered' ? 1 : 0]
+   113→   113→    : paper;
+   114→   114→  // CAD grid: cell/section spacing follows the chosen display units.
+   115→   115→  const grid =
+   116→   116→    units === 'mm' || units === 'cm'
+   117→   117→      ? { cell: 0.1, section: 1 } // 10 cm minor, 1 m major
+   118→   118→      : units === 'in' || units === 'ft'
+   119→   119→        ? { cell: 0.3048, section: 3.048 } // 1 ft minor, 10 ft major
+   120→   120→        : { cell: 1, section: 5 }; // meters (default)
+   121→   121→  // Animation preview: while scrubbing/playing, animated objects render at
+   122→   122→  // their sampled keyframe pose instead of the document transform.
+   123→   123→  const animTime = useScene3DStore((s) => s.animTime);
+   124→   124→  const animPreview = useScene3DStore((s) => s.animPreview);
+   125→   125→  const animOverrides = useMemo(() => {
+   126→   126→    if (!animPreview) return null;
+   127→   127→    const m = new Map<string, Transform>();
+   128→   128→    for (const o of snapshot.objects) {
+   129→   129→      const t = sampleAnim(o.anim, animTime);
+   130→   130→      if (t) m.set(o.id, t);
+   131→   131→    }
+   132→   132→    return m.size > 0 ? m : null;
+   133→   133→  }, [animPreview, animTime, snapshot]);
+   134→   134→  const viewingCameraId = useScene3DStore((s) => s.viewingCameraId);
+   135→   135→  const editorMode = useScene3DStore((s) => s.editorMode);
+   136→   136→  const editSelection = useScene3DStore((s) => s.editSelection);
+   137→   137→  const selectMode = useScene3DStore((s) => s.selectMode);
+   138→   138→  const setEditSelection = useScene3DStore((s) => s.setEditSelection);
+   139→   139→  const [awareness, setAwareness] = useState<AwarenessState[]>([]);
+   140→   140→  // Blender-style navigation: Shift+MMB pans instead of orbiting.
+   141→   141→  const [shiftDown, setShiftDown] = useState(false);
+   142→   142→  // Shift+A add menu, opened at the last-known cursor position.
+   143→   143→  const [addMenuPos, setAddMenuPos] = useState<{ x: number; y: number } | null>(null);
+   144→   144→  const lastPointerRef = useRef({ x: 80, y: 80 });
+   145→   145→  /** Screen position (container px) of the selection pivot, for the guide line. */
+   146→   146→  const pivotScreenRef = useRef<{ x: number; y: number } | null>(null);
+   147→   147→  const guideLineRef = useRef<SVGLineElement | null>(null);
+   148→   148→
+   149→   149→  useEffect(() => room.onAwarenessChange(setAwareness), [room]);
+   150→   150→
+   151→   151→  useEffect(() => {
+   152→   152→    const down = (e: KeyboardEvent) => {
+   153→   153→      if (e.key === 'Shift') setShiftDown(true);
+   154→   154→    };
+   155→   155→    const up = (e: KeyboardEvent) => {
+   156→   156→      if (e.key === 'Shift') setShiftDown(false);
+   157→   157→    };
+   158→   158→    window.addEventListener('keydown', down);
+   159→   159→    window.addEventListener('keyup', up);
+   160→   160→    return () => {
+   161→   161→      window.removeEventListener('keydown', down);
+   162→   162→      window.removeEventListener('keyup', up);
+   163→   163→    };
+   164→   164→  }, []);
+   165→   165→
+   166→   166→  // Live subscription to Yjs.
+   167→   167→  useEffect(() => {
+   168→   168→    const objects = room.slate.scene3dObjects();
+   169→   169→    const meshes = room.slate.scene3dMeshes();
+   170→   170→    const materials = room.slate.scene3dMaterials();
+   171→   171→    const refresh = () => setSnapshot(readSceneSnapshot(room.slate));
+   172→   172→    objects.observeDeep(refresh);
+   173→   173→    meshes.observeDeep(refresh);
+   174→   174→    materials.observeDeep(refresh);
+   175→   175→    refresh();
+   176→   176→    return () => {
+   177→   177→      objects.unobserveDeep(refresh);
+   178→   178→      meshes.unobserveDeep(refresh);
+   179→   179→      materials.unobserveDeep(refresh);
+   180→   180→    };
+   181→   181→  }, [room]);
+   182→   182→
+   183→   183→  // Modal tool state — independent of zustand so high-frequency updates
+   184→   184→  // don't trigger React re-renders. The store's `modal.tool` mirrors whether
+   185→   185→  // a modal is active so the shortcut hook can route keys correctly.
+   186→   186→  const modalRef = useRef<ObjectModalState | null>(null);
+   187→   187→  const meshModalRef = useRef<MeshModalState | null>(null);
+   188→   188→  const [modalLabelText, setModalLabelText] = useState<string | null>(null);
+   189→   189→  const frameSelectedRef = useRef<(all: boolean) => void>(() => {});
+   190→   190→  const cameraInfoRef = useRef<CameraInfo | null>(null);
+   191→   191→  /** Set when a modal just ended so the confirming click doesn't clear selection. */
+   192→   192→  const modalEndedAtRef = useRef(0);
+   193→   193→  const snapshotRef = useRef(snapshot);
+   194→   194→  snapshotRef.current = snapshot;
+   195→   195→  /** The viewport element — pointer-locked while a modal drag is running. */
+   196→   196→  const containerRef = useRef<HTMLDivElement | null>(null);
+   197→   197→  /** Where the last primary press landed — drags must not clear selection. */
+   198→   198→  const pointerDownAtRef = useRef<{ x: number; y: number } | null>(null);
+   199→   199→
+   200→   200→  // Blender locks the cursor during a modal transform so the pointer can't
+   201→   201→  // leave the window (wander onto browser chrome, trigger a back-swipe, or
+   202→   202→  // close the tab); the tool reads raw movementX/Y instead. requestPointerLock
+   203→   203→  // may reject during the browser's post-Esc cooldown — that's fine, the tool
+   204→   204→  // still works unlocked.
+   205→   205→  const requestModalLock = useCallback(() => {
+   206→   206→    const el = containerRef.current;
+   207→   207→    if (!el || document.pointerLockElement === el) return;
+   208→   208→    try {
+   209→   209→      const p = el.requestPointerLock?.();
+   210→   210→      if (p && typeof (p as Promise<void>).catch === 'function') {
+   211→   211→        (p as Promise<void>).catch(() => {});
+   212→   212→      }
+   213→   213→    } catch {
+   214→   214→      /* unsupported / not allowed — fall back to unlocked drag */
+   215→   215→    }
+   216→   216→  }, []);
+   217→   217→  const releaseModalLock = useCallback(() => {
+   218→   218→    if (document.pointerLockElement) document.exitPointerLock?.();
+   219→   219→  }, []);
+   220→   220→
+   221→   221→  const onObjectPick = useCallback(
+   222→   222→    (id: string, additive: boolean) => {
+   223→   223→      // The click that confirms a modal transform must not also re-pick.
+   224→   224→      if (Date.now() - modalEndedAtRef.current < 350) return;
+   225→   225→      if (additive) toggleSelection(id);
+   226→   226→      else setSelection([id]);
+   227→   227→    },
+   228→   228→    [setSelection, toggleSelection],
+   229→   229→  );
+   230→   230→
+   231→   231→  // Resolve a sub-element click according to the active select mode
+   232→   232→  // (1 = vertex, 2 = edge, 3 = face — Blender's layout).
+   233→   233→  const onElementPick = useCallback(
+   234→   234→    (objectId: string, hit: ElementHit, additive: boolean) => {
+   235→   235→      // Ignore the click that confirms a mesh modal so it can't re-pick a face.
+   236→   236→      if (Date.now() - modalEndedAtRef.current < 350) return;
+   237→   237→      const store = useScene3DStore.getState();
+   238→   238→      const obj = snapshotRef.current.objects.find((o) => o.id === objectId);
+   239→   239→      const mesh = obj?.meshId ? snapshotRef.current.meshes.get(obj.meshId) : undefined;
+   240→   240→      const poly = mesh?.faces[hit.face]?.v;
+   241→   241→      if (!mesh || !poly) return;
+   242→   242→
+   243→   243→      if (store.selectMode === 'face') {
+   244→   244→        const cur = store.editSelection.faces;
+   245→   245→        const next = additive
+   246→   246→          ? cur.includes(hit.face)
+   247→   247→            ? cur.filter((f) => f !== hit.face)
+   248→   248→            : [...cur, hit.face]
+   249→   249→          : cur.length === 1 && cur[0] === hit.face
+   250→   250→            ? []
+   251→   251→            : [hit.face];
+   252→   252→        setEditSelection({ faces: next, verts: [], edges: [] });
+   253→   253→        return;
+   254→   254→      }
+   255→   255→
+   256→   256→      const vpos = (vi: number) => ({
+   257→   257→        x: mesh.vertices[vi * 3] ?? 0,
+   258→   258→        y: mesh.vertices[vi * 3 + 1] ?? 0,
+   259→   259→        z: mesh.vertices[vi * 3 + 2] ?? 0,
+   260→   260→      });
+   261→   261→      if (store.selectMode === 'vertex') {
+   262→   262→        let best = poly[0]!;
+   263→   263→        let bestD = Infinity;
+   264→   264→        for (const vi of poly) {
+   265→   265→          const p = vpos(vi);
+   266→   266→          const d = (p.x - hit.local.x) ** 2 + (p.y - hit.local.y) ** 2 + (p.z - hit.local.z) ** 2;
+   267→   267→          if (d < bestD) {
+   268→   268→            bestD = d;
+   269→   269→            best = vi;
+   270→   270→          }
+   271→   271→        }
+   272→   272→        const cur = store.editSelection.verts;
+   273→   273→        const next = additive
+   274→   274→          ? cur.includes(best)
+   275→   275→            ? cur.filter((v) => v !== best)
+   276→   276→            : [...cur, best]
+   277→   277→          : cur.length === 1 && cur[0] === best
+   278→   278→            ? []
+   279→   279→            : [best];
+   280→   280→        setEditSelection({ verts: next, faces: [], edges: [] });
+   281→   281→        return;
+   282→   282→      }
+   283→   283→
+   284→   284→      // Edge mode: nearest polygon edge to the hit point.
+   285→   285→      let bestA = poly[0]!;
+   286→   286→      let bestB = poly[1] ?? poly[0]!;
+   287→   287→      let bestD = Infinity;
+   288→   288→      for (let i = 0; i < poly.length; i++) {
+   289→   289→        const a = poly[i]!;
+   290→   290→        const b = poly[(i + 1) % poly.length]!;
+   291→   291→        const pa = vpos(a);
+   292→   292→        const pb = vpos(b);
+   293→   293→        const abx = pb.x - pa.x,
+   294→   294→          aby = pb.y - pa.y,
+   295→   295→          abz = pb.z - pa.z;
+   296→   296→        const len2 = abx * abx + aby * aby + abz * abz || 1;
+   297→   297→        let t =
+   298→   298→          ((hit.local.x - pa.x) * abx + (hit.local.y - pa.y) * aby + (hit.local.z - pa.z) * abz) /
+   299→   299→          len2;
+   300→   300→        t = Math.max(0, Math.min(1, t));
+   301→   301→        const dx = hit.local.x - (pa.x + t * abx);
+   302→   302→        const dy = hit.local.y - (pa.y + t * aby);
+   303→   303→        const dz = hit.local.z - (pa.z + t * abz);
+   304→   304→        const d = dx * dx + dy * dy + dz * dz;
+   305→   305→        if (d < bestD) {
+   306→   306→          bestD = d;
+   307→   307→          bestA = Math.min(a, b);
+   308→   308→          bestB = Math.max(a, b);
+   309→   309→        }
+   310→   310→      }
+   311→   311→      const cur = store.editSelection.edges;
+   312→   312→      const pairs: [number, number][] = [];
+   313→   313→      for (let i = 0; i + 1 < cur.length; i += 2) pairs.push([cur[i]!, cur[i + 1]!]);
+   314→   314→      const idx = pairs.findIndex(([a, b]) => a === bestA && b === bestB);
+   315→   315→      let nextPairs: [number, number][];
+   316→   316→      if (additive) {
+   317→   317→        nextPairs = idx >= 0 ? pairs.filter((_, i) => i !== idx) : [...pairs, [bestA, bestB]];
+   318→   318→      } else {
+   319→   319→        nextPairs = pairs.length === 1 && idx === 0 ? [] : [[bestA, bestB]];
+   320→   320→      }
+   321→   321→      setEditSelection({ edges: nextPairs.flat(), faces: [], verts: [] });
+   322→   322→    },
+   323→   323→    [setEditSelection],
+   324→   324→  );
+   325→   325→
+   326→   326→  void clearSelection;
+   327→   327→
+   328→   328→  const onStartModal = useCallback(
+   329→   329→    (kind: ModalKind) => {
+   330→   330→      const ids = useScene3DStore.getState().selection;
+   331→   331→      if (ids.length === 0) return;
+   332→   332→      const base = new Map<string, Object3DSchema>();
+   333→   333→      for (const id of ids) {
+   334→   334→        const yo = room.slate.scene3dObjects().get(id);
+   335→   335→        if (!yo) continue;
+   336→   336→        const transform = yo.get('transform') as Transform | undefined;
+   337→   337→        if (!transform) continue;
+   338→   338→        base.set(id, {
+   339→   339→          id,
+   340→   340→          parentId: (yo.get('parentId') as string | null) ?? null,
+   341→   341→          type: yo.get('type') as Object3DSchema['type'],
+   342→   342→          name: (yo.get('name') as string) ?? 'Object',
+   343→   343→          visible: (yo.get('visible') as boolean) ?? true,
+   344→   344→          transform,
+   345→   345→          meshId: (yo.get('meshId') as string | null) ?? null,
+   346→   346→          materialId: (yo.get('materialId') as string | null) ?? null,
+   347→   347→        });
+   348→   348→      }
+   349→   349→      if (base.size === 0) return;
+   350→   350→      // Reflect the transform in the persistent gizmo so after a keyboard
+   351→   351→      // G/R/S the gizmo shows the matching handles (arrows/rings/boxes).
+   352→   352→      const gizmoMode = kind === 'grab' ? 'translate' : kind === 'rotate' ? 'rotate' : 'scale';
+   353→   353→      useScene3DStore.setState({ gizmo: gizmoMode });
+   354→   354→      modalRef.current = startObjectModal(kind, base);
+   355→   355→      setModalLabelText(modalLabel(modalRef.current));
+   356→   356→      useScene3DStore.getState().setModal({ tool: kind });
+   357→   357→      requestModalLock();
+   358→   358→    },
+   359→   359→    [room, requestModalLock],
+   360→   360→  );
+   361→   361→
+   362→   362→  // Blender-style modal mesh edits: E extrudes-and-follows-the-mouse,
+   363→   363→  // G drags the selected verts/edges/faces.
+   364→   364→  const onStartMeshModal = useCallback(
+   365→   365→    (kind: MeshModalKind) => {
+   366→   366→      const store = useScene3DStore.getState();
+   367→   367→      const objectId = store.selection[0];
+   368→   368→      if (!objectId || store.selection.length !== 1) return;
+   369→   369→      const sel = store.editSelection;
+   370→   370→      let state: MeshModalState | null = null;
+   371→   371→      if (kind === 'bevel' || kind === 'inset' || kind === 'loop-cut') {
+   372→   372→        state = startMeshScalar(room, objectId, kind, sel.faces, sel.verts);
+   373→   373→      } else if (kind === 'extrude') {
+   374→   374→        state = startMeshExtrude(room, objectId, sel.faces);
+   375→   375→      } else {
+   376→   376→        const obj = snapshotRef.current.objects.find((o) => o.id === objectId);
+   377→   377→        const mesh = obj?.meshId ? snapshotRef.current.meshes.get(obj.meshId) : undefined;
+   378→   378→        if (!mesh) return;
+   379→   379→        const verts =
+   380→   380→          sel.verts.length > 0
+   381→   381→            ? sel.verts
+   382→   382→            : sel.edges.length > 0
+   383→   383→              ? [...new Set(sel.edges)]
+   384→   384→              : [...new Set(sel.faces.flatMap((fi) => mesh.faces[fi]?.v ?? []))];
+   385→   385→        state = startMeshGrab(room, objectId, verts, sel.faces, kind);
+   386→   386→      }
+   387→   387→      if (!state) return;
+   388→   388→      meshModalRef.current = state;
+   389→   389→      setModalLabelText(meshModalLabel(state));
+   390→   390→      useScene3DStore.getState().setModal({ tool: kind });
+   391→   391→      requestModalLock();
+   392→   392→    },
+   393→   393→    [room, requestModalLock],
+   394→   394→  );
+   395→   395→
+   396→   396→  const endMeshModal = useCallback(
+   397→   397→    (commit: boolean) => {
+   398→   398→      const state = meshModalRef.current;
+   399→   399→      if (!state) return;
+   400→   400→      meshModalRef.current = null;
+   401→   401→      modalEndedAtRef.current = Date.now();
+   402→   402→      setModalLabelText(null);
+   403→   403→      releaseModalLock();
+   404→   404→      useScene3DStore.getState().setModal({ tool: null });
+   405→   405→      if (commit) {
+   406→   406→        useScene3DStore.getState().setEditSelection({ faces: state.resultFaces, verts: [], edges: [] });
+   407→   407→      } else {
+   408→   408→        cancelMeshModal(room, state);
+   409→   409→        useScene3DStore.getState().setEditSelection({ faces: state.baseFaces, verts: [], edges: [] });
+   410→   410→      }
+   411→   411→    },
+   412→   412→    [room, releaseModalLock],
+   413→   413→  );
+   414→   414→
+   415→   415→  const onCancelModal = useCallback(() => {
+   416→   416→    if (meshModalRef.current) {
+   417→   417→      endMeshModal(false);
+   418→   418→      return;
+   419→   419→    }
+   420→   420→    const state = modalRef.current;
+   421→   421→    if (!state) return;
+   422→   422→    room.slate.doc.transact(() => {
+   423→   423→      for (const [id, snap] of state.snapshot) {
+   424→   424→        setTransform(room.slate, id, snap.transform);
+   425→   425→      }
+   426→   426→    });
+   427→   427→    modalRef.current = null;
+   428→   428→    modalEndedAtRef.current = Date.now();
+   429→   429→    setModalLabelText(null);
+   430→   430→    releaseModalLock();
+   431→   431→    useScene3DStore.getState().setModal({ tool: null });
+   432→   432→  }, [room, endMeshModal, releaseModalLock]);
+   433→   433→
+   434→   434→  const onConfirmModal = useCallback(() => {
+   435→   435→    if (meshModalRef.current) {
+   436→   436→      endMeshModal(true);
+   437→   437→      return;
+   438→   438→    }
+   439→   439→    if (!modalRef.current) return;
+   440→   440→    modalRef.current = null;
+   441→   441→    modalEndedAtRef.current = Date.now();
+   442→   442→    setModalLabelText(null);
+   443→   443→    releaseModalLock();
+   444→   444→    useScene3DStore.getState().setModal({ tool: null });
+   445→   445→  }, [endMeshModal, releaseModalLock]);
+   446→   446→
+   447→   447→  // Listen for modal keys globally.
+   448→   448→  useEffect(() => {
+   449→   449→    const onKey = (e: KeyboardEvent) => {
+   450→   450→      const mesh = meshModalRef.current;
+   451→   451→      if (mesh) {
+   452→   452→        const k = e.key.toLowerCase();
+   453→   453→        if (k === 'enter' || k === ' ') {
+   454→   454→          e.preventDefault();
+   455→   455→          onConfirmModal();
+   456→   456→        } else if (k === 'escape') {
+   457→   457→          e.preventDefault();
+   458→   458→          onCancelModal();
+   459→   459→        } else if (k === 'x' || k === 'y' || k === 'z') {
+   460→   460→          // Axis lock: replaces the default direction; same key clears it.
+   461→   461→          e.preventDefault();
+   462→   462→          const axis = { x: 0, y: 0, z: 0, [k]: 1 } as { x: number; y: number; z: number };
+   463→   463→          const same =
+   464→   464→            mesh.lockDir && mesh.lockDir.x === axis.x && mesh.lockDir.y === axis.y && mesh.lockDir.z === axis.z;
+   465→   465→          mesh.lockDir = same ? null : axis;
+   466→   466→          setModalLabelText(meshModalLabel(mesh));
+   467→   467→        }
+   468→   468→        return;
+   469→   469→      }
+   470→   470→      const state = modalRef.current;
+   471→   471→      if (!state) return;
+   472→   472→      const r = handleModalKey(state, e);
+   473→   473→      if (r.consumed) {
+   474→   474→        e.preventDefault();
+   475→   475→        setModalLabelText(modalLabel(state));
+   476→   476→      }
+   477→   477→      if (r.confirm) onConfirmModal();
+   478→   478→      if (r.cancel) onCancelModal();
+   479→   479→    };
+   480→   480→    window.addEventListener('keydown', onKey);
+   481→   481→    return () => window.removeEventListener('keydown', onKey);
+   482→   482→  }, [onConfirmModal, onCancelModal]);
+   483→   483→
+   484→   484→  // Track mouse for modal pixel delta + LMB to confirm / RMB to cancel.
+   485→   485→  // Writes are throttled to ~30 Hz (pixel deltas keep accumulating, so
+   486→   486→  // nothing is lost). Snapping: Blender-style Ctrl-to-snap, or inverted
+   487→   487→  // when CAD snapping is on (snap by default, Ctrl frees the drag).
+   488→   488→  const lastModalWriteRef = useRef(0);
+   489→   489→  useEffect(() => {
+   490→   490→    const snapTo = (v: number, step: number) => Math.round(v / step) * step;
+   491→   491→    const snapping = (e: PointerEvent) =>
+   492→   492→      e.ctrlKey !== ((room.slate.meta().get('cadSnap') as boolean | undefined) ?? false);
+   493→   493→    const onMove = (e: PointerEvent) => {
+   494→   494→      const mesh = meshModalRef.current;
+   495→   495→      const state = modalRef.current;
+   496→   496→      if (!mesh && !state) return;
+   497→   497→      const now = performance.now();
+   498→   498→      const target = mesh ?? state!;
+   499→   499→      target.pixelDelta.x += e.movementX;
+   500→   500→      target.pixelDelta.y += e.movementY;
+   501→   501→      if (now - lastModalWriteRef.current < 33) return;
+   502→   502→      lastModalWriteRef.current = now;
+   503→   503→
+   504→   504→      const cam = cameraInfoRef.current;
+   505→   505→      if (mesh) {
+   506→   506→        // Scalar ops (bevel/inset): mouse distance sets the amount. Loop-cut's
+   507→   507→        // count comes from the wheel handler, so its mouse move is a no-op
+   508→   508→        // beyond keeping the preview fresh.
+   509→   509→        if (mesh.scalar) {
+   510→   510→          if (mesh.scalar.op === 'loop-cut') {
+   511→   511→            // Move left/right to slide the cut along the ring (Blender-style).
+   512→   512→            mesh.scalar.slide = Math.max(-1, Math.min(1, mesh.pixelDelta.x * 0.004));
+   513→   513→          } else {
+   514→   514→            const drag = mesh.pixelDelta.x + -mesh.pixelDelta.y;
+   515→   515→            // ~half the diagonal at a full-screen drag; clamp to a sane range.
+   516→   516→            mesh.scalar.amount = Math.max(0, Math.min(0.5, drag * 0.0015));
+   517→   517→          }
+   518→   518→          applyMeshScalar(room, mesh);
+   519→   519→          setModalLabelText(meshModalLabel(mesh));
+   520→   520→          return;
+   521→   521→        }
+   522→   522→        const s = cam?.pxScale ?? 0.01;
+   523→   523→        const amount = mesh.pixelDelta.x + -mesh.pixelDelta.y;
+   524→   524→        if (mesh.kind === 'rotate') {
+   525→   525→          // Around the locked axis, or the view axis — like Blender's R.
+   526→   526→          const axis = mesh.lockDir ?? cam?.basis.forward ?? { x: 0, y: 1, z: 0 };
+   527→   527→          let angle = (amount * Math.PI) / 360;
+   528→   528→          if (snapping(e)) angle = snapTo(angle, Math.PI / 12);
+   529→   529→          writeVertices(room, mesh, rotateVertices(mesh, axis, angle));
+   530→   530→          return;
+   531→   531→        }
+   532→   532→        if (mesh.kind === 'scale') {
+   533→   533→          let k = Math.max(0.02, 1 + amount * 0.005);
+   534→   534→          if (snapping(e)) k = Math.max(0.05, snapTo(k, 0.05));
+   535→   535→          const factor = mesh.lockDir
+   536→   536→            ? {
+   537→   537→                x: mesh.lockDir.x ? k : 1,
+   538→   538→                y: mesh.lockDir.y ? k : 1,
+   539→   539→                z: mesh.lockDir.z ? k : 1,
+   540→   540→              }
+   541→   541→            : { x: k, y: k, z: k };
+   542→   542→          writeVertices(room, mesh, scaleVertices(mesh, factor));
+   543→   543→          return;
+   544→   544→        }
+   545→   545→        let delta: { x: number; y: number; z: number };
+   546→   546→        if (mesh.lockDir) {
+   547→   547→          // Extrude / axis-locked grab: geometry follows the mouse projected
+   548→   548→          // onto the axis (the face normal for extrude), like Blender.
+   549→   549→          const a = axisDragAmount(mesh.lockDir, mesh.pixelDelta, cam?.basis, s);
+   550→   550→          delta = { x: mesh.lockDir.x * a, y: mesh.lockDir.y * a, z: mesh.lockDir.z * a };
+   551→   551→        } else if (cam) {
+   552→   552→          const dx = mesh.pixelDelta.x * s;
+   553→   553→          const dy = -mesh.pixelDelta.y * s;
+   554→   554→          delta = {
+   555→   555→            x: cam.basis.right.x * dx + cam.basis.up.x * dy,
+   556→   556→            y: cam.basis.right.y * dx + cam.basis.up.y * dy,
+   557→   557→            z: cam.basis.right.z * dx + cam.basis.up.z * dy,
+   558→   558→          };
+   559→   559→        } else {
+   560→   560→          delta = { x: 0, y: 0, z: 0 };
+   561→   561→        }
+   562→   562→        if (snapping(e)) {
+   563→   563→          delta = {
+   564→   564→            x: snapTo(delta.x, 0.25),
+   565→   565→            y: snapTo(delta.y, 0.25),
+   566→   566→            z: snapTo(delta.z, 0.25),
+   567→   567→          };
+   568→   568→        }
+   569→   569→        applyMeshModal(room, mesh, delta);
+   570→   570→        return;
+   571→   571→      }
+   572→   572→
+   573→   573→      const obj = state!;
+   574→   574→      const delta = deltaFromModal(obj, cam?.pxScale ?? 0.01, cam?.basis);
+   575→   575→      if (snapping(e)) {
+   576→   576→        if (delta.translate) {
+   577→   577→          delta.translate = {
+   578→   578→            x: snapTo(delta.translate.x, 0.5),
+   579→   579→            y: snapTo(delta.translate.y, 0.5),
+   580→   580→            z: snapTo(delta.translate.z, 0.5),
+   581→   581→          };
+   582→   582→        }
+   583→   583→        if (delta.rotate) {
+   584→   584→          delta.rotate = {
+   585→   585→            x: snapTo(delta.rotate.x, Math.PI / 12),
+   586→   586→            y: snapTo(delta.rotate.y, Math.PI / 12),
+   587→   587→            z: snapTo(delta.rotate.z, Math.PI / 12),
+   588→   588→          };
+   589→   589→        }
+   590→   590→        if (delta.scale) {
+   591→   591→          delta.scale = {
+   592→   592→            x: Math.max(0.05, snapTo(delta.scale.x, 0.05)),
+   593→   593→            y: Math.max(0.05, snapTo(delta.scale.y, 0.05)),
+   594→   594→            z: Math.max(0.05, snapTo(delta.scale.z, 0.05)),
+   595→   595→          };
+   596→   596→        }
+   597→   597→      }
+   598→   598→      room.slate.doc.transact(() => {
+   599→   599→        for (const [id, snap] of obj.snapshot) {
+   600→   600→          setTransform(room.slate, id, applyDelta(snap.transform, delta));
+   601→   601→        }
+   602→   602→      });
+   603→   603→      setModalLabelText(modalLabel(obj));
+   604→   604→    };
+   605→   605→    const onDown = (e: PointerEvent) => {
+   606→   606→      if (meshModalRef.current) {
+   607→   607→        if (e.button === 0) onConfirmModal();
+   608→   608→        else if (e.button === 2) onCancelModal();
+   609→   609→        return;
+   610→   610→      }
+   611→   611→      if (!modalRef.current) return;
+   612→   612→      if (e.button === 0) {
+   613→   613→        onConfirmModal();
+   614→   614→      } else if (e.button === 2) {
+   615→   615→        onCancelModal();
+   616→   616→      }
+   617→   617→    };
+   618→   618→    // Loop-cut: wheel changes the number of cuts (Blender's scroll-to-add).
+   619→   619→    const onWheel = (e: WheelEvent) => {
+   620→   620→      const mesh = meshModalRef.current;
+   621→   621→      if (!mesh?.scalar || mesh.scalar.op !== 'loop-cut') return;
+   622→   622→      e.preventDefault();
+   623→   623→      mesh.scalar.cuts = Math.max(1, Math.min(20, mesh.scalar.cuts + (e.deltaY < 0 ? 1 : -1)));
+   624→   624→      applyMeshScalar(room, mesh);
+   625→   625→      setModalLabelText(meshModalLabel(mesh));
+   626→   626→    };
+   627→   627→    window.addEventListener('pointermove', onMove);
+   628→   628→    window.addEventListener('pointerdown', onDown, true);
+   629→   629→    window.addEventListener('wheel', onWheel, { passive: false });
+   630→   630→    return () => {
+   631→   631→      window.removeEventListener('pointermove', onMove);
+   632→   632→      window.removeEventListener('pointerdown', onDown, true);
+   633→   633→      window.removeEventListener('wheel', onWheel);
+   634→   634→    };
+   635→   635→  }, [room, onCancelModal, onConfirmModal]);
+   636→   636→
+   637→   637→  // Blender-style guide line: while a modal transform runs, draw a dashed line
+   638→   638→  // from the pivot to the cursor so you always see where the mouse is. Driven
+   639→   639→  // imperatively (no per-frame React state) for smoothness.
+   640→   640→  useEffect(() => {
+   641→   641→    if (!modalLabelText) {
+   642→   642→      const l = guideLineRef.current;
+   643→   643→      if (l) l.style.display = 'none';
+   644→   644→      return;
+   645→   645→    }
+   646→   646→    let raf = 0;
+   647→   647→    const tick = () => {
+   648→   648→      raf = requestAnimationFrame(tick);
+   649→   649→      const l = guideLineRef.current;
+   650→   650→      const pivot = pivotScreenRef.current;
+   651→   651→      if (!l || !pivot) {
+   652→   652→        if (l) l.style.display = 'none';
+   653→   653→        return;
+   654→   654→      }
+   655→   655→      const m = lastPointerRef.current;
+   656→   656→      l.style.display = '';
+   657→   657→      l.setAttribute('x1', String(pivot.x));
+   658→   658→      l.setAttribute('y1', String(pivot.y));
+   659→   659→      l.setAttribute('x2', String(m.x));
+   660→   660→      l.setAttribute('y2', String(m.y));
+   661→   661→    };
+   662→   662→    raf = requestAnimationFrame(tick);
+   663→   663→    return () => cancelAnimationFrame(raf);
+   664→   664→  }, [modalLabelText]);
+   665→   665→
+   666→   666→  // If the browser drops pointer lock while a modal is still running (Esc,
+   667→   667→  // Alt-Tab, focus loss), cancel the drag so we never get stuck mid-transform
+   668→   668→  // with a hidden cursor. Our own confirm/cancel clears the refs before
+   669→   669→  // exitPointerLock fires, so this only triggers on unexpected loss.
+   670→   670→  useEffect(() => {
+   671→   671→    const onLockChange = () => {
+   672→   672→      if (document.pointerLockElement) return;
+   673→   673→      if (meshModalRef.current || modalRef.current) onCancelModal();
+   674→   674→    };
+   675→   675→    document.addEventListener('pointerlockchange', onLockChange);
+   676→   676→    return () => {
+   677→   677→      document.removeEventListener('pointerlockchange', onLockChange);
+   678→   678→      if (document.pointerLockElement) document.exitPointerLock?.();
+   679→   679→    };
+   680→   680→  }, [onCancelModal]);
+   681→   681→
+   682→   682→  /** Fly/pan must never start while a G/R/S drag owns the pointer — nor on
+   683→   683→   *  the very press that just cancelled one (RMB cancel fires first). */
+   684→   684→  const isModalActive = useCallback(
+   685→   685→    () =>
+   686→   686→      !!(modalRef.current || meshModalRef.current) ||
+   687→   687→      Date.now() - modalEndedAtRef.current < 350,
+   688→   688→    [],
+   689→   689→  );
+   690→   690→
+   691→   691→  // Shift+A: open the add menu at the cursor, clamped inside the viewport.
+   692→   692→  const onOpenAddMenu = useCallback(() => {
+   693→   693→    setAddMenuPos((cur) => {
+   694→   694→      if (cur) return null; // pressing Shift+A again closes it
+   695→   695→      const el = containerRef.current;
+   696→   696→      const p = lastPointerRef.current;
+   697→   697→      const w = el?.clientWidth ?? 800;
+   698→   698→      const h = el?.clientHeight ?? 600;
+   699→   699→      return {
+   700→   700→        x: Math.max(8, Math.min(p.x, w - 176)),
+   701→   701→        y: Math.max(8, Math.min(p.y, h - 360)),
+   702→   702→      };
+   703→   703→    });
+   704→   704→  }, []);
+   705→   705→
+   706→   706→  useEffect(() => {
+   707→   707→    if (!addMenuPos) return;
+   708→   708→    const onKey = (e: KeyboardEvent) => {
+   709→   709→      if (e.key === 'Escape') {
+   710→   710→        e.preventDefault();
+   711→   711→        e.stopPropagation();
+   712→   712→        setAddMenuPos(null);
+   713→   713→      }
+   714→   714→    };
+   715→   715→    window.addEventListener('keydown', onKey, true);
+   716→   716→    return () => window.removeEventListener('keydown', onKey, true);
+   717→   717→  }, [addMenuPos]);
+   718→   718→
+   719→   719→  useViewport3DShortcuts({
+   720→   720→    room,
+   721→   721→    onFrameSelected: () => frameSelectedRef.current(false),
+   722→   722→    onFrameAll: () => frameSelectedRef.current(true),
+   723→   723→    onStartModal,
+   724→   724→    onStartMeshModal,
+   725→   725→    onCancelModal,
+   726→   726→    onConfirmModal,
+   727→   727→    onOpenAddMenu,
+   728→   728→  });
+   729→   729→
+   730→   730→  /** Set by ViewPresets — jumps the view into the scene camera. */
+   731→   731→  const lookThroughRef = useRef<() => boolean>(() => false);
+   732→   732→  /** Set by ViewPresets — points the view at the scene camera's pose sampled
+   733→   733→   *  at time `t` (follows camera keyframes). Returns false with no camera. */
+   734→   734→  const cameraFollowRef = useRef<(t: number) => boolean>(() => false);
+   735→   735→  const [rendering, setRendering] = useState(false);
+   736→   736→
+   737→   737→  // "Render image" — Blender F12 style: when the scene has a camera, render
+   738→   738→  // from it (jump the view in, wait for the frames to draw, capture);
+   739→   739→  // otherwise capture the current viewport.
+   740→   740→  const onRenderImage = useCallback(() => {
+   741→   741→    const capture = () => {
+   742→   742→      const canvas = containerRef.current?.querySelector('canvas');
+   743→   743→      if (!canvas) return;
+   744→   744→      canvas.toBlob((blob) => {
+   745→   745→        if (!blob) return;
+   746→   746→        const a = document.createElement('a');
+   747→   747→        a.href = URL.createObjectURL(blob);
+   748→   748→        a.download = `${room.room}-render.png`;
+   749→   749→        a.click();
+   750→   750→        URL.revokeObjectURL(a.href);
+   751→   751→      }, 'image/png');
+   752→   752→    };
+   753→   753→    const jumped = lookThroughRef.current();
+   754→   754→    if (jumped) {
+   755→   755→      // Give the render loop two frames to draw from the new pose.
+   756→   756→      requestAnimationFrame(() => requestAnimationFrame(capture));
+   757→   757→    } else {
+   758→   758→      capture();
+   759→   759→    }
+   760→   760→  }, [room]);
+   761→   761→
+   762→   762→  // "Render animation" — play the timeline through the scene camera (or the
+   763→   763→  // current view when there's none) and record the canvas to a WebM video.
+   764→   764→  const onRenderAnimation = useCallback(() => {
+   765→   765→    if (rendering) return;
+   766→   766→    const canvas = containerRef.current?.querySelector('canvas') as HTMLCanvasElement | null;
+   767→   767→    if (!canvas || typeof canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+   768→   768→      toast({ title: 'Recording unsupported', description: 'This browser can’t record the canvas.', variant: 'error' });
+   769→   769→      return;
+   770→   770→    }
+   771→   771→    const store = useScene3DStore.getState();
+   772→   772→    const duration = store.animDuration;
+   773→   773→    const hasAnim = snapshotRef.current.objects.some((o) => (o.anim?.length ?? 0) > 0);
+   774→   774→    if (!hasAnim) {
+   775→   775→      toast({ title: 'Nothing to render', description: 'Add keyframes on the timeline first (select an object, press I).' });
+   776→   776→      return;
+   777→   777→    }
+   778→   778→    const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(
+   779→   779→      (m) => MediaRecorder.isTypeSupported(m),
+   780→   780→    );
+   781→   781→    if (!mime) {
+   782→   782→      toast({ title: 'Recording unsupported', variant: 'error' });
+   783→   783→      return;
+   784→   784→    }
+   785→   785→    const stream = canvas.captureStream(30);
+   786→   786→    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
+   787→   787→    const chunks: BlobPart[] = [];
+   788→   788→    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+   789→   789→    recorder.onstop = () => {
+   790→   790→      const blob = new Blob(chunks, { type: 'video/webm' });
+   791→   791→      const a = document.createElement('a');
+   792→   792→      a.href = URL.createObjectURL(blob);
+   793→   793→      a.download = `${room.room}-animation.webm`;
+   794→   794→      a.click();
+   795→   795→      URL.revokeObjectURL(a.href);
+   796→   796→      toast({ title: 'Animation rendered', description: 'Saved as a WebM video.' });
+   797→   797→    };
+   798→   798→
+   799→   799→    // Freeze interactive playback + enter preview; drive time ourselves.
+   800→   800→    store.setAnimPlaying(false);
+   801→   801→    store.setAnimPreview(true);
+   802→   802→    setRendering(true);
+   803→   803→    const usingCamera = cameraFollowRef.current(0);
+   804→   804→    store.setAnimTime(0);
+   805→   805→
+   806→   806→    let start = 0;
+   807→   807→    recorder.start();
+   808→   808→    const step = (now: number) => {
+   809→   809→      if (!start) start = now;
+   810→   810→      const t = (now - start) / 1000;
+   811→   811→      const clamped = Math.min(t, duration);
+   812→   812→      useScene3DStore.getState().setAnimTime(clamped);
+   813→   813→      if (usingCamera) cameraFollowRef.current(clamped);
+   814→   814→      if (t < duration) {
+   815→   815→        requestAnimationFrame(step);
+   816→   816→      } else {
+   817→   817→        // Let the last frame paint, then finalize.
+   818→   818→        requestAnimationFrame(() => {
+   819→   819→          recorder.stop();
+   820→   820→          const s = useScene3DStore.getState();
+   821→   821→          s.setAnimPreview(false);
+   822→   822→          s.setAnimTime(0);
+   823→   823→          setRendering(false);
+   824→   824→        });
+   825→   825→      }
+   826→   826→    };
+   827→   827→    requestAnimationFrame(step);
+   828→   828→  }, [room, rendering]);
+   829→   829→
+   830→   830→  return (
+   831→   831→    <div
+   832→   832→      ref={containerRef}
+   833→   833→      className="relative h-full w-full bg-bg overflow-hidden"
+   834→   834→      style={{ touchAction: 'none' }}
+   835→   835→      onContextMenu={(e) => e.preventDefault()}
+   836→   836→      onPointerMove={(e) => {
+   837→   837→        const rect = e.currentTarget.getBoundingClientRect();
+   838→   838→        lastPointerRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+   839→   839→      }}
+   840→   840→      onPointerDownCapture={(e) => {
+   841→   841→        if (e.button === 0) pointerDownAtRef.current = { x: e.clientX, y: e.clientY };
+   842→   842→        // A slider/number input elsewhere (timeline, properties) keeps
+   843→   843→        // keyboard focus after use and silently eats every hotkey. Clicking
+   844→   844→        // into the viewport hands the keyboard back.
+   845→   845→        const active = document.activeElement as HTMLElement | null;
+   846→   846→        if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) active.blur();
+   847→   847→      }}
+   848→   848→      onDragOver={(e) => {
+   849→   849→        const items = [...(e.dataTransfer?.items ?? [])];
+   850→   850→        if (items.some((i) => i.kind === 'file' || i.type === 'application/x-slate-asset')) {
+   851→   851→          e.preventDefault();
+   852→   852→        }
+   853→   853→      }}
+   854→   854→      onDrop={(e) => {
+   855→   855→        // 1) A library asset dragged out of the Assets panel (Unity-style).
+   856→   856→        const assetId = e.dataTransfer?.getData('application/x-slate-asset');
+   857→   857→        if (assetId) {
+   858→   858→          e.preventDefault();
+   859→   859→          const objId = instantiateAsset(room.slate, assetId, {
+   860→   860→            position: { x: 0, y: 0, z: 0 },
+   861→   861→            selection: useScene3DStore.getState().selection,
+   862→   862→          });
+   863→   863→          if (objId) {
+   864→   864→            useScene3DStore.getState().setSelection([objId]);
+   865→   865→            toast({ title: 'Placed in scene', description: 'Press G to move it.' });
+   866→   866→          }
+   867→   867→          return;
+   868→   868→        }
+   869→   869→        // 2) Model files dropped from the OS.
+   870→   870→        const files = [...(e.dataTransfer?.files ?? [])].filter((f) =>
+   871→   871→          /\.(obj|stl|ply|gltf|glb|fbx)$/i.test(f.name),
+   872→   872→        );
+   873→   873→        if (!files.length) return;
+   874→   874→        e.preventDefault();
+   875→   875→        void (async () => {
+   876→   876→          for (const file of files) {
+   877→   877→            try {
+   878→   878→              const n = await importModel(room, file);
+   879→   879→              toast({
+   880→   880→                title: `Imported ${file.name}`,
+   881→   881→                description: `${n} object${n === 1 ? '' : 's'} added to the scene`,
+   882→   882→              });
+   883→   883→            } catch (err) {
+   884→   884→              toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' });
+   885→   885→            }
+   886→   886→          }
+   887→   887→        })();
+   888→   888→      }}
+   889→   889→    >
+   890→   890→      <Canvas
+   891→   891→        camera={{ position: [4, 3, 4], fov: 50, near: 0.1, far: 200 }}
+   892→   892→        shadows
+   893→   893→        onPointerMissed={(e) => {
+   894→   894→          // Don't clear when the click was confirming/cancelling a modal tool.
+   895→   895→          if (modalRef.current || meshModalRef.current) return;
+   896→   896→          if (Date.now() - modalEndedAtRef.current < 350) return;
+   897→   897→          // Browsers fire `click` even after a long drag; an orbit/pan drag
+   898→   898→          // must not deselect (that also hides the properties + material UI).
+   899→   899→          const down = pointerDownAtRef.current;
+   900→   900→          if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+   901→   901→          if (!e.shiftKey) clearSelection();
+   902→   902→        }}
+   903→   903→        // preserveDrawingBuffer lets "Render image" capture the canvas.
+   904→   904→        gl={{ antialias: true, preserveDrawingBuffer: true }}
+   905→   905→        dpr={[1, 2]}
+   906→   906→      >
+   907→   907→        <color attach="background" args={[bgColor]} />
+   908→   908→        {shading === 'rendered' ? (
+   909→   909→          // Rendered shading: the scene's own lights do the work (they're
+   910→   910→          // emitted by SceneObjects); keep only a whisper of ambient so an
+   911→   911→          // unlit scene reads as "add a light", not a broken viewport.
+   912→   912→          <ambientLight intensity={0.12} />
+   913→   913→        ) : (
+   914→   914→          // Studio rig for wireframe/solid/material preview shading:
+   915→   915→          // sky/ground hemisphere fill + shadowed key + cool rim, roughly
+   916→   916→          // Blender's default studio look.
+   917→   917→          <>
+   918→   918→            <hemisphereLight args={[0xdcdcff, 0x33332e, 0.65]} />
+   919→   919→            <directionalLight
+   920→   920→              position={[6, 8, 5]}
+   921→   921→              intensity={1.1}
+   922→   922→              castShadow
+   923→   923→              shadow-mapSize={[2048, 2048]}
+   924→   924→              shadow-bias={-0.0003}
+   925→   925→              shadow-camera-left={-15}
+   926→   926→              shadow-camera-right={15}
+   927→   927→              shadow-camera-top={15}
+   928→   928→              shadow-camera-bottom={-15}
+   929→   929→              shadow-camera-near={0.5}
+   930→   930→              shadow-camera-far={60}
+   931→   931→            />
+   932→   932→            <directionalLight position={[-4, 3, -3]} intensity={0.3} color="#bcd0ff" />
+   933→   933→          </>
+   934→   934→        )}
+   935→   935→        {showGrid && (
+   936→   936→          <Grid
+   937→   937→            args={[20, 20]}
+   938→   938→            cellSize={grid.cell}
+   939→   939→            cellThickness={0.6}
+   940→   940→            cellColor={viewportColors.cell}
+   941→   941→            sectionSize={grid.section}
+   942→   942→            sectionThickness={1.2}
+   943→   943→            sectionColor={viewportColors.section}
+   944→   944→            infiniteGrid
+   945→   945→            fadeDistance={40}
+   946→   946→            fadeStrength={1}
+   947→   947→            followCamera={false}
+   948→   948→          />
+   949→   949→        )}
+   950→   950→        <SceneObjects
+   951→   951→          objects={snapshot.objects}
+   952→   952→          meshes={snapshot.meshes}
+   953→   953→          materials={snapshot.materials}
+   954→   954→          selection={new Set(selection)}
+   955→   955→          onObjectPick={onObjectPick}
+   956→   956→          onElementPick={onElementPick}
+   957→   957→          selectedFaces={editSelection.faces}
+   958→   958→          selectedVerts={editSelection.verts}
+   959→   959→          selectedEdges={editSelection.edges}
+   960→   960→          shading={shading}
+   961→   961→          editMode={editorMode === 'edit'}
+   962→   962→          overrides={animOverrides}
+   963→   963→          viewingCameraId={viewingCameraId}
+   964→   964→        />
+   965→   965→        <OrbitControls
+   966→   966→          makeDefault
+   967→   967→          enableDamping
+   968→   968→          dampingFactor={0.08}
+   969→   969→          // Any manual navigation exits camera view (Blender-style).
+   970→   970→          onStart={() => {
+   971→   971→            const s = useScene3DStore.getState();
+   972→   972→            if (s.viewingCameraId) s.setViewingCamera(null);
+   973→   973→          }}
+   974→   974→          mouseButtons={{
+   975→   975→            // Blender-style: MMB orbits, Shift+MMB pans, wheel zooms.
+   976→   976→            // Left-drag also orbits (friendlier for mice/trackpads); plain
+   977→   977→            // clicks still select.
+   978→   978→            LEFT: THREE.MOUSE.ROTATE,
+   979→   979→            MIDDLE: shiftDown ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+   980→   980→            RIGHT: THREE.MOUSE.PAN,
+   981→   981→          }}
+   982→   982→          touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
+   983→   983→        />
+   984→   984→        <FlyMode containerRef={containerRef} isModalActive={isModalActive} />
+   985→   985→        <ObjectGizmo room={room} snapshot={snapshot} />
+   986→   986→        <ViewPresets snapshot={snapshot} lookThroughRef={lookThroughRef} cameraFollowRef={cameraFollowRef} />
+   987→   987→        <PivotProjector snapshot={snapshot} out={pivotScreenRef} />
+   988→   988→        <CameraTracking out={cameraInfoRef} room={room} />
+   989→   989→        <RemotePeers3D peers={awareness} selfId={room.identity.peerId} />
+   990→   990→        <FrameSelectedBinding
+   991→   991→          frameRef={frameSelectedRef}
+   992→   992→          snapshot={snapshot}
+   993→   993→          selection={selection}
+   994→   994→        />
+   995→   995→        <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+   996→   996→          {/* hideNegativeAxes=false keeps all six spheres so the axis letters
+   997→   997→              stay visible no matter how the view is orbited. */}
+   998→   998→          <GizmoViewport
+   999→   999→            axisColors={['#f87171', '#22d3a5', '#7c6aff']}
+  1000→  1000→            labelColor="white"
+  1001→  1001→            hideNegativeAxes={false}
+  1002→  1002→          />
+  1003→  1003→        </GizmoHelper>
+  1004→  1004→      </Canvas>
+  1005→  1005→      <Toolbar3D
+  1006→  1006→        room={room}
+  1007→  1007→        onStartModal={onStartModal}
+  1008→  1008→        onStartMeshModal={onStartMeshModal}
+  1009→  1009→        onFrameSelected={() => frameSelectedRef.current(false)}
+  1010→  1010→        onRenderImage={onRenderImage}
+  1011→  1011→        onRenderAnimation={onRenderAnimation}
+  1012→  1012→        rendering={rendering}
+  1013→  1013→      />
+  1014→  1014→      <Timeline room={room} snapshot={snapshot} />
+  1015→  1015→      {rendering && (
+  1016→  1016→        <div
+  1017→  1017→          className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-md border border-danger/60 bg-bg-2/95 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-danger shadow-lg backdrop-blur"
+  1018→  1018→          role="status"
+  1019→  1019→        >
+  1020→  1020→          ● Recording animation…
+  1021→  1021→        </div>
+  1022→  1022→      )}
+  1023→  1023→      {addMenuPos && (
+  1024→  1024→        <AddObjectMenu room={room} pos={addMenuPos} onClose={() => setAddMenuPos(null)} />
+  1025→  1025→      )}
+  1026→  1026→      {viewingCameraId && (
+  1027→  1027→        <>
+  1028→  1028→          {/* Blender-style camera-view frame: a passe-partout border. */}
+  1029→  1029→          <div className="pointer-events-none absolute inset-4 z-10 rounded-sm border-2 border-warn/50" />
+  1030→  1030→          <div
+  1031→  1031→            className="pointer-events-none absolute left-1/2 top-12 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-warn/60 bg-bg-2/95 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-warn shadow-lg backdrop-blur"
+  1032→  1032→            role="status"
+  1033→  1033→          >
+  1034→  1034→            Camera view — orbit / fly to exit
+  1035→  1035→          </div>
+  1036→  1036→        </>
+  1037→  1037→      )}
+  1038→  1038→      {flying && (
+  1039→  1039→        <div
+  1040→  1040→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-accent/60 bg-bg-2/95 px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg backdrop-blur"
+  1041→  1041→          role="status"
+  1042→  1042→        >
+  1043→  1043→          Fly — WASD move · Q/E down/up · Shift fast · wheel speed ({flySpeed.toFixed(1)}) · release MMB to exit
+  1044→  1044→        </div>
+  1045→  1045→      )}
+  1046→  1046→      {showTransformHud && editorMode === 'edit' && !modalLabelText && !flying && (
+  1047→  1047→        <div
+  1048→  1048→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-border bg-bg-2/95 px-3 py-1.5 text-xs text-text-dim backdrop-blur"
+  1049→  1049→          role="status"
+  1050→  1050→        >
+  1051→  1051→          {selection.length === 0
+  1052→  1052→            ? 'Edit mode — click an object to edit its mesh'
+  1053→  1053→            : editHudText(selectMode, editSelection)}
+  1054→  1054→        </div>
+  1055→  1055→      )}
+  1056→  1056→      {showTransformHud && modalLabelText && (
+  1057→  1057→        <div
+  1058→  1058→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-accent/60 bg-bg-2/95 backdrop-blur px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg"
+  1059→  1059→          role="status"
+  1060→  1060→        >
+  1061→  1061→          {modalLabelText} — LMB / Enter to confirm, RMB / Esc to cancel
+  1062→  1062→        </div>
+  1063→  1063→      )}
+  1064→  1064→      {/* Guide line from the pivot to the cursor during modal transforms. */}
+  1065→  1065→      <svg className="pointer-events-none absolute inset-0 z-20 h-full w-full" aria-hidden>
+  1066→  1066→        <line
+  1067→  1067→          ref={guideLineRef}
+  1068→  1068→          style={{ display: 'none' }}
+  1069→  1069→          stroke="var(--accent, #7c6aff)"
+  1070→  1070→          strokeWidth={1}
+  1071→  1071→          strokeDasharray="5 4"
+  1072→  1072→          opacity={0.8}
+  1073→  1073→        />
+  1074→  1074→      </svg>
+  1075→  1075→      {/* Kept left of the view gizmo, which owns the bottom-right corner. */}
+  1076→  1076→      <div className="pointer-events-none absolute right-32 bottom-2 z-10 hidden rounded-md bg-bg-2/80 px-2 py-1 font-mono text-[10px] text-text-dim sm:block">
+  1077→  1077→        {snapshot.objects.length} object{snapshot.objects.length === 1 ? '' : 's'}
+  1078→  1078→      </div>
+  1079→  1079→    </div>
+  1080→  1080→  );
+  1081→  1081→}
+  1082→  1082→
+  1083→  1083→/**
+  1084→  1084→ * Projects the selection pivot (centroid of selected objects) to screen-space
+  1085→  1085→ * container pixels each frame, so the DOM guide-line overlay can anchor to it.
+  1086→  1086→ */
+  1087→  1087→function PivotProjector({
+  1088→  1088→  snapshot,
+  1089→  1089→  out,
+  1090→  1090→}: {
+  1091→  1091→  snapshot: SceneSnapshot;
+  1092→  1092→  out: React.MutableRefObject<{ x: number; y: number } | null>;
+  1093→  1093→}) {
+  1094→  1094→  const { camera, size } = useThree();
+  1095→  1095→  const snapRef = useRef(snapshot);
+  1096→  1096→  snapRef.current = snapshot;
+  1097→  1097→  useFrame(() => {
+  1098→  1098→    const sel = useScene3DStore.getState().selection;
+  1099→  1099→    if (sel.length === 0) {
+  1100→  1100→      out.current = null;
+  1101→  1101→      return;
+  1102→  1102→    }
+  1103→  1103→    let x = 0, y = 0, z = 0, n = 0;
+  1104→  1104→    for (const id of sel) {
+  1105→  1105→      const o = snapRef.current.objects.find((ob) => ob.id === id);
+  1106→  1106→      if (o) {
+  1107→  1107→        x += o.transform.position.x;
+  1108→  1108→        y += o.transform.position.y;
+  1109→  1109→        z += o.transform.position.z;
+  1110→  1110→        n++;
+  1111→  1111→      }
+  1112→  1112→    }
+  1113→  1113→    if (n === 0) {
+  1114→  1114→      out.current = null;
+  1115→  1115→      return;
+  1116→  1116→    }
+  1117→  1117→    const v = new THREE.Vector3(x / n, y / n, z / n).project(camera);
+  1118→  1118→    out.current = { x: (v.x * 0.5 + 0.5) * size.width, y: (-v.y * 0.5 + 0.5) * size.height };
+  1119→  1119→  });
+  1120→  1120→  return null;
+  1121→  1121→}
+  1122→  1122→
+  1123→  1123→/**
+  1124→  1124→ * Publishes the camera basis + world-units-per-pixel each frame so the modal
+  1125→  1125→ * tool driver (which lives outside the R3F canvas) can map pointer motion
+  1126→  1126→ * into the screen plane at the right sensitivity.
+  1127→  1127→ */
+  1128→  1128→function CameraTracking({
+  1129→  1129→  out,
+  1130→  1130→  room,
+  1131→  1131→}: {
+  1132→  1132→  out: React.MutableRefObject<CameraInfo | null>;
+  1133→  1133→  room: SlateRoom;
+  1134→  1134→}) {
+  1135→  1135→  const { camera, controls, size } = useThree();
+  1136→  1136→  const lastPublish = useRef({ t: 0, key: '' });
+  1137→  1137→  useFrame(() => {
+  1138→  1138→    const cam = camera as THREE.PerspectiveCamera;
+  1139→  1139→    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+  1140→  1140→    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+  1141→  1141→    const forward = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 2).negate();
+  1142→  1142→    const target = (controls as { target?: THREE.Vector3 } | null)?.target;
+  1143→  1143→    const dist = target ? cam.position.distanceTo(target) : Math.max(cam.position.length(), 1);
+  1144→  1144→    const pxScale =
+  1145→  1145→      (2 * Math.max(dist, 0.5) * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) /
+  1146→  1146→      Math.max(size.height, 1);
+  1147→  1147→    out.current = {
+  1148→  1148→      basis: {
+  1149→  1149→        right: { x: right.x, y: right.y, z: right.z },
+  1150→  1150→        up: { x: up.x, y: up.y, z: up.z },
+  1151→  1151→        forward: { x: forward.x, y: forward.y, z: forward.z },
+  1152→  1152→      },
+  1153→  1153→      pxScale,
+  1154→  1154→    };
+  1155→  1155→    // Publish the camera pose so other peers can see where we're looking.
+  1156→  1156→    // Throttled and change-gated — awareness messages count against the
+  1157→  1157→    // server's per-peer rate limit.
+  1158→  1158→    const now = performance.now();
+  1159→  1159→    if (now - lastPublish.current.t < 150) return;
+  1160→  1160→    const t = target ?? new THREE.Vector3();
+  1161→  1161→    const r = (n: number) => Math.round(n * 100) / 100;
+  1162→  1162→    const p: [number, number, number] = [r(cam.position.x), r(cam.position.y), r(cam.position.z)];
+  1163→  1163→    const tt: [number, number, number] = [r(t.x), r(t.y), r(t.z)];
+  1164→  1164→    const key = p.join(',') + '|' + tt.join(',');
+  1165→  1165→    if (key === lastPublish.current.key) return;
+  1166→  1166→    lastPublish.current = { t: now, key };
+  1167→  1167→    room.setLocalAwareness({ cam: { p, t: tt } });
+  1168→  1168→  });
+  1169→  1169→  return null;
+  1170→  1170→}
+  1171→  1171→
+  1172→  1172→/** Other peers' cameras: a colored wire pyramid at their eye, name attached. */
+  1173→  1173→function RemotePeers3D({ peers, selfId }: { peers: AwarenessState[]; selfId: string }) {
+  1174→  1174→  const remote = peers.filter((p) => p.id !== selfId && p.cam);
+  1175→  1175→  if (remote.length === 0) return null;
+  1176→  1176→  return (
+  1177→  1177→    <>
+  1178→  1178→      {remote.map((p) => (
+  1179→  1179→        <PeerCamera key={p.id} state={p} />
+  1180→  1180→      ))}
+  1181→  1181→    </>
+  1182→  1182→  );
+  1183→  1183→}
+  1184→  1184→
+  1185→  1185→/** Blender-style camera glyph: wire frustum + up-triangle, apex at the eye. */
+  1186→  1186→const PEER_CAM_LINES = (() => {
+  1187→  1187→  const w = 0.42, h = 0.28, d = 0.85; // frustum half-extents + depth
+  1188→  1188→  const a = [0, 0, 0];
+  1189→  1189→  const c = [
+  1190→  1190→    [-w, h, d], [w, h, d], [w, -h, d], [-w, -h, d],
+  1191→  1191→  ];
+  1192→  1192→  const seg: number[] = [];
+  1193→  1193→  for (const p of c) seg.push(...a, ...p); // apex → corners
+  1194→  1194→  for (let i = 0; i < 4; i++) seg.push(...c[i]!, ...c[(i + 1) % 4]!); // rect
+  1195→  1195→  // Up indicator above the top edge.
+  1196→  1196→  seg.push(-w * 0.5, h, d, 0, h + 0.18, d);
+  1197→  1197→  seg.push(0, h + 0.18, d, w * 0.5, h, d);
+  1198→  1198→  seg.push(w * 0.5, h, d, -w * 0.5, h, d);
+  1199→  1199→  const g = new THREE.BufferGeometry();
+  1200→  1200→  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+  1201→  1201→  return g;
+  1202→  1202→})();
+  1203→  1203→
+  1204→  1204→function PeerCamera({ state }: { state: AwarenessState }) {
+  1205→  1205→  const cam = state.cam!;
+  1206→  1206→  const groupRef = useRef<THREE.Group | null>(null);
+  1207→  1207→  // Poses arrive ~6/s; damp per frame so remote cameras glide, not hop.
+  1208→  1208→  const targetPos = useRef(new THREE.Vector3(cam.p[0], cam.p[1], cam.p[2]));
+  1209→  1209→  const lookCur = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
+  1210→  1210→  const lookTarget = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
+  1211→  1211→  targetPos.current.set(cam.p[0], cam.p[1], cam.p[2]);
+  1212→  1212→  lookTarget.current.set(cam.t[0], cam.t[1], cam.t[2]);
+  1213→  1213→  useFrame((_, delta) => {
+  1214→  1214→    const g = groupRef.current;
+  1215→  1215→    if (!g) return;
+  1216→  1216→    // Frame-rate-independent smoothing (~90 ms time constant); teleport when
+  1217→  1217→    // the peer jumps far so the glyph never streaks across the whole scene.
+  1218→  1218→    if (g.position.distanceToSquared(targetPos.current) > 400) {
+  1219→  1219→      g.position.copy(targetPos.current);
+  1220→  1220→      lookCur.current.copy(lookTarget.current);
+  1221→  1221→    } else {
+  1222→  1222→      const k = 1 - Math.exp(-delta * 11);
+  1223→  1223→      g.position.lerp(targetPos.current, k);
+  1224→  1224→      lookCur.current.lerp(lookTarget.current, k);
+  1225→  1225→    }
+  1226→  1226→    g.lookAt(lookCur.current);
+  1227→  1227→  });
+  1228→  1228→  return (
+  1229→  1229→    <group ref={groupRef} position={[cam.p[0], cam.p[1], cam.p[2]]}>
+  1230→  1230→      <lineSegments geometry={PEER_CAM_LINES} raycast={() => null}>
+  1231→  1231→        <lineBasicMaterial color={state.color} transparent opacity={0.9} />
+  1232→  1232→      </lineSegments>
+  1233→  1233→      {/* Small solid eye so the camera reads at a distance. */}
+  1234→  1234→      <mesh raycast={() => null}>
+  1235→  1235→        <sphereGeometry args={[0.06, 10, 10]} />
+  1236→  1236→        <meshBasicMaterial color={state.color} />
+  1237→  1237→      </mesh>
+  1238→  1238→      <Html position={[0, 0.55, 0]} center distanceFactor={14} occlude={false}>
+  1239→  1239→        <div
+  1240→  1240→          className="pointer-events-none w-max max-w-[140px] truncate rounded-full px-1.5 py-px text-[10px] font-medium leading-4 text-black/85 shadow"
+  1241→  1241→          style={{ backgroundColor: state.color }}
+  1242→  1242→        >
+  1243→  1243→          {state.name}
+  1244→  1244→        </div>
+  1245→  1245→      </Html>
+  1246→  1246→    </group>
+  1247→  1247→  );
+  1248→  1248→}
+  1249→  1249→
+  1250→  1250→function editHudText(
+  1251→  1251→  mode: 'vertex' | 'edge' | 'face',
+  1252→  1252→  sel: { verts: number[]; edges: number[]; faces: number[] },
+  1253→  1253→): string {
+  1254→  1254→  const counts: Record<string, number> = {
+  1255→  1255→    vertex: sel.verts.length,
+  1256→  1256→    edge: sel.edges.length / 2,
+  1257→  1257→    face: sel.faces.length,
+  1258→  1258→  };
+  1259→  1259→  const n = counts[mode] ?? 0;
+  1260→  1260→  if (n === 0) {
+  1261→  1261→    const noun = mode === 'vertex' ? 'vertex' : mode;
+  1262→  1262→    return `Click a ${noun} to select it · Shift+Click adds · 1/2/3 switch vert/edge/face`;
+  1263→  1263→  }
+  1264→  1264→  const plural = mode === 'vertex' ? 'vertices' : `${mode}s`;
+  1265→  1265→  const verb = mode === 'face' ? ' · E extrudes · G moves' : ' · G moves';
+  1266→  1266→  return `${n} ${n === 1 ? (mode === 'vertex' ? 'vertex' : mode) : plural} selected${verb}`;
+  1267→  1267→}
+  1268→  1268→
+  1269→  1269→/** Blender-style numpad view presets: 1 front, 3 right, 7 top, 0 camera. */
+  1270→  1270→function ViewPresets({
+  1271→  1271→  snapshot,
+  1272→  1272→  lookThroughRef,
+  1273→  1273→  cameraFollowRef,
+  1274→  1274→}: {
+  1275→  1275→  snapshot: SceneSnapshot;
+  1276→  1276→  lookThroughRef: React.MutableRefObject<() => boolean>;
+  1277→  1277→  cameraFollowRef?: React.MutableRefObject<(t: number) => boolean>;
+  1278→  1278→}) {
+  1279→  1279→  const { camera, controls } = useThree();
+  1280→  1280→  const snapRef = useRef(snapshot);
+  1281→  1281→  snapRef.current = snapshot;
+  1282→  1282→
+  1283→  1283→  // Point the R3F camera at the scene camera's pose sampled at time `t`, so
+  1284→  1284→  // an animation render follows keyframed camera moves. Returns false when
+  1285→  1285→  // there's no scene camera.
+  1286→  1286→  useEffect(() => {
+  1287→  1287→    if (!cameraFollowRef) return;
+  1288→  1288→    cameraFollowRef.current = (t: number) => {
+  1289→  1289→      const sel = useScene3DStore.getState().selection;
+  1290→  1290→      const cams = snapRef.current.objects.filter((o) => o.type === 'camera');
+  1291→  1291→      const cam = cams.find((o) => sel.includes(o.id)) ?? cams[0];
+  1292→  1292→      if (!cam) return false;
+  1293→  1293→      const tr = (cam.anim?.length ? sampleAnim(cam.anim, t) : null) ?? cam.transform;
+  1294→  1294→      const dir = new THREE.Vector3(0, -1, 0).applyEuler(
+  1295→  1295→        new THREE.Euler(tr.rotation.x, tr.rotation.y, tr.rotation.z),
+  1296→  1296→      );
+  1297→  1297→      camera.position.set(tr.position.x, tr.position.y, tr.position.z);
+  1298→  1298→      const persp = camera as THREE.PerspectiveCamera;
+  1299→  1299→      persp.fov = cam.camera?.fov ?? 50;
+  1300→  1300→      persp.updateProjectionMatrix();
+  1301→  1301→      camera.lookAt(new THREE.Vector3().copy(camera.position).addScaledVector(dir, 8));
+  1302→  1302→      return true;
+  1303→  1303→    };
+  1304→  1304→  }, [camera, cameraFollowRef]);
+  1305→  1305→
+  1306→  1306→  // Jump the viewport into the selected (or first) scene camera. Shared by
+  1307→  1307→  // Numpad 0 and the render button. Returns false when the scene has none.
+  1308→  1308→  useEffect(() => {
+  1309→  1309→    lookThroughRef.current = () => {
+  1310→  1310→      const sel = useScene3DStore.getState().selection;
+  1311→  1311→      const cams = snapRef.current.objects.filter((o) => o.type === 'camera');
+  1312→  1312→      const cam = cams.find((o) => sel.includes(o.id)) ?? cams[0];
+  1313→  1313→      if (!cam) return false;
+  1314→  1314→      const t = cam.transform;
+  1315→  1315→      const dir = new THREE.Vector3(0, -1, 0).applyEuler(
+  1316→  1316→        new THREE.Euler(t.rotation.x, t.rotation.y, t.rotation.z),
+  1317→  1317→      );
+  1318→  1318→      camera.position.set(t.position.x, t.position.y, t.position.z);
+  1319→  1319→      const persp = camera as THREE.PerspectiveCamera;
+  1320→  1320→      persp.fov = cam.camera?.fov ?? 50;
+  1321→  1321→      persp.updateProjectionMatrix();
+  1322→  1322→      (controls as { target?: THREE.Vector3 } | null)?.target?.copy(
+  1323→  1323→        new THREE.Vector3().copy(camera.position).addScaledVector(dir, 8),
+  1324→  1324→      );
+  1325→  1325→      (controls as { update?: () => void } | null)?.update?.();
+  1326→  1326→      // Enter "camera view": the glyph hides and a frame HUD shows until the
+  1327→  1327→      // user orbits/flies away (Blender's Numpad 0 behavior).
+  1328→  1328→      useScene3DStore.getState().setViewingCamera(cam.id);
+  1329→  1329→      return true;
+  1330→  1330→    };
+  1331→  1331→  }, [camera, controls, lookThroughRef]);
+  1332→  1332→
+  1333→  1333→  useEffect(() => {
+  1334→  1334→    const onKey = (e: KeyboardEvent) => {
+  1335→  1335→      const target = e.target as HTMLElement;
+  1336→  1336→      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+  1337→  1337→      if (useScene3DStore.getState().flying) return;
+  1338→  1338→      if (e.code === 'Numpad0') {
+  1339→  1339→        if (lookThroughRef.current()) e.preventDefault();
+  1340→  1340→        return;
+  1341→  1341→      }
+  1342→  1342→      let dir: THREE.Vector3 | null = null;
+  1343→  1343→      if (e.code === 'Numpad1') dir = new THREE.Vector3(0, 0, 1);
+  1344→  1344→      else if (e.code === 'Numpad3') dir = new THREE.Vector3(1, 0, 0);
+  1345→  1345→      else if (e.code === 'Numpad7') dir = new THREE.Vector3(0.0001, 1, 0.0001);
+  1346→  1346→      if (!dir) return;
+  1347→  1347→      // Ctrl+Numpad flips to the opposite view (back/left/bottom), as in Blender.
+  1348→  1348→      if (e.ctrlKey) dir.negate();
+  1349→  1349→      e.preventDefault();
+  1350→  1350→      const t = (controls as { target?: THREE.Vector3 } | null)?.target ?? new THREE.Vector3();
+  1351→  1351→      const dist = camera.position.distanceTo(t) || 8;
+  1352→  1352→      camera.position.copy(t.clone().add(dir.normalize().multiplyScalar(dist)));
+  1353→  1353→      (controls as { update?: () => void } | null)?.update?.();
+  1354→  1354→    };
+  1355→  1355→    window.addEventListener('keydown', onKey);
+  1356→  1356→    return () => window.removeEventListener('keydown', onKey);
+  1357→  1357→  }, [camera, controls]);
+  1358→  1358→  return null;
+  1359→  1359→}
+  1360→  1360→
+  1361→  1361→/**
+  1362→  1362→ * Tiny in-canvas component that captures `useThree` and exposes a callback
+  1363→  1363→ * to frame the current selection. Kept inside <Canvas> so it has access to
+  1364→  1364→ * the camera and controls.
+  1365→  1365→ */
+  1366→  1366→function FrameSelectedBinding({
+  1367→  1367→  frameRef,
+  1368→  1368→  snapshot,
+  1369→  1369→  selection,
+  1370→  1370→}: {
+  1371→  1371→  frameRef: React.MutableRefObject<(all: boolean) => void>;
+  1372→  1372→  snapshot: SceneSnapshot;
+  1373→  1373→  selection: string[];
+  1374→  1374→}) {
+  1375→  1375→  const { camera, controls } = useThree();
+  1376→  1376→  useFrame(() => {});
+  1377→  1377→  useEffect(() => {
+  1378→  1378→    frameRef.current = (all: boolean) => {
+  1379→  1379→      // Frame the selection; with `all` (or nothing selected), frame the scene.
+  1380→  1380→      const ids = !all && selection.length > 0 ? selection : snapshot.objects.map((o) => o.id);
+  1381→  1381→      const positions: THREE.Vector3[] = [];
+  1382→  1382→      for (const id of ids) {
+  1383→  1383→        const obj = snapshot.objects.find((o) => o.id === id);
+  1384→  1384→        if (!obj) continue;
+  1385→  1385→        positions.push(
+  1386→  1386→          new THREE.Vector3(obj.transform.position.x, obj.transform.position.y, obj.transform.position.z),
+  1387→  1387→        );
+  1388→  1388→      }
+  1389→  1389→      if (positions.length === 0) return;
+  1390→  1390→      const box = new THREE.Box3().setFromPoints(positions);
+  1391→  1391→      const size = new THREE.Vector3();
+  1392→  1392→      box.getSize(size);
+  1393→  1393→      const center = new THREE.Vector3();
+  1394→  1394→      box.getCenter(center);
+  1395→  1395→      const radius = Math.max(size.length() / 2, 1) * 1.5;
+  1396→  1396→      const dir = new THREE.Vector3()
+  1397→  1397→        .subVectors(camera.position, (controls as { target?: THREE.Vector3 })?.target ?? new THREE.Vector3())
+  1398→  1398→        .normalize();
+  1399→  1399→      camera.position.copy(center.clone().add(dir.multiplyScalar(radius)));
+  1400→  1400→      (controls as { target?: THREE.Vector3 } | null)?.target?.copy(center);
+  1401→  1401→      (controls as { update?: () => void } | null)?.update?.();
+  1402→  1402→    };
+  1403→  1403→  }, [camera, controls, snapshot, selection, frameRef]);
+  1404→  1404→  return null;
+  1405→  1405→}
+  1406→  1406→

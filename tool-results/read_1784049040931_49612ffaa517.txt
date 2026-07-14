@@ -1,0 +1,965 @@
+     1→/**
+     2→ * 2D canvas surface.
+     3→ *
+     4→ * Owns a `<canvas>` and instantiates a CanvasEngine bound to the active
+     5→ * SlateRoom. Pointer events are translated to board-space and forwarded
+     6→ * to the active Tool. Wheel + pinch zoom and pan are handled here so the
+     7→ * Tool layer stays focused on drawing semantics.
+     8→ */
+     9→
+    10→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    11→import type { Shape, Stroke } from '@slate/sync-protocol';
+    12→import type { SlateRoom } from '../sync/provider';
+    13→import { CanvasEngine } from './engine';
+    14→import { createTool, type Tool, type ToolContext } from './tools';
+    15→import { Canvas2DToolbar } from './Toolbar';
+    16→import { Minimap } from './Minimap';
+    17→import { RemoteCursors } from './RemoteCursors';
+    18→import { SelectionHandles } from './SelectionHandles';
+    19→import { useCanvasStore } from './store';
+    20→import { useLayersStore } from './store';
+    21→import { useAppStore } from '../app/store';
+    22→import { boardToScreen, screenToBoard } from './transform';
+    23→import { pointInShape } from './geometry';
+    24→import { fileToImageShape, isImageFile } from './importImage';
+    25→import { makeId } from '../utils/id';
+    26→import { toast } from '../ui/Toast';
+    27→import type { BoardPoint, Rect } from './types';
+    28→
+    29→interface TextEditState {
+    30→  board: BoardPoint;
+    31→  value: string;
+    32→  /** Existing shape id when editing, null when inserting. */
+    33→  shapeId: string | null;
+    34→  fontSize: number;
+    35→  color: string;
+    36→}
+    37→
+    38→interface Canvas2DProps {
+    39→  room: SlateRoom;
+    40→}
+    41→
+    42→export function Canvas2D({ room }: Canvas2DProps) {
+    43→  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    44→  const wrapperRef = useRef<HTMLDivElement | null>(null);
+    45→  const engineRef = useRef<CanvasEngine | null>(null);
+    46→  const toolRef = useRef<Tool | null>(null);
+    47→  const tool = useCanvasStore((s) => s.tool);
+    48→  const stroke = useCanvasStore((s) => s.stroke);
+    49→  const fill = useCanvasStore((s) => s.fill);
+    50→  const strokeWidth = useCanvasStore((s) => s.strokeWidth);
+    51→  const strokeOpacity = useCanvasStore((s) => s.strokeOpacity);
+    52→  const fontSize = useCanvasStore((s) => s.fontSize);
+    53→  const zoom = useCanvasStore((s) => s.zoom);
+    54→  const panX = useCanvasStore((s) => s.panX);
+    55→  const panY = useCanvasStore((s) => s.panY);
+    56→  const setViewport = useCanvasStore((s) => s.setViewport);
+    57→  const pan = useCanvasStore((s) => s.pan);
+    58→  const zoomAt = useCanvasStore((s) => s.zoomAt);
+    59→  const fit = useCanvasStore((s) => s.fit);
+    60→  const setStroke = useCanvasStore((s) => s.setStroke);
+    61→  const setTool = useCanvasStore((s) => s.setTool);
+    62→  const activeLayerId = useLayersStore((s) => s.activeLayerId);
+    63→
+    64→  const [selection, setSelection] = useState<Set<string>>(new Set());
+    65→  const [marquee, setMarquee] = useState<Rect | null>(null);
+    66→  const [liveSel, setLiveSel] = useState<Set<string> | null>(null);
+    67→  const [paper, setPaper] = useState('#0c0c0e');
+    68→  const [size, setSize] = useState({ width: 800, height: 600, dpr: 1 });
+    69→  const [textEdit, setTextEdit] = useState<TextEditState | null>(null);
+    70→  const textEditRef = useRef<TextEditState | null>(null);
+    71→  textEditRef.current = textEdit;
+    72→
+    73→  const livePreviewRef = useRef<{ stroke: Stroke | null; shape: Shape | null }>({
+    74→    stroke: null,
+    75→    shape: null,
+    76→  });
+    77→  /** In-app clipboard for Ctrl+C/X/V/D (plain copies, ids re-minted on paste). */
+    78→  const clipboardRef = useRef<{ shapes: Shape[]; strokes: Stroke[] }>({
+    79→    shapes: [],
+    80→    strokes: [],
+    81→  });
+    82→
+    83→  // Watch paper meta.
+    84→  useEffect(() => {
+    85→    const meta = room.slate.meta();
+    86→    const apply = () => setPaper((meta.get('paper') as string) || '#0c0c0e');
+    87→    apply();
+    88→    meta.observe(apply);
+    89→    return () => meta.unobserve(apply);
+    90→  }, [room]);
+    91→
+    92→  // Like the 3D viewport, the paper can follow the app theme on this device
+    93→  // (default). Turning it off in Settings shows the board's shared color.
+    94→  const theme = useAppStore((s) => s.theme);
+    95→  const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
+    96→  const effectivePaper = paperFollowsTheme ? (theme === 'light' ? '#f6f5f0' : '#0c0c0e') : paper;
+    97→
+    98→  // Style controls restyle the current selection (Figma-style): changing
+    99→  // stroke/fill/width/opacity/font while things are selected applies to them.
+   100→  const prevStyleRef = useRef({ stroke, fill, strokeWidth, strokeOpacity, fontSize });
+   101→  useEffect(() => {
+   102→    const prev = prevStyleRef.current;
+   103→    prevStyleRef.current = { stroke, fill, strokeWidth, strokeOpacity, fontSize };
+   104→    const engine = engineRef.current;
+   105→    if (!engine || selection.size === 0) return;
+   106→    const shapePatch: Partial<Shape> = {};
+   107→    const strokePatch: Partial<Stroke> = {};
+   108→    if (prev.stroke !== stroke) {
+   109→      shapePatch.stroke = stroke;
+   110→      strokePatch.color = stroke;
+   111→    }
+   112→    if (prev.fill !== fill) shapePatch.fill = fill;
+   113→    if (prev.strokeWidth !== strokeWidth) {
+   114→      shapePatch.strokeWidth = strokeWidth;
+   115→      strokePatch.size = strokeWidth;
+   116→    }
+   117→    if (prev.strokeOpacity !== strokeOpacity) {
+   118→      shapePatch.strokeOpacity = strokeOpacity;
+   119→      strokePatch.opacity = strokeOpacity;
+   120→    }
+   121→    const fontChanged = prev.fontSize !== fontSize;
+   122→    if (
+   123→      Object.keys(shapePatch).length === 0 &&
+   124→      Object.keys(strokePatch).length === 0 &&
+   125→      !fontChanged
+   126→    ) {
+   127→      return;
+   128→    }
+   129→    const snap = engine.snapshot();
+   130→    for (const layer of snap.layers) {
+   131→      for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
+   132→        if (!selection.has(sh.id)) continue;
+   133→        const patch = { ...shapePatch };
+   134→        if (fontChanged && sh.kind === 'text') patch.fontSize = fontSize;
+   135→        if (Object.keys(patch).length > 0) engine.updateShape(sh.id, patch);
+   136→      }
+   137→      if (Object.keys(strokePatch).length > 0) {
+   138→        for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+   139→          if (selection.has(st.id)) engine.updateStroke(st.id, strokePatch);
+   140→        }
+   141→      }
+   142→    }
+   143→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   144→  }, [stroke, fill, strokeWidth, strokeOpacity, fontSize]);
+   145→
+   146→  // Doc version bump so DOM overlays (selection handles) track remote edits.
+   147→  const [docVersion, setDocVersion] = useState(0);
+   148→  useEffect(() => {
+   149→    const bump = () => setDocVersion((v) => v + 1);
+   150→    const shapes = room.slate.shapes();
+   151→    const strokes = room.slate.strokes();
+   152→    shapes.observeDeep(bump);
+   153→    strokes.observeDeep(bump);
+   154→    return () => {
+   155→      shapes.unobserveDeep(bump);
+   156→      strokes.unobserveDeep(bump);
+   157→    };
+   158→  }, [room]);
+   159→
+   160→  // Engine lifecycle.
+   161→  useEffect(() => {
+   162→    const c = canvasRef.current;
+   163→    if (!c) return;
+   164→    const engine = new CanvasEngine({
+   165→      canvas: c,
+   166→      room,
+   167→      getTransform: () => ({ zoom: useCanvasStore.getState().zoom, panX: useCanvasStore.getState().panX, panY: useCanvasStore.getState().panY }),
+   168→      getSelection: () => selectionRef.current,
+   169→      getMarquee: () => marqueeRef.current,
+   170→      getLivePreview: () => livePreviewRef.current,
+   171→      getViewport: () => sizeRef.current,
+   172→      getPaper: () => paperRef.current,
+   173→    });
+   174→    engineRef.current = engine;
+   175→    return () => {
+   176→      engine.dispose();
+   177→      engineRef.current = null;
+   178→    };
+   179→  }, [room]);
+   180→
+   181→  // Live refs so the engine read functions stay stable.
+   182→  const selectionRef = useRef(selection);
+   183→  const marqueeRef = useRef(marquee);
+   184→  const sizeRef = useRef(size);
+   185→  const paperRef = useRef(effectivePaper);
+   186→  useEffect(() => {
+   187→    selectionRef.current = liveSel ?? selection;
+   188→    engineRef.current?.markDirty();
+   189→  }, [selection, liveSel]);
+   190→  useEffect(() => {
+   191→    marqueeRef.current = marquee;
+   192→    engineRef.current?.markDirty();
+   193→  }, [marquee]);
+   194→  useEffect(() => {
+   195→    sizeRef.current = size;
+   196→    engineRef.current?.resize(size);
+   197→  }, [size]);
+   198→  useEffect(() => {
+   199→    paperRef.current = effectivePaper;
+   200→    engineRef.current?.markDirty();
+   201→  }, [effectivePaper]);
+   202→  useEffect(() => {
+   203→    engineRef.current?.markDirty();
+   204→  }, [zoom, panX, panY]);
+   205→
+   206→  // Resize observer.
+   207→  useEffect(() => {
+   208→    const el = wrapperRef.current;
+   209→    if (!el) return;
+   210→    const update = () => {
+   211→      const r = el.getBoundingClientRect();
+   212→      setSize({ width: r.width, height: r.height, dpr: window.devicePixelRatio || 1 });
+   213→    };
+   214→    update();
+   215→    const ro = new ResizeObserver(update);
+   216→    ro.observe(el);
+   217→    window.addEventListener('resize', update);
+   218→    return () => {
+   219→      ro.disconnect();
+   220→      window.removeEventListener('resize', update);
+   221→    };
+   222→  }, []);
+   223→
+   224→  const toolCtx: ToolContext = useMemo(
+   225→    () => ({
+   226→      engine: engineRef.current!,
+   227→      authorId: room.identity.peerId,
+   228→      layerId: activeLayerId ?? '',
+   229→      stroke,
+   230→      fill,
+   231→      strokeWidth,
+   232→      strokeOpacity,
+   233→      fontSize,
+   234→      additive: false,
+   235→    }),
+   236→    [room, activeLayerId, stroke, fill, strokeWidth, strokeOpacity, fontSize],
+   237→  );
+   238→
+   239→  // ── Inline text editing ────────────────────────────────────────────────────
+   240→  const commitTextEdit = useCallback(() => {
+   241→    const te = textEditRef.current;
+   242→    if (!te) return;
+   243→    setTextEdit(null);
+   244→    const engine = engineRef.current;
+   245→    if (!engine) return;
+   246→    const value = te.value.replace(/\s+$/, '');
+   247→    if (te.shapeId) {
+   248→      if (!value) {
+   249→        engine.deleteIds([te.shapeId]);
+   250→        return;
+   251→      }
+   252→      const lines = value.split('\n');
+   253→      const longest = lines.reduce((m, l) => Math.max(m, l.length), 1);
+   254→      engine.updateShape(te.shapeId, {
+   255→        text: value,
+   256→        w: Math.max(40, longest * te.fontSize * 0.6),
+   257→        h: lines.length * te.fontSize * 1.2,
+   258→      });
+   259→      return;
+   260→    }
+   261→    if (!value || !activeLayerId) return;
+   262→    const lines = value.split('\n');
+   263→    const longest = lines.reduce((m, l) => Math.max(m, l.length), 1);
+   264→    engine.commitShape({
+   265→      id: makeId('shape'),
+   266→      kind: 'text',
+   267→      layerId: activeLayerId,
+   268→      x: te.board.x,
+   269→      y: te.board.y,
+   270→      w: Math.max(40, longest * te.fontSize * 0.6),
+   271→      h: lines.length * te.fontSize * 1.2,
+   272→      rotation: 0,
+   273→      stroke: te.color,
+   274→      fill: null,
+   275→      strokeWidth: 0,
+   276→      strokeOpacity: 1,
+   277→      text: value,
+   278→      fontSize: te.fontSize,
+   279→      createdAt: Date.now(),
+   280→      authorId: room.identity.peerId,
+   281→    });
+   282→  }, [activeLayerId, room]);
+   283→
+   284→  const openTextEditor = useCallback(
+   285→    (board: BoardPoint) => {
+   286→      setTextEdit({
+   287→        board,
+   288→        value: '',
+   289→        shapeId: null,
+   290→        fontSize: useCanvasStore.getState().fontSize,
+   291→        color: useCanvasStore.getState().stroke,
+   292→      });
+   293→    },
+   294→    [],
+   295→  );
+   296→
+   297→  /** Double-click: edit the topmost text shape under the pointer. */
+   298→  const tryEditTextAt = useCallback((board: BoardPoint): boolean => {
+   299→    const snap = engineRef.current?.snapshot();
+   300→    if (!snap) return false;
+   301→    for (let i = snap.layers.length - 1; i >= 0; i--) {
+   302→      const layer = snap.layers[i]!;
+   303→      if (!layer.visible || layer.locked) continue;
+   304→      const shapes = snap.shapesByLayer.get(layer.id) ?? [];
+   305→      for (let j = shapes.length - 1; j >= 0; j--) {
+   306→        const sh = shapes[j]!;
+   307→        if (sh.kind === 'text' && pointInShape(sh, board)) {
+   308→          setTextEdit({
+   309→            board: { x: sh.x, y: sh.y },
+   310→            value: sh.text ?? '',
+   311→            shapeId: sh.id,
+   312→            fontSize: sh.fontSize ?? 24,
+   313→            color: sh.stroke,
+   314→          });
+   315→          return true;
+   316→        }
+   317→      }
+   318→    }
+   319→    return false;
+   320→  }, []);
+   321→
+   322→  // ── Image insertion (drag-drop, paste, toolbar button) ─────────────────────
+   323→  const insertImages = useCallback(
+   324→    async (files: File[] | Blob[], at?: BoardPoint) => {
+   325→      const engine = engineRef.current;
+   326→      const layerId = useLayersStore.getState().activeLayerId;
+   327→      if (!engine || !layerId) return;
+   328→      // Default to the viewport center when there is no drop point.
+   329→      const t = useCanvasStore.getState();
+   330→      const r = canvasRef.current?.getBoundingClientRect();
+   331→      const center =
+   332→        at ??
+   333→        screenToBoard(
+   334→          { zoom: t.zoom, panX: t.panX, panY: t.panY },
+   335→          { x: (r?.width ?? 800) / 2, y: (r?.height ?? 600) / 2 },
+   336→        );
+   337→      let offset = 0;
+   338→      const newIds: string[] = [];
+   339→      for (const file of files) {
+   340→        try {
+   341→          const img = await fileToImageShape(file);
+   342→          // Cap the placed size so a photo doesn't swallow the viewport.
+   343→          const maxPlaced = 480 / t.zoom;
+   344→          const k = Math.min(1, maxPlaced / Math.max(img.w, img.h));
+   345→          const w = img.w * k;
+   346→          const h = img.h * k;
+   347→          const id = makeId('shape');
+   348→          engine.commitShape({
+   349→            id,
+   350→            kind: 'image',
+   351→            layerId,
+   352→            x: center.x - w / 2 + offset,
+   353→            y: center.y - h / 2 + offset,
+   354→            w,
+   355→            h,
+   356→            rotation: 0,
+   357→            stroke: '#00000000',
+   358→            fill: null,
+   359→            strokeWidth: 0,
+   360→            strokeOpacity: 1,
+   361→            src: img.src,
+   362→            createdAt: Date.now(),
+   363→            authorId: room.identity.peerId,
+   364→          });
+   365→          newIds.push(id);
+   366→          offset += 24;
+   367→        } catch (err) {
+   368→          toast({ title: 'Image import failed', description: (err as Error).message, variant: 'error' });
+   369→        }
+   370→      }
+   371→      if (newIds.length) {
+   372→        setSelection(new Set(newIds));
+   373→        setTool('select');
+   374→      }
+   375→    },
+   376→    [room, setTool],
+   377→  );
+   378→
+   379→  // Drop images anywhere on the canvas → image shapes at the drop point.
+   380→  const onDrop = useCallback(
+   381→    (e: React.DragEvent<HTMLDivElement>) => {
+   382→      const files = [...(e.dataTransfer?.files ?? [])].filter(isImageFile);
+   383→      if (!files.length) return;
+   384→      e.preventDefault();
+   385→      const c = canvasRef.current;
+   386→      const t = useCanvasStore.getState();
+   387→      const at = c
+   388→        ? screenToBoard(
+   389→            { zoom: t.zoom, panX: t.panX, panY: t.panY },
+   390→            {
+   391→              x: e.clientX - c.getBoundingClientRect().left,
+   392→              y: e.clientY - c.getBoundingClientRect().top,
+   393→            },
+   394→          )
+   395→        : undefined;
+   396→      void insertImages(files, at);
+   397→    },
+   398→    [insertImages],
+   399→  );
+   400→
+   401→  // Paste images from the OS clipboard (screenshots!).
+   402→  useEffect(() => {
+   403→    const onPaste = (e: ClipboardEvent) => {
+   404→      const target = e.target as HTMLElement;
+   405→      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+   406→      if (target?.isContentEditable) return;
+   407→      const files = [...(e.clipboardData?.files ?? [])].filter(isImageFile);
+   408→      if (!files.length) return;
+   409→      e.preventDefault();
+   410→      void insertImages(files);
+   411→    };
+   412→    window.addEventListener('paste', onPaste);
+   413→    return () => window.removeEventListener('paste', onPaste);
+   414→  }, [insertImages]);
+   415→
+   416→  const imagePickerRef = useRef<HTMLInputElement | null>(null);
+   417→
+   418→  const ensureTool = useCallback(
+   419→    (additive: boolean): Tool | null => {
+   420→      if (!engineRef.current || !activeLayerId) return null;
+   421→      const ctx: ToolContext = { ...toolCtx, additive };
+   422→      const t = createTool({
+   423→        toolId: tool,
+   424→        context: ctx,
+   425→        getSelected: () => selectionRef.current,
+   426→        setSelection: (ids) => setSelection(new Set(ids)),
+   427→        onSampleColor: (c) => setStroke(c),
+   428→        onTextInsert: openTextEditor,
+   429→        polySides: useCanvasStore.getState().polySides,
+   430→      });
+   431→      toolRef.current = t;
+   432→      return t;
+   433→    },
+   434→    [tool, toolCtx, activeLayerId, setStroke, openTextEditor],
+   435→  );
+   436→
+   437→  // Pointer plumbing.
+   438→  const draggingPanRef = useRef<{ x: number; y: number } | null>(null);
+   439→  const isSpaceDownRef = useRef(false);
+   440→  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+   441→  const pinchRef = useRef<{ d: number; cx: number; cy: number } | null>(null);
+   442→
+   443→  const toBoard = useCallback(
+   444→    (clientX: number, clientY: number) => {
+   445→      const c = canvasRef.current!;
+   446→      const r = c.getBoundingClientRect();
+   447→      const screen = { x: clientX - r.left, y: clientY - r.top };
+   448→      return screenToBoard(
+   449→        { zoom: useCanvasStore.getState().zoom, panX: useCanvasStore.getState().panX, panY: useCanvasStore.getState().panY },
+   450→        screen,
+   451→      );
+   452→    },
+   453→    [],
+   454→  );
+   455→
+   456→  const onPointerDown = useCallback(
+   457→    (e: React.PointerEvent<HTMLDivElement>) => {
+   458→      const target = e.target as HTMLElement;
+   459→      if (target.closest('[data-no-canvas-pointer]')) return;
+   460→      if (textEditRef.current) {
+   461→        // Click-away commits the inline text editor and swallows the click.
+   462→        commitTextEdit();
+   463→        return;
+   464→      }
+   465→      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+   466→      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+   467→      if (pointersRef.current.size === 2) {
+   468→        const [a, b] = [...pointersRef.current.values()];
+   469→        pinchRef.current = {
+   470→          d: Math.hypot(a!.x - b!.x, a!.y - b!.y),
+   471→          cx: (a!.x + b!.x) / 2,
+   472→          cy: (a!.y + b!.y) / 2,
+   473→        };
+   474→        toolRef.current?.cancel();
+   475→        return;
+   476→      }
+   477→      const wantPan =
+   478→        tool === 'pan' || isSpaceDownRef.current || e.button === 1 || e.button === 2;
+   479→      if (wantPan) {
+   480→        draggingPanRef.current = { x: e.clientX, y: e.clientY };
+   481→        return;
+   482→      }
+   483→      const t = ensureTool(e.shiftKey);
+   484→      if (!t) return;
+   485→      const point = toBoard(e.clientX, e.clientY);
+   486→      t.start({ point, pressure: e.pressure || 0.5, t: e.timeStamp, constrain: e.shiftKey, snap: e.ctrlKey });
+   487→      livePreviewRef.current = pickPreview(t);
+   488→      const sel = t.preview().selection;
+   489→      if (sel) setLiveSel(sel);
+   490→      engineRef.current?.markDirty();
+   491→    },
+   492→    [tool, ensureTool, toBoard, commitTextEdit],
+   493→  );
+   494→
+   495→  const onPointerMove = useCallback(
+   496→    (e: React.PointerEvent<HTMLDivElement>) => {
+   497→      if (pointersRef.current.has(e.pointerId)) {
+   498→        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+   499→      }
+   500→      if (pinchRef.current && pointersRef.current.size === 2) {
+   501→        const [a, b] = [...pointersRef.current.values()];
+   502→        const d = Math.hypot(a!.x - b!.x, a!.y - b!.y);
+   503→        const cx = (a!.x + b!.x) / 2;
+   504→        const cy = (a!.y + b!.y) / 2;
+   505→        const r = canvasRef.current!.getBoundingClientRect();
+   506→        zoomAt(cx - r.left, cy - r.top, d / pinchRef.current.d);
+   507→        const dx = cx - pinchRef.current.cx;
+   508→        const dy = cy - pinchRef.current.cy;
+   509→        pan(dx, dy);
+   510→        pinchRef.current = { d, cx, cy };
+   511→        return;
+   512→      }
+   513→      if (draggingPanRef.current) {
+   514→        const dx = e.clientX - draggingPanRef.current.x;
+   515→        const dy = e.clientY - draggingPanRef.current.y;
+   516→        draggingPanRef.current = { x: e.clientX, y: e.clientY };
+   517→        pan(dx, dy);
+   518→        return;
+   519→      }
+   520→      const t = toolRef.current;
+   521→      if (!t) return;
+   522→      // Browsers coalesce pointermove events for performance, so a single
+   523→      // React event can hide many intermediate positions. Feeding only the
+   524→      // latest makes fast strokes jagged and laggy — the "drawing feels
+   525→      // broken" symptom. getCoalescedEvents() recovers the full-resolution
+   526→      // path so ink tracks the cursor smoothly at any speed.
+   527→      const native = e.nativeEvent;
+   528→      const coalesced =
+   529→        typeof native.getCoalescedEvents === 'function' ? native.getCoalescedEvents() : [];
+   530→      const samples = coalesced.length > 0 ? coalesced : [native];
+   531→      for (const ev of samples) {
+   532→        t.move({
+   533→          point: toBoard(ev.clientX, ev.clientY),
+   534→          pressure: ev.pressure || 0.5,
+   535→          t: ev.timeStamp,
+   536→          constrain: e.shiftKey,
+   537→          snap: e.ctrlKey,
+   538→        });
+   539→      }
+   540→      livePreviewRef.current = pickPreview(t);
+   541→      const sel = t.preview().selection;
+   542→      if (sel) setLiveSel(sel);
+   543→      const m = t.preview().marquee;
+   544→      setMarquee(m);
+   545→      engineRef.current?.markDirty();
+   546→    },
+   547→    [toBoard, pan, zoomAt],
+   548→  );
+   549→
+   550→  const onPointerUp = useCallback(
+   551→    (e: React.PointerEvent<HTMLDivElement>) => {
+   552→      pointersRef.current.delete(e.pointerId);
+   553→      if (pinchRef.current && pointersRef.current.size < 2) {
+   554→        pinchRef.current = null;
+   555→      }
+   556→      if (draggingPanRef.current) {
+   557→        draggingPanRef.current = null;
+   558→        return;
+   559→      }
+   560→      const t = toolRef.current;
+   561→      if (!t) return;
+   562→      const point = toBoard(e.clientX, e.clientY);
+   563→      t.end({ point, pressure: e.pressure || 0.5, t: e.timeStamp, constrain: e.shiftKey, snap: e.ctrlKey });
+   564→      livePreviewRef.current = { stroke: null, shape: null };
+   565→      setMarquee(null);
+   566→      setLiveSel(null);
+   567→      toolRef.current = null;
+   568→      engineRef.current?.markDirty();
+   569→    },
+   570→    [toBoard],
+   571→  );
+   572→
+   573→  // Wheel: React registers wheel listeners passively, so preventDefault would
+   574→  // be ignored (browser page-zoom fires alongside ctrl+wheel). Attach a native
+   575→  // non-passive listener instead.
+   576→  useEffect(() => {
+   577→    const el = wrapperRef.current;
+   578→    if (!el) return;
+   579→    const onWheel = (e: WheelEvent) => {
+   580→      e.preventDefault();
+   581→      if (e.ctrlKey || e.metaKey) {
+   582→        const r = canvasRef.current!.getBoundingClientRect();
+   583→        zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.1 : 0.9);
+   584→      } else {
+   585→        // Two-finger pan on trackpad / plain wheel.
+   586→        pan(-e.deltaX, -e.deltaY);
+   587→      }
+   588→    };
+   589→    el.addEventListener('wheel', onWheel, { passive: false });
+   590→    return () => el.removeEventListener('wheel', onWheel);
+   591→  }, [zoomAt, pan]);
+   592→
+   593→  // Keyboard shortcuts.
+   594→  useEffect(() => {
+   595→    const onKey = (e: KeyboardEvent) => {
+   596→      const target = e.target as HTMLElement;
+   597→      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+   598→      if (target.isContentEditable) return;
+   599→      if (e.code === 'Space') {
+   600→        isSpaceDownRef.current = true;
+   601→        return;
+   602→      }
+   603→      const ctrl = e.ctrlKey || e.metaKey;
+   604→      if (ctrl && e.key.toLowerCase() === 'z') {
+   605→        e.preventDefault();
+   606→        if (e.shiftKey) room.undo.redo();
+   607→        else room.undo.undo();
+   608→        return;
+   609→      }
+   610→      if (ctrl && e.key === '0') {
+   611→        e.preventDefault();
+   612→        fit();
+   613→        return;
+   614→      }
+   615→      if (e.key === '+' || e.key === '=') {
+   616→        const c = canvasRef.current!;
+   617→        const r = c.getBoundingClientRect();
+   618→        zoomAt(r.width / 2, r.height / 2, 1.1);
+   619→        return;
+   620→      }
+   621→      if (e.key === '-' || e.key === '_') {
+   622→        const c = canvasRef.current!;
+   623→        const r = c.getBoundingClientRect();
+   624→        zoomAt(r.width / 2, r.height / 2, 0.9);
+   625→        return;
+   626→      }
+   627→      if (e.key === 'Delete' || e.key === 'Backspace') {
+   628→        if (selection.size) {
+   629→          engineRef.current?.deleteIds(selection);
+   630→          setSelection(new Set());
+   631→        }
+   632→        return;
+   633→      }
+   634→      if ((e.key === ']' || e.key === '[') && !ctrl && selection.size) {
+   635→        e.preventDefault();
+   636→        engineRef.current?.reorder(selection, e.key === ']' ? 'front' : 'back');
+   637→        return;
+   638→      }
+   639→      if (e.key === 'Escape') {
+   640→        toolRef.current?.cancel();
+   641→        toolRef.current = null;
+   642→        livePreviewRef.current = { stroke: null, shape: null };
+   643→        setMarquee(null);
+   644→        setLiveSel(null);
+   645→        setSelection(new Set());
+   646→        engineRef.current?.markDirty();
+   647→        return;
+   648→      }
+   649→      if (ctrl && e.key.toLowerCase() === 'a') {
+   650→        e.preventDefault();
+   651→        const snap = engineRef.current?.snapshot();
+   652→        if (!snap) return;
+   653→        const all = new Set<string>();
+   654→        for (const layer of snap.layers) {
+   655→          if (!layer.visible || layer.locked) continue;
+   656→          for (const sh of snap.shapesByLayer.get(layer.id) ?? []) all.add(sh.id);
+   657→          for (const st of snap.strokesByLayer.get(layer.id) ?? []) all.add(st.id);
+   658→        }
+   659→        setSelection(all);
+   660→        return;
+   661→      }
+   662→      const copySelection = () => {
+   663→        const snap = engineRef.current?.snapshot();
+   664→        if (!snap || selection.size === 0) return false;
+   665→        const shapes: Shape[] = [];
+   666→        const strokes: Stroke[] = [];
+   667→        for (const layer of snap.layers) {
+   668→          for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
+   669→            if (selection.has(sh.id)) shapes.push({ ...sh });
+   670→          }
+   671→          for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+   672→            if (selection.has(st.id)) strokes.push({ ...st, points: st.points.slice() });
+   673→          }
+   674→        }
+   675→        if (shapes.length === 0 && strokes.length === 0) return false;
+   676→        clipboardRef.current = { shapes, strokes };
+   677→        return true;
+   678→      };
+   679→      const pasteClipboard = () => {
+   680→        const engine = engineRef.current;
+   681→        const clip = clipboardRef.current;
+   682→        if (!engine || (clip.shapes.length === 0 && clip.strokes.length === 0)) return;
+   683→        const OFFSET = 24;
+   684→        const now = Date.now();
+   685→        const me = room.identity.peerId;
+   686→        const newIds: string[] = [];
+   687→        for (const sh of clip.shapes) {
+   688→          const id = makeId('shape');
+   689→          engine.commitShape({ ...sh, id, x: sh.x + OFFSET, y: sh.y + OFFSET, createdAt: now, authorId: me });
+   690→          newIds.push(id);
+   691→        }
+   692→        for (const st of clip.strokes) {
+   693→          const id = makeId('stroke');
+   694→          const points = st.points.slice();
+   695→          for (let i = 0; i < points.length; i += 3) {
+   696→            points[i] = (points[i] ?? 0) + OFFSET;
+   697→            points[i + 1] = (points[i + 1] ?? 0) + OFFSET;
+   698→          }
+   699→          engine.commitStroke({ ...st, id, points, createdAt: now, authorId: me });
+   700→          newIds.push(id);
+   701→        }
+   702→        setSelection(new Set(newIds));
+   703→      };
+   704→      const k0 = e.key.toLowerCase();
+   705→      if (ctrl && k0 === 'c') {
+   706→        if (copySelection()) e.preventDefault();
+   707→        return;
+   708→      }
+   709→      if (ctrl && k0 === 'x') {
+   710→        if (copySelection()) {
+   711→          e.preventDefault();
+   712→          engineRef.current?.deleteIds(selection);
+   713→          setSelection(new Set());
+   714→        }
+   715→        return;
+   716→      }
+   717→      if (ctrl && k0 === 'v') {
+   718→        e.preventDefault();
+   719→        pasteClipboard();
+   720→        return;
+   721→      }
+   722→      if (ctrl && k0 === 'd') {
+   723→        // Duplicate in place (with offset), Figma-style.
+   724→        e.preventDefault();
+   725→        if (copySelection()) pasteClipboard();
+   726→        return;
+   727→      }
+   728→      const k = e.key.toLowerCase();
+   729→      const map: Record<string, typeof tool> = {
+   730→        v: 'select',
+   731→        p: 'pen',
+   732→        y: 'highlighter',
+   733→        e: 'eraser',
+   734→        r: 'rect',
+   735→        o: 'ellipse',
+   736→        g: 'triangle',
+   737→        l: 'line',
+   738→        a: 'arrow',
+   739→        t: 'text',
+   740→        u: 'polygon',
+   741→        s: 'star',
+   742→        i: 'eyedropper',
+   743→        k: 'fill',
+   744→        h: 'pan',
+   745→      };
+   746→      if (map[k] && !ctrl) {
+   747→        e.preventDefault();
+   748→        setTool(map[k]!);
+   749→      }
+   750→      if (k === 'x') useCanvasStore.getState().swapColors();
+   751→    };
+   752→    const onUp = (e: KeyboardEvent) => {
+   753→      if (e.code === 'Space') isSpaceDownRef.current = false;
+   754→    };
+   755→    window.addEventListener('keydown', onKey);
+   756→    window.addEventListener('keyup', onUp);
+   757→    return () => {
+   758→      window.removeEventListener('keydown', onKey);
+   759→      window.removeEventListener('keyup', onUp);
+   760→    };
+   761→  }, [room, setTool, selection, fit, zoomAt]);
+   762→
+   763→  // Awareness cursor publication: pointermove stashes the latest position;
+   764→  // a 30 Hz interval publishes when it changed. The trailing position is
+   765→  // always sent (the old RAF-throttle dropped it, so remote cursors froze
+   766→  // short of where the pointer stopped).
+   767→  useEffect(() => {
+   768→    let pending: { x: number; y: number } | null = null;
+   769→    let lastKey = '';
+   770→    const move = (e: PointerEvent) => {
+   771→      const c = canvasRef.current;
+   772→      if (!c) return;
+   773→      const r = c.getBoundingClientRect();
+   774→      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
+   775→        return;
+   776→      const t = useCanvasStore.getState();
+   777→      pending = screenToBoard(
+   778→        { zoom: t.zoom, panX: t.panX, panY: t.panY },
+   779→        { x: e.clientX - r.left, y: e.clientY - r.top },
+   780→      );
+   781→    };
+   782→    const timer = window.setInterval(() => {
+   783→      if (!pending) return;
+   784→      const key = `${pending.x.toFixed(1)},${pending.y.toFixed(1)}`;
+   785→      if (key === lastKey) return;
+   786→      lastKey = key;
+   787→      room.setLocalAwareness({ cursor: { x: pending.x, y: pending.y }, tool });
+   788→    }, 33);
+   789→    window.addEventListener('pointermove', move);
+   790→    return () => {
+   791→      clearInterval(timer);
+   792→      window.removeEventListener('pointermove', move);
+   793→      room.setLocalAwareness({ cursor: null });
+   794→    };
+   795→  }, [room, tool]);
+   796→
+   797→  const onUndo = useCallback(() => room.undo.undo(), [room]);
+   798→  const onRedo = useCallback(() => room.undo.redo(), [room]);
+   799→  const onClear = useCallback(() => {
+   800→    if (!window.confirm('Clear the board for everyone?')) return;
+   801→    engineRef.current?.clearAll();
+   802→  }, []);
+   803→  const onZoomIn = useCallback(() => {
+   804→    const c = canvasRef.current!;
+   805→    const r = c.getBoundingClientRect();
+   806→    zoomAt(r.width / 2, r.height / 2, 1.1);
+   807→  }, [zoomAt]);
+   808→  const onZoomOut = useCallback(() => {
+   809→    const c = canvasRef.current!;
+   810→    const r = c.getBoundingClientRect();
+   811→    zoomAt(r.width / 2, r.height / 2, 0.9);
+   812→  }, [zoomAt]);
+   813→
+   814→  return (
+   815→    <div
+   816→      ref={wrapperRef}
+   817→      className="relative h-full w-full overflow-hidden"
+   818→      style={{ touchAction: 'none' }}
+   819→      onPointerDown={onPointerDown}
+   820→      onPointerMove={onPointerMove}
+   821→      onPointerUp={onPointerUp}
+   822→      onPointerCancel={onPointerUp}
+   823→      onDragOver={(e) => {
+   824→        if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault();
+   825→      }}
+   826→      onDrop={onDrop}
+   827→      onDoubleClick={(e) => {
+   828→        if (textEdit) return;
+   829→        if (tool !== 'select' && tool !== 'text') return;
+   830→        tryEditTextAt(toBoard(e.clientX, e.clientY));
+   831→      }}
+   832→      onContextMenu={(e) => e.preventDefault()}
+   833→    >
+   834→      <canvas ref={canvasRef} className="block h-full w-full" />
+   835→      <RemoteCursors room={room} />
+   836→      {tool === 'select' && selection.size > 0 && !marquee && (
+   837→        <SelectionHandles
+   838→          engine={engineRef.current}
+   839→          selection={selection}
+   840→          docVersion={docVersion}
+   841→          wrapper={wrapperRef.current}
+   842→        />
+   843→      )}
+   844→      {textEdit && (
+   845→        <TextEditorOverlay
+   846→          state={textEdit}
+   847→          screen={boardToScreen({ zoom, panX, panY }, textEdit.board)}
+   848→          zoom={zoom}
+   849→          onChange={(value) => setTextEdit((s) => (s ? { ...s, value } : s))}
+   850→          onCommit={commitTextEdit}
+   851→          onCancel={() => setTextEdit(null)}
+   852→        />
+   853→      )}
+   854→      <Canvas2DToolbar
+   855→        onUndo={onUndo}
+   856→        onRedo={onRedo}
+   857→        onClear={onClear}
+   858→        onZoomIn={onZoomIn}
+   859→        onZoomOut={onZoomOut}
+   860→        onFit={fit}
+   861→        onInsertImage={() => imagePickerRef.current?.click()}
+   862→        zoomLabel={`${Math.round(zoom * 100)}%`}
+   863→      />
+   864→      <input
+   865→        ref={imagePickerRef}
+   866→        type="file"
+   867→        accept="image/*"
+   868→        multiple
+   869→        className="hidden"
+   870→        data-no-canvas-pointer
+   871→        onChange={(e) => {
+   872→          const files = [...(e.target.files ?? [])];
+   873→          e.target.value = '';
+   874→          if (files.length) void insertImages(files);
+   875→        }}
+   876→      />
+   877→      <Minimap
+   878→        getSnapshot={() => engineRef.current?.snapshot() ?? null}
+   879→        viewport={{ zoom, panX, panY }}
+   880→        size={size}
+   881→        paper={effectivePaper}
+   882→        onPan={(boardCenter) => {
+   883→          const c = canvasRef.current!;
+   884→          const r = c.getBoundingClientRect();
+   885→          setViewport(zoom, r.width / 2 - boardCenter.x * zoom, r.height / 2 - boardCenter.y * zoom);
+   886→        }}
+   887→      />
+   888→    </div>
+   889→  );
+   890→
+   891→  void setViewport;
+   892→}
+   893→
+   894→function pickPreview(t: Tool): { stroke: Stroke | null; shape: Shape | null } {
+   895→  const p = t.preview();
+   896→  return { stroke: p.stroke, shape: p.shape };
+   897→}
+   898→
+   899→/** Absolutely-positioned textarea rendered at the text shape's board point. */
+   900→function TextEditorOverlay({
+   901→  state,
+   902→  screen,
+   903→  zoom,
+   904→  onChange,
+   905→  onCommit,
+   906→  onCancel,
+   907→}: {
+   908→  state: TextEditState;
+   909→  screen: { x: number; y: number };
+   910→  zoom: number;
+   911→  onChange: (value: string) => void;
+   912→  onCommit: () => void;
+   913→  onCancel: () => void;
+   914→}) {
+   915→  const ref = useRef<HTMLTextAreaElement | null>(null);
+   916→  useEffect(() => {
+   917→    const el = ref.current;
+   918→    if (!el) return;
+   919→    el.focus();
+   920→    if (state.shapeId) el.select();
+   921→    // Focus/select only on mount — the value keeps updating while typing.
+   922→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   923→  }, []);
+   924→  const fontPx = Math.max(9, state.fontSize * zoom);
+   925→  const lines = state.value.split('\n');
+   926→  const rows = Math.max(1, lines.length);
+   927→  const cols = Math.max(6, lines.reduce((m, l) => Math.max(m, l.length), 0) + 2);
+   928→  return (
+   929→    <textarea
+   930→      ref={ref}
+   931→      data-no-canvas-pointer
+   932→      value={state.value}
+   933→      rows={rows}
+   934→      onChange={(e) => onChange(e.target.value)}
+   935→      onKeyDown={(e) => {
+   936→        e.stopPropagation();
+   937→        if (e.key === 'Enter' && !e.shiftKey) {
+   938→          e.preventDefault();
+   939→          onCommit();
+   940→        } else if (e.key === 'Escape') {
+   941→          e.preventDefault();
+   942→          onCancel();
+   943→        }
+   944→      }}
+   945→      onBlur={onCommit}
+   946→      onPointerDown={(e) => e.stopPropagation()}
+   947→      spellCheck={false}
+   948→      placeholder="Type…"
+   949→      className="absolute z-20 resize-none overflow-hidden rounded-sm border border-accent/70 bg-bg/85 outline-none backdrop-blur-[2px] placeholder:text-text-dim"
+   950→      style={{
+   951→        left: screen.x - 4,
+   952→        top: screen.y - 4,
+   953→        padding: '2px 4px',
+   954→        color: state.color,
+   955→        fontSize: fontPx,
+   956→        lineHeight: 1.2,
+   957→        fontFamily: 'Inter, sans-serif',
+   958→        width: `${cols}ch`,
+   959→        minWidth: 120,
+   960→        maxWidth: '60vw',
+   961→      }}
+   962→    />
+   963→  );
+   964→}
+   965→

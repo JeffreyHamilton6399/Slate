@@ -70,3 +70,24 @@ Work Log:
 
 Stage Summary:
 - 7 files modified. Browser-verified: smooth toggle ON→undo→false→redo→true; File>Open entry click opens with no confirm; no runtime errors. TypeScript + ESLint clean.
+
+---
+Task ID: FIX-3
+Agent: main (Z.ai Code)
+Task: Fix round 3 (auth freeze, Home redesign, 2D brush lag, board visibility, select-mode cycle, modal cursor, rotate weirdness, HUD toggle, lights, timeline snaps, remove preview mode)
+
+Work Log:
+- Auth freeze: wrapped supabase auth calls in Promise.race with a 20s timeout so a misconfigured/unreachable Supabase can't freeze the form on "Working…" forever.
+- Home/Onboarding redesign: added ambient gradient backdrop (accent + green blurs), kept the polished card.
+- 2D brush lag (circles+connect): renderer now uses quadratic curves through perfect-freehand outline midpoints (smooth fill instead of straight lineTo segments); InkTool sample threshold lowered to 0.12×brushWidth for denser, smoother sampling.
+- Board Settings: added a public/private visibility segmented toggle at the top (writes to board meta).
+- Vert/Edge/Face: replaced the 3-button segmented switch with a single cycle button (like the shading button). Verified Vert→Edge→Face→Vert.
+- Modal cursor: container hides the cursor (cursor:none) during modal transforms; the guide line still tracks the mouse — Blender-style.
+- 3D rotate weirdness: modal rotate now uses horizontal-drag-only (was x+y combined, which made diagonal drags rotate 2× and feel unpredictable). Scale similarly simplified to horizontal-only.
+- HUD/tooltips: the Fly HUD now respects showTransformHud (goes away when toggled off).
+- Lights: boosted all default light intensities (point 25→60, sun 1.6→3.2, spot 40→80, hemi 1.2→2.4, area 12→25); boosted the studio rig (ambient 0.12→0.35, hemi 0.65→1.4, key 1.1→2.0, rim 0.3→0.6) so meshes read clearly.
+- Timeline: added snap tick marks at each second (frame grid); keyframe diamonds remain draggable; removed the "Preview" button.
+- Removed animPreview mode: it desynced the gizmo from the mesh on keyframed objects (gizmo wrote base transform while preview showed a sampled pose → glitch). Objects now always render at their document transform; the timeline playhead only drives camera renders.
+
+Stage Summary:
+- 9 files modified. Browser-verified: select-mode cycle (Vert→Edge→Face→Vert), Board Settings visibility toggle (public↔private), Home redesign loads clean. TypeScript + ESLint clean (0 errors).

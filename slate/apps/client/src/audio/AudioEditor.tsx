@@ -1,8 +1,7 @@
 /**
  * AudioEditor — CapCut/BandLab-style DAW.
- * Key optimization: clip drag/trim uses LOCAL state during the drag and only
- * commits to Yjs on pointer-up. This avoids the observeDeep→re-read→re-render
- * cycle that made dragging laggy.
+ * ZERO React re-renders during drag/trim: moves clip divs directly via DOM.
+ * Volume/pan use local state, debounced Yjs commit.
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -101,11 +100,9 @@ export function AudioEditor() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [masterVol, setMasterVol] = useState(0.85);
   const [looping, setLooping] = useState(false);
-  const [loopStart, setLoopStart] = useState(0);
-  const [loopEnd, setLoopEnd] = useState(8);
+  const [loopStart] = useState(0);
+  const [loopEnd] = useState(8);
   const [pxPerSec, setPxPerSec] = useState(100);
-  /** Live drag state — local, NOT Yjs. Updated instantly via DOM, committed on pointer-up. */
-  const [dragState, setDragState] = useState<{ clipId: string; start: number; duration: number; offset: number } | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
   const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
   const rafRef = useRef(0);
@@ -113,6 +110,9 @@ export function AudioEditor() {
   const playheadRef = useRef<HTMLDivElement | null>(null);
   const posDisplayRef = useRef<HTMLSpanElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** Drag state stored in a ref — NO React state, NO re-renders during drag.
+   *  The clip div is moved directly via style.left/width. */
+  const dragRef = useRef<{ clipId: string; el: HTMLElement; origStart: number; origDur: number; origOffset: number; startX: number; mode: 'drag' | 'trimL' | 'trimR' } | null>(null);
 
   // Yjs subscription.
   useEffect(() => {
@@ -165,12 +165,53 @@ export function AudioEditor() {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      setPxPerSec((c) => Math.max(20, Math.min(500, c * factor)));
+      setPxPerSec((c) => Math.max(20, Math.min(500, c * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
+
+  // Global pointermove/up for clip drag — NO React state, pure DOM.
+  useEffect(() => {
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const dt = (ev.clientX - d.startX) / pxPerSec;
+      if (d.mode === 'drag') {
+        const newStart = Math.max(0, d.origStart + dt);
+        d.el.style.left = `${newStart * pxPerSec}px`;
+      } else if (d.mode === 'trimL') {
+        const newDur = d.origDur - dt;
+        if (newDur > 0.1 && d.origOffset + dt >= 0) {
+          d.el.style.left = `${(d.origStart + dt) * pxPerSec}px`;
+          d.el.style.width = `${newDur * pxPerSec}px`;
+        }
+      } else if (d.mode === 'trimR') {
+        const newDur = Math.max(0.1, d.origDur + dt);
+        d.el.style.width = `${newDur * pxPerSec}px`;
+      }
+    };
+    const onUp = () => {
+      const d = dragRef.current;
+      if (!d) return;
+      // Commit to Yjs ONCE.
+      const dt = 0; // already applied via DOM; read final position from style
+      const left = parseFloat(d.el.style.left) / pxPerSec;
+      const width = parseFloat(d.el.style.width) / pxPerSec;
+      if (d.mode === 'drag') {
+        updateAudioClip(slate, d.clipId, { start: Math.max(0, left) });
+      } else if (d.mode === 'trimL') {
+        updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: d.origOffset + (left - d.origStart) });
+      } else if (d.mode === 'trimR') {
+        updateAudioClip(slate, d.clipId, { duration: width });
+      }
+      dragRef.current = null;
+      void dt;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+  }, [slate, pxPerSec]);
 
   // Hotkeys.
   useEffect(() => {
@@ -179,8 +220,8 @@ export function AudioEditor() {
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
       const k = e.key.toLowerCase();
       if (k === ' ') { e.preventDefault(); togglePlay(); }
-      else if (k === 'c' && !e.ctrlKey) { e.preventDefault(); splitSelected(); }
-      else if (k === 'delete' || k === 'backspace') { e.preventDefault(); deleteSelected(); }
+      else if (k === 'c' && !e.ctrlKey) { e.preventDefault(); if (selectedClipId) splitAudioClip(slate, selectedClipId, positionRef.current); }
+      else if (k === 'delete' || k === 'backspace') { e.preventDefault(); if (selectedClipId) { deleteAudioClip(slate, selectedClipId); setSelectedClipId(null); } }
       else if (k === 'd' && !e.ctrlKey) { e.preventDefault(); duplicateSelected(); }
       else if (k === 'l' && !e.ctrlKey) { e.preventDefault(); toggleLoop(); }
       else if (k === 'm' && !e.ctrlKey) { e.preventDefault(); toggleMetronome(); }
@@ -275,9 +316,6 @@ export function AudioEditor() {
 
   const zoom = (dir: 'in' | 'out') => setPxPerSec((c) => Math.max(20, Math.min(500, dir === 'in' ? c * 1.4 : c / 1.4)));
 
-  // Clip ops.
-  const splitSelected = () => { if (selectedClipId) splitAudioClip(slate, selectedClipId, positionRef.current); };
-  const deleteSelected = () => { if (selectedClipId) { deleteAudioClip(slate, selectedClipId); setSelectedClipId(null); } };
   const duplicateSelected = () => {
     if (!selectedClipId) return;
     const yo = slate.audioClips().get(selectedClipId); if (!yo) return;
@@ -285,66 +323,17 @@ export function AudioEditor() {
     addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples: c.samples, sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
   };
 
-  // ── Drag handlers — LOCAL state during drag, Yjs commit on pointer-up ─────
+  // ── Drag start — stores info in ref, NO React state ────────────────────────
 
-  const handleClipDragStart = (clip: AudioClip, e: React.PointerEvent) => {
+  const startClipDrag = (clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => {
     e.stopPropagation();
     setSelectedClipId(clip.id);
-    const startX = e.clientX;
-    const origStart = clip.start;
-    const origDur = clip.duration;
-    const origOffset = clip.offset;
-    setDragState({ clipId: clip.id, start: origStart, duration: origDur, offset: origOffset });
-
-    const onMove = (ev: PointerEvent) => {
-      const dt = (ev.clientX - startX) / pxPerSec;
-      setDragState({ clipId: clip.id, start: Math.max(0, origStart + dt), duration: origDur, offset: origOffset });
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      // Commit to Yjs ONCE on pointer-up.
-      setDragState((cur) => {
-        if (cur) updateAudioClip(slate, cur.clipId, { start: cur.start });
-        return null;
-      });
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    dragRef.current = { clipId: clip.id, el, origStart: clip.start, origDur: clip.duration, origOffset: clip.offset, startX: e.clientX, mode: 'drag' };
   };
-
-  const handleTrimStart = (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent) => {
+  const startTrim = (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => {
     e.stopPropagation();
     setSelectedClipId(clip.id);
-    const startX = e.clientX;
-    const os = clip.start, od = clip.duration, oo = clip.offset;
-    setDragState({ clipId: clip.id, start: os, duration: od, offset: oo });
-
-    const onMove = (ev: PointerEvent) => {
-      const dt = (ev.clientX - startX) / pxPerSec;
-      if (side === 'left') {
-        const newDur = od - dt;
-        if (newDur > 0.1 && oo + dt >= 0) setDragState({ clipId: clip.id, start: os + dt, duration: newDur, offset: oo + dt });
-      } else {
-        setDragState({ clipId: clip.id, start: os, duration: Math.max(0.1, od + dt), offset: oo });
-      }
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      setDragState((cur) => {
-        if (cur) updateAudioClip(slate, cur.clipId, { start: cur.start, duration: cur.duration, offset: cur.offset });
-        return null;
-      });
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  };
-
-  // Apply drag state to clip display (override Yjs values during drag).
-  const getDisplayClip = (clip: AudioClip): AudioClip => {
-    if (dragState?.clipId === clip.id) return { ...clip, start: dragState.start, duration: dragState.duration, offset: dragState.offset };
-    return clip;
+    dragRef.current = { clipId: clip.id, el, origStart: clip.start, origDur: clip.duration, origOffset: clip.offset, startX: e.clientX, mode: side === 'left' ? 'trimL' : 'trimR' };
   };
 
   return (
@@ -357,9 +346,9 @@ export function AudioEditor() {
         <div className="mx-2 h-6 w-px bg-border" />
         <span ref={posDisplayRef} className="min-w-[3rem] font-mono text-sm text-text">0.0s</span>
         <div className="mx-2 h-6 w-px bg-border" />
-        <button onClick={splitSelected} disabled={!selectedClipId} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={15} /></button>
+        <button onClick={() => selectedClipId && splitAudioClip(slate, selectedClipId, positionRef.current)} disabled={!selectedClipId} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={15} /></button>
         <button onClick={duplicateSelected} disabled={!selectedClipId} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={15} /></button>
-        <button onClick={deleteSelected} disabled={!selectedClipId} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={15} /></button>
+        <button onClick={() => { if (selectedClipId) { deleteAudioClip(slate, selectedClipId); setSelectedClipId(null); } }} disabled={!selectedClipId} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={15} /></button>
         <div className="mx-2 h-6 w-px bg-border" />
         <label className="flex items-center gap-1 text-xs text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => handleBpmChange(Number(e.target.value))} className="w-12 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-sm text-text outline-none focus:border-accent" /></label>
         <button onClick={toggleMetronome} className={`flex h-8 w-8 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={14} /></button>
@@ -368,7 +357,6 @@ export function AudioEditor() {
         <div className="flex items-center gap-1"><Volume2 size={13} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => handleMasterVol(Number(e.target.value))} className="w-16 accent-accent" /></div>
         <button onClick={() => zoom('out')} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={13} /></button>
         <button onClick={() => zoom('in')} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={13} /></button>
-        <span className="text-[9px] text-text-dim">Ctrl+Scroll</span>
         <div className="flex-1" />
         <label className="flex cursor-pointer items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-text-mid hover:bg-bg-3"><Upload size={13} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs text-accent hover:bg-accent/20"><Plus size={13} />Track</button>
@@ -380,14 +368,12 @@ export function AudioEditor() {
         <div className="sticky left-0 z-10 w-48 shrink-0 border-r border-border bg-bg-2">
           <div className="flex items-center border-b border-border px-2 text-[10px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
           {tracks.length === 0 && <div className="p-3 text-center text-xs text-text-dim">No tracks. Import or add a track.</div>}
-          {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)}
-            onMute={() => { updateAudioTrack(slate, t.id, { muted: !t.muted }); engineRef.current?.updateTracks(slate); }}
-            onSolo={() => { updateAudioTrack(slate, t.id, { solo: !t.solo }); engineRef.current?.updateTracks(slate); }}
-            onVol={(v) => { updateAudioTrack(slate, t.id, { volume: v }); engineRef.current?.updateTracks(slate); }}
-            onPan={(p) => { updateAudioTrack(slate, t.id, { pan: p }); engineRef.current?.updateTracks(slate); }}
-            onArm={() => updateAudioTrack(slate, t.id, { armed: !t.armed, input: !t.armed ? 'mic' : 'none' })}
-            onRename={(n) => updateAudioTrack(slate, t.id, { name: n })}
-            onDelete={() => deleteAudioTrack(slate, t.id)} />)}
+          {tracks.map((t) => (
+            <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef}
+              onArm={() => updateAudioTrack(slate, t.id, { armed: !t.armed, input: !t.armed ? 'mic' : 'none' })}
+              onRename={(n) => updateAudioTrack(slate, t.id, { name: n })}
+              onDelete={() => deleteAudioTrack(slate, t.id)} />
+          ))}
         </div>
 
         {/* Timeline */}
@@ -410,22 +396,19 @@ export function AudioEditor() {
             const tc = clips.filter((c) => c.trackId === t.id);
             return (
               <div key={t.id} className="relative border-b border-border/20" style={{ height: TRACK_H }}>
-                {tc.map((c) => {
-                  const dc = getDisplayClip(c);
-                  return (
-                    <ClipBlock key={c.id} clip={dc} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
-                      onSelect={() => setSelectedClipId(c.id)}
-                      onDragStart={(e) => handleClipDragStart(c, e)}
-                      onTrimStart={(side, e) => handleTrimStart(c, side, e)}
-                      onSplit={() => splitAudioClip(slate, c.id, positionRef.current)}
-                      onDelete={() => { deleteAudioClip(slate, c.id); setSelectedClipId(null); }}
-                      onFadeIn={(v) => updateAudioClip(slate, c.id, { fadeIn: v })}
-                      onFadeOut={(v) => updateAudioClip(slate, c.id, { fadeOut: v })}
-                      onNormalize={() => { const cl = readAudioClip(slate.audioClips().get(c.id)!, c.id); if (cl) updateAudioClip(slate, c.id, { samples: normalizeSamples(cl) }); }}
-                      onReverse={() => { const cl = readAudioClip(slate.audioClips().get(c.id)!, c.id); if (cl) updateAudioClip(slate, c.id, { samples: reverseSamples(cl) }); }}
-                    />
-                  );
-                })}
+                {tc.map((c) => (
+                  <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
+                    onSelect={() => setSelectedClipId(c.id)}
+                    onDragStart={startClipDrag}
+                    onTrimStart={startTrim}
+                    onSplit={() => splitAudioClip(slate, c.id, positionRef.current)}
+                    onDelete={() => { deleteAudioClip(slate, c.id); setSelectedClipId(null); }}
+                    onFadeIn={(v) => updateAudioClip(slate, c.id, { fadeIn: v })}
+                    onFadeOut={(v) => updateAudioClip(slate, c.id, { fadeOut: v })}
+                    onNormalize={() => { const cl = readAudioClip(slate.audioClips().get(c.id)!, c.id); if (cl) updateAudioClip(slate, c.id, { samples: normalizeSamples(cl) }); }}
+                    onReverse={() => { const cl = readAudioClip(slate.audioClips().get(c.id)!, c.id); if (cl) updateAudioClip(slate, c.id, { samples: reverseSamples(cl) }); }}
+                  />
+                ))}
               </div>
             );
           })}
@@ -444,12 +427,38 @@ export function AudioEditor() {
   );
 }
 
-// ── Track header ────────────────────────────────────────────────────────────
+// ── Track header with LOCAL volume/pan (debounced Yjs) ──────────────────────
 
-const TrackHeader = memo(function TrackHeader({ track, hasSolo, onMute, onSolo, onVol, onPan, onArm, onRename, onDelete }: {
-  track: AudioTrack; hasSolo: boolean; onMute: () => void; onSolo: () => void;
-  onVol: (v: number) => void; onPan: (p: number) => void; onArm: () => void; onRename: (n: string) => void; onDelete: () => void;
+const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef, onArm, onRename, onDelete }: {
+  track: AudioTrack; hasSolo: boolean;
+  slate: ReturnType<typeof useRoom>['slate'];
+  engineRef: React.RefObject<AudioEngine | null>;
+  onArm: () => void; onRename: (n: string) => void; onDelete: () => void;
 }) {
+  const [vol, setVol] = useState(track.volume);
+  const [pan, setPan] = useState(track.pan);
+  const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const panTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync from Yjs when track changes externally.
+  useEffect(() => { setVol(track.volume); }, [track.volume]);
+  useEffect(() => { setPan(track.pan); }, [track.pan]);
+
+  const onVol = (v: number) => {
+    setVol(v);
+    engineRef.current?.updateTracks(slate);
+    if (volTimer.current) clearTimeout(volTimer.current);
+    volTimer.current = setTimeout(() => updateAudioTrack(slate, track.id, { volume: v }), 150);
+  };
+  const onPan = (p: number) => {
+    setPan(p);
+    engineRef.current?.updateTracks(slate);
+    if (panTimer.current) clearTimeout(panTimer.current);
+    panTimer.current = setTimeout(() => updateAudioTrack(slate, track.id, { pan: p }), 150);
+  };
+  const onMute = () => { updateAudioTrack(slate, track.id, { muted: !track.muted }); engineRef.current?.updateTracks(slate); };
+  const onSolo = () => { updateAudioTrack(slate, track.id, { solo: !track.solo }); engineRef.current?.updateTracks(slate); };
+
   return (
     <div className="border-b border-border/20 px-2 py-1.5" style={{ height: TRACK_H }}>
       <div className="flex items-center gap-1">
@@ -462,9 +471,9 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, onMute, onSolo, 
       </div>
       <div className="mt-1 flex items-center gap-1.5">
         <Volume2 size={9} className="shrink-0 text-text-dim" />
-        <input type="range" min={0} max={1} step={0.01} value={track.volume} onChange={(e) => onVol(Number(e.target.value))} className="h-1 flex-1 accent-accent" />
+        <input type="range" min={0} max={1} step={0.01} value={vol} onChange={(e) => onVol(Number(e.target.value))} className="h-1 flex-1 accent-accent" />
         <Sliders size={9} className="shrink-0 text-text-dim" />
-        <input type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(e) => onPan(Number(e.target.value))} className="h-1 w-10 accent-accent" />
+        <input type="range" min={-1} max={1} step={0.01} value={pan} onChange={(e) => onPan(Number(e.target.value))} className="h-1 w-10 accent-accent" />
       </div>
     </div>
   );
@@ -474,7 +483,8 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, onMute, onSolo, 
 
 const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart, onSplit, onDelete, onFadeIn, onFadeOut, onNormalize, onReverse }: {
   clip: AudioClip; pxPerSec: number; selected: boolean; onSelect: () => void;
-  onDragStart: (e: React.PointerEvent) => void; onTrimStart: (side: 'left' | 'right', e: React.PointerEvent) => void;
+  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => void;
+  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => void;
   onSplit: () => void; onDelete: () => void; onFadeIn: (v: number) => void; onFadeOut: (v: number) => void;
   onNormalize: () => void; onReverse: () => void;
 }) {
@@ -482,15 +492,16 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
   const width = Math.max(4, clip.duration * pxPerSec);
   const fiW = clip.fadeIn * pxPerSec;
   const foW = clip.fadeOut * pxPerSec;
+  const elRef = useRef<HTMLDivElement | null>(null);
 
   return (
-    <div onPointerDown={(e) => { e.stopPropagation(); onSelect(); onDragStart(e); }} className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}25` }}>
+    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(); onDragStart(clip, e, elRef.current); } }} className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}25` }}>
       <MemoWaveform samples={clip.samples} channels={clip.channels} pxPerSec={pxPerSec} duration={clip.duration} color={clip.color} />
       {clip.fadeIn > 0 && <div className="absolute top-0 bottom-0 left-0" style={{ width: fiW, background: `linear-gradient(to right, ${clip.color}00, ${clip.color}30)`, clipPath: 'polygon(0 0, 100% 50%, 0 100%)' }} />}
       {clip.fadeOut > 0 && <div className="absolute top-0 bottom-0 right-0" style={{ width: foW, background: `linear-gradient(to left, ${clip.color}00, ${clip.color}30)`, clipPath: 'polygon(100% 0, 0 50%, 100% 100%)' }} />}
       <span className="absolute left-1 top-0 truncate text-[8px] font-medium text-text-mid/80">{clip.name}</span>
-      <div onPointerDown={(e) => onTrimStart('left', e)} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/20 opacity-0 group-hover:opacity-100" />
-      <div onPointerDown={(e) => onTrimStart('right', e)} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/20 opacity-0 group-hover:opacity-100" />
+      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/20 opacity-0 group-hover:opacity-100" />
+      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/20 opacity-0 group-hover:opacity-100" />
       {selected && (
         <div className="absolute bottom-0.5 left-1 right-1 flex items-center gap-1">
           <label className="flex items-center gap-0.5 text-[7px] text-text-dim">FI<input type="range" min={0} max={clip.duration / 2} step={0.05} value={clip.fadeIn} onChange={(e) => onFadeIn(Number(e.target.value))} onPointerDown={(e) => e.stopPropagation()} className="h-0.5 w-10 accent-accent" /></label>

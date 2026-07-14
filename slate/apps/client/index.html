@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0c0e" />
+    <meta name="description" content="Slate — real-time collaborative 2D whiteboard and Blender-style 3D editor. Peer-to-peer, no accounts." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Slate" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <title>Slate</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self' ws: wss: https: data: blob:; worker-src 'self' blob:; child-src blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+    />
+  </head>
+  <body>
+    <style>
+      /* Boot placeholder — replaced the moment React mounts. If scripts fail
+         (stale cache after a deploy), the delayed hint tells the user what to
+         do instead of leaving a black screen. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: #0c0c0e;
+        color: #8b8a99;
+        font: 14px/1.5 system-ui, sans-serif;
+        text-align: center;
+      }
+      #boot .spin {
+        width: 28px;
+        height: 28px;
+        margin: 0 auto 14px;
+        border: 2px solid #26262e;
+        border-top-color: #7c6aff;
+        border-radius: 50%;
+        animation: bootspin 0.9s linear infinite;
+      }
+      #boot .hint {
+        opacity: 0;
+        margin-top: 10px;
+        font-size: 12px;
+        animation: boothint 0.5s ease 8s forwards;
+      }
+      @keyframes bootspin { to { transform: rotate(1turn); } }
+      @keyframes boothint { to { opacity: 1; } }
+    </style>
+    <div id="root">
+      <div id="boot">
+        <div>
+          <div class="spin"></div>
+          <div>Loading Slate…</div>
+          <div class="hint">Stuck? Refresh the page (Ctrl+Shift+R) to fetch the latest version.</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

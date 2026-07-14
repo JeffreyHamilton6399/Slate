@@ -108,3 +108,23 @@ Work Log:
 
 Stage Summary:
 - 6 files modified. Browser-verified: grid purple, timeline shows 1 row (selected only), no runtime errors. TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-5
+Agent: main (Z.ai Code)
+Task: Fix round 5 (icon toggles, required name, remove dimensions, timeline drag/delete fixes, single bar, wheel for bevel, accent grid+material)
+
+Work Log:
+- Onboarding + Home: public/private and 2D/3D are now single-icon toggle buttons (click to flip icon) instead of 2-button segmented controls. Saves horizontal space.
+- Onboarding: project name is now required (Enter board disabled until named).
+- Properties: removed the 3D Dimensions row (Scale already covers it).
+- Timeline keyframe drag: moveKeyframe now tracks the key's CURRENT time each drag tick (was re-searching from the original time with a 0.1s tolerance, so the drag stopped after moving > 0.1s). Generous 1.0s tolerance + no-op guard when already at target.
+- Timeline keyframe delete: increased withoutKey tolerance from 0.05s to 0.5s so the Delete button reliably removes the nearest key without pixel-perfect scrubbing. Verified: 2 keys → delete → 1 key.
+- Timeline: removed the duplicate keyframe diamonds from the scrubber track (they were already in the dope sheet row, making "two keyframing things"). Now one single bar with snap ticks only.
+- Timeline: dope sheet shows one row per SELECTED animated object (1 selected = 1 row; 2 selected = 2 rows).
+- Bevel/loop-cut wheel: mouse wheel now increases cuts/segments for both bevel and loop-cut (was loop-cut only). preventDefault stops OrbitControls from zooming during these modals.
+- Accent color recolors grid lines: section = accent, cell = darkened accent (read from --accent CSS var at runtime, recomputed when the accent setting changes).
+- Accent color recolors default material: defaultMaterial() reads --accent so new objects match the custom accent.
+
+Stage Summary:
+- 7 files modified. Browser-verified: required project name (disabled→enabled), icon toggles flip (2D→3D), keyframe delete works (2→1). TypeScript + ESLint clean (0 errors).

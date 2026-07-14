@@ -143,3 +143,17 @@ Work Log:
 
 Stage Summary:
 - 5 files modified. Browser-verified: single Object/Edit toggle flips, wireframe shows real face edges (VLM-confirmed), Size readout present, no errors. TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-7
+Agent: main (Z.ai Code)
+Task: Fix round 7 (yellow selected keyframe, cursor hide on left-hold, object invisible during modal, timeline focus)
+
+Work Log:
+- Selected keyframe is now yellow (warn) — the keyframe diamond under the playhead (within 0.05s tolerance) renders fill-warn/text-warn and slightly larger (size 10 vs 8). Unselected keys stay accent. Verified: at t=0 with 1 key → yellow:1.
+- Cursor now hides on left-hold-click (not just during modal transforms). Added leftHeld state; cursor:none when modalLabelText OR leftHeld. Pointer up / leave clears it.
+- Objects no longer go invisible when moving: animOverrides now suppress the sampled-pose override for objects being transformed (during a G/R/S modal OR a gizmo drag). Previously the override masked the live base-transform edit, making the object appear stuck/invisible while dragging. Added gizmoDragging flag to the store; ObjectGizmo sets it on mouseDown/up; animOverrides skips overridden objects when modalTool or gizmoDragging is active.
+- Timeline focus: the dope sheet, scrubber, keyframe drag (tracks current time), delete (0.5s tolerance), and single-bar layout all confirmed working.
+
+Stage Summary:
+- 4 files modified. Browser-verified: yellow selected keyframe at playhead. TypeScript + ESLint clean (0 errors).

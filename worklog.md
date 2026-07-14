@@ -175,3 +175,19 @@ Work Log:
 
 Stage Summary:
 - 6 files modified. Browser-verified: bevel wheel changes width (5%→7%) without zooming, timeline cursor no longer stop-sign, no runtime errors. TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-9
+Agent: main (Z.ai Code)
+Task: Fix round 9 (animation transforms, timeline drag offset, infinite grid zoom, CAD on-edge labels, pivot setting, more 2D tools)
+
+Work Log:
+- Animation: confirmed transforms (location/rotation/scale) update live as the playhead scrubs — animOverrides sample the keyframe pose and apply it to the rendered object. Properties panel reads the sampled transform too.
+- Timeline drag offset: fixed the keyframe drag rect calculation (was using parentElement rect with implicit padding offset; now uses the track's client rect directly so left:0 = rect.left).
+- Grid infinite zoom: removed maxDistance from OrbitControls (was implicitly limited); set minDistance=0.1. Grid fadeDistance increased from 40 to 10000 so the grid stays visible when zoomed far out (Blender-style infinite zoom).
+- CAD on-edge measurements: selected edges now show a length label (e.g. "1.234 m") directly ON the edge midpoint in 3D space (drei Html overlay), not just in the bottom HUD tooltip. Added scale param to ElementHighlight; computes world-space edge length.
+- Transform pivot point setting: added PivotMode (median/cursor/individual/active) to the store + a cycle button in the 3D toolbar (next to Global/Local). Click to cycle: Median → Cursor → Indiv. → Active → Median. Verified.
+- More 2D tools: added 4 new brush variants (Pencil, Marker, Calligraphy, Airbrush) with per-brush size/opacity/thinning profiles (pencil=thin+textured, marker=bold+opaque, calligraphy=pressure-driven, airbrush=soft+low-opacity). Added 6 new shapes (Heart, Cloud, Speech Bubble, Diamond, Pentagon, Hexagon). All appear in the Tools panel and can be favorited to the left rail. Updated schema (StrokeKind, ShapeKind), createTool, InkTool draft profiles, renderer brush tuning, ToolsPanel, and left-rail Toolbar defs.
+
+Stage Summary:
+- 9 files modified. Browser-verified: pivot cycle (Median→Cursor→Indiv.), new 2D tools present (Pencil/Marker/Calligraphy/Airbrush/Diamond). TypeScript + ESLint clean (0 errors).

@@ -157,3 +157,21 @@ Work Log:
 
 Stage Summary:
 - 4 files modified. Browser-verified: yellow selected keyframe at playhead. TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-8
+Agent: main (Z.ai Code)
+Task: Fix round 8 (fly camera publishing, grid follow, timeline stop-sign, bevel wheel, loop-cut preview, home polling)
+
+Work Log:
+- Pulled latest from GitHub (commit d19754c by other AI: timeline auto-key, single transform-tool button, MP4 render, clean recordings, reload fix).
+- Fly mode camera: reduced awareness publish throttle from 150ms to 50ms during fly mode so remote peers see the camera move smoothly in real time (was static until release). PeerCamera already had lerp smoothing.
+- 3D grid: set followCamera=true so the grid follows the camera as you fly/orbit (was stuck at origin, looked weird when navigating away).
+- Timeline stop-sign cursor: the viewport container's onPointerDownCapture was setting leftHeld=true for ALL clicks inside the viewport (including timeline UI), which set cursor:none and conflicted with the range input drag (producing a not-allowed/stop-sign cursor). Now only sets leftHeld when the click target is the canvas element.
+- Bevel/loop-cut wheel: moved the wheel handler from window to the container element in CAPTURE phase so it fires BEFORE OrbitControls' canvas-level wheel listener. preventDefault + stopPropagation now fully stops zoom during bevel/loop-cut. Bevel scroll changes the bevel width (amount); loop-cut scroll changes cut count. Verified: Bevel 5% → scroll → 7%, no zoom.
+- Bevel/loop-cut preview: scalar modals now apply the initial preview immediately on start (applyMeshScalar called right after startMeshScalar), so the user sees the bevel/cut result the moment they press the shortcut — Blender shows the preview before clicking. Bevel starts with a small visible amount (5%).
+- Home page: added 10s polling for live boards so visibility toggles by other users reflect without a manual refresh.
+- Fixed ESLint error in useSlateRoom.ts (let → const for unassigned entry).
+
+Stage Summary:
+- 6 files modified. Browser-verified: bevel wheel changes width (5%→7%) without zooming, timeline cursor no longer stop-sign, no runtime errors. TypeScript + ESLint clean (0 errors).

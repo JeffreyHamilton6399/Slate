@@ -91,3 +91,20 @@ Work Log:
 
 Stage Summary:
 - 9 files modified. Browser-verified: select-mode cycle (Vert→Edge→Face→Vert), Board Settings visibility toggle (public↔private), Home redesign loads clean. TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: FIX-4
+Agent: main (Z.ai Code)
+Task: Fix round 4 (grid accent color, timeline scrub interpolation, selected-only keyframes, edit-mode select-all, CAD edge lengths, Home compress)
+
+Work Log:
+- 3D grid lines now follow the accent color: section lines bright accent (#7c6aff), cell lines a faint accent tint (#3a3550). Verified via VLM: grid is purple.
+- Timeline scrubbing now actually interpolates object transforms between keyframes (re-enabled animOverrides for display). The gizmo syncs from the sampled pose so it stays attached to the visible mesh (no desync). Properties panel transform numbers update as you scrub (sampled transform applied to the displayed obj).
+- Timeline dope sheet now shows only the selected object's keyframe row, not every animated object in the scene. Verified: 1 row for the selected cube.
+- Edit-mode Select All (A) now selects all sub-elements of the current object (verts/edges/faces per select mode) instead of selecting every object in the scene. Alt+A deselects sub-elements in edit mode.
+- CAD edge measurements: edit HUD now shows total edge length for any number of selected edges (was single-edge only).
+- Home page (signed-in) compressed: project name input capped to max-w-xs; replaced the two big create cards with a 2D/3D segmented control + a single Create button. Removed the unused CreateCard component.
+- Onboarding board-name input also capped to max-w-xs.
+
+Stage Summary:
+- 6 files modified. Browser-verified: grid purple, timeline shows 1 row (selected only), no runtime errors. TypeScript + ESLint clean (0 errors).

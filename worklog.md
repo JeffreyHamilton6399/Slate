@@ -52,3 +52,21 @@ Work Log:
 
 Stage Summary:
 - 10 files modified across apps/client/src. All 8 bugs fixed and browser-verified. Ready to push to JeffreyHamilton6399/Slate.
+
+---
+Task ID: FIX-2
+Agent: main (Z.ai Code)
+Task: Fix round 2 of Slate editor issues (smooth toggle, camera lock, timeline, brush, File>Open, edit-mode length, undo, modal preview)
+
+Work Log:
+- Removed the Smooth shading row from Properties Object section (it's in the top toolbar now).
+- Camera view lock (Blender-style): OrbitControls disabled while viewingCameraId set; MMB exits camera view via onPointerDownCapture. HUD updated to "Camera view — MMB to exit".
+- Modal transform "weird preview mouse thing": removed pointer lock (cursor now stays visible during G/R/S; guide line tracks it naturally).
+- File > Open: clicking the entry title now opens it (whole row is a button); removed the overwrite-confirm warning; description updated to "Click a snapshot to open it."
+- 2D brush too big: InkTool.move sample threshold now scales with brush size (min 0.5, or strokeWidth*0.35) so large brushes produce smooth strokes instead of jagged gaps.
+- Edit-mode edge length: editHudText now shows the selected edge's world-space length (in m) when a single edge is picked — measure mesh parts directly.
+- Ctrl+Z undo in 3D: wrapped setTransform in slate.doc.transact() so the Y.UndoManager captures each drag as one undoable op. Verified: smooth toggle → undo reverts, redo re-applies.
+- Timeline (more Blender-like): auto-expands when animation exists; keyframe diamonds in the dope sheet are now draggable to retime (moveKeyframe added to scene.ts); click (no drag) still jumps the playhead.
+
+Stage Summary:
+- 7 files modified. Browser-verified: smooth toggle ON→undo→false→redo→true; File>Open entry click opens with no confirm; no runtime errors. TypeScript + ESLint clean.

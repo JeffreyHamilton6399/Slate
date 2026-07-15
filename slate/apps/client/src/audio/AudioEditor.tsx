@@ -21,6 +21,7 @@ import {
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
+import { storeSamples, loadSamples, float32ToNumberArray } from './sampleStore';
 
 const TRACK_H = 60;
 
@@ -28,7 +29,7 @@ const TRACK_H = 60;
 // Key: `${clipId}:${sampleCount}:${width}` → data URL
 const waveformPNGCache = new Map<string, string>();
 
-function computeWaveformPNG(samples: number[], channels: number, width: number, color: string, height: number): string {
+function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number): string {
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   const w = Math.max(2, Math.floor(width));
@@ -52,33 +53,28 @@ function computeWaveformPNG(samples: number[], channels: number, width: number, 
   return canvas.toDataURL();
 }
 
-/** Waveform image — uses cached PNG, only recomputes when samples change. */
-const WaveformImg = memo(function WaveformImg({ clipId, yMap, channels, width, color }: {
-  clipId: string; yMap: Y.Map<unknown>; channels: number; width: number; color: string;
+/** Waveform image — loads samples async from IndexedDB, caches PNG. */
+const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, width, color }: {
+  clipId: string; sampleKey: string; channels: number; width: number; color: string;
 }) {
   const height = TRACK_H - 6;
   const [imgUrl, setImgUrl] = useState<string>('');
 
-  // Only recompute when clipId or sample count changes — NOT on every version bump.
-  const sampleCount = useMemo(() => {
-    const s = readAudioClipSamples(yMap);
-    return s.length;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clipId, yMap]);
-
   useEffect(() => {
-    const cacheKey = `${clipId}:${sampleCount}:${Math.floor(width)}`;
-    let url = waveformPNGCache.get(cacheKey);
-    if (!url) {
-      const samples = readAudioClipSamples(yMap);
-      url = computeWaveformPNG(samples, channels, width, color, height);
+    const cacheKey = `${clipId}:${sampleKey}:${Math.floor(width)}`;
+    const cached = waveformPNGCache.get(cacheKey);
+    if (cached) { setImgUrl(cached); return; }
+    let cancelled = false;
+    void loadSamples(sampleKey).then((samples) => {
+      if (cancelled) return;
+      const url = computeWaveformPNG(samples, channels, width, color, height);
       waveformPNGCache.set(cacheKey, url);
-    }
-    setImgUrl(url);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clipId, sampleCount, width, color]);
+      setImgUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [clipId, sampleKey, channels, width, color, height]);
 
-  if (!imgUrl) return null;
+  if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
   return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
 });
 
@@ -86,27 +82,32 @@ const WaveformImg = memo(function WaveformImg({ clipId, yMap, channels, width, c
 
 function normalizeSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
   const yo = slate.audioClips().get(clipId); if (!yo) return;
-  const samples = readAudioClipSamples(yo);
+  const sampleKey = yo.get('sampleKey') as string;
   const channels = (yo.get('channels') as number) ?? 1;
-  let max = 0;
-  for (let i = 0; i < samples.length; i += channels)
-    for (let ch = 0; ch < channels; ch++) max = Math.max(max, Math.abs(samples[i + ch] ?? 0));
-  if (max < 1e-6) return;
-  const g = 1 / max;
-  updateAudioClip(slate, clipId, { samples: samples.map((s) => s * g) });
-  // Invalidate waveform cache for this clip.
-  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+  void loadSamples(sampleKey).then((samples) => {
+    let max = 0;
+    for (let i = 0; i < samples.length; i += channels)
+      for (let ch = 0; ch < channels; ch++) max = Math.max(max, Math.abs(samples[i + ch] ?? 0));
+    if (max < 1e-6) return;
+    const g = 1 / max;
+    const normed = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) normed[i] = samples[i]! * g;
+    void storeSamples(sampleKey, float32ToNumberArray(normed));
+    for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+  });
 }
 
 function reverseSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
   const yo = slate.audioClips().get(clipId); if (!yo) return;
-  const samples = readAudioClipSamples(yo);
+  const sampleKey = yo.get('sampleKey') as string;
   const ch = (yo.get('channels') as number) ?? 1;
-  const frames = samples.length / ch;
-  const out: number[] = new Array(samples.length);
-  for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
-  updateAudioClip(slate, clipId, { samples: out });
-  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+  void loadSamples(sampleKey).then((samples) => {
+    const frames = samples.length / ch;
+    const out = new Float32Array(samples.length);
+    for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
+    void storeSamples(sampleKey, float32ToNumberArray(out));
+    for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+  });
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -218,7 +219,7 @@ export function AudioEditor() {
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
       const k = e.key.toLowerCase();
       if (k === ' ') { e.preventDefault(); togglePlay(); }
-      else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); splitAudioClip(slate, selectedRef.current, positionRef.current); }
+      else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); void splitAudioClip(slate, selectedRef.current, positionRef.current); }
       else if ((k === 'delete' || k === 'backspace') && selectedRef.current) { e.preventDefault(); deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); }
       else if (k === 'd' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); dupClip(selectedRef.current); }
       else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
@@ -282,11 +283,11 @@ export function AudioEditor() {
     }
   }, [recording, tracks, slate]);
 
-  const dupClip = useCallback((id: string) => {
+  const dupClip = useCallback(async (id: string) => {
     const yo = slate.audioClips().get(id); if (!yo) return;
     const c = readAudioClip(yo, id); if (!c) return;
-    const samples = readAudioClipSamples(yo);
-    addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples, sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
+    const samples = await loadSamples(c.sampleKey);
+    await addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples: float32ToNumberArray(samples), sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
   }, [slate]);
 
   const handleFileImport = useCallback(async (file: File) => {
@@ -390,13 +391,10 @@ export function AudioEditor() {
           {/* Clips */}
           {tracks.map((t) => (
             <div key={t.id} className="relative border-b border-border/15" style={{ height: TRACK_H }}>
-              {clips.filter((c) => c.trackId === t.id).map((c) => {
-                const yMap = slate.audioClips().get(c.id);
-                return (
-                  <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id} yMap={yMap}
-                    onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
-                );
-              })}
+              {clips.filter((c) => c.trackId === t.id).map((c) => (
+                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
+                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
+              ))}
             </div>
           ))}
           {/* Seek */}
@@ -454,8 +452,8 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
 
 // ── Clip block ──────────────────────────────────────────────────────────────
 
-const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, yMap, onSelect, onDragStart, onTrimStart, slate }: {
-  clip: AudioClip; pxPerSec: number; selected: boolean; yMap: Y.Map<unknown> | undefined;
+const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart, slate }: {
+  clip: AudioClip; pxPerSec: number; selected: boolean;
   onSelect: (id: string) => void;
   onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => void;
   onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => void;
@@ -469,13 +467,13 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, yMap, onSe
   return (
     <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); onDragStart(clip, e, elRef.current); } }}
       className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
-      {yMap && <WaveformImg clipId={clip.id} yMap={yMap} channels={clip.channels} width={w} color={clip.color} />}
+      {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} width={w} color={clip.color} />}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current); }} className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
       {selected && (
         <div className="absolute bottom-0.5 left-1 right-1 flex items-center gap-0.5">
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Split"><Scissors size={7} /></button>
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => void splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Split"><Scissors size={7} /></button>
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => normalizeSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Normalize"><Wand2 size={7} /></button>
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => reverseSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Reverse"><FlipHorizontal2 size={7} /></button>
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => { deleteAudioClip(slate, clip.id); }} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-danger" title="Delete"><Trash2 size={7} /></button>

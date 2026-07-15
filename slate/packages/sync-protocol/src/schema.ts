@@ -277,10 +277,9 @@ export interface AudioClip {
   offset: number;
   /** Duration of the clip in seconds (may be shorter than the source). */
   duration: number;
-  /** Audio sample data as Float32Array (interleaved mono or stereo).
-   *  Stored as a regular array for Yjs compatibility — large clips use
-   *  the audio store instead. */
-  samples: number[];
+  /** Key into the IndexedDB sample store (audio data is NOT in Yjs — too big).
+   *  Use loadSamples(key) to get the Float32Array PCM data. */
+  sampleKey: string;
   /** Sample rate of the source audio (e.g. 44100). */
   sampleRate: number;
   /** Number of channels (1 = mono, 2 = stereo). */

@@ -29,7 +29,7 @@ export function Onboarding() {
     const params = new URLSearchParams(window.location.search);
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     const linkModeRaw = params.get('mode');
-    const linkMode = linkModeRaw === '3d' ? '3d' : linkModeRaw === '2d' ? '2d' : null;
+    const linkMode = linkModeRaw === '3d' ? '3d' : linkModeRaw === '2d' ? '2d' : linkModeRaw === 'audio' ? 'audio' : null;
 
     fetchRooms()
       .then((rs) => {

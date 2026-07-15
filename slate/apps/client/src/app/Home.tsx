@@ -356,19 +356,23 @@ function Home({ email, userId }: { email: string; userId: string }) {
     const params = new URLSearchParams(window.location.search);
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     if (!linkBoard) return;
-    const linkMode = params.get('mode') === '3d' ? '3d' : '2d';
+    const rawMode = params.get('mode');
+    const linkMode = rawMode === '3d' ? '3d' : rawMode === '2d' ? '2d' : rawMode === 'audio' ? 'audio' : null;
     window.history.replaceState(null, '', window.location.pathname);
-    const join = (creator: boolean) =>
+    const join = (creator: boolean, mode: '2d' | '3d' | 'audio') =>
       enterBoard({
         name: linkBoard,
-        mode: linkMode,
+        mode,
         visibility: 'public',
         iAmCreator: creator,
         joinedAt: Date.now(),
       });
     fetchRooms()
-      .then((rs) => join(!rs.some((r) => r.name === linkBoard)))
-      .catch(() => join(true));
+      .then((rs) => {
+        const found = rs.find((r) => r.name === linkBoard);
+        join(!found, linkMode ?? found?.mode ?? '2d');
+      })
+      .catch(() => join(true, linkMode ?? '2d'));
   }, [enterBoard]);
 
   const open = (name: string, m: '2d' | '3d' | 'audio', creator: boolean) =>

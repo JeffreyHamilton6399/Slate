@@ -67,7 +67,8 @@ export function App() {
     if (!linkBoard) return;
     const cur = useAppStore.getState().currentBoard;
     if (!cur || cur.name === linkBoard) return;
-    const linkMode = params.get('mode') === '3d' ? '3d' : params.get('mode') === '2d' ? '2d' : null;
+    const rawMode = params.get('mode');
+    const linkMode = rawMode === '3d' ? '3d' : rawMode === '2d' ? '2d' : rawMode === 'audio' ? 'audio' : null;
     window.history.replaceState(null, '', window.location.pathname);
     fetchRooms()
       .then((rooms) => {

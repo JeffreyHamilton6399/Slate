@@ -382,9 +382,11 @@ export function AudioEditor() {
               </>
             )}
           </div>
+          {/* Seek layer — background click catcher (behind clips) */}
+          <div className="absolute inset-0 top-7" onPointerDown={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / pxRef.current); }} />
           {/* Grid background */}
-          <div className="absolute inset-0 top-7" style={gridStyle}>
-            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
+          <div className="pointer-events-none absolute inset-0 top-7" style={gridStyle}>
+            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="pointer-events-auto absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
           </div>
           {/* Playhead */}
           <div ref={playheadRef} className="absolute top-0 bottom-0 z-20 w-0.5 bg-warn pointer-events-none" style={{ transform: 'translateX(0px)' }}>
@@ -392,15 +394,13 @@ export function AudioEditor() {
           </div>
           {/* Clips */}
           {tracks.map((t) => (
-            <div key={t.id} className="relative border-b border-border/15" style={{ height: TRACK_H }}>
+            <div key={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
               {clips.filter((c) => c.trackId === t.id).map((c) => (
                 <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
                   onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
               ))}
             </div>
           ))}
-          {/* Seek */}
-          <div className="absolute inset-0" onPointerDown={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / pxRef.current); }} />
         </div>
       </div>
 
@@ -468,7 +468,7 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
 
   return (
     <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current); } }}
-      className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
+      className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
       {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} width={w} color={clip.color} />}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />

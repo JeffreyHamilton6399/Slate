@@ -692,8 +692,8 @@ function ElementHighlight({
       )}
       {/* On-edge length labels (CAD-style, sit on the line itself). */}
       {edgeLabels.map((lbl, i) => (
-        <Html key={i} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
-          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-0 font-mono text-[8px] font-medium text-black shadow">
+        <Html key={i} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-0.5 py-0 font-mono text-[7px] font-medium text-black shadow">
             {lbl.len}
           </div>
         </Html>
@@ -818,16 +818,16 @@ function FaceHighlight({
       </mesh>
       {/* Perimeter edge length labels (CAD-style, sit on each edge midpoint). */}
       {edgeLabels.map((lbl, i) => (
-        <Html key={`e${i}`} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
-          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-0 font-mono text-[8px] font-medium text-black shadow">
+        <Html key={`e${i}`} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-0.5 py-0 font-mono text-[7px] font-medium text-black shadow">
             {lbl.len}
           </div>
         </Html>
       ))}
-      {/* Face area label at the centroid (slightly larger pill so it reads as the "primary" callout). */}
+      {/* Face area label at the centroid (small pill so it doesn't dominate the callout). */}
       {areaLabels.map((lbl, i) => (
-        <Html key={`a${i}`} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
-          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn px-1 py-0 font-mono text-[8px] font-semibold text-black shadow">
+        <Html key={`a${i}`} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn px-0.5 py-0 font-mono text-[7px] font-semibold text-black shadow">
             {lbl.area}
           </div>
         </Html>

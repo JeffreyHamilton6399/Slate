@@ -7,11 +7,20 @@
  * separate IndexedDB database, and keep only a string key in the Yjs clip.
  *
  * The key is `clipId` — lookups are O(1) via IndexedDB's key path.
+ *
+ * MULTIPLAYER SYNC: For clips under the SYNC_SIZE_LIMIT (~500KB), samples are
+ * also published to a Yjs Y.Map (base64-encoded) so other peers in the room
+ * receive them automatically. Larger clips stay local-only (would freeze Yjs).
  */
+
+import * as Y from 'yjs';
 
 const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
 let dbPromise: Promise<IDBDatabase> | null = null;
+
+/** Maximum sample blob size (in bytes) to sync via Yjs. ~500KB = ~11s mono @ 44.1kHz. */
+const SYNC_SIZE_LIMIT = 500_000;
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -29,17 +38,78 @@ function openDB(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
+// ── Multiplayer sample sync via Yjs ─────────────────────────────────────────
+// A separate Y.Map on the same doc, keyed by sampleKey, holding base64 strings.
+// Only used for clips under SYNC_SIZE_LIMIT. Listened to by all peers to
+// auto-populate their local IndexedDB.
+
+let syncMap: Y.Map<string> | null = null;
+let syncRoom: { slate: { doc: Y.Doc } } | null = null;
+const syncedKeys = new Set<string>();
+
+/** Register the Yjs Y.Map used for sample sync. Call once per room. */
+export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
+  if (syncRoom === room) return;
+  syncRoom = room;
+  syncMap = room.slate.doc.getMap<string>('audioSampleSync');
+  // Listen for remote sample additions.
+  syncMap.observe((event) => {
+    for (const key of event.keysChanged) {
+      if (syncedKeys.has(key)) continue;
+      const base64 = syncMap!.get(key);
+      if (!base64) continue;
+      // Decode base64 → ArrayBuffer → Float32Array → store locally.
+      try {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const float32 = new Float32Array(bytes.buffer);
+        syncedKeys.add(key);
+        void storeSamples(key, float32);
+        // Notify the AudioEditor that samples arrived.
+        window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: key }));
+      } catch {
+        // ignore decode errors
+      }
+    }
+  });
+}
+
+/** Check if a sampleKey has been synced (exists in the Yjs sync map). */
+export function isSampleSynced(sampleKey: string): boolean {
+  return syncedKeys.has(sampleKey);
+}
+
+/** Publish samples to the Yjs sync map so other peers receive them. */
+function publishToSyncMap(key: string, float32: Float32Array): void {
+  if (!syncMap || float32.byteLength > SYNC_SIZE_LIMIT) return;
+  try {
+    // Float32Array → ArrayBuffer → base64
+    const bytes = new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    const base64 = btoa(binary);
+    syncMap.set(key, base64);
+    syncedKeys.add(key);
+  } catch {
+    // ignore — large clips just don't sync
+  }
+}
+
 /** Store audio samples in IndexedDB. Accepts number[] or Float32Array. */
 export async function storeSamples(key: string, samples: number[] | Float32Array): Promise<void> {
   const db = await openDB();
   // Convert to Float32Array for compactness if not already.
   const float32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
-  return new Promise((resolve, reject) => {
+  const promise = new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(float32.buffer, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  await promise;
+  // After local store succeeds, publish to the Yjs sync map for other peers.
+  publishToSyncMap(key, float32);
 }
 
 /** Load audio samples from IndexedDB by key. Returns Float32Array. */
@@ -60,12 +130,16 @@ export async function loadSamples(key: string): Promise<Float32Array> {
 /** Delete samples for a key (when a clip is deleted). */
 export async function deleteSamples(key: string): Promise<void> {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  const promise = new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  await promise;
+  // Also remove from the Yjs sync map.
+  if (syncMap && syncMap.has(key)) syncMap.delete(key);
+  syncedKeys.delete(key);
 }
 
 /** Convert Float32Array back to number[] (only when needed for processing). */

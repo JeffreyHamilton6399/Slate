@@ -4,13 +4,15 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, FolderOpen, Clock, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
+import { Dialog } from '../ui/Dialog';
 import { useAppStore } from './store';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { cn } from '../utils/cn';
+import { listSaves, deleteSave } from '../files/snapshot';
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -22,6 +24,36 @@ export function Onboarding() {
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [mode, setMode] = useState<'2d' | '3d' | 'audio'>('2d');
   const [rooms, setRooms] = useState<PublicRoom[]>([]);
+  const [allProjectsOpen, setAllProjectsOpen] = useState(false);
+  const [savesVersion, setSavesVersion] = useState(0);
+
+  // Build recents from local saves (max 3).
+  const recents = (() => {
+    const byBoard = new Map<string, { boardName: string; mode: '2d' | '3d' | 'audio'; savedAt: number }>();
+    for (const e of listSaves()) {
+      const cur = byBoard.get(e.boardName);
+      if (!cur || e.savedAt > cur.savedAt) {
+        byBoard.set(e.boardName, { boardName: e.boardName, mode: e.mode, savedAt: e.savedAt });
+      }
+    }
+    return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 3);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })();
+
+  const allProjects = (() => {
+    const byBoard = new Map<string, { boardName: string; mode: '2d' | '3d' | 'audio'; savedAt: number }>();
+    for (const e of listSaves()) {
+      const cur = byBoard.get(e.boardName);
+      if (!cur || e.savedAt > cur.savedAt) {
+        byBoard.set(e.boardName, { boardName: e.boardName, mode: e.mode, savedAt: e.savedAt });
+      }
+    }
+    return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })();
+
+  const refreshSaves = () => setSavesVersion((v) => v + 1);
+  void savesVersion; // re-render trigger
 
   // Share links carry ?board= (and optionally &mode=). Join directly when we
   // already know the visitor's name; otherwise prefill the form.
@@ -137,6 +169,44 @@ export function Onboarding() {
             Enter board
           </Button>
         </form>
+
+        {/* Recent projects + All Projects button */}
+        {recents.length > 0 && (
+          <div className="border-t border-border pt-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="panel-title">Recent</span>
+              <button
+                type="button"
+                onClick={() => setAllProjectsOpen(true)}
+                className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-dim hover:text-text"
+              >
+                <FolderOpen size={11} />
+                All ({allProjects.length})
+              </button>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {recents.map((r) => (
+                <li key={r.boardName}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisplayName(sanitizeDisplayName(name) || 'Guest');
+                      enterBoard({ name: r.boardName, mode: r.mode, visibility: 'public', iAmCreator: false, joinedAt: Date.now() });
+                    }}
+                    className="w-full flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-mid hover:text-text hover:bg-bg-3"
+                  >
+                    <Clock size={11} className="shrink-0 text-text-dim" />
+                    <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
+                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : 'text-green')}>
+                      {r.mode}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {rooms.length > 0 && (
           <div className="border-t border-border pt-4 max-h-44 overflow-y-auto">
             <div className="panel-title mb-2">Live public boards</div>
@@ -162,8 +232,68 @@ export function Onboarding() {
           </div>
         )}
       </div>
+      {/* All Projects dialog */}
+      <Dialog open={allProjectsOpen} onOpenChange={setAllProjectsOpen} title="All Projects" description={`${allProjects.length} saved project${allProjects.length === 1 ? '' : 's'}`}>
+        <div className="max-h-[50vh] overflow-y-auto">
+          {allProjects.length === 0 ? (
+            <p className="py-8 text-center text-xs text-text-dim">No saved projects yet.</p>
+          ) : (
+            <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {allProjects.map((r) => (
+                <li key={r.boardName} className="group relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisplayName(sanitizeDisplayName(name) || 'Guest');
+                      enterBoard({ name: r.boardName, mode: r.mode, visibility: 'public', iAmCreator: false, joinedAt: Date.now() });
+                      setAllProjectsOpen(false);
+                    }}
+                    className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-bg-2 text-left hover:border-accent/50"
+                  >
+                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : 'bg-green/10 text-green')}>
+                      {r.mode.toUpperCase()}
+                    </span>
+                    <span className="flex flex-col gap-0.5 p-2">
+                      <span className="truncate text-xs font-medium text-text">{r.boardName}</span>
+                      <span className="flex items-center gap-1 text-[10px] text-text-dim">
+                        <Clock size={9} /> {timeAgo(r.savedAt)}
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      for (const e of listSaves()) if (e.boardName === r.boardName) deleteSave(e.id);
+                      refreshSaves();
+                    }}
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+                    aria-label="Delete project"
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex justify-end pt-3">
+          <Button variant="primary" size="sm" onClick={() => setAllProjectsOpen(false)}>Close</Button>
+        </div>
+      </Dialog>
     </div>
   );
+}
+
+/** Relative time formatter. */
+function timeAgo(t: number): string {
+  const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? 'yesterday' : `${d} days ago`;
 }
 
 /** A single-icon toggle button: shows one icon when active, another when not.

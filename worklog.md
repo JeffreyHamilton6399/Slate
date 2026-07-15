@@ -304,3 +304,89 @@ Stage Summary:
 - 15+ files modified across mesh, sync-protocol, canvas2d, viewport3d, audio, panels, app.
 - TypeScript: 0 errors. ESLint: 0 errors. Mesh tests: 33/33 pass (including 2 new multi-segment bevel watertight tests).
 - Browser-verified: app loads, 2D timeline visible, no console errors.
+
+---
+Task ID: ROUND3-B
+Agent: main (Z.ai Code)
+Task: Fix bevel "rotating/swirling" behavior + CAD measurement label sizing
+
+Work Log:
+- Read worklog (last entry was FIX-ROUND-2) and target files: packages/mesh/src/ops.ts (bevelVerts, lines 191-329) and apps/client/src/viewport3d/SceneObjects.tsx (ElementHighlight & FaceHighlight).
+
+Task 1 — Bevel swirl fix (packages/mesh/src/ops.ts):
+- Root cause confirmed: corner-fill edge sort used a discontinuous tangent-basis seed (`Math.abs(n.x) < 0.9 ? {x:1,y:0,z:0} : {x:0,y:1,z:0}`). As the vertex normal crossed |n.x|=0.9 during interactive dragging, the basis (u,w) flipped 90°, which could change the atan2 sort order in a non-cyclic way. Combined with the binary winding-reverse check, the final corner-fill ended up at a different cyclic rotation between edits — the "rotating kind of thing" the user reported.
+- Fix: replaced the angle sort with a deterministic topological neighbour cycle.
+  1. New block right after vertNormal computation (BEFORE the face-rewriting loop) walks each ORIGINAL face containing `vi`, records (prev, next) from the face vertex array, and chains pairs into a cycle by following "next of one == prev of next" (each shared edge appears as "next" in one face and "prev" in its CCW neighbour).
+  2. Stored in `vertNeighbourCycle: Map<number, number[]>` (vi → ordered neighbour ids).
+  3. Chain has safety counter (pairs.length+1) and falls back to face-iteration order if it can't close (non-manifold / inconsistent winding).
+  4. In the corner-fill loop, replaced `edges.sort(...)` with a cutsByNb map (neighbourId → outward cuts), then ordered edges by the cycle. Falls back to map iteration order if cycle length ≠ cutsByNb size.
+  5. Kept the winding safety net (`dot(faceNormal, n) < 0 → edges.reverse()`) — topology gives a consistent cyclic order but may be globally inverted depending on which face started the chain.
+  6. vertNormal still computed (used only for the winding check, NOT for sort). Removed all references to seed/u/w/atan2 and the `c = vGet(m, vi)` used only by the sort.
+
+Task 2 — CAD measurement labels (apps/client/src/viewport3d/SceneObjects.tsx):
+- ElementHighlight edge labels (line 695-696): `text-[8px]`→`text-[7px]`, `px-1 py-0`→`px-0.5 py-0`, `distanceFactor={8}`→`distanceFactor={6}`.
+- FaceHighlight edge labels (line 821-822): same changes.
+- FaceHighlight area labels (line 829-830): same changes (smaller pill, no longer "primary callout" sizing). Updated comment to match.
+- Labels remain centered on edge midpoint / face centroid via `<Html center>` (unchanged).
+
+Verification:
+- `cd packages/mesh && npx vitest run src/ops.test.ts` → 33/33 pass (incl. 4 bevel tests: single-corner watertight, outward winding via recalculateNormals no-op, huge-amount clamp, multi-segment watertight, multi-segment edge bevel).
+- `cd apps/client && npx tsc --noEmit` → 0 errors.
+- Dev server log shows clean compile (Next.js 16.1.3, GET / 200).
+
+Stage Summary:
+- 2 files modified.
+- All 33 mesh tests pass; TypeScript clean.
+- Bevel: topological ordering is invariant under vertex-position edits, so multi-segment quad strips no longer swirl while dragging the bevel width.
+- CAD labels: smaller (text-[7px], px-0.5) and don't scale up as aggressively (distanceFactor 6) — they sit centered on the lines as requested.
+
+---
+Task ID: ROUND3-A
+Agent: main (Z.ai Code)
+Task: 3 fixes — (1) Home recents → bottom-right widget + All Projects dialog; (2) Audio editor zoom-out to fit all clips; (3) Audio settings rotary knobs (DAW-style)
+
+Work Log:
+- Read worklog (latest FIX-ROUND-2) + the 3 target files (Home.tsx, AudioEditor.tsx, AudioSettingsPanel.tsx) + snapshot.ts (to confirm `listSaves()` shape) + Dialog.tsx (description prop) + Button.tsx (variant/size options).
+
+- **Task 1 — Home.tsx** (recents widget + All Projects):
+  • Removed the old full-width "Recent projects" `<section>` (the 2/3-col grid of large cards).
+  • Added `allProjectsFromSaves()` — same dedup-by-board logic as `recentsFromSaves()` but NO `.slice(0, 3)` cap, so it returns EVERY saved project. `recentsFromSaves()` now delegates to `allProjectsFromSaves().slice(0, 3)` (kept for the widget).
+  • Added a compact **Recent widget** inside the hero section — a small floating panel (border + `bg-bg-2/95` + `shadow-sm` + `backdrop-blur`) showing at most 3 recent projects as single-row clickable entries: `[mode badge] [name (truncate)] [time ago]`. Header has a "View all →" link. Layout uses `lg:flex-row lg:items-end lg:justify-between` so the create bar takes the left/flex-1 column and the widget sits in the bottom-right on lg+; stacks vertically on mobile (`self-end max-w-xs`).
+  • Added an **"All Projects" button** (FolderOpen icon + count badge) in the hero header row (top-right of greeting). Opens a `<Dialog>` with title "All Projects" + a description showing the total count.
+  • Added `<AllProjectsDialog>` component — a modal with a scrollable (`max-h-[60vh] overflow-y-auto`) 2/3-col grid of project cards (mode badge banner + name + time ago + hover-reveal delete button). Clicking a card opens the board and closes the dialog; delete calls `deleteSaveByBoardName` (which mirrors to cloud via the existing `onDeleteSave` bridge) then refreshes both `recents` + `allProjects` state via a new `refreshSaves()` helper.
+  • Kept the existing `recentsFromSaves()` (now wraps `allProjectsFromSaves().slice(0,3)`) and `deleteSaveByBoardName()` functions. Added `allProjects`, `allProjectsOpen` state + `refreshSaves()`.
+
+- **Task 2 — AudioEditor.tsx** (zoom out to fit all clips):
+  • Added module-level constants `MIN_PX_PER_SEC = 2`, `MAX_PX_PER_SEC = 800`, `TRACK_HEADER_W = 176` (w-44 = 11rem) — replacing the magic `10`/`800` numbers. The min dropped from 10 → 2 so a 3-minute song (180s × 2px = 360px) fits in a typical timeline viewport.
+  • Updated all 3 clamp sites: Ctrl+scroll zoom (`MIN/MAX`), zoom-out button (`MIN_PX_PER_SEC`), zoom-in button (`MAX_PX_PER_SEC`).
+  • Added `fitToWindow()` `useCallback` — computes `viewportW = scrollRef.clientWidth - TRACK_HEADER_W` (the visible timeline area, excluding the sticky header column), then `fit = viewportW / timelineDuration`, clamped to `[MIN, MAX]`. Sets `pxPerSec` so ALL clips fit in the current viewport at once.
+  • Added a **"Fit to window" button** (`Maximize2` icon, title "Fit to window") between the zoom-out and zoom-in buttons in the transport bar. Used `Maximize2` rather than `ZoomOut` to avoid two identical icons.
+  • `timelineDuration` calculation left unchanged (already correct: `Math.max(30, ...clips.map(c => c.start + c.duration), positionRef.current + 10)`).
+
+- **Task 3 — AudioSettingsPanel.tsx** (rotary knobs):
+  • Created a `RotaryKnob` component (inline in the same file) — DAW-style circular knob (Ableton/FL Studio inspired):
+    - ~48px SVG (`size=48`), 270° sweep with a gap at the bottom (135° → 405°/45° in SVG clockwise convention).
+    - **Background arc**: full 270° ring, dim (`text-text-dim/30`), strokeWidth 2, round caps.
+    - **Value arc**: from min (135°) to current value angle, accent color, strokeWidth 2. Skipped when value = min (zero-length path is invalid).
+    - **Knob body**: filled circle (`fill-bg-3 stroke-border`), radius `size/2 - 9`.
+    - **Indicator line**: from inner radius 4 to `rBody - 1`, pointing at the current value angle, accent color, strokeWidth 2.5, round caps — rotates with the value.
+    - **Value text** below the knob (font-mono text-[9px]) using a `format` prop.
+    - **Label** below the value (field-label class).
+  - Interactions:
+    - **Drag**: pointer down + vertical move. Up = increase, down = decrease. 200px = full range (Shift = 3× finer / 600px). Uses pointer capture for smooth dragging outside the SVG. Free continuous values (no stepping) for smooth DAW feel.
+    - **Mouse wheel**: native non-passive listener (attached via `useEffect` + `addEventListener('wheel', ..., { passive: false })`) so `preventDefault` works. Each notch = `max(step, range/50)` so a full sweep takes ~50 notches even for fine knobs (e.g. gain has 150 single-steps). Snaps to step grid.
+    - **Keyboard**: `role="slider"`, `tabIndex=0`, `aria-valuemin/max/now/text`. Arrow Up/Right = +step, Down/Left = -step, Home = min, End = max. `stopPropagation` on arrow keys so the AudioEditor's global seek hotkeys don't fire while focused on a knob.
+    - `snap()` helper rounds to step grid with float-drift fix (`toFixed` based on step magnitude).
+  - Replaced ALL `<input type="range">` sliders in AudioSettingsPanel with `RotaryKnob`:
+    - Clip settings: Fade In, Fade Out (2-col grid), Gain, Pan (2-col grid), Speed/Pitch (full width).
+    - Track settings: Volume, Pan (2-col grid).
+    - Same `onChange` → `setClip`/`setTrack` → Yjs update logic (no debouncing, matching the old slider behavior). Kept the same `format` functions (e.g. pan shows `L50`/`C`/`R50`, gain shows `75`, speed shows `1.00×`).
+  - Removed now-unused icon imports (`Volume2`, `VolumeX`, `Sliders`, `Gauge`) — the knob's own label replaces them.
+  - Did NOT touch the compact TrackHeader inline sliders in AudioEditor.tsx (out of task scope — those are tiny 60px-tall track-header sliders where a 48px knob wouldn't fit) or the transport-bar master volume slider (also out of scope).
+
+- `npx tsc --noEmit` from apps/client: **EXIT 0**, zero errors.
+- `npx eslint` on the 3 changed files: 0 errors, 2 pre-existing warnings (the `pxPerSec` dep in AudioEditor's `startLoopDrag` useCallback, and `version` set-but-not-read in AudioSettingsPanel — both predate this task).
+- dev.log: clean compile, `GET / 200`.
+
+Stage Summary:
+- 3 files modified (app/Home.tsx, audio/AudioEditor.tsx, panels/AudioSettingsPanel.tsx). Home now shows a compact Recent widget in the bottom-right of the hero (3 items, single-row entries) + an "All Projects" button/dialog showing ALL saved projects in a scrollable grid with delete. Audio editor zoom-out floor lowered from 10→2 px/sec so long mixes fit in the viewport, plus a Fit-to-window button (Maximize2 icon) that computes the exact px/sec to fit all clips. Audio settings panel now uses DAW-style rotary knobs (270° arc + indicator + drag/wheel/keyboard) for all clip + track numeric params. tsc + ESLint clean.

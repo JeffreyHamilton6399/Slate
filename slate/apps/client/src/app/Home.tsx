@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2 } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -314,12 +314,20 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const displayName = useAppStore((s) => s.displayName);
   const setDisplayName = useAppStore((s) => s.setDisplayName);
   const [recents, setRecents] = useState<RecentProject[]>(() => recentsFromSaves());
+  const [allProjects, setAllProjects] = useState<RecentProject[]>(() => allProjectsFromSaves());
+  const [allProjectsOpen, setAllProjectsOpen] = useState(false);
   const [rooms, setRooms] = useState<PublicRoom[]>([]);
   const [board, setBoard] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [createMode, setCreateMode] = useState<'2d' | '3d' | 'audio'>('2d');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cloudNote, setCloudNote] = useState('Syncing projects…');
+
+  /** Refresh both the recents widget + the All Projects dialog list. */
+  const refreshSaves = () => {
+    setRecents(recentsFromSaves());
+    setAllProjects(allProjectsFromSaves());
+  };
 
   // Default the collaboration display name from the account email.
   useEffect(() => {
@@ -331,7 +339,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
     let cancelled = false;
     void restoreSavesFromCloud(userId).then((r) => {
       if (cancelled) return;
-      setRecents(recentsFromSaves());
+      refreshSaves();
       setCloudNote(r.error ? `Cloud sync unavailable: ${r.error}` : '');
     });
     return () => {
@@ -408,100 +416,113 @@ function Home({ email, userId }: { email: string; userId: string }) {
 
         {/* Hero + create cards */}
         <section className="flex flex-col gap-5">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              Welcome back, <span className="text-accent">{greeting}</span>
-            </h1>
-            <p className="mt-1 text-sm text-text-dim">Start something new or pick up where you left off.</p>
-          </div>
-          <div className="flex flex-col gap-3">
-            {/* Compressed create bar: name (capped, required) + icon toggles +
-                Create button. Compact single-row layout. */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                maxLength={80}
-                value={board}
-                onChange={(e) => setBoard(e.target.value)}
-                placeholder="Project name"
-                className="min-w-0 max-w-xs flex-1"
-              />
-              <IconToggle
-                active={visibility === 'public'}
-                onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
-                onIcon={<Globe size={15} />}
-                offIcon={<Lock size={15} />}
-                onLabel="Public"
-                offLabel="Private"
-              />
-              <IconToggle
-                active={createMode !== '2d'}
-                onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : '2d')}
-                onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
-                offIcon={<PenLineIcon size={15} />}
-                onLabel={createMode === '3d' ? '3D scene' : 'Audio'}
-                offLabel="2D whiteboard"
-              />
-              <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
-                <Plus size={14} />
-                <span className="ml-1.5">Create</span>
-              </Button>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                Welcome back, <span className="text-accent">{greeting}</span>
+              </h1>
+              <p className="mt-1 text-sm text-text-dim">Start something new or pick up where you left off.</p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
+              className="shrink-0 gap-1.5 text-text-mid hover:text-text"
+              title="Browse all saved projects"
+            >
+              <FolderOpen size={14} />
+              <span className="hidden sm:inline">All Projects</span>
+              <span className="text-[10px] font-mono text-text-dim">({allProjects.length})</span>
+            </Button>
           </div>
-        </section>
+          {/* Create bar (left) + Recent widget (right) — side by side on lg so
+              the widget sits in the bottom-right corner of the hero without
+              overlapping the create controls. Stacks vertically on mobile. */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex flex-1 flex-col gap-2">
+              {/* Compressed create bar: name (capped, required) + icon toggles +
+                  Create button. Compact single-row layout. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  maxLength={80}
+                  value={board}
+                  onChange={(e) => setBoard(e.target.value)}
+                  placeholder="Project name"
+                  className="min-w-0 max-w-xs flex-1"
+                />
+                <IconToggle
+                  active={visibility === 'public'}
+                  onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
+                  onIcon={<Globe size={15} />}
+                  offIcon={<Lock size={15} />}
+                  onLabel="Public"
+                  offLabel="Private"
+                />
+                <IconToggle
+                  active={createMode !== '2d'}
+                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : '2d')}
+                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
+                  offIcon={<PenLineIcon size={15} />}
+                  onLabel={createMode === '3d' ? '3D scene' : 'Audio'}
+                  offLabel="2D whiteboard"
+                />
+                <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
+                  <Plus size={14} />
+                  <span className="ml-1.5">Create</span>
+                </Button>
+              </div>
+              {cloudNote && <span className="text-[11px] text-text-dim">{cloudNote}</span>}
+            </div>
 
-        {/* Recent projects */}
-        <section>
-          <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-sm font-semibold text-text">Recent projects</h2>
-            {cloudNote && <span className="text-[11px] text-text-dim">{cloudNote}</span>}
-          </div>
-          {recents.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-text-dim">
-              Nothing yet — create your first board above. Projects follow you on every device you
-              sign in to.
-            </div>
-          ) : (
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {recents.map((r) => (
-                <li key={r.boardName} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => open(r.boardName, r.mode, false)}
-                    className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
-                  >
-                    <span
-                      className={cn(
-                        'grid h-20 w-full place-items-center text-sm font-bold tracking-wider',
-                        r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : 'bg-green/10 text-green',
-                      )}
+            {/* Recent widget — compact floating panel in the bottom-right of
+                the hero on lg+. Shows at most the 3 most recent projects as
+                single-row clickable entries (mode badge + name + time ago). */}
+            {recents.length > 0 && (
+              <div className="w-full max-w-xs self-end lg:w-80">
+                <div className="rounded-lg border border-border bg-bg-2/95 p-2 shadow-sm backdrop-blur">
+                  <div className="mb-1 flex items-center justify-between px-0.5">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Recent</span>
+                    <button
+                      type="button"
+                      onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
+                      className="flex items-center gap-0.5 text-[10px] text-accent hover:underline"
                     >
-                      {r.mode.toUpperCase()}
-                    </span>
-                    <span className="flex flex-col gap-0.5 p-2.5">
-                      <span className="truncate text-sm font-medium text-text group-hover:text-accent">
-                        {r.boardName}
-                      </span>
-                      <span className="flex items-center gap-1 text-[11px] text-text-dim">
-                        <Clock size={10} /> {timeAgo(r.savedAt)}
-                      </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!window.confirm(`Delete saved project "${r.boardName}"? This removes the local + cloud saves, not the live board itself.`)) return;
-                      deleteSaveByBoardName(r.boardName);
-                      setRecents(recentsFromSaves());
-                    }}
-                    className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
-                    aria-label="Delete project"
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                      View all <ChevronRight size={10} />
+                    </button>
+                  </div>
+                  <ul className="flex flex-col gap-0.5">
+                    {recents.map((r) => (
+                      <li key={r.boardName}>
+                        <button
+                          type="button"
+                          onClick={() => open(r.boardName, r.mode, false)}
+                          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-bg-3"
+                        >
+                          <span
+                            className={cn(
+                              'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
+                              r.mode === '3d'
+                                ? 'bg-accent/15 text-accent'
+                                : r.mode === 'audio'
+                                  ? 'bg-warn/15 text-warn'
+                                  : 'bg-green/15 text-green',
+                            )}
+                          >
+                            {r.mode}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium text-text">{r.boardName}</span>
+                          <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-dim">
+                            <Clock size={9} />
+                            {timeAgo(r.savedAt)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Live public boards */}
@@ -539,7 +560,84 @@ function Home({ email, userId }: { email: string; userId: string }) {
         )}
       </div>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AllProjectsDialog
+        open={allProjectsOpen}
+        onOpenChange={setAllProjectsOpen}
+        projects={allProjects}
+        onOpen={(name, mode) => { open(name, mode, false); setAllProjectsOpen(false); }}
+        onDelete={(name) => {
+          if (!window.confirm(`Delete saved project "${name}"? This removes the local + cloud saves, not the live board itself.`)) return;
+          deleteSaveByBoardName(name);
+          refreshSaves();
+        }}
+      />
     </div>
+  );
+}
+
+/** Modal showing ALL saved projects in a grid with delete buttons. */
+function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projects: RecentProject[];
+  onOpen: (name: string, mode: '2d' | '3d' | 'audio') => void;
+  onDelete: (name: string) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="All Projects" description={`${projects.length} saved project${projects.length === 1 ? '' : 's'}`}>
+      {projects.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-text-dim">
+          Nothing yet — create your first board on the home screen. Projects follow you on every
+          device you sign in to.
+        </div>
+      ) : (
+        <ul className="grid max-h-[60vh] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
+          {projects.map((r) => (
+            <li key={r.boardName} className="group relative">
+              <button
+                type="button"
+                onClick={() => onOpen(r.boardName, r.mode)}
+                className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
+              >
+                <span
+                  className={cn(
+                    'grid h-16 w-full place-items-center text-xs font-bold tracking-wider',
+                    r.mode === '3d'
+                      ? 'bg-accent/10 text-accent'
+                      : r.mode === 'audio'
+                        ? 'bg-warn/10 text-warn'
+                        : 'bg-green/10 text-green',
+                  )}
+                >
+                  {r.mode.toUpperCase()}
+                </span>
+                <span className="flex flex-col gap-0.5 p-2">
+                  <span className="truncate text-xs font-medium text-text group-hover:text-accent">
+                    {r.boardName}
+                  </span>
+                  <span className="flex items-center gap-1 text-[10px] text-text-dim">
+                    <Clock size={9} /> {timeAgo(r.savedAt)}
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(r.boardName)}
+                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+                aria-label={`Delete project ${r.boardName}`}
+              >
+                <Trash2 size={11} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex justify-end pt-3">
+        <Button variant="primary" size="sm" onClick={() => onOpenChange(false)}>
+          Close
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -578,8 +676,15 @@ function IconToggle({
   );
 }
 
-/** Latest save per board, newest first. */
+/** Latest save per board, newest first — capped to the 3 most recent for the
+ *  compact Recent widget in the hero corner. */
 function recentsFromSaves(): RecentProject[] {
+  return allProjectsFromSaves().slice(0, 3);
+}
+
+/** Latest save per board, newest first — NO cap. Used by the All Projects
+ *  dialog so the user can browse every saved project. */
+function allProjectsFromSaves(): RecentProject[] {
   const byBoard = new Map<string, RecentProject>();
   for (const e of listSaves()) {
     const cur = byBoard.get(e.boardName);
@@ -587,7 +692,7 @@ function recentsFromSaves(): RecentProject[] {
       byBoard.set(e.boardName, { boardName: e.boardName, mode: e.mode, savedAt: e.savedAt });
     }
   }
-  return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 3);
+  return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt);
 }
 
 /** Delete all saves for a board name. */

@@ -24,7 +24,7 @@ import type { Mesh as MeshTopology } from '@slate/mesh';
 import { cube, sphere, cylinder, cone, plane, torus, joinMeshes, mirrorMesh } from '@slate/mesh';
 import type { SlateDoc } from '../sync/doc';
 import { makeId } from '../utils/id';
-import { withKey, withoutKey } from './animation';
+import { withKey, withoutKey, sampleAnim } from './animation';
 
 export interface SceneSnapshot {
   objects: Object3D[];
@@ -510,7 +510,12 @@ export function autoKeyframe(slate: SlateDoc, ids: Iterable<string>, t: number):
       const yo = objs.get(id);
       const obj = yo ? readObject(yo, id) : null;
       if (!yo || !obj || (obj.anim?.length ?? 0) === 0) continue;
-      yo.set('anim', withKey(obj.anim, t, obj.transform));
+      // Use the SAMPLED transform at time t (what the user sees), not the
+      // base transform — otherwise keyframing at a scrubbed position stores
+      // the wrong pose. If sampling returns null (t outside track), use base.
+      const sampled = sampleAnim(obj.anim, t);
+      const transform = sampled ?? obj.transform;
+      yo.set('anim', withKey(obj.anim, t, transform));
       keyed++;
     }
   });
@@ -526,7 +531,12 @@ export function insertKeyframe(slate: SlateDoc, ids: Iterable<string>, t: number
       const yo = objs.get(id);
       const obj = yo ? readObject(yo, id) : null;
       if (!yo || !obj) continue;
-      yo.set('anim', withKey(obj.anim, t, obj.transform));
+      // Use the SAMPLED transform at time t (what the user sees), not the
+      // base transform — so keyframing at a scrubbed position captures the
+      // visible pose. If no animation yet, use the base transform.
+      const sampled = obj.anim && obj.anim.length > 0 ? sampleAnim(obj.anim, t) : null;
+      const transform = sampled ?? obj.transform;
+      yo.set('anim', withKey(obj.anim, t, transform));
       keyed++;
     }
   });

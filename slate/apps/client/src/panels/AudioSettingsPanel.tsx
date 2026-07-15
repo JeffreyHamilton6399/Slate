@@ -5,10 +5,14 @@
  * When no clip is selected: shows selected track properties (volume, pan,
  * mute, solo, arm).
  * Also has an import button + audio asset library at the bottom.
+ *
+ * All numeric parameters use the RotaryKnob component below — a circular DAW
+ * knob (Ableton/FL Studio style) with a coloured value arc + indicator line,
+ * drag-to-adjust (vertical), mouse-wheel, and keyboard arrow support.
  */
 
-import { useEffect, useState } from 'react';
-import { Trash2, Wand2, FlipHorizontal2, Scissors, Sliders, Volume2, VolumeX, Gauge, Copy } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Trash2, Wand2, FlipHorizontal2, Scissors, Copy } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
@@ -94,50 +98,61 @@ export function AudioSettingsPanel() {
               <input type="color" value={clip.color} onChange={(e) => setClip({ color: e.target.value })} className="h-7 w-full rounded border border-border bg-transparent" />
             </div>
           </div>
-          {/* Fades */}
+          {/* Fades — rotary knobs */}
           <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-0.5">
-              <label className="field-label">Fade In</label>
-              <input type="range" min={0} max={clip.duration / 2} step={0.05} value={clip.fadeIn} onChange={(e) => setClip({ fadeIn: Number(e.target.value) })} className="w-full accent-accent" />
-              <span className="text-[9px] font-mono text-text-dim">{clip.fadeIn.toFixed(2)}s</span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <label className="field-label">Fade Out</label>
-              <input type="range" min={0} max={clip.duration / 2} step={0.05} value={clip.fadeOut} onChange={(e) => setClip({ fadeOut: Number(e.target.value) })} className="w-full accent-accent" />
-              <span className="text-[9px] font-mono text-text-dim">{clip.fadeOut.toFixed(2)}s</span>
-            </div>
+            <RotaryKnob
+              label="Fade In"
+              value={clip.fadeIn}
+              min={0}
+              max={Math.max(0.1, clip.duration / 2)}
+              step={0.05}
+              onChange={(v) => setClip({ fadeIn: v })}
+              format={(v) => `${v.toFixed(2)}s`}
+            />
+            <RotaryKnob
+              label="Fade Out"
+              value={clip.fadeOut}
+              min={0}
+              max={Math.max(0.1, clip.duration / 2)}
+              step={0.05}
+              onChange={(v) => setClip({ fadeOut: v })}
+              format={(v) => `${v.toFixed(2)}s`}
+            />
           </div>
-          {/* Gain + Pan */}
+          {/* Gain + Pan — rotary knobs */}
           <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-0.5">
-              <label className="field-label">Gain</label>
-              <div className="flex items-center gap-1">
-                <Volume2 size={12} className="shrink-0 text-text-dim" />
-                <input type="range" min={0} max={1.5} step={0.01} value={clip.gain ?? 1} onChange={(e) => setClip({ gain: Number(e.target.value) })} className="flex-1 accent-accent" />
-                <span className="w-8 text-right font-mono text-[10px] text-text-dim">{Math.round((clip.gain ?? 1) * 100)}</span>
-              </div>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <label className="field-label">Pan</label>
-              <div className="flex items-center gap-1">
-                <Sliders size={12} className="shrink-0 text-text-dim" />
-                <input type="range" min={-1} max={1} step={0.01} value={clip.pan ?? 0} onChange={(e) => setClip({ pan: Number(e.target.value) })} className="flex-1 accent-accent" />
-                <span className="w-8 text-right font-mono text-[10px] text-text-dim">{(clip.pan ?? 0) > 0 ? `R${Math.round((clip.pan ?? 0) * 100)}` : (clip.pan ?? 0) < 0 ? `L${Math.round(-(clip.pan ?? 0) * 100)}` : 'C'}</span>
-              </div>
-            </div>
+            <RotaryKnob
+              label="Gain"
+              value={clip.gain ?? 1}
+              min={0}
+              max={1.5}
+              step={0.01}
+              onChange={(v) => setClip({ gain: v })}
+              format={(v) => `${Math.round(v * 100)}`}
+            />
+            <RotaryKnob
+              label="Pan"
+              value={clip.pan ?? 0}
+              min={-1}
+              max={1}
+              step={0.01}
+              onChange={(v) => setClip({ pan: v })}
+              format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
+            />
           </div>
-          {/* Speed / Pitch */}
-          <div className="flex flex-col gap-0.5">
-            <label className="field-label">Speed / Pitch</label>
-            <div className="flex items-center gap-1">
-              <Gauge size={12} className="shrink-0 text-text-dim" />
-              <input type="range" min={0.25} max={4} step={0.05} value={clip.speed ?? 1} onChange={(e) => setClip({ speed: Number(e.target.value) })} className="flex-1 accent-accent" />
-              <span className="w-10 text-right font-mono text-[10px] text-text-dim">{(clip.speed ?? 1).toFixed(2)}×</span>
-            </div>
-          </div>
+          {/* Speed / Pitch — rotary knob */}
+          <RotaryKnob
+            label="Speed / Pitch"
+            value={clip.speed ?? 1}
+            min={0.25}
+            max={4}
+            step={0.05}
+            onChange={(v) => setClip({ speed: v })}
+            format={(v) => `${v.toFixed(2)}×`}
+          />
           {/* Mute + source info */}
           <div className="flex items-center justify-between">
-            <button onClick={() => setClip({ mute: !clip.mute })} className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${clip.mute ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{clip.mute ? <VolumeX size={11} /> : <Volume2 size={11} />}{clip.mute ? 'Muted' : 'Mute clip'}</button>
+            <button onClick={() => setClip({ mute: !clip.mute })} className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${clip.mute ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{clip.mute ? 'Muted' : 'Mute clip'}</button>
             <span className="font-mono text-[9px] text-text-dim">{clip.sampleRate} Hz · {clip.channels === 2 ? 'stereo' : 'mono'}</span>
           </div>
           {/* Quick actions — Split + Duplicate first (matching the D hotkey), then the sample-processing ops. */}
@@ -187,21 +202,26 @@ export function AudioSettingsPanel() {
             <label className="field-label">Color</label>
             <input type="color" value={track.color} onChange={(e) => setTrack({ color: e.target.value })} className="h-7 w-full rounded border border-border bg-transparent" />
           </div>
-          <div>
-            <label className="field-label">Volume</label>
-            <div className="flex items-center gap-2">
-              <Volume2 size={12} className="text-text-dim" />
-              <input type="range" min={0} max={1} step={0.01} value={track.volume} onChange={(e) => setTrack({ volume: Number(e.target.value) })} className="flex-1 accent-accent" />
-              <span className="w-8 text-right font-mono text-[10px] text-text-dim">{Math.round(track.volume * 100)}</span>
-            </div>
-          </div>
-          <div>
-            <label className="field-label">Pan</label>
-            <div className="flex items-center gap-2">
-              <Sliders size={12} className="text-text-dim" />
-              <input type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(e) => setTrack({ pan: Number(e.target.value) })} className="flex-1 accent-accent" />
-              <span className="w-8 text-right font-mono text-[10px] text-text-dim">{track.pan > 0 ? `R${Math.round(track.pan * 100)}` : track.pan < 0 ? `L${Math.round(-track.pan * 100)}` : 'C'}</span>
-            </div>
+          {/* Volume + Pan — rotary knobs */}
+          <div className="grid grid-cols-2 gap-2">
+            <RotaryKnob
+              label="Volume"
+              value={track.volume}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => setTrack({ volume: v })}
+              format={(v) => `${Math.round(v * 100)}`}
+            />
+            <RotaryKnob
+              label="Pan"
+              value={track.pan}
+              min={-1}
+              max={1}
+              step={0.01}
+              onChange={(v) => setTrack({ pan: v })}
+              format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
+            />
           </div>
           <div className="flex gap-1">
             <button onClick={() => setTrack({ muted: !track.muted })} className={`flex-1 rounded border py-1 text-[10px] ${track.muted ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{track.muted ? 'Muted' : 'Mute'}</button>
@@ -215,6 +235,184 @@ export function AudioSettingsPanel() {
           Select a clip in the timeline to edit its settings.
         </div>
       )}
+    </div>
+  );
+}
+
+// ── RotaryKnob ──────────────────────────────────────────────────────────────
+
+/** Convert polar (angle in degrees, measured CLOCKWISE from 3 o'clock — i.e.
+ *  SVG-friendly since y grows downward) to cartesian coordinates. */
+function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
+  const rad = (angleDeg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+/** Arc path: clockwise from startAngle to endAngle (degrees, SVG convention). */
+function arcPath(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
+  const start = polarToCartesian(cx, cy, r, startAngle);
+  const end = polarToCartesian(cx, cy, r, endAngle);
+  const sweep = endAngle - startAngle;
+  const largeArc = Math.abs(sweep) > 180 ? 1 : 0;
+  // sweepFlag = 1 → clockwise (SVG visual, since y is down and angles increase
+  // clockwise visually).
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`;
+}
+
+/**
+ * DAW-style rotary knob (Ableton / FL Studio inspired).
+ *
+ * Visual: a 270° value arc (gap at the bottom) with a coloured fill from min
+ * to the current value, a circular knob body, and an indicator line pointing
+ * to the current position. ~48px diameter.
+ *
+ * Interaction:
+ *  - Drag up = increase, drag down = decrease (Shift = 3× finer).
+ *  - Mouse wheel up = increase, down = decrease.
+ *  - Arrow Up/Right = +step, Arrow Down/Left = -step (keyboard accessible).
+ *
+ * The `onChange` callback fires on every adjustment tick — same semantics as
+ * the old `<input type="range">` it replaces, so the Yjs update logic is
+ * unchanged.
+ */
+function RotaryKnob({ value, min, max, step, label, onChange, format, size = 48 }: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  label: string;
+  onChange: (v: number) => void;
+  format?: (v: number) => string;
+  size?: number;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ startY: number; startVal: number; fine: boolean } | null>(null);
+
+  // Latest value + onChange held in refs so the native (non-passive) wheel
+  // listener — attached ONCE — can read the freshest value without re-binding
+  // on every drag tick.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const range = max - min;
+  const clamp = useCallback((v: number) => Math.max(min, Math.min(max, v)), [min, max]);
+  // Snap a free value to the step grid (with float-drift fix via toFixed).
+  const snap = useCallback((v: number) => {
+    if (step <= 0) return clamp(v);
+    const steps = Math.round((v - min) / step);
+    const snapped = min + steps * step;
+    const decimals = step < 0.001 ? 5 : step < 0.01 ? 4 : step < 0.1 ? 3 : step < 1 ? 2 : 1;
+    return clamp(parseFloat(snapped.toFixed(decimals)));
+  }, [min, step, clamp]);
+
+  // Geometry: 270° sweep starting at 135° (lower-left, ~7:30) going clockwise
+  // to 45° (lower-right, ~4:30). Normalised 0..1 maps across that arc.
+  const cx = size / 2;
+  const cy = size / 2;
+  const rRing = size / 2 - 3;       // outer arc radius
+  const rBody = size / 2 - 9;       // knob body radius
+  const rInd = rBody - 1;           // indicator line length
+
+  const ARC_START = 135;
+  const ARC_END = 135 + 270;        // 405 (= 45)
+  const normalized = range > 0 ? (value - min) / range : 0;
+  const valAngle = ARC_START + normalized * 270;
+  const valRad = (valAngle * Math.PI) / 180;
+
+  const bgPath = arcPath(cx, cy, rRing, ARC_START, ARC_END);
+  // Skip the value arc when at min (zero-length path is invalid).
+  const valPath = normalized > 0.001 ? arcPath(cx, cy, rRing, ARC_START, valAngle) : '';
+  // Indicator line: from a small inner radius out to the body edge, pointing
+  // at the current value angle.
+  const indStart = { x: cx + 4 * Math.cos(valRad), y: cy + 4 * Math.sin(valRad) };
+  const indEnd = { x: cx + rInd * Math.cos(valRad), y: cy + rInd * Math.sin(valRad) };
+
+  // ── Pointer drag (vertical: up = increase) ──────────────────────────────
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { startY: e.clientY, startVal: value, fine: e.shiftKey };
+    try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current; if (!d) return;
+    // 200px of drag = full range (600px with Shift for fine control).
+    const sensitivity = d.fine ? 600 : 200;
+    const delta = ((d.startY - e.clientY) / sensitivity) * range;
+    onChange(clamp(d.startVal + delta));
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    dragRef.current = null;
+    try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+
+  // ── Native non-passive wheel listener (so preventDefault works) ─────────
+  useEffect(() => {
+    const el = svgRef.current; if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      // Each notch = max(step, range/50) so a full sweep takes ~50 notches
+      // even for fine-grained knobs (e.g. gain has 150 single-steps).
+      const wheelStep = Math.max(step, range / 50);
+      onChangeRef.current(snap(valueRef.current + dir * wheelStep));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [step, range, snap]);
+
+  // ── Keyboard: arrows nudge by one step ──────────────────────────────────
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    let next: number | null = null;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = value + step;
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next = value - step;
+    else if (e.key === 'Home') next = min;
+    else if (e.key === 'End') next = max;
+    if (next !== null) {
+      e.preventDefault();
+      e.stopPropagation(); // don't trigger the AudioEditor's seek hotkeys
+      onChange(snap(next));
+    }
+  };
+
+  const display = format ? format(value) : String(value);
+
+  return (
+    <div className="flex select-none flex-col items-center gap-0.5">
+      <svg
+        ref={svgRef}
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        className="touch-none cursor-ns-resize"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onKeyDown={onKeyDown}
+        role="slider"
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={display}
+        tabIndex={0}
+      >
+        {/* Background track — full 270° arc (dim) */}
+        <path d={bgPath} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="text-text-dim/30" />
+        {/* Value arc — min → current (accent) */}
+        {valPath && (
+          <path d={valPath} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="text-accent" />
+        )}
+        {/* Knob body */}
+        <circle cx={cx} cy={cy} r={rBody} className="fill-bg-3 stroke-border" strokeWidth={1} />
+        {/* Indicator line — points to the current value angle */}
+        <line x1={indStart.x} y1={indStart.y} x2={indEnd.x} y2={indEnd.y} stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" className="text-accent" />
+      </svg>
+      <span className="font-mono text-[9px] text-text-dim">{display}</span>
+      <span className="field-label text-center leading-tight">{label}</span>
     </div>
   );
 }

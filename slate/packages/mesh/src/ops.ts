@@ -236,6 +236,57 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
     }
   }
 
+  // Build the canonical neighbour cycle for each beveled vertex by walking
+  // the ORIGINAL face loops. For each face containing `vi`, the face's
+  // vertex array gives us the (prev, vi, next) triple — the two edges
+  // incident to `vi` in that face, in CCW order around the vertex (because
+  // faces are wound CCW seen from outside). Chaining these pairs into a
+  // single cycle gives the edges in topological CCW order.
+  //
+  // This is what we use to order the corner-fill edges instead of an
+  // angle-based sort: the topological cycle is stable across interactive
+  // edits as long as the mesh connectivity doesn't change, whereas an
+  // angle sort depends on a tangent basis that flips discontinuously
+  // (Math.abs(n.x) < 0.9 seed) as the vertex normal rotates — that flip
+  // is what makes multi-segment bevels visibly swirl while dragging.
+  const vertNeighbourCycle = new Map<number, number[]>();
+  for (const vi of new Set(vertIds)) {
+    const pairs: Array<{ prev: number; next: number }> = [];
+    for (const f of m.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        if (f.v[i] !== vi) continue;
+        const prev = f.v[(i - 1 + f.v.length) % f.v.length]!;
+        const next = f.v[(i + 1) % f.v.length]!;
+        pairs.push({ prev, next });
+      }
+    }
+    if (pairs.length < 3) continue;
+    // Chain: starting from pairs[0], the next pair is the one whose
+    // prev equals the current pair's next (each shared edge appears as
+    // "next" in one face and "prev" in its neighbour). Continue until
+    // the cycle closes back to the start.
+    const byPrev = new Map<number, { prev: number; next: number }>();
+    for (const p of pairs) byPrev.set(p.prev, p);
+    const order: number[] = [];
+    const start = pairs[0]!;
+    let cur = start;
+    let safety = pairs.length + 1;
+    do {
+      order.push(cur.next);
+      const nxt = byPrev.get(cur.next);
+      if (!nxt) break; // chain broke (non-manifold / inconsistent winding)
+      cur = nxt;
+    } while (cur !== start && --safety > 0);
+    // If we couldn't close the loop, fall back to face-iteration order —
+    // still deterministic per topology, and the winding check below will
+    // catch a globally-inverted ordering.
+    if (order.length !== pairs.length) {
+      order.length = 0;
+      for (const p of pairs) order.push(p.next);
+    }
+    vertNeighbourCycle.set(vi, order);
+  }
+
   for (let fi = 0; fi < m.faces.length; fi++) {
     const f = m.faces[fi]!;
     const newV: number[] = [];
@@ -268,35 +319,43 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   // fan of quad strips connecting concentric rings of cut vertices, capped
   // by a small innermost n-gon — this is what produces the smooth round.
   for (const vi of new Set(vertIds)) {
-    // Collect cut vertices per incident edge, ordered from vi outward.
-    const edges: number[][] = [];
+    // Map: neighbourId → cut vertex ids going outward from vi (cuts[0] is
+    // closest to vi). Built from the symmetric edgeVerts cache.
+    const cutsByNb = new Map<number, number[]>();
     for (const [key, cutIds] of edgeVerts) {
-      const [a, b] = key.split('->');
-      if (a === String(vi) || b === String(vi)) {
-        // cuts are stored from the smaller-id vertex toward the larger.
-        // If vi is the smaller (a===vi), cuts go vi→nb: correct (outward).
-        // If vi is the larger (b===vi), cuts go nb→vi: reverse for outward.
-        if (b === String(vi)) {
-          edges.push([...cutIds].reverse());
-        } else {
-          edges.push([...cutIds]);
-        }
-      }
+      const [aStr, bStr] = key.split('->');
+      const a = Number(aStr);
+      const b = Number(bStr);
+      if (a === vi) cutsByNb.set(b, [...cutIds]);
+      else if (b === vi) cutsByNb.set(a, [...cutIds].reverse());
     }
-    if (edges.length < 3) continue;
-    // Sort edges by angle around the vertex normal so adjacent edges in the
-    // array are physically adjacent around the corner.
-    const c = vGet(m, vi);
+    if (cutsByNb.size < 3) continue;
+
+    // Order the edges by the topological neighbour cycle (computed above
+    // from the original face loops) instead of by angle around the vertex
+    // normal. The topological order is invariant under vertex-position
+    // edits, so the multi-segment quad strips no longer swirl while the
+    // user drags the bevel width.
+    const cycle = vertNeighbourCycle.get(vi);
+    let edges: number[][];
+    if (cycle && cycle.length === cutsByNb.size) {
+      edges = [];
+      for (const nb of cycle) {
+        const cuts = cutsByNb.get(nb);
+        if (cuts) edges.push(cuts);
+      }
+      // If some neighbours were missing from the cycle (non-manifold),
+      // fall back to the unordered iteration.
+      if (edges.length !== cutsByNb.size) edges = [...cutsByNb.values()];
+    } else {
+      edges = [...cutsByNb.values()];
+    }
+
+    // Winding safety net: ensure the outer ring is CCW seen from outside.
+    // (Topology gives us a consistent cyclic order, but it may be globally
+    // inverted relative to the vertex normal depending on which face we
+    // started the chain from — flip if so.)
     const n = normalize(vertNormal.get(vi) ?? { x: 0, y: 1, z: 0 });
-    const seed = Math.abs(n.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-    const u = normalize(cross(n, seed));
-    const w = cross(n, u);
-    edges.sort((ea, eb) => {
-      const pa = sub(vGet(m, ea[0]!), c); // first cut = closest to vi
-      const pb = sub(vGet(m, eb[0]!), c);
-      return Math.atan2(dot(pa, w), dot(pa, u)) - Math.atan2(dot(pb, w), dot(pb, u));
-    });
-    // Verify winding (CCW seen from outside).
     const outerRing = edges.map((e) => e[e.length - 1]!); // outermost cuts
     if (dot(faceNormal(m, { v: outerRing }), n) < 0) edges.reverse();
 

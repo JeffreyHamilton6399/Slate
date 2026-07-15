@@ -1,0 +1,844 @@
+     1→/**
+     2→ * Topology operations on Mesh.
+     3→ *
+     4→ * Each op returns a fresh Mesh; callers can wrap in a transaction and
+     5→ * roll back by holding onto the previous mesh value.
+     6→ *
+     7→ * Behavioral parity with Blender (referenced from
+     8→ * https://projects.blender.org/blender/blender) for shortcut semantics —
+     9→ * no GPL code is vendored.
+    10→ */
+    11→
+    12→import type { Mesh, MeshFace, Vec3 } from './types.js';
+    13→import {
+    14→  add,
+    15→  cloneMesh,
+    16→  cross,
+    17→  dot,
+    18→  faceCentroid,
+    19→  faceNormal,
+    20→  length,
+    21→  normalize,
+    22→  scale,
+    23→  sub,
+    24→  vAdd,
+    25→  vCount,
+    26→  vGet,
+    27→} from './types.js';
+    28→import { weld } from './weld.js';
+    29→
+    30→/** Translate selected vertices by `delta`. */
+    31→export function translateVerts(mesh: Mesh, vertIds: Iterable<number>, delta: Vec3): Mesh {
+    32→  const m = cloneMesh(mesh);
+    33→  for (const i of vertIds) {
+    34→    m.vertices[i * 3] = (m.vertices[i * 3] ?? 0) + delta.x;
+    35→    m.vertices[i * 3 + 1] = (m.vertices[i * 3 + 1] ?? 0) + delta.y;
+    36→    m.vertices[i * 3 + 2] = (m.vertices[i * 3 + 2] ?? 0) + delta.z;
+    37→  }
+    38→  return m;
+    39→}
+    40→
+    41→/** Delete faces touching any of the given vertex indices. */
+    42→export function deleteVerts(mesh: Mesh, vertIds: Iterable<number>): Mesh {
+    43→  const drop = new Set<number>(vertIds as Iterable<number>);
+    44→  const faces = mesh.faces.filter((f) => f.v.every((i) => !drop.has(i)));
+    45→  return compact({ vertices: mesh.vertices.slice(), faces });
+    46→}
+    47→
+    48→/** Delete faces by index. */
+    49→export function deleteFaces(mesh: Mesh, faceIdxs: Iterable<number>): Mesh {
+    50→  const drop = new Set<number>(faceIdxs as Iterable<number>);
+    51→  const faces = mesh.faces.filter((_, i) => !drop.has(i));
+    52→  return compact({ vertices: mesh.vertices.slice(), faces });
+    53→}
+    54→
+    55→/** Drop unreferenced vertices and reindex faces. */
+    56→export function compact(mesh: Mesh): Mesh {
+    57→  const n = vCount(mesh);
+    58→  const used = new Uint8Array(n);
+    59→  for (const f of mesh.faces) for (const i of f.v) used[i] = 1;
+    60→  const remap = new Int32Array(n);
+    61→  const verts: number[] = [];
+    62→  for (let i = 0; i < n; i++) {
+    63→    if (used[i]) {
+    64→      remap[i] = verts.length / 3;
+    65→      verts.push(mesh.vertices[i * 3]!, mesh.vertices[i * 3 + 1]!, mesh.vertices[i * 3 + 2]!);
+    66→    } else {
+    67→      remap[i] = -1;
+    68→    }
+    69→  }
+    70→  return {
+    71→    vertices: verts,
+    72→    faces: mesh.faces.map((f) => ({ v: f.v.map((i) => remap[i]!) })),
+    73→  };
+    74→}
+    75→
+    76→/**
+    77→ * Extrude the given faces along an offset vector. New geometry creates
+    78→ * a duplicate of each face's verts plus side quads.
+    79→ * Returns the new mesh + the indices of the new (extruded) face copies
+    80→ * so they remain selected in edit mode (Blender-like).
+    81→ */
+    82→export function extrudeFaces(
+    83→  mesh: Mesh,
+    84→  faceIdxs: number[],
+    85→  offset: Vec3,
+    86→): { mesh: Mesh; newFaceIdxs: number[] } {
+    87→  const m = cloneMesh(mesh);
+    88→  const sel = new Set(faceIdxs);
+    89→
+    90→  // Collect boundary edges (edges that belong to exactly one selected face).
+    91→  const edgeCount = new Map<string, number>();
+    92→  const edgeKey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+    93→  for (const fi of faceIdxs) {
+    94→    const f = m.faces[fi]!;
+    95→    for (let i = 0; i < f.v.length; i++) {
+    96→      const a = f.v[i]!;
+    97→      const b = f.v[(i + 1) % f.v.length]!;
+    98→      const k = edgeKey(a, b);
+    99→      edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+   100→    }
+   101→  }
+   102→
+   103→  // Map old vert id -> new (extruded) vert id (only for verts belonging to selected faces).
+   104→  const newVertOf = new Map<number, number>();
+   105→  const ensureNewVert = (oldI: number): number => {
+   106→    let nid = newVertOf.get(oldI);
+   107→    if (nid === undefined) {
+   108→      const v = vGet(m, oldI);
+   109→      nid = vAdd(m, add(v, offset));
+   110→      newVertOf.set(oldI, nid);
+   111→    }
+   112→    return nid;
+   113→  };
+   114→  for (const fi of faceIdxs) {
+   115→    for (const v of m.faces[fi]!.v) ensureNewVert(v);
+   116→  }
+   117→
+   118→  // Side faces along boundary edges.
+   119→  for (const fi of faceIdxs) {
+   120→    const f = m.faces[fi]!;
+   121→    for (let i = 0; i < f.v.length; i++) {
+   122→      const a = f.v[i]!;
+   123→      const b = f.v[(i + 1) % f.v.length]!;
+   124→      const k = edgeKey(a, b);
+   125→      if ((edgeCount.get(k) ?? 0) === 1) {
+   126→        const na = newVertOf.get(a)!;
+   127→        const nb = newVertOf.get(b)!;
+   128→        m.faces.push({ v: [a, b, nb, na] });
+   129→      }
+   130→    }
+   131→  }
+   132→
+   133→  // Replace each selected face with its extruded copy (verts swapped).
+   134→  const newFaceIdxs: number[] = [];
+   135→  for (const fi of faceIdxs) {
+   136→    const f = m.faces[fi]!;
+   137→    const replaced: MeshFace = { v: f.v.map((i) => newVertOf.get(i)!) };
+   138→    m.faces[fi] = replaced;
+   139→    newFaceIdxs.push(fi);
+   140→  }
+   141→
+   142→  // Original faces stay where they were? In Blender's default extrude, the
+   143→  // bottom is removed (the cap is the new top). For a forgiving editor we
+   144→  // keep them only when the face is _not_ on the boundary — meaning the
+   145→  // original interior caps disappear automatically because they sit on the
+   146→  // side faces. Easier: just keep what we have; users can clean with Merge.
+   147→
+   148→  void sel;
+   149→  return { mesh: m, newFaceIdxs };
+   150→}
+   151→
+   152→/** Inset selected faces individually (Blender 'I' default). */
+   153→export function insetFaces(mesh: Mesh, faceIdxs: number[], thickness: number): Mesh {
+   154→  if (thickness <= 0) return cloneMesh(mesh);
+   155→  const m = cloneMesh(mesh);
+   156→  // Splice in descending index order so replacing one face never shifts the
+   157→  // indices of faces still to be processed (splicing at a higher index leaves
+   158→  // lower indices untouched).
+   159→  const ordered = [...new Set(faceIdxs)].filter((i) => i >= 0 && i < m.faces.length).sort((a, b) => b - a);
+   160→  for (const fi of ordered) {
+   161→    const f = m.faces[fi]!;
+   162→    const c = faceCentroid(m, f);
+   163→    const inner: number[] = [];
+   164→    for (const i of f.v) {
+   165→      const v = vGet(m, i);
+   166→      const dir = sub(c, v);
+   167→      // Clamp to 90% of the way to the centroid so a thick inset on a small
+   168→      // face can never push verts past the middle and invert the face.
+   169→      const moved = add(v, scale(normalize(dir), Math.min(thickness, length(dir) * 0.9)));
+   170→      inner.push(vAdd(m, moved));
+   171→    }
+   172→    // Ring of quads between original loop and inner loop.
+   173→    const ring: MeshFace[] = [];
+   174→    for (let i = 0; i < f.v.length; i++) {
+   175→      const a = f.v[i]!;
+   176→      const b = f.v[(i + 1) % f.v.length]!;
+   177→      const nb = inner[(i + 1) % inner.length]!;
+   178→      const na = inner[i]!;
+   179→      ring.push({ v: [a, b, nb, na] });
+   180→    }
+   181→    m.faces.splice(fi, 1, { v: inner }, ...ring);
+   182→  }
+   183→  return m;
+   184→}
+   185→
+   186→/**
+   187→ * Bevel selected vertices by `amount` (Blender's Ctrl+Shift+B vertex bevel).
+   188→ * Each vertex is cut back along every incident edge and the resulting hole
+   189→ * is filled with a corner face, so the chamfer is watertight.
+   190→ */
+   191→export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segments = 1): Mesh {
+   192→  if (amount <= 0 || vertIds.length === 0) return cloneMesh(mesh);
+   193→  const seg = Math.max(1, Math.round(segments));
+   194→  const m = cloneMesh(mesh);
+   195→  const sel = new Set(vertIds);
+   196→
+   197→  // For segments > 1, create multiple interpolated vertices along each bevel
+   198→  // edge — this is Blender's "Segments" bevel setting (a rounded chamfer
+   199→  // instead of a single flat cut). Each segment vertex sits at a fractional
+   200→  // position along the edge.
+   201→  // KEY INVARIANT: cutVerts(a, b) and cutVerts(b, a) return the SAME vertex ids
+   202→  // (just in reverse order). This is critical when both endpoints of an edge
+   203→  // are beveled — without sharing, each side would create duplicate vertices
+   204→  // at the same positions, breaking the watertight property.
+   205→  const edgeVerts = new Map<string, number[]>();
+   206→  const cutVerts = (cur: number, nb: number): number[] => {
+   207→    const key = cur < nb ? `${cur}->${nb}` : `${nb}->${cur}`;
+   208→    const reversed = cur > nb;
+   209→    let ids = edgeVerts.get(key);
+   210→    if (ids === undefined) {
+   211→      const c = vGet(m, cur);
+   212→      const edge = sub(vGet(m, nb), c);
+   213→      // Never step past 45% of the edge so bevels from both ends can't cross.
+   214→      const t = Math.min(amount, length(edge) * 0.45);
+   215→      ids = [];
+   216→      for (let s = 1; s <= seg; s++) {
+   217→        const frac = s / (seg + 1);
+   218→        const pos = add(c, scale(normalize(edge), t * frac));
+   219→        ids.push(vAdd(m, pos));
+   220→      }
+   221→      edgeVerts.set(key, ids);
+   222→    }
+   223→    // Return a copy so callers can reverse without mutating the cache.
+   224→    // If reversed, the cuts go from nb toward cur (caller wants cur→nb order).
+   225→    return reversed ? [...ids].reverse() : [...ids];
+   226→  };
+   227→
+   228→  // Average incident-face normal per beveled vertex (orients its corner face).
+   229→  // Collected from the original faces before they're rewritten.
+   230→  const vertNormal = new Map<number, Vec3>();
+   231→  for (const f of m.faces) {
+   232→    const n = faceNormal(m, f);
+   233→    for (const vi of f.v) {
+   234→      if (!sel.has(vi)) continue;
+   235→      vertNormal.set(vi, add(vertNormal.get(vi) ?? { x: 0, y: 0, z: 0 }, n));
+   236→    }
+   237→  }
+   238→
+   239→  for (let fi = 0; fi < m.faces.length; fi++) {
+   240→    const f = m.faces[fi]!;
+   241→    const newV: number[] = [];
+   242→    for (let i = 0; i < f.v.length; i++) {
+   243→      const cur = f.v[i]!;
+   244→      if (!sel.has(cur)) {
+   245→        newV.push(cur);
+   246→        continue;
+   247→      }
+   248→      const prev = f.v[(i - 1 + f.v.length) % f.v.length]!;
+   249→      const next = f.v[(i + 1) % f.v.length]!;
+   250→      // Walking the loop prev→cur→next, the boundary meets the cut on the
+   251→      // prev-side edge first (arriving from prev toward cur), then the cut
+   252→      // on the next-side edge (departing from cur toward next).
+   253→      // For multi-segment bevels, only the OUTERMOST cut (closest to the
+   254→      // neighbour) goes into the face boundary. The intermediate cuts form
+   255→      // the rounded corner fill only — putting them in both the face AND the
+   256→      // corner fill creates non-manifold (shared) edges.
+   257→      const prevCuts = cutVerts(cur, prev);
+   258→      const nextCuts = cutVerts(cur, next);
+   259→      // prevCuts goes cur→prev; last element is closest to prev.
+   260→      // nextCuts goes cur→next; last element is closest to next.
+   261→      newV.push(prevCuts[prevCuts.length - 1]!, nextCuts[nextCuts.length - 1]!);
+   262→    }
+   263→    m.faces[fi] = { v: newV };
+   264→  }
+   265→
+   266→  // Fill the hole left at each beveled vertex with a rounded corner. For
+   267→  // single-segment bevels this is a single n-gon. For multi-segment, it's a
+   268→  // fan of quad strips connecting concentric rings of cut vertices, capped
+   269→  // by a small innermost n-gon — this is what produces the smooth round.
+   270→  for (const vi of new Set(vertIds)) {
+   271→    // Collect cut vertices per incident edge, ordered from vi outward.
+   272→    const edges: number[][] = [];
+   273→    for (const [key, cutIds] of edgeVerts) {
+   274→      const [a, b] = key.split('->');
+   275→      if (a === String(vi) || b === String(vi)) {
+   276→        // cuts are stored from the smaller-id vertex toward the larger.
+   277→        // If vi is the smaller (a===vi), cuts go vi→nb: correct (outward).
+   278→        // If vi is the larger (b===vi), cuts go nb→vi: reverse for outward.
+   279→        if (b === String(vi)) {
+   280→          edges.push([...cutIds].reverse());
+   281→        } else {
+   282→          edges.push([...cutIds]);
+   283→        }
+   284→      }
+   285→    }
+   286→    if (edges.length < 3) continue;
+   287→    // Sort edges by angle around the vertex normal so adjacent edges in the
+   288→    // array are physically adjacent around the corner.
+   289→    const c = vGet(m, vi);
+   290→    const n = normalize(vertNormal.get(vi) ?? { x: 0, y: 1, z: 0 });
+   291→    const seed = Math.abs(n.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+   292→    const u = normalize(cross(n, seed));
+   293→    const w = cross(n, u);
+   294→    edges.sort((ea, eb) => {
+   295→      const pa = sub(vGet(m, ea[0]!), c); // first cut = closest to vi
+   296→      const pb = sub(vGet(m, eb[0]!), c);
+   297→      return Math.atan2(dot(pa, w), dot(pa, u)) - Math.atan2(dot(pb, w), dot(pb, u));
+   298→    });
+   299→    // Verify winding (CCW seen from outside).
+   300→    const outerRing = edges.map((e) => e[e.length - 1]!); // outermost cuts
+   301→    if (dot(faceNormal(m, { v: outerRing }), n) < 0) edges.reverse();
+   302→
+   303→    // For single-segment (seg=1), each edge has 1 cut. The corner fill is a
+   304→    // single n-gon connecting all cuts — edges shared with the modified faces.
+   305→    if (seg === 1) {
+   306→      m.faces.push({ v: edges.map((e) => e[0]!) });
+   307→      continue;
+   308→    }
+   309→    // For multi-segment, create concentric rings connected by quad strips.
+   310→    // Ring s (0-indexed from innermost=0 to outermost=seg-1) has one cut per edge.
+   311→    // The outermost ring (s=seg-1) has its outer edges shared with modified faces.
+   312→    // Quad strips connect ring s to ring s+1 for s = 0..seg-2.
+   313→    // The innermost ring (s=0) is capped with a small n-gon.
+   314→    const numEdges = edges.length;
+   315→    for (let s = 0; s < seg - 1; s++) {
+   316→      for (let e = 0; e < numEdges; e++) {
+   317→        const e1 = edges[e]!;
+   318→        const e2 = edges[(e + 1) % numEdges]!;
+   319→        // Quad: inner(s) on e1, outer(s+1) on e1, outer(s+1) on e2, inner(s) on e2
+   320→        m.faces.push({ v: [e1[s]!, e1[s + 1]!, e2[s + 1]!, e2[s]!] });
+   321→      }
+   322→    }
+   323→    // Innermost n-gon cap (ring 0).
+   324→    m.faces.push({ v: edges.map((e) => e[0]!) });
+   325→  }
+   326→
+   327→  // The original beveled vertices are now unreferenced; drop them.
+   328→  return compact(m);
+   329→}
+   330→
+   331→/** Merge selected verts to their centroid (Blender 'M' → At Center). */
+   332→export function mergeAtCenter(mesh: Mesh, vertIds: number[]): Mesh {
+   333→  if (vertIds.length < 2) return cloneMesh(mesh);
+   334→  let cx = 0,
+   335→    cy = 0,
+   336→    cz = 0;
+   337→  for (const i of vertIds) {
+   338→    const v = vGet(mesh, i);
+   339→    cx += v.x;
+   340→    cy += v.y;
+   341→    cz += v.z;
+   342→  }
+   343→  const c = { x: cx / vertIds.length, y: cy / vertIds.length, z: cz / vertIds.length };
+   344→  const m = cloneMesh(mesh);
+   345→  for (const i of vertIds) {
+   346→    m.vertices[i * 3] = c.x;
+   347→    m.vertices[i * 3 + 1] = c.y;
+   348→    m.vertices[i * 3 + 2] = c.z;
+   349→  }
+   350→  return weld(m);
+   351→}
+   352→
+   353→/**
+   354→ * Loop cut (Blender Ctrl+R): starting from `faceIdx`, the cut enters each
+   355→ * quad through one edge and exits through the opposite one, walking in both
+   356→ * directions until the loop closes on itself or leaves quad territory.
+   357→ * Every crossed quad is split into `cuts + 1` strips; cut vertices are
+   358→ * shared across faces so the loop is watertight. N-gons fall back to
+   359→ * fan subdivision.
+   360→ */
+   361→/**
+   362→ * Loop-cut a quad ring. `cuts` sets how many parallel cuts; `slide` in
+   363→ * [-1, 1] shifts the whole loop along the crossed edges (0 = centered, like
+   364→ * Blender's edge-slide after the cut). The slide direction is taken from the
+   365→ * start face's crossed edge, so on prism/cube/cylinder rings — where the
+   366→ * crossed edges are parallel — the loop slides cleanly to one side.
+   367→ */
+   368→export function loopCut(mesh: Mesh, faceIdx: number, cuts = 1, slide = 0): Mesh {
+   369→  const f0 = mesh.faces[faceIdx];
+   370→  if (!f0) return cloneMesh(mesh);
+   371→  if (f0.v.length !== 4) return subdivideFace(mesh, faceIdx, cuts);
+   372→  const m = cloneMesh(mesh);
+   373→  const segs = Math.max(1, cuts) + 1;
+   374→  const ekey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+   375→
+   376→  const facesByEdge = new Map<string, number[]>();
+   377→  m.faces.forEach((f, fi) => {
+   378→    for (let i = 0; i < f.v.length; i++) {
+   379→      const k = ekey(f.v[i]!, f.v[(i + 1) % f.v.length]!);
+   380→      const arr = facesByEdge.get(k) ?? [];
+   381→      arr.push(fi);
+   382→      facesByEdge.set(k, arr);
+   383→    }
+   384→  });
+   385→
+   386→  // faceIdx → index of one crossed edge in its loop (the pair is i and i+2).
+   387→  // The start face is cut parallel to its first edge, i.e. across edges 1/3.
+   388→  const crossed = new Map<number, number>();
+   389→  crossed.set(faceIdx, 1);
+   390→  const queue: [number, number][] = [[faceIdx, 1]];
+   391→  while (queue.length > 0) {
+   392→    const [fi, ei] = queue.pop()!;
+   393→    const face = m.faces[fi]!;
+   394→    for (const j of [ei, (ei + 2) % 4]) {
+   395→      const k = ekey(face.v[j]!, face.v[(j + 1) % 4]!);
+   396→      for (const nfi of facesByEdge.get(k) ?? []) {
+   397→        if (nfi === fi || crossed.has(nfi)) continue;
+   398→        const nf = m.faces[nfi]!;
+   399→        if (nf.v.length !== 4) continue;
+   400→        let entry = -1;
+   401→        for (let t = 0; t < 4; t++) {
+   402→          if (ekey(nf.v[t]!, nf.v[(t + 1) % 4]!) === k) {
+   403→            entry = t;
+   404→            break;
+   405→          }
+   406→        }
+   407→        if (entry < 0) continue;
+   408→        crossed.set(nfi, entry);
+   409→        queue.push([nfi, entry]);
+   410→      }
+   411→    }
+   412→  }
+   413→
+   414→  // Slide direction D — the start face's crossed edge (v[1]→v[2]). Cut points
+   415→  // are measured from each edge's "D-backward" end so the slide is consistent
+   416→  // around the whole loop, not per-edge by arbitrary vertex id.
+   417→  const sa = vGet(m, f0.v[1]!);
+   418→  const sb = vGet(m, f0.v[2]!);
+   419→  let dx = sb.x - sa.x, dy = sb.y - sa.y, dz = sb.z - sa.z;
+   420→  const dl = Math.hypot(dx, dy, dz) || 1;
+   421→  dx /= dl; dy /= dl; dz /= dl;
+   422→
+   423→  // Cut fractions with a uniform slide offset kept strictly inside the quad
+   424→  // (|offset| < one spacing, so cuts never cross or collapse).
+   425→  const off = Math.max(-1, Math.min(1, slide)) * (1 / segs) * 0.9;
+   426→  const fracs: number[] = [];
+   427→  for (let i = 1; i < segs; i++) fracs.push(Math.min(0.98, Math.max(0.02, i / segs + off)));
+   428→
+   429→  // Cut vertices per crossed edge; oriented by D so neighbors reuse the exact
+   430→  // same physical points (watertight) regardless of walk direction.
+   431→  const cutPts = new Map<string, number[]>();
+   432→  const cutBack = new Map<string, number>();
+   433→  const cutsAlong = (a: number, b: number): number[] => {
+   434→    const k = ekey(a, b);
+   435→    let ids = cutPts.get(k);
+   436→    if (!ids) {
+   437→      const va = vGet(m, a);
+   438→      const vb = vGet(m, b);
+   439→      // Orient a→b vs D: t=0 at the backward end, t=1 at the forward end.
+   440→      const dot = (vb.x - va.x) * dx + (vb.y - va.y) * dy + (vb.z - va.z) * dz;
+   441→      const back = dot >= 0 ? a : b;
+   442→      const fwd = dot >= 0 ? b : a;
+   443→      const vBack = vGet(m, back);
+   444→      const vFwd = vGet(m, fwd);
+   445→      ids = fracs.map((t) =>
+   446→        vAdd(m, {
+   447→          x: vBack.x + (vFwd.x - vBack.x) * t,
+   448→          y: vBack.y + (vFwd.y - vBack.y) * t,
+   449→          z: vBack.z + (vFwd.z - vBack.z) * t,
+   450→        }),
+   451→      );
+   452→      cutPts.set(k, ids);
+   453→      cutBack.set(k, back);
+   454→    }
+   455→    // Return in the caller's a→b order.
+   456→    return a === cutBack.get(k) ? ids : [...ids].reverse();
+   457→  };
+   458→
+   459→  const out: MeshFace[] = [];
+   460→  m.faces.forEach((f, fi) => {
+   461→    const ei = crossed.get(fi);
+   462→    if (ei === undefined) {
+   463→      out.push(f);
+   464→      return;
+   465→    }
+   466→    const [a, b, c, d] = [f.v[ei]!, f.v[(ei + 1) % 4]!, f.v[(ei + 2) % 4]!, f.v[(ei + 3) % 4]!];
+   467→    // Rails run along the two crossed edges, in the same direction across
+   468→    // the quad (a→b and d→c); each pair of rail steps becomes one strip.
+   469→    const railA = [a, ...cutsAlong(a, b), b];
+   470→    const railB = [d, ...cutsAlong(d, c), c];
+   471→    for (let i = 0; i < railA.length - 1; i++) {
+   472→      out.push({ v: [railA[i]!, railA[i + 1]!, railB[i + 1]!, railB[i]!] });
+   473→    }
+   474→  });
+   475→  m.faces = out;
+   476→  return m;
+   477→}
+   478→
+   479→/** Generic subdivide — split a face into `cuts+1` x `cuts+1` quads if quad,
+   480→ *  otherwise fan from the centroid. */
+   481→export function subdivideFace(mesh: Mesh, faceIdx: number, cuts = 1): Mesh {
+   482→  const f = mesh.faces[faceIdx];
+   483→  if (!f) return cloneMesh(mesh);
+   484→  const m = cloneMesh(mesh);
+   485→  if (f.v.length === 4 && cuts >= 1) {
+   486→    const [a, b, c, d] = f.v as [number, number, number, number];
+   487→    const va = vGet(m, a);
+   488→    const vb = vGet(m, b);
+   489→    const vc = vGet(m, c);
+   490→    const vd = vGet(m, d);
+   491→    const segs = cuts + 1;
+   492→    const grid: number[][] = [];
+   493→    for (let j = 0; j <= segs; j++) {
+   494→      const tj = j / segs;
+   495→      const row: number[] = [];
+   496→      for (let i = 0; i <= segs; i++) {
+   497→        const ti = i / segs;
+   498→        const x = (1 - ti) * (1 - tj) * va.x + ti * (1 - tj) * vb.x + ti * tj * vc.x + (1 - ti) * tj * vd.x;
+   499→        const y = (1 - ti) * (1 - tj) * va.y + ti * (1 - tj) * vb.y + ti * tj * vc.y + (1 - ti) * tj * vd.y;
+   500→        const z = (1 - ti) * (1 - tj) * va.z + ti * (1 - tj) * vb.z + ti * tj * vc.z + (1 - ti) * tj * vd.z;
+   501→        if (j === 0 && i === 0) row.push(a);
+   502→        else if (j === 0 && i === segs) row.push(b);
+   503→        else if (j === segs && i === segs) row.push(c);
+   504→        else if (j === segs && i === 0) row.push(d);
+   505→        else row.push(vAdd(m, { x, y, z }));
+   506→      }
+   507→      grid.push(row);
+   508→    }
+   509→    const newFaces: MeshFace[] = [];
+   510→    for (let j = 0; j < segs; j++) {
+   511→      for (let i = 0; i < segs; i++) {
+   512→        newFaces.push({
+   513→          v: [grid[j]![i]!, grid[j]![i + 1]!, grid[j + 1]![i + 1]!, grid[j + 1]![i]!],
+   514→        });
+   515→      }
+   516→    }
+   517→    m.faces.splice(faceIdx, 1, ...newFaces);
+   518→    return m;
+   519→  }
+   520→  // n-gon fan from centroid
+   521→  const centroid = faceCentroid(m, f);
+   522→  const ci = vAdd(m, centroid);
+   523→  const fan: MeshFace[] = [];
+   524→  for (let i = 0; i < f.v.length; i++) {
+   525→    fan.push({ v: [f.v[i]!, f.v[(i + 1) % f.v.length]!, ci] });
+   526→  }
+   527→  m.faces.splice(faceIdx, 1, ...fan);
+   528→  return m;
+   529→}
+   530→
+   531→/** Triangulate the given faces (or all faces) by fanning from the first vert.
+   532→ *  Convex faces only — which is everything Slate's ops produce. */
+   533→export function triangulateSelected(mesh: Mesh, faceIdxs?: number[]): Mesh {
+   534→  const target =
+   535→    faceIdxs && faceIdxs.length > 0
+   536→      ? new Set(faceIdxs.filter((i) => i >= 0 && i < mesh.faces.length))
+   537→      : null;
+   538→  const faces: MeshFace[] = [];
+   539→  for (let fi = 0; fi < mesh.faces.length; fi++) {
+   540→    const f = mesh.faces[fi]!;
+   541→    if ((target && !target.has(fi)) || f.v.length <= 3) {
+   542→      faces.push({ v: f.v.slice() });
+   543→      continue;
+   544→    }
+   545→    for (let i = 1; i < f.v.length - 1; i++) {
+   546→      faces.push({ v: [f.v[0]!, f.v[i]!, f.v[i + 1]!] });
+   547→    }
+   548→  }
+   549→  return { vertices: mesh.vertices.slice(), faces };
+   550→}
+   551→
+   552→/**
+   553→ * Recalculate normals to point outward — reverse any face whose normal points
+   554→ * back toward the mesh centroid. Exact for convex meshes (all of Slate's
+   555→ * primitives) and a sensible default elsewhere; Blender's flood-fill variant
+   556→ * is only needed for pathological concave topology.
+   557→ */
+   558→export function recalculateNormals(mesh: Mesh): Mesh {
+   559→  const n = vCount(mesh);
+   560→  if (n === 0) return cloneMesh(mesh);
+   561→  let cx = 0,
+   562→    cy = 0,
+   563→    cz = 0;
+   564→  for (let i = 0; i < n; i++) {
+   565→    const v = vGet(mesh, i);
+   566→    cx += v.x;
+   567→    cy += v.y;
+   568→    cz += v.z;
+   569→  }
+   570→  cx /= n;
+   571→  cy /= n;
+   572→  cz /= n;
+   573→  const faces = mesh.faces.map((f) => {
+   574→    if (f.v.length < 3) return { v: f.v.slice() };
+   575→    const fc = faceCentroid(mesh, f);
+   576→    const nrm = faceNormal(mesh, f);
+   577→    const dot = nrm.x * (fc.x - cx) + nrm.y * (fc.y - cy) + nrm.z * (fc.z - cz);
+   578→    return dot < 0 ? { v: [...f.v].reverse() } : { v: f.v.slice() };
+   579→  });
+   580→  return { vertices: mesh.vertices.slice(), faces };
+   581→}
+   582→
+   583→/** Reverse the winding of the given faces (or all), flipping their normals. */
+   584→export function flipFaces(mesh: Mesh, faceIdxs?: number[]): Mesh {
+   585→  const target =
+   586→    faceIdxs && faceIdxs.length > 0
+   587→      ? new Set(faceIdxs.filter((i) => i >= 0 && i < mesh.faces.length))
+   588→      : null;
+   589→  return {
+   590→    vertices: mesh.vertices.slice(),
+   591→    faces: mesh.faces.map((f, i) =>
+   592→      !target || target.has(i) ? { v: [...f.v].reverse() } : { v: f.v.slice() },
+   593→    ),
+   594→  };
+   595→}
+   596→
+   597→/** Make-face from selected verts (Blender 'F'). Requires 3 or 4 verts. */
+   598→export function makeFace(mesh: Mesh, vertIds: number[]): Mesh {
+   599→  if (vertIds.length < 3 || vertIds.length > 64) return cloneMesh(mesh);
+   600→  const m = cloneMesh(mesh);
+   601→  m.faces.push({ v: vertIds.slice() });
+   602→  return m;
+   603→}
+   604→
+   605→/**
+   606→ * Laplacian vertex smooth (Blender's Vertex → Smooth): each selected vertex
+   607→ * moves `factor` of the way toward the average of its edge-connected
+   608→ * neighbors. Empty `vertIds` smooths every vertex.
+   609→ */
+   610→export function smoothVerts(
+   611→  mesh: Mesh,
+   612→  vertIds: number[],
+   613→  factor = 0.5,
+   614→  iterations = 1,
+   615→): Mesh {
+   616→  const m = cloneMesh(mesh);
+   617→  const sel = vertIds.length > 0 ? new Set(vertIds) : null;
+   618→  const nbrs = new Map<number, Set<number>>();
+   619→  const link = (a: number, b: number) => {
+   620→    let s = nbrs.get(a);
+   621→    if (!s) {
+   622→      s = new Set();
+   623→      nbrs.set(a, s);
+   624→    }
+   625→    s.add(b);
+   626→  };
+   627→  for (const f of m.faces) {
+   628→    for (let i = 0; i < f.v.length; i++) {
+   629→      const a = f.v[i]!;
+   630→      const b = f.v[(i + 1) % f.v.length]!;
+   631→      link(a, b);
+   632→      link(b, a);
+   633→    }
+   634→  }
+   635→  for (let it = 0; it < Math.max(1, iterations); it++) {
+   636→    const next = m.vertices.slice();
+   637→    for (const [vi, ns] of nbrs) {
+   638→      if (sel && !sel.has(vi)) continue;
+   639→      if (ns.size === 0) continue;
+   640→      let ax = 0,
+   641→        ay = 0,
+   642→        az = 0;
+   643→      for (const n of ns) {
+   644→        const p = vGet(m, n);
+   645→        ax += p.x;
+   646→        ay += p.y;
+   647→        az += p.z;
+   648→      }
+   649→      const c = vGet(m, vi);
+   650→      next[vi * 3] = c.x + (ax / ns.size - c.x) * factor;
+   651→      next[vi * 3 + 1] = c.y + (ay / ns.size - c.y) * factor;
+   652→      next[vi * 3 + 2] = c.z + (az / ns.size - c.z) * factor;
+   653→    }
+   654→    m.vertices = next;
+   655→  }
+   656→  return m;
+   657→}
+   658→
+   659→/**
+   660→ * Shrink/fatten (Blender Alt+S): move selected vertices along their averaged
+   661→ * incident-face normals. Positive offset fattens, negative shrinks. Empty
+   662→ * `vertIds` moves every vertex.
+   663→ */
+   664→export function shrinkFatten(mesh: Mesh, vertIds: number[], offset: number): Mesh {
+   665→  const m = cloneMesh(mesh);
+   666→  const sel = vertIds.length > 0 ? new Set(vertIds) : null;
+   667→  const acc = new Map<number, Vec3>();
+   668→  for (const f of m.faces) {
+   669→    const n = faceNormal(m, f);
+   670→    for (const vi of f.v) {
+   671→      if (sel && !sel.has(vi)) continue;
+   672→      acc.set(vi, add(acc.get(vi) ?? { x: 0, y: 0, z: 0 }, n));
+   673→    }
+   674→  }
+   675→  for (const [vi, n] of acc) {
+   676→    const d = normalize(n);
+   677→    m.vertices[vi * 3] = (m.vertices[vi * 3] ?? 0) + d.x * offset;
+   678→    m.vertices[vi * 3 + 1] = (m.vertices[vi * 3 + 1] ?? 0) + d.y * offset;
+   679→    m.vertices[vi * 3 + 2] = (m.vertices[vi * 3 + 2] ?? 0) + d.z * offset;
+   680→  }
+   681→  return m;
+   682→}
+   683→
+   684→/** Mirror across a local axis; winding reversed so normals stay outward. */
+   685→export function mirrorMesh(mesh: Mesh, axis: 'x' | 'y' | 'z'): Mesh {
+   686→  const m = cloneMesh(mesh);
+   687→  const o = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+   688→  for (let i = o; i < m.vertices.length; i += 3) m.vertices[i] = -(m.vertices[i] ?? 0);
+   689→  m.faces = m.faces.map((f) => ({ v: [...f.v].reverse() }));
+   690→  return m;
+   691→}
+   692→
+   693→/** Concatenate two meshes into one (Blender Ctrl+J building block). */
+   694→export function joinMeshes(a: Mesh, b: Mesh): Mesh {
+   695→  const base = vCount(a);
+   696→  return {
+   697→    vertices: [...a.vertices, ...b.vertices],
+   698→    faces: [
+   699→      ...a.faces.map((f) => ({ v: f.v.slice() })),
+   700→      ...b.faces.map((f) => ({ v: f.v.map((i) => i + base) })),
+   701→    ],
+   702→  };
+   703→}
+   704→
+   705→/** Convenience: AABB of a vert subset (or all). */
+   706→export function aabb(
+   707→  mesh: Mesh,
+   708→  vertIds?: Iterable<number>,
+   709→): { min: Vec3; max: Vec3 } {
+   710→  const indices = vertIds
+   711→    ? Array.from(vertIds)
+   712→    : Array.from({ length: vCount(mesh) }, (_, i) => i);
+   713→  if (indices.length === 0) {
+   714→    return { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+   715→  }
+   716→  let minX = Infinity,
+   717→    minY = Infinity,
+   718→    minZ = Infinity;
+   719→  let maxX = -Infinity,
+   720→    maxY = -Infinity,
+   721→    maxZ = -Infinity;
+   722→  for (const i of indices) {
+   723→    const v = vGet(mesh, i);
+   724→    if (v.x < minX) minX = v.x;
+   725→    if (v.y < minY) minY = v.y;
+   726→    if (v.z < minZ) minZ = v.z;
+   727→    if (v.x > maxX) maxX = v.x;
+   728→    if (v.y > maxY) maxY = v.y;
+   729→    if (v.z > maxZ) maxZ = v.z;
+   730→  }
+   731→  return { min: { x: minX, y: minY, z: minZ }, max: { x: maxX, y: maxY, z: maxZ } };
+   732→}
+   733→
+   734→// Unused but exported for downstream use by edit-mode tools.
+   735→export { faceNormal as faceNormalOp, cross as crossOp };
+   736→
+   737→/** Duplicate the given faces as detached copies, offset slightly so they're
+   738→ *  visible — Blender's Shift+D in edit mode (face duplicate without extrude). */
+   739→export function duplicateFaces(mesh: Mesh, faceIdxs: number[], offset: number): Mesh {
+   740→  const m = cloneMesh(mesh);
+   741→  const vertMap = new Map<number, number>();
+   742→  for (const fi of faceIdxs) {
+   743→    const f = m.faces[fi];
+   744→    if (!f) continue;
+   745→    const newV: number[] = [];
+   746→    for (const vi of f.v) {
+   747→      let nv = vertMap.get(vi);
+   748→      if (nv === undefined) {
+   749→        const p = vGet(m, vi);
+   750→        nv = vAdd(m, { x: p.x + offset, y: p.y + offset, z: p.z + offset });
+   751→        vertMap.set(vi, nv);
+   752→      }
+   753→      newV.push(nv);
+   754→    }
+   755→    m.faces.push({ v: newV });
+   756→  }
+   757→  return m;
+   758→}
+   759→
+   760→/** Rip selected verts: duplicate them and reassign only the selected faces
+   761→ *  to use the copies, so the selected region detaches from the mesh. */
+   762→export function ripVerts(mesh: Mesh, vertIds: number[], offset: number): Mesh {
+   763→  const m = cloneMesh(mesh);
+   764→  const sel = new Set(vertIds);
+   765→  const vertMap = new Map<number, number>();
+   766→  const ensureRip = (vi: number): number => {
+   767→    let nv = vertMap.get(vi);
+   768→    if (nv === undefined) {
+   769→      const p = vGet(m, vi);
+   770→      nv = vAdd(m, { x: p.x + offset, y: p.y + offset, z: p.z + offset });
+   771→      vertMap.set(vi, nv);
+   772→    }
+   773→    return nv;
+   774→  };
+   775→  // For each face: if ALL its verts are selected, reassign them to ripped copies.
+   776→  for (let fi = 0; fi < m.faces.length; fi++) {
+   777→    const f = m.faces[fi]!;
+   778→    if (f.v.every((vi) => sel.has(vi))) {
+   779→      m.faces[fi] = { v: f.v.map((vi) => ensureRip(vi)) };
+   780→    }
+   781→  }
+   782→  return m;
+   783→}
+   784→
+   785→/** Shear selected verts: shift X proportional to Y height within the selection.
+   786→ *  Blender's Alt+Ctrl+Shift+S. */
+   787→export function shearVerts(mesh: Mesh, vertIds: number[], factor: number): Mesh {
+   788→  const m = cloneMesh(mesh);
+   789→  if (vertIds.length === 0) return m;
+   790→  const box = aabb(m, vertIds);
+   791→  const yMin = box.min.y;
+   792→  const yRange = box.max.y - yMin || 1;
+   793→  const sel = new Set(vertIds);
+   794→  for (let i = 0; i < m.vertices.length; i += 3) {
+   795→    const vi = i / 3;
+   796→    if (!sel.has(vi)) continue;
+   797→    const y = m.vertices[i + 1] ?? 0;
+   798→    const t = (y - yMin) / yRange; // 0 at bottom, 1 at top
+   799→    m.vertices[i] = (m.vertices[i] ?? 0) + t * factor * yRange;
+   800→  }
+   801→  return m;
+   802→}
+   803→
+   804→/** Move selected verts toward (or away from) the centroid — Blender's
+   805→ *  To Sphere (Alt+Shift+S). factor=0 = no move, factor=1 = all at centroid. */
+   806→export function toSphere(mesh: Mesh, vertIds: number[], factor: number): Mesh {
+   807→  const m = cloneMesh(mesh);
+   808→  if (vertIds.length < 2) return m;
+   809→  // Centroid
+   810→  let cx = 0, cy = 0, cz = 0;
+   811→  for (const vi of vertIds) {
+   812→    const p = vGet(m, vi);
+   813→    cx += p.x; cy += p.y; cz += p.z;
+   814→  }
+   815→  cx /= vertIds.length; cy /= vertIds.length; cz /= vertIds.length;
+   816→  // Average distance from centroid
+   817→  let avgDist = 0;
+   818→  for (const vi of vertIds) {
+   819→    const p = vGet(m, vi);
+   820→    avgDist += Math.hypot(p.x - cx, p.y - cy, p.z - cz);
+   821→  }
+   822→  avgDist /= vertIds.length || 1;
+   823→  if (avgDist < 1e-9) return m;
+   824→  const sel = new Set(vertIds);
+   825→  const f = Math.max(0, Math.min(1, factor));
+   826→  for (let i = 0; i < m.vertices.length; i += 3) {
+   827→    const vi = i / 3;
+   828→    if (!sel.has(vi)) continue;
+   829→    const x = m.vertices[i] ?? 0;
+   830→    const y = m.vertices[i + 1] ?? 0;
+   831→    const z = m.vertices[i + 2] ?? 0;
+   832→    // Move toward the point on the sphere of radius avgDist centered at centroid.
+   833→    const dx = x - cx, dy = y - cy, dz = z - cz;
+   834→    const dist = Math.hypot(dx, dy, dz) || 1;
+   835→    const tx = cx + (dx / dist) * avgDist;
+   836→    const ty = cy + (dy / dist) * avgDist;
+   837→    const tz = cz + (dz / dist) * avgDist;
+   838→    m.vertices[i] = x + (tx - x) * f;
+   839→    m.vertices[i + 1] = y + (ty - y) * f;
+   840→    m.vertices[i + 2] = z + (tz - z) * f;
+   841→  }
+   842→  return m;
+   843→}
+   844→

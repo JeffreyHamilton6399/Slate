@@ -9,7 +9,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Maximize2,
 } from 'lucide-react';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -20,9 +20,20 @@ import {
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
-import { loadSamples } from './sampleStore';
+import { loadSamples, registerSampleSyncMap } from './sampleStore';
 
 const TRACK_H = 60;
+/** px-per-sec zoom limits. The min is intentionally tiny (2) so a long mix
+ *  (e.g. a 3-minute song = 180s) still fits in a typical viewport at the
+ *  widest zoom-out — 180s * 2px = 360px, well within a timeline pane. The
+ *  Fit-to-window button uses this as the floor so the computed fit value is
+ *  never silently clamped away. */
+const MIN_PX_PER_SEC = 2;
+const MAX_PX_PER_SEC = 800;
+/** Width of the sticky track-header column (Tailwind w-44 = 11rem = 176px).
+ *  Used by the Fit-to-window calculation to subtract the header from the
+ *  scroll viewport so we fit clips into the visible TIMELINE area only. */
+const TRACK_HEADER_W = 176;
 
 // ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
 // Key: `${clipId}:${sampleCount}:${width}` → data URL
@@ -86,8 +97,10 @@ const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sam
   // props are unchanged) — the `bust` counter forces the load effect to re-run.
   useEffect(() => {
     const onChanged = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail;
-      if (id !== clipId) return;
+      const detail = (e as CustomEvent<string>).detail;
+      // Match by clipId (normalize/reverse/split events) OR by sampleKey
+      // (multiplayer sample-arrival events from registerSampleSyncMap).
+      if (detail !== clipId && detail !== sampleKey) return;
       for (const key of waveformPNGCache.keys()) {
         if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
       }
@@ -96,7 +109,7 @@ const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sam
     };
     window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
     return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
-  }, [clipId]);
+  }, [clipId, sampleKey]);
 
   useEffect(() => {
     const startFrame = Math.round(offset * sampleRate);
@@ -181,6 +194,9 @@ export function AudioEditor() {
 
   // Yjs subscription.
   useEffect(() => {
+    // Register the multiplayer sample sync map so audio clips imported by
+    // other peers are automatically received and stored locally.
+    registerSampleSyncMap(room);
     const tracks = slate.audioTracks();
     const clips = slate.audioClips();
     const audioMap = slate.doc.getMap('audio');
@@ -221,7 +237,7 @@ export function AudioEditor() {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setPxPerSec((c) => Math.max(10, Math.min(800, c * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+      setPxPerSec((c) => Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, c * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -345,6 +361,18 @@ export function AudioEditor() {
 
   const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
 
+  /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
+   *  currently-visible timeline viewport (scroll container minus the sticky
+   *  track-header column). Clamped to [MIN, MAX] so absurdly long or short
+   *  sessions still produce a sane zoom. */
+  const fitToWindow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const viewportW = Math.max(50, el.clientWidth - TRACK_HEADER_W);
+    const fit = viewportW / Math.max(1, timelineDuration);
+    setPxPerSec(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
+  }, [timelineDuration]);
+
   // ── Transport ─────────────────────────────────────────────────────────────
 
   const togglePlay = useCallback(() => {
@@ -464,8 +492,9 @@ export function AudioEditor() {
         <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-        <button onClick={() => setPxPerSec((c) => Math.max(10, c / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
-        <button onClick={() => setPxPerSec((c) => Math.min(800, c * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+        <button onClick={() => setPxPerSec((c) => Math.max(MIN_PX_PER_SEC, c / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
+        <button onClick={() => setPxPerSec((c) => Math.min(MAX_PX_PER_SEC, c * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
         <div className="flex-1" />
         <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>

@@ -1,0 +1,307 @@
+     1→---
+     2→Task ID: EXPLORE-1
+     3→Agent: Explore
+     4→Task: Map all 8 Slate 3D editor bugs to exact code locations
+     5→
+     6→Work Log:
+     7→- Read worklog (none existed) and listed the monorepo structure under /home/z/my-project/slate.
+     8→- Read every relevant 3D editor + workspace file fully:
+     9→  - viewport3d/{store, ObjectGizmo, Toolbar3D, modalTools, useViewport3DShortcuts, editModeTools, Viewport3D, AddObjectMenu, SceneObjects}.ts(x)
+    10→  - panels/{PropertiesPanel, ToolsPanel, HierarchyPanel, AssetsPanel, BoardsPanel}.tsx
+    11→  - app/{App, Workspace, Header, Home, NewProjectDialog, ServerWakeGate}.tsx
+    12→  - workspace/{Dock, panelRegistry, dockStore, FloatingPanels}.tsx
+    13→  - sync/{provider, useSlateRoom, serverStatus}.ts
+    14→  - files/{import3d, snapshot, SaveOpenDialog, ImportDialog, useAutosave}.ts(x)
+    15→  - account/cloudSaves.ts
+    16→  - canvas2d/{store, Toolbar}.ts(x)
+    17→- Searched the entire client tree for "brush|sculpt|paint" (case-insensitive) and for "favorite|pin|fav|star", "smooth|flat|computeVertexNormals", "reset|resetTransform", and the Editor3DMode type.
+    18→- Cross-referenced git log to confirm commit 5395717 ("Normalize imported model size, sync gizmo mode on G/R/S, HUD toggle setting") introduced the gizmo-sync-on-G/R/S behavior that is Bug 3(b).
+    19→- Did NOT modify any source files — research only.
+    20→
+    21→Stage Summary:
+    22→- Bug 1 (Brush): NO brush/sculpt/paint tool exists in the 3D editor. Editor3DMode is `'object' | 'edit'` only (viewport3d/store.ts:7). The only "brush" reference in the codebase is a 2D-canvas comment about strokeWidth (canvas2d/store.ts:2). editModeTools.ts has a one-shot `'smooth'` EditOp (line 52, 153-154) but no mouse-driven brush. Fix = either build a sculpt tool from scratch, or treat this as "feature does not exist" and confirm with user.
+    23→- Bug 2 (File > Open): Header.tsx:110 → Workspace.tsx:194-195 → SaveOpenDialog.tsx (mode='open'). Dialog lists snapshots from localStorage (snapshot.ts:197 listSaves) and on click calls applySnapshot (snapshot.ts:118) which OVERWRITES the current board's Yjs doc — it does NOT switch boards. The "Open" affordance is a tiny RotateCcw icon with no text label (SaveOpenDialog.tsx:101-103). Users expecting to open a different project (board switch) get nothing visible. Fix paths detailed below.
+    24→- Bug 3 (Gizmo): (a) store.ts:138 setGizmo toggles to null on re-click (NOT Blender-like). Fix = `setGizmo: (g) => set({ gizmo: g })`. (b) Viewport3D.tsx:350-353 inside onStartModal forcibly writes `gizmo: gizmoMode` on every G/R/S — pressing R permanently changes gizmo to 'rotate'. Fix = remove those two lines so G/R/S is purely modal (modal.tool drives ObjectGizmo's `!modalTool` hide at ObjectGizmo.tsx:38, and gizmo state is preserved).
+    25→- Bug 4 (STL import): import3d.ts:109 IMPORT_TARGET_SIZE = 2.5; import3d.ts:122-131 normalizes the model to a fixed 2.5-unit box centered at origin. No camera framing is performed. Viewport3D.tsx:854-888 onDrop and ImportDialog.tsx:37 both call importModel but never select/frame the new objects. FrameSelectedBinding (Viewport3D.tsx:1366-1405) frames using object POSITIONS only (line 1385-1388), not mesh bounding boxes, so even calling it after import wouldn't fit a large model. Fix = return new object IDs from importModel, select them, and call frameSelectedRef.current(false); or scale relative to current camera distance from cameraInfoRef.
+    26→- Bug 5 (Reset Transform): No resetTransform function exists in scene.ts (only dropToFloor at line 449). PropertiesPanel.tsx Transform section is at lines 162-216 with no reset button. Fix = add `resetTransform(slate, ids)` to scene.ts and a "Reset Transform" button in the Transform Section of PropertiesPanel.
+    27→- Bug 6 (Smooth shading): The toggle lives only in PropertiesPanel.tsx:150-159 (Object section, conditional on obj.meshId). SceneObjects.tsx:218 reads `obj.smooth` to call computeVertexNormals. Toolbar3D.tsx has a shading CYCLE button (line 176-187) but no smooth/flat toggle. Fix = add a smooth/flat toggle button to Toolbar3D near the shading button, bound to the primary selected object's `smooth` flag via setSmooth.
+    28→- Bug 7 (Object tab): PropertiesPanel.tsx:138-160 Object section currently has Name (line 139-141), Visible checkbox (line 142-149), AND Smooth checkbox (line 150-159). The Visible toggle is redundant with HierarchyPanel.tsx:206-216 eye-icon button. Fix = remove the Visible Row from PropertiesPanel; keep Name (already there). Optionally also move Smooth to Toolbar3D per Bug 6.
+    29→- Bug 8 (Tool favorites → far-left rail): Favorites already exist in useCanvasStore (canvas2d/store.ts:36, 71, 85-90 toggleFavorite). ToolsPanel.tsx:75-78, 122-133 renders favorites at the top of the right-side Tools panel only. The far-left vertical toolbar is Canvas2DToolbar in canvas2d/Toolbar.tsx:87-126 with a fixed TOOL_GROUPS list (line 44-59) that does NOT read favorites. Fix = in Canvas2DToolbar, read useCanvasStore(s => s.favorites) and render a favorites group at the top of the left rail. There is NO equivalent left rail in 3D mode (3D only has the top Toolbar3D).
+    30→
+    31→App-shell findings:
+    32→- Layout (Workspace.tsx:241-277): Header at top; `<Dock side="left">` (full tabbed panel dock, NOT a thin icon rail); `<main>` with Viewport3D or Canvas2D; `<Dock side="right">`. FloatingPanels + MobileDrawer overlay. No thin vertical icon rail exists in 3D mode.
+    33→- Viewport3D signature (Viewport3D.tsx:74-76, 84): `Viewport3D({ room }: { room: SlateRoom })`. SlateRoom is the class in sync/provider.ts:42 — exposes `room.slate` (SlateDoc), `room.identity`, `room.provider` (Hocuspocus), `room.idb` (IndexeddbPersistence), `room.undo` (Y.UndoManager), `room.room` (board name).
+    34→- Server optional: SlateRoom.open (provider.ts:108-152) awaits ensureServerProbe; if availability !== 'online' the HocuspocusProviderWebsocket is created with `connect: false` (line 121) and a background re-probe subscribes to flip online later (line 143-149). IndexeddbPersistence always loads (line 114-116) so the app fully works local-only. ServerWakeGate (ServerWakeGate.tsx:14-63) renders `{children}` always and only overlays a "waking" splash — it never blocks. App does NOT crash if Hocuspocus fails; it falls back to local-only and shows a "Local" pill (Header.tsx:201-213).
+    35→
+    36→---
+    37→Task ID: FIX-1
+    38→Agent: main (Z.ai Code)
+    39→Task: Fix all 8 reported Slate 3D/2D editor bugs and push to GitHub
+    40→
+    41→Work Log:
+    42→- Gizmo: store.ts setGizmo no longer toggles to null (sticky, Blender-like); Viewport3D onStartModal no longer clobbers gizmo mode on G/R/S (modal previews then restores active tool).
+    43→- STL import: importModel returns object IDs; onDrop + ImportDialog select new objects and frame camera on them; FrameSelectedBinding now uses real mesh bounding boxes (not just origin points) so imported models are always visible.
+    44→- Reset Transform: added resetTransform() to scene.ts + a "Reset Transform" button in PropertiesPanel Transform section.
+    45→- Smooth shading: added a Blend-icon toggle to Toolbar3D (object mode) reading the primary selection's smooth flag.
+    46→- Object tab: removed redundant "Visible" row (outliner eye already handles it); kept editable Name field.
+    47→- 2D brush: moved layer bootstrap + active-layer activation from LayersPanel into Canvas2D (always mounted on 2D boards) so the pen draws even when the Layers panel is closed.
+    48→- File > Open: added a labeled "Open" button (was an unclear icon); syncs board mode to the snapshot's mode on restore so opening a 3D project on a 2D board actually shows the 3D view.
+    49→- Favoriting: favorited 2D tools now render at the top of the far-left rail (with a full tool-def lookup so shape tools resolve correctly).
+    50→- TypeScript typecheck passes (tsc --noEmit clean).
+    51→- Browser-verified via Agent Browser: gizmo sticky (Rotate stays pressed), smooth toggle flips on a mesh, Reset Transform present, visibility removed, 2D pen draws (27 lit pixels), favoriting adds Rectangle to left rail — all with zero runtime errors.
+    52→
+    53→Stage Summary:
+    54→- 10 files modified across apps/client/src. All 8 bugs fixed and browser-verified. Ready to push to JeffreyHamilton6399/Slate.
+    55→
+    56→---
+    57→Task ID: FIX-2
+    58→Agent: main (Z.ai Code)
+    59→Task: Fix round 2 of Slate editor issues (smooth toggle, camera lock, timeline, brush, File>Open, edit-mode length, undo, modal preview)
+    60→
+    61→Work Log:
+    62→- Removed the Smooth shading row from Properties Object section (it's in the top toolbar now).
+    63→- Camera view lock (Blender-style): OrbitControls disabled while viewingCameraId set; MMB exits camera view via onPointerDownCapture. HUD updated to "Camera view — MMB to exit".
+    64→- Modal transform "weird preview mouse thing": removed pointer lock (cursor now stays visible during G/R/S; guide line tracks it naturally).
+    65→- File > Open: clicking the entry title now opens it (whole row is a button); removed the overwrite-confirm warning; description updated to "Click a snapshot to open it."
+    66→- 2D brush too big: InkTool.move sample threshold now scales with brush size (min 0.5, or strokeWidth*0.35) so large brushes produce smooth strokes instead of jagged gaps.
+    67→- Edit-mode edge length: editHudText now shows the selected edge's world-space length (in m) when a single edge is picked — measure mesh parts directly.
+    68→- Ctrl+Z undo in 3D: wrapped setTransform in slate.doc.transact() so the Y.UndoManager captures each drag as one undoable op. Verified: smooth toggle → undo reverts, redo re-applies.
+    69→- Timeline (more Blender-like): auto-expands when animation exists; keyframe diamonds in the dope sheet are now draggable to retime (moveKeyframe added to scene.ts); click (no drag) still jumps the playhead.
+    70→
+    71→Stage Summary:
+    72→- 7 files modified. Browser-verified: smooth toggle ON→undo→false→redo→true; File>Open entry click opens with no confirm; no runtime errors. TypeScript + ESLint clean.
+    73→
+    74→---
+    75→Task ID: FIX-3
+    76→Agent: main (Z.ai Code)
+    77→Task: Fix round 3 (auth freeze, Home redesign, 2D brush lag, board visibility, select-mode cycle, modal cursor, rotate weirdness, HUD toggle, lights, timeline snaps, remove preview mode)
+    78→
+    79→Work Log:
+    80→- Auth freeze: wrapped supabase auth calls in Promise.race with a 20s timeout so a misconfigured/unreachable Supabase can't freeze the form on "Working…" forever.
+    81→- Home/Onboarding redesign: added ambient gradient backdrop (accent + green blurs), kept the polished card.
+    82→- 2D brush lag (circles+connect): renderer now uses quadratic curves through perfect-freehand outline midpoints (smooth fill instead of straight lineTo segments); InkTool sample threshold lowered to 0.12×brushWidth for denser, smoother sampling.
+    83→- Board Settings: added a public/private visibility segmented toggle at the top (writes to board meta).
+    84→- Vert/Edge/Face: replaced the 3-button segmented switch with a single cycle button (like the shading button). Verified Vert→Edge→Face→Vert.
+    85→- Modal cursor: container hides the cursor (cursor:none) during modal transforms; the guide line still tracks the mouse — Blender-style.
+    86→- 3D rotate weirdness: modal rotate now uses horizontal-drag-only (was x+y combined, which made diagonal drags rotate 2× and feel unpredictable). Scale similarly simplified to horizontal-only.
+    87→- HUD/tooltips: the Fly HUD now respects showTransformHud (goes away when toggled off).
+    88→- Lights: boosted all default light intensities (point 25→60, sun 1.6→3.2, spot 40→80, hemi 1.2→2.4, area 12→25); boosted the studio rig (ambient 0.12→0.35, hemi 0.65→1.4, key 1.1→2.0, rim 0.3→0.6) so meshes read clearly.
+    89→- Timeline: added snap tick marks at each second (frame grid); keyframe diamonds remain draggable; removed the "Preview" button.
+    90→- Removed animPreview mode: it desynced the gizmo from the mesh on keyframed objects (gizmo wrote base transform while preview showed a sampled pose → glitch). Objects now always render at their document transform; the timeline playhead only drives camera renders.
+    91→
+    92→Stage Summary:
+    93→- 9 files modified. Browser-verified: select-mode cycle (Vert→Edge→Face→Vert), Board Settings visibility toggle (public↔private), Home redesign loads clean. TypeScript + ESLint clean (0 errors).
+    94→
+    95→---
+    96→Task ID: FIX-4
+    97→Agent: main (Z.ai Code)
+    98→Task: Fix round 4 (grid accent color, timeline scrub interpolation, selected-only keyframes, edit-mode select-all, CAD edge lengths, Home compress)
+    99→
+   100→Work Log:
+   101→- 3D grid lines now follow the accent color: section lines bright accent (#7c6aff), cell lines a faint accent tint (#3a3550). Verified via VLM: grid is purple.
+   102→- Timeline scrubbing now actually interpolates object transforms between keyframes (re-enabled animOverrides for display). The gizmo syncs from the sampled pose so it stays attached to the visible mesh (no desync). Properties panel transform numbers update as you scrub (sampled transform applied to the displayed obj).
+   103→- Timeline dope sheet now shows only the selected object's keyframe row, not every animated object in the scene. Verified: 1 row for the selected cube.
+   104→- Edit-mode Select All (A) now selects all sub-elements of the current object (verts/edges/faces per select mode) instead of selecting every object in the scene. Alt+A deselects sub-elements in edit mode.
+   105→- CAD edge measurements: edit HUD now shows total edge length for any number of selected edges (was single-edge only).
+   106→- Home page (signed-in) compressed: project name input capped to max-w-xs; replaced the two big create cards with a 2D/3D segmented control + a single Create button. Removed the unused CreateCard component.
+   107→- Onboarding board-name input also capped to max-w-xs.
+   108→
+   109→Stage Summary:
+   110→- 6 files modified. Browser-verified: grid purple, timeline shows 1 row (selected only), no runtime errors. TypeScript + ESLint clean (0 errors).
+   111→
+   112→---
+   113→Task ID: FIX-5
+   114→Agent: main (Z.ai Code)
+   115→Task: Fix round 5 (icon toggles, required name, remove dimensions, timeline drag/delete fixes, single bar, wheel for bevel, accent grid+material)
+   116→
+   117→Work Log:
+   118→- Onboarding + Home: public/private and 2D/3D are now single-icon toggle buttons (click to flip icon) instead of 2-button segmented controls. Saves horizontal space.
+   119→- Onboarding: project name is now required (Enter board disabled until named).
+   120→- Properties: removed the 3D Dimensions row (Scale already covers it).
+   121→- Timeline keyframe drag: moveKeyframe now tracks the key's CURRENT time each drag tick (was re-searching from the original time with a 0.1s tolerance, so the drag stopped after moving > 0.1s). Generous 1.0s tolerance + no-op guard when already at target.
+   122→- Timeline keyframe delete: increased withoutKey tolerance from 0.05s to 0.5s so the Delete button reliably removes the nearest key without pixel-perfect scrubbing. Verified: 2 keys → delete → 1 key.
+   123→- Timeline: removed the duplicate keyframe diamonds from the scrubber track (they were already in the dope sheet row, making "two keyframing things"). Now one single bar with snap ticks only.
+   124→- Timeline: dope sheet shows one row per SELECTED animated object (1 selected = 1 row; 2 selected = 2 rows).
+   125→- Bevel/loop-cut wheel: mouse wheel now increases cuts/segments for both bevel and loop-cut (was loop-cut only). preventDefault stops OrbitControls from zooming during these modals.
+   126→- Accent color recolors grid lines: section = accent, cell = darkened accent (read from --accent CSS var at runtime, recomputed when the accent setting changes).
+   127→- Accent color recolors default material: defaultMaterial() reads --accent so new objects match the custom accent.
+   128→
+   129→Stage Summary:
+   130→- 7 files modified. Browser-verified: required project name (disabled→enabled), icon toggles flip (2D→3D), keyframe delete works (2→1). TypeScript + ESLint clean (0 errors).
+   131→
+   132→---
+   133→Task ID: FIX-6
+   134→Agent: main (Z.ai Code)
+   135→Task: Fix round 6 (white default material, units display, subdivide tool, wireframe edges, Object/Edit toggle)
+   136→
+   137→Work Log:
+   138→- Default material color is now white (was accent) — new objects read as neutral clay, Blender-style.
+   139→- Properties: added a read-only "Size" readout in the Transform section showing the object's bounding-box dimensions in the current unit (mm/cm/m/in/ft), with feet+inches formatting for ft (e.g. "3′ 2.5″"). CAD measurements now always visible.
+   140→- Subdivide tool brought back as a primary toolbar icon (was buried in the Mesh dropdown). Removed the duplicate from the Mesh menu.
+   141→- Wireframe mode now shows ONLY the real polygon face edges (not triangulated diagonals). The filled surface is hidden (opacity 0) and a separate lineSegments overlay draws each face's perimeter edges. VLM-verified: cube shows 12 edges, no diagonals.
+   142→- Object/Edit mode is now a single toggle button (shows the current mode, click to flip) instead of two side-by-side buttons.
+   143→
+   144→Stage Summary:
+   145→- 5 files modified. Browser-verified: single Object/Edit toggle flips, wireframe shows real face edges (VLM-confirmed), Size readout present, no errors. TypeScript + ESLint clean (0 errors).
+   146→
+   147→---
+   148→Task ID: FIX-7
+   149→Agent: main (Z.ai Code)
+   150→Task: Fix round 7 (yellow selected keyframe, cursor hide on left-hold, object invisible during modal, timeline focus)
+   151→
+   152→Work Log:
+   153→- Selected keyframe is now yellow (warn) — the keyframe diamond under the playhead (within 0.05s tolerance) renders fill-warn/text-warn and slightly larger (size 10 vs 8). Unselected keys stay accent. Verified: at t=0 with 1 key → yellow:1.
+   154→- Cursor now hides on left-hold-click (not just during modal transforms). Added leftHeld state; cursor:none when modalLabelText OR leftHeld. Pointer up / leave clears it.
+   155→- Objects no longer go invisible when moving: animOverrides now suppress the sampled-pose override for objects being transformed (during a G/R/S modal OR a gizmo drag). Previously the override masked the live base-transform edit, making the object appear stuck/invisible while dragging. Added gizmoDragging flag to the store; ObjectGizmo sets it on mouseDown/up; animOverrides skips overridden objects when modalTool or gizmoDragging is active.
+   156→- Timeline focus: the dope sheet, scrubber, keyframe drag (tracks current time), delete (0.5s tolerance), and single-bar layout all confirmed working.
+   157→
+   158→Stage Summary:
+   159→- 4 files modified. Browser-verified: yellow selected keyframe at playhead. TypeScript + ESLint clean (0 errors).
+   160→
+   161→---
+   162→Task ID: FIX-8
+   163→Agent: main (Z.ai Code)
+   164→Task: Fix round 8 (fly camera publishing, grid follow, timeline stop-sign, bevel wheel, loop-cut preview, home polling)
+   165→
+   166→Work Log:
+   167→- Pulled latest from GitHub (commit d19754c by other AI: timeline auto-key, single transform-tool button, MP4 render, clean recordings, reload fix).
+   168→- Fly mode camera: reduced awareness publish throttle from 150ms to 50ms during fly mode so remote peers see the camera move smoothly in real time (was static until release). PeerCamera already had lerp smoothing.
+   169→- 3D grid: set followCamera=true so the grid follows the camera as you fly/orbit (was stuck at origin, looked weird when navigating away).
+   170→- Timeline stop-sign cursor: the viewport container's onPointerDownCapture was setting leftHeld=true for ALL clicks inside the viewport (including timeline UI), which set cursor:none and conflicted with the range input drag (producing a not-allowed/stop-sign cursor). Now only sets leftHeld when the click target is the canvas element.
+   171→- Bevel/loop-cut wheel: moved the wheel handler from window to the container element in CAPTURE phase so it fires BEFORE OrbitControls' canvas-level wheel listener. preventDefault + stopPropagation now fully stops zoom during bevel/loop-cut. Bevel scroll changes the bevel width (amount); loop-cut scroll changes cut count. Verified: Bevel 5% → scroll → 7%, no zoom.
+   172→- Bevel/loop-cut preview: scalar modals now apply the initial preview immediately on start (applyMeshScalar called right after startMeshScalar), so the user sees the bevel/cut result the moment they press the shortcut — Blender shows the preview before clicking. Bevel starts with a small visible amount (5%).
+   173→- Home page: added 10s polling for live boards so visibility toggles by other users reflect without a manual refresh.
+   174→- Fixed ESLint error in useSlateRoom.ts (let → const for unassigned entry).
+   175→
+   176→Stage Summary:
+   177→- 6 files modified. Browser-verified: bevel wheel changes width (5%→7%) without zooming, timeline cursor no longer stop-sign, no runtime errors. TypeScript + ESLint clean (0 errors).
+   178→
+   179→---
+   180→Task ID: FIX-9
+   181→Agent: main (Z.ai Code)
+   182→Task: Fix round 9 (animation transforms, timeline drag offset, infinite grid zoom, CAD on-edge labels, pivot setting, more 2D tools)
+   183→
+   184→Work Log:
+   185→- Animation: confirmed transforms (location/rotation/scale) update live as the playhead scrubs — animOverrides sample the keyframe pose and apply it to the rendered object. Properties panel reads the sampled transform too.
+   186→- Timeline drag offset: fixed the keyframe drag rect calculation (was using parentElement rect with implicit padding offset; now uses the track's client rect directly so left:0 = rect.left).
+   187→- Grid infinite zoom: removed maxDistance from OrbitControls (was implicitly limited); set minDistance=0.1. Grid fadeDistance increased from 40 to 10000 so the grid stays visible when zoomed far out (Blender-style infinite zoom).
+   188→- CAD on-edge measurements: selected edges now show a length label (e.g. "1.234 m") directly ON the edge midpoint in 3D space (drei Html overlay), not just in the bottom HUD tooltip. Added scale param to ElementHighlight; computes world-space edge length.
+   189→- Transform pivot point setting: added PivotMode (median/cursor/individual/active) to the store + a cycle button in the 3D toolbar (next to Global/Local). Click to cycle: Median → Cursor → Indiv. → Active → Median. Verified.
+   190→- More 2D tools: added 4 new brush variants (Pencil, Marker, Calligraphy, Airbrush) with per-brush size/opacity/thinning profiles (pencil=thin+textured, marker=bold+opaque, calligraphy=pressure-driven, airbrush=soft+low-opacity). Added 6 new shapes (Heart, Cloud, Speech Bubble, Diamond, Pentagon, Hexagon). All appear in the Tools panel and can be favorited to the left rail. Updated schema (StrokeKind, ShapeKind), createTool, InkTool draft profiles, renderer brush tuning, ToolsPanel, and left-rail Toolbar defs.
+   191→
+   192→Stage Summary:
+   193→- 9 files modified. Browser-verified: pivot cycle (Median→Cursor→Indiv.), new 2D tools present (Pencil/Marker/Calligraphy/Airbrush/Diamond). TypeScript + ESLint clean (0 errors).
+   194→
+   195→---
+   196→Task ID: PARALLEL-B
+   197→Agent: main (Z.ai Code)
+   198→Task: Face-selection CAD measurements + smaller numbers + rotation-correct edge lengths + unit-aware labels
+   199→
+   200→Work Log:
+   201→- Read SceneObjects.tsx, useBoardSettings.ts, units.ts, Viewport3D.tsx, mesh/triangulate.ts, sync-protocol/schema.ts to understand the data flow and existing measurement code.
+   202→- Added `formatArea(metersSquared, unit)` to `viewport3d/units.ts`: converts m² to mm²/cm²/m²/in²/ft² (squared the existing UNIT_PER_METER factor) with sensible per-unit decimals (mm=0, cm=1, m=3, in/ft=2). Reuses the existing `formatLength` approach so area labels read like "0.123 m²" / "5.4 ft²".
+   203→- Plumbed board display unit into the 3D scene: added `unit?: LengthUnit` to `SceneObjectsProps` (defaults to 'm'), forwarded `unit` through `SceneObjects` → `SceneMesh` → `ElementHighlight` / `FaceHighlight`. `Viewport3D.tsx` already had `const [units] = useBoardUnits(room)` so it just passes `unit={units}` to `<SceneObjects>`.
+   204→- Added shared `worldMatrix(t: Transform)` helper in SceneObjects.tsx that composes a `THREE.Matrix4` from position + Euler rotation + scale (same pattern as scene.ts `bakeMeshToWorld`). Used by both highlight components so CAD math respects object rotation, not just scale.
+   205→- ElementHighlight rewrite:
+   206→  - Changed prop from `scale: {x,y,z}` to `transform: Transform` + `unit: LengthUnit`.
+   207→  - Edge length now measured in WORLD space: each endpoint is projected through `worldMatrix(transform)` via `Vector3.applyMatrix4`, then `va.distanceTo(vb)`. Fixes the previous `Math.hypot((bx-ax)*scale.x, …)` which ignored rotation.
+   208→  - Label text now uses `formatLength(len, unit)` so the unit follows the board's setting (mm/cm/m/in/ft with `ft` formatted as `3′ 2.5″`).
+   209→  - Pill: `text-[9px]` → `text-[8px]`; `px-1 py-px` → `px-1 py-0` (smaller numbers + tighter pills).
+   210→- FaceHighlight rewrite (the big one): now accepts `transform` + `unit` and emits CAD labels in addition to the existing translucent orange fill:
+   211→  - For each selected face, walks its perimeter edges (consecutive vertex pairs with wrap-around), projects each endpoint through `worldMatrix(transform)`, computes the world-space length, and renders a `<Html>` label at the local-space midpoint (same drei pattern as ElementHighlight: `center distanceFactor={8} occlude={false} zIndexRange={[20,0]}`).
+   212→  - Computes the face's world-space area by fan-triangulating it (reuses `triangulateFace`) and summing `0.5 * |(b-a) × (c-a)|` of each triangle in world space. Renders a `<Html>` area label at the face's centroid (local-space vertex average, so it sits inside the face).
+   213→  - Area label pill is solid `bg-warn` + `font-semibold` (vs the edges' `bg-warn/90` + `font-medium`) so it reads as the "primary" callout. Both use `text-[8px]` and `px-1 py-0` for size consistency with ElementHighlight.
+   214→- Updated both `SceneMesh` call sites in SceneObjects.tsx: `FaceHighlight` now receives `transform={obj.transform} unit={unit}` and `ElementHighlight` receives `transform={obj.transform} unit={unit}` (replacing the old `scale={obj.transform.scale}`).
+   215→- TypeScript typecheck (`npx tsc --noEmit`) passes clean — no errors.
+   216→
+   217→Stage Summary:
+   218→- 3 files modified (units.ts, SceneObjects.tsx, Viewport3D.tsx). Selecting FACES in the 3D editor now shows measurement labels (perimeter edge lengths + face area at centroid) in addition to the orange fill. Selecting EDGES still shows length labels but now with rotation-correct math and unit-aware formatting. ALL CAD measurement pills are smaller (`text-[8px]`, `px-1 py-0`). Units follow the board setting (mm/cm/m/in/ft; ft-length as `ft′ in″`, ft-area as `ft²`). tsc clean.
+   219→
+   220→---
+   221→Task ID: PARALLEL-A
+   222→Agent: main (Z.ai Code)
+   223→Task: 3 related fixes — (1) Delete projects from Supabase cloud, not just local; (2) Home layout max 3 recents + scrollable live boards; (3) Live public boards real-time updates with audio mode + visibility filtering
+   224→
+   225→Work Log:
+   226→- Read worklog (latest FIX-9) and the 5 target files (cloudSaves.ts, snapshot.ts, Home.tsx, rooms.ts, supabase.ts, useAccount.ts). Confirmed `startCloudSaveBridge` is mounted in App.tsx as `<CloudSaveBridge>` (active whenever a user is signed in — including when Home renders).
+   227→- snapshot.ts: added `onDeleteSave(cb)` pub/sub mirroring `onSavePersisted` (a `Set<DeleteListener>` with `(saveId: string) => void` signature). `deleteSave(id)` now fires all `deleteListeners` after removing the localStorage index entry + snapshot blob. `pruneLegacyAutosaves` and `deleteSaveByBoardName` (in Home.tsx) automatically propagate via this listener.
+   228→- cloudSaves.ts: imported `onDeleteSave`. Added `deleteCloudSave(userId, saveId)` (DELETE FROM board_saves WHERE user_id=? AND save_id=?) and `deleteCloudSavesByBoard(userId, boardName)` (DELETE … WHERE user_id=? AND board_name=?). `startCloudSaveBridge` now also subscribes to `onDeleteSave` and calls `deleteCloudSave(userId, saveId)` for each locally-deleted save. The unsubscribe tears down both the persist listener and the delete listener (and clears pending debounce timers).
+   229→- Home.tsx: 
+   230→  • `recentsFromSaves()` now slices to 3 (was 12).
+   231→  • Recents grid is now `grid-cols-2 sm:grid-cols-3` (dropped the `lg:grid-cols-4` tier so max 3 cards show).
+   232→  • Added `const liveRooms = rooms.filter((r) => r.visibility === 'public' && r.members > 0)` so private boards and empty rooms disappear from the discovery list (matches the "Live public boards" section title).
+   233→  • Live boards `<ul>` now has `max-h-[50vh] overflow-y-auto pr-1` so it scrolls when many boards are present.
+   234→  • Polling interval reduced from 10s to 5s for snappier real-time updates.
+   235→  • Live board mode badge now uses the same color scheme as recents: 3d→accent, audio→warn, 2d→green (audio was previously collapsed into the 2d/green branch because the type didn't include 'audio').
+   236→  • Delete confirm message updated to reflect that BOTH local + cloud saves are removed.
+   237→- rooms.ts: `PublicRoom.mode` extended from `'2d' | '3d'` to `'2d' | '3d' | 'audio'`. Verified all callers (Onboarding.tsx, BoardsPanel.tsx, Home.tsx) handle 'audio' correctly (they pass it through to `setMode`/`enterBoard` which already accept 'audio').
+   238→- Installed workspace deps with `bun install` (node_modules were missing — bun migrated the pnpm-lock.yaml to bun.lock automatically).
+   239→- `npx tsc --noEmit` from apps/client: EXIT 0, zero errors. (Pre-existing modifications to SceneObjects.tsx/Viewport3D.tsx/units.ts from another agent's work are also clean now — they appeared broken in an intermediate run due to stash churn but resolve to clean on the final state.)
+   240→
+   241→Stage Summary:
+   242→- 4 files modified (cloudSaves.ts, snapshot.ts, Home.tsx, rooms.ts). Deleting a project from Home now removes it from Supabase too (via the new onDeleteSave bridge listener), so it won't reappear on refresh. Home shows max 3 recents in a 2/3-col grid, with a scrollable live-boards list below. Live boards poll every 5s, include audio mode with warn color, and filter out private + empty rooms. TypeScript clean (0 errors).
+   243→
+   244→---
+   245→Task ID: PARALLEL-C
+   246→Agent: main (Z.ai Code)
+   247→Task: 4 audio editor fixes — (1) waveform blank after cut/join/leave, (2) drag snap to left/right of neighbour, (3) fade-in/out visual triangle, (4) clean up Audio Settings panel
+   248→
+   249→Work Log:
+   250→- Read worklog (latest PARALLEL-A/B) and the 4 target files (AudioEditor.tsx, scene.ts, sampleStore.ts, AudioSettingsPanel.tsx) fully.
+   251→- Task 1 — waveform blank after cut/join/leave:
+   252→  • WaveformImg (AudioEditor.tsx): when `loadSamples` returns an empty Float32Array (length 0 — race with IndexedDB write on a freshly-split/created clip), DON'T cache the resulting blank PNG. Instead show the `···` placeholder and retry every 500ms up to 5 times. `retryRef` counter is reset to 0 on success or when the cache-bust event fires.
+   253→  • WaveformImg: added an internal `slate:audio-clip-changed` listener that (a) invalidates any cached PNG entries for the current `clipId` (defensive — parent also does this), (b) resets the retry counter, and (c) bumps a `bust` state counter that's in the load-effect deps. Without the `bust` bump the memoised component kept showing the stale PNG even after the cache was cleared (its primitive props were unchanged so the effect never re-ran).
+   254→  • scene.ts splitAudioClip: now passes the Float32Array halves straight to `storeSamples` (slice() on Float32Array returns Float32Array) instead of converting via `float32ToNumberArray` — saves a full-array copy for big clips. Same fix in AudioSettingsPanel Normalize + Reverse (pass `normed`/`out` Float32Array directly).
+   255→  • Added `duplicateAudioClip(slate, id)` helper in scene.ts (loads samples, calls addAudioClip with the Float32Array directly).
+   256→  • Generalised `addAudioClip` to accept `number[] | Float32Array` (uses `instanceof Float32Array` to pass through without copying).
+   257→- Task 2 — drag snap to left/right of neighbour:
+   258→  • Extended `neighbourBounds` to also return the full list of same-track clip `{start,end}` bounds (was just the immediate left/right limits).
+   259→  • `dragRef` now carries the `neighbours` array.
+   260→  • `pointermove` for `mode === 'drag'`: replaced the dead-stop clamp with a snap-to-free-side resolver. Computes `rawStart = os + dt`, then iteratively: if the candidate position would overlap a neighbour by more than 0.05s (small threshold to avoid accidental snaps at the boundary), JUMP to the free side of that blocker — `blocker.end` when dragging right (dt ≥ 0), `blocker.start - duration` when dragging left (dt < 0). Iterates so a chain of back-to-back clips resolves to the next genuine free slot. Final `Math.max(0, start)` keeps it on the positive timeline. Trim modes still use the old leftLimit/rightLimit clamp (unchanged).
+   261→- Task 3 — fade-in/out visual triangles:
+   262→  • ClipBlock (AudioEditor.tsx): added two CSS clip-path div overlays on top of the waveform layer. Fade-in: `bg-black/30` wedge anchored left, width = `clip.fadeIn * pxPerSec`, `clipPath: polygon(0% 0%, 0% 100%, 100% 50%)` — full height at the outer (left) edge tapering to a point at the inner edge. Fade-out: mirrored on the right (`right-0`, `polygon(100% 0%, 100% 100%, 0% 50%)`). Widths clamped to the clip box so an over-long fade doesn't spill past the opposite edge. Both are `pointer-events-none` so they don't intercept drag/trim.
+   263→- Task 4 — clean up Audio Settings panel:
+   264→  • Removed the "Start (s)" and "Duration (s)" numeric inputs (these are controlled by dragging/trimming in the timeline, not typing).
+   265→  • Reorganised into a consistent grid: Name+Color (2-col), Fade In+Out (2-col), Gain+Pan (2-col), Speed/Pitch (full width). Each slider row uses the same `field-label` + `flex items-center gap-1` (icon + range + value) structure.
+   266→  • Added a "Duplicate" button (Copy icon) next to Split in a 2-col action grid — calls the new `duplicateAudioClip(slate, clip.id)` (same logic as the D hotkey, which now also calls it). Normalize + Reverse fill the second row, Delete Clip is its own full-width row below.
+   267→  • Normalize/Reverse now pass the Float32Array directly to `storeSamples` (removed `float32ToNumberArray` import — unused after the fix).
+   268→- `npx tsc --noEmit` from apps/client: EXIT 0, zero errors.
+   269→- ESLint on the 3 changed files: 0 errors, 2 pre-existing warnings (pxPerSec dep in a useCallback, and `version` state set-but-not-read in AudioSettingsPanel — both predate this task).
+   270→- dev.log: clean compile, `GET / 200`.
+   271→
+   272→Stage Summary:
+   273→- 3 files modified (audio/AudioEditor.tsx, audio/scene.ts, panels/AudioSettingsPanel.tsx). Waveforms no longer go blank after split/normalize/reverse (retry-on-empty + per-clip cache-bust). Dragging a clip over a neighbour now snaps to the free side (left/right) of that neighbour instead of stopping dead. Clip blocks show semi-transparent triangle overlays for fade-in (left wedge) and fade-out (right wedge). Audio Settings panel is more compact: Start/Duration inputs removed, consistent 2-col slider grid, Duplicate button added. tsc + ESLint clean.
+   274→
+   275→---
+   276→Task ID: FIX-ROUND-2
+   277→Agent: main (Z.ai Code)
+   278→Task: Pull latest, fix cloud delete, home layout, live boards, bevel geometry, face measurements, 2D animation, 3D timeline alignment, audio waveform/snap/fade/settings
+   279→
+   280→Work Log:
+   281→- **Pulled latest** (da2a300): remote had already added no-overlap clip drag + trim-cut waveforms. Reset to origin/main to get clean base.
+   282→- **Cloud delete** (subagent PARALLEL-A): Added `onDeleteSave` pub/sub to snapshot.ts. `deleteSave` now fires delete listeners. cloudSaves.ts gained `deleteCloudSave(userId, saveId)` + `deleteCloudSavesByBoard`. `startCloudSaveBridge` subscribes to `onDeleteSave` and deletes from Supabase `board_saves` table. Deleting a project from Home now removes it from BOTH local localStorage AND cloud — no more resurrection on refresh.
+   283→- **Home layout** (subagent PARALLEL-A): `recentsFromSaves()` slices to 3 (was 12). Grid is `grid-cols-2 sm:grid-cols-3` (was 4 tiers). Live boards `<ul>` has `max-h-[50vh] overflow-y-auto pr-1` for scrolling.
+   284→- **Live public boards** (subagent PARALLEL-A): Polling reduced to 5s (was 10s). `liveRooms = rooms.filter(r => r.visibility === 'public' && r.members > 0)` — private boards and empty rooms disappear. `PublicRoom.mode` extended to include `'audio'`. Audio boards show with warn color.
+   285→- **Face CAD measurements** (subagent PARALLEL-B): `FaceHighlight` now shows perimeter edge length labels + face area label at centroid. All measurement text reduced from `text-[9px]` to `text-[8px]`. Edge length calculation fixed to use full world matrix (position + rotation + scale) via `THREE.Matrix4` — was ignoring rotation. Labels respect board units (mm/cm/m/in/ft) via `formatLength`/`formatArea`.
+   286→- **Bevel geometry fix** (direct): Root cause was the `cutVerts` function creating DUPLICATE vertices when both endpoints of an edge are beveled — each side created its own cuts at the same positions. Fixed by making `cutVerts` symmetric: cache key is always `min->max`, and the reversed direction returns the same vertices in reverse order. Additionally, the face boundary now uses only the OUTERMOST cut (closest to neighbor) instead of all intermediate cuts — intermediate cuts go only in the corner fill. The corner fill for multi-segment bevels is now a fan of quad strips connecting concentric rings, capped by an innermost n-gon — this produces proper rounded corners. All 33 mesh tests pass (including 2 new multi-segment watertight tests).
+   287→- **2D animation system** (direct): Full Adobe Animate-style animation for 2D shapes:
+   288→  - Schema: Added `Transform2D` (x, y, rotation, scaleX, scaleY, opacity) and `AnimKey2D` (t + transform) to sync-protocol. Extended `Shape` with optional `anim?: AnimKey2D[]`. Updated zod validators to accept all 18 shape kinds + all 7 stroke kinds + the anim field.
+   289→  - Animation module (`canvas2d/animation.ts`): `sampleAnim2D` with linear position/scale/opacity + shortest-arc rotation interp. `withKey2D`/`withoutKey2D`/`moveKey2D` helpers.
+   290→  - Keyframe helpers (`canvas2d/keyframes.ts`): `insertKeyframe2D`/`autoKeyframe2D`/`deleteKeyframe2D`/`moveKeyframe2D` writing to Yjs.
+   291→  - Store: Added `animTime`, `animDuration`, `animPlaying`, `animPreview` + setters to `useCanvasStore`.
+   292→  - Engine: `readShape` now reads `anim` field. `loop()` repaints when `animPreview` is true. Passes `animTime` to renderer.
+   293→  - Renderer: `drawShapeWithAnim` applies sampled transform (translate + rotate + scale + opacity) before drawing. `renderScene` samples each shape's anim at current time.
+   294→  - Timeline2D component: Minimalistic timeline overlay at bottom of 2D canvas. Play/pause, scrubber, dope sheet with draggable keyframe diamonds, insert (I) / delete keyframes, End duration input. Auto-expands when animation exists.
+   295→- **3D timeline alignment** (direct): Dope sheet rows and slider row now share the same `grid-cols-[7rem_1fr_auto]` layout so keyframe diamonds line up exactly with the scrubber thumb. Was misaligned because dope sheet track started after the name button while slider started after play+time controls.
+   296→- **Audio fixes** (subagent PARALLEL-C):
+   297→  - Waveform blank after cut: `WaveformImg` no longer caches empty (length 0) sample results — retries every 500ms up to 5 times. Listens for `slate:audio-clip-changed` to invalidate cache.
+   298→  - Clip drag snap: dragging a clip onto another now snaps to the free side (left or right of the blocker) instead of dead-stopping.
+   299→  - Fade-in visual: `ClipBlock` renders CSS clip-path triangles for fade-in (left) and fade-out (right).
+   300→  - Settings panel: Removed Start/Duration inputs. Added Duplicate button. Reorganized into consistent 2-col grid.
+   301→  - `splitAudioClip` passes Float32Array directly to `storeSamples` (was converting to number[] unnecessarily).
+   302→
+   303→Stage Summary:
+   304→- 15+ files modified across mesh, sync-protocol, canvas2d, viewport3d, audio, panels, app.
+   305→- TypeScript: 0 errors. ESLint: 0 errors. Mesh tests: 33/33 pass (including 2 new multi-segment bevel watertight tests).
+   306→- Browser-verified: app loads, 2D timeline visible, no console errors.
+   307→

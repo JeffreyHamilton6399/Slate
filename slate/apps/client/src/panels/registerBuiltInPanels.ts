@@ -95,16 +95,16 @@ export function registerBuiltInPanels(): void {
     mode: 'both',
   });
   // Members panel retired — the People widget covers roster + voice + host controls.
-  // Audio editor — main left panel for audio-mode boards.
+  // Audio settings — left dock panel for audio-mode boards (track/clip properties).
   registerPanel({
-    id: 'audio-editor',
-    title: 'Audio Editor',
+    id: 'audio-settings',
+    title: 'Audio Settings',
     defaultSide: 'left',
-    render: AudioEditorPanel,
+    render: AudioAssetsPanel,
     order: 0,
     mode: 'audio',
   });
-  // Audio assets — right panel for audio-mode boards.
+  // Audio assets — right dock panel for audio-mode boards.
   registerPanel({
     id: 'audio-assets',
     title: 'Audio Assets',

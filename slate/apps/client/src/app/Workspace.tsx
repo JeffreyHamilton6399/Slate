@@ -26,6 +26,7 @@ import { initMetaIfEmpty } from '../sync/doc';
 import { RoomProvider } from '../sync/RoomContext';
 import { Canvas2D } from '../canvas2d/Canvas2D';
 import { Viewport3D } from '../viewport3d/Viewport3D';
+import { AudioEditor } from '../audio/AudioEditor';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -256,15 +257,7 @@ export function Workspace() {
             {board.mode === '3d' ? (
               <Viewport3D room={room} />
             ) : board.mode === 'audio' ? (
-              <div className="flex h-full w-full items-center justify-center bg-bg text-center">
-                <div className="max-w-md p-8">
-                  <h2 className="mb-2 text-xl font-bold text-text">Audio Studio</h2>
-                  <p className="text-sm text-text-dim">
-                    Open the <span className="text-accent">Audio Editor</span> panel on the left to edit tracks.
-                    Open <span className="text-accent">Audio Assets</span> on the right to manage your audio library.
-                  </p>
-                </div>
-              </div>
+              <AudioEditor />
             ) : (
               <Canvas2D room={room} />
             )}

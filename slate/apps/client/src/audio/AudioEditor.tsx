@@ -1,9 +1,8 @@
 /**
  * AudioEditor — CapCut/BandLab-style DAW.
- * Key optimization: clip metadata (start/duration/etc.) is read WITHOUT copying
- * the samples array. Samples are only read inside WaveformCanvas via a Yjs map
- * ref. This makes the editor fast even with multi-minute songs (millions of
- * sample values).
+ * Key optimization: waveforms are pre-computed as PNG data URLs cached per
+ * clip id + sample count. The canvas only draws ONCE when a clip is first
+ * seen or its samples change — not on every version bump.
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,42 +24,62 @@ import { AudioEngine } from './engine';
 
 const TRACK_H = 60;
 
-// ── Canvas waveform — reads samples from the Yjs map ref on mount only ───────
+// ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
+// Key: `${clipId}:${sampleCount}:${width}` → data URL
+const waveformPNGCache = new Map<string, string>();
 
-const WaveformCanvas = memo(function WaveformCanvas({ yMap, channels, width, color }: {
-  yMap: Y.Map<unknown>; channels: number; width: number; color: string;
+function computeWaveformPNG(samples: number[], channels: number, width: number, color: string, height: number): string {
+  const canvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(2, Math.floor(width));
+  canvas.width = w * dpr;
+  canvas.height = height * dpr;
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, height);
+  const total = samples.length / channels;
+  if (total === 0) return canvas.toDataURL();
+  const mid = height / 2;
+  ctx.fillStyle = color;
+  for (let x = 0; x < w; x++) {
+    const s0 = Math.floor((x / w) * total);
+    const s1 = Math.min(total, Math.floor(((x + 1) / w) * total) + 1);
+    let peak = 0;
+    for (let i = s0; i < s1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
+    const bh = Math.max(1, peak * mid * 0.85);
+    ctx.fillRect(x, mid - bh, 1, bh * 2);
+  }
+  return canvas.toDataURL();
+}
+
+/** Waveform image — uses cached PNG, only recomputes when samples change. */
+const WaveformImg = memo(function WaveformImg({ clipId, yMap, channels, width, color }: {
+  clipId: string; yMap: Y.Map<unknown>; channels: number; width: number; color: string;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const height = TRACK_H - 6;
+  const [imgUrl, setImgUrl] = useState<string>('');
+
+  // Only recompute when clipId or sample count changes — NOT on every version bump.
+  const sampleCount = useMemo(() => {
+    const s = readAudioClipSamples(yMap);
+    return s.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipId, yMap]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(2, Math.floor(width));
-    canvas.width = w * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${height}px`;
-    const ctx = canvas.getContext('2d')!;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, height);
-    const samples = readAudioClipSamples(yMap);
-    const total = samples.length / channels;
-    if (total === 0) return;
-    const mid = height / 2;
-    ctx.fillStyle = color;
-    for (let x = 0; x < w; x++) {
-      const s0 = Math.floor((x / w) * total);
-      const s1 = Math.min(total, Math.floor(((x + 1) / w) * total) + 1);
-      let peak = 0;
-      for (let i = s0; i < s1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
-      const bh = Math.max(1, peak * mid * 0.85);
-      ctx.fillRect(x, mid - bh, 1, bh * 2);
+    const cacheKey = `${clipId}:${sampleCount}:${Math.floor(width)}`;
+    let url = waveformPNGCache.get(cacheKey);
+    if (!url) {
+      const samples = readAudioClipSamples(yMap);
+      url = computeWaveformPNG(samples, channels, width, color, height);
+      waveformPNGCache.set(cacheKey, url);
     }
-  }, [yMap, channels, width, height, color]);
+    setImgUrl(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipId, sampleCount, width, color]);
 
-  return <canvas ref={canvasRef} className="pointer-events-none" />;
+  if (!imgUrl) return null;
+  return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
 });
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -75,6 +94,8 @@ function normalizeSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: st
   if (max < 1e-6) return;
   const g = 1 / max;
   updateAudioClip(slate, clipId, { samples: samples.map((s) => s * g) });
+  // Invalidate waveform cache for this clip.
+  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
 }
 
 function reverseSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
@@ -85,6 +106,7 @@ function reverseSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: stri
   const out: number[] = new Array(samples.length);
   for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
   updateAudioClip(slate, clipId, { samples: out });
+  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -350,7 +372,6 @@ export function AudioEditor() {
             {Array.from({ length: Math.ceil(timelineDuration / 5) + 1 }, (_, i) => (
               <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: i * 5 * pxPerSec }}>{i * 5}s</span>
             ))}
-            {/* Loop region handles */}
             {looping && (
               <>
                 <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
@@ -448,7 +469,7 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, yMap, onSe
   return (
     <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); onDragStart(clip, e, elRef.current); } }}
       className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
-      {yMap && <WaveformCanvas yMap={yMap} channels={clip.channels} width={w} color={clip.color} />}
+      {yMap && <WaveformImg clipId={clip.id} yMap={yMap} channels={clip.channels} width={w} color={clip.color} />}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current); }} className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />

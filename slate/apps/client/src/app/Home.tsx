@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -428,7 +428,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
               <IconToggle
                 active={createMode !== '2d'}
                 onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : '2d')}
-                onIcon={<BoxIcon size={15} />}
+                onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
                 offIcon={<PenLineIcon size={15} />}
                 onLabel={createMode === '3d' ? '3D scene' : 'Audio'}
                 offLabel="2D whiteboard"

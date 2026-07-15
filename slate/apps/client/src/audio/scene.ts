@@ -133,8 +133,9 @@ export function splitAudioClip(slate: SlateDoc, id: string, splitTime: number): 
   const sampleRate = clip.sampleRate;
   const channels = clip.channels;
   const splitSample = Math.floor(relTime * sampleRate) * channels;
-  const samplesA = clip.samples.slice(0, splitSample);
-  const samplesB = clip.samples.slice(splitSample);
+  const fullSamples = readAudioClipSamples(yo);
+  const samplesA = fullSamples.slice(0, splitSample);
+  const samplesB = fullSamples.slice(splitSample);
 
   slate.doc.transact(() => {
     yo.set('duration', relTime);
@@ -147,6 +148,7 @@ export function splitAudioClip(slate: SlateDoc, id: string, splitTime: number): 
       offset: 0,
       duration: clip.duration - relTime,
       samples: samplesB,
+      name: clip.name,
     };
     const m = new Y.Map<unknown>();
     for (const [k, v] of Object.entries(newClip)) m.set(k, v);
@@ -162,7 +164,9 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     start: (m.get('start') as number) ?? 0,
     offset: (m.get('offset') as number) ?? 0,
     duration: (m.get('duration') as number) ?? 0,
-    samples: (m.get('samples') as number[]) ?? [],
+    // DON'T copy samples here — it's potentially millions of numbers.
+    // Use readAudioClipSamples() when you need the actual audio data.
+    samples: [],
     sampleRate: (m.get('sampleRate') as number) ?? 44100,
     channels: (m.get('channels') as number) ?? 1,
     name: (m.get('name') as string) ?? 'Clip',
@@ -170,6 +174,11 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     fadeIn: (m.get('fadeIn') as number) ?? 0,
     fadeOut: (m.get('fadeOut') as number) ?? 0,
   };
+}
+
+/** Read ONLY the samples array from a clip (heavy — don't call in render loops). */
+export function readAudioClipSamples(m: Y.Map<unknown>): number[] {
+  return (m.get('samples') as number[]) ?? [];
 }
 
 export function setAudioBpm(slate: SlateDoc, bpm: number): void {

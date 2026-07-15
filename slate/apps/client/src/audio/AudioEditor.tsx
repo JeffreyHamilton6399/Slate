@@ -1,30 +1,34 @@
 /**
  * AudioEditor — CapCut/BandLab-style DAW.
- * Optimized: stable callbacks via refs, CSS background grid, no per-second DOM.
+ * Key optimization: clip metadata (start/duration/etc.) is read WITHOUT copying
+ * the samples array. Samples are only read inside WaveformCanvas via a Yjs map
+ * ref. This makes the editor fast even with multi-minute songs (millions of
+ * sample values).
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as Y from 'yjs';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
-  Wand2, FlipHorizontal2,
+  Wand2, FlipHorizontal2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
   addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
-  deleteAudioTrack, readAudioClip, readAudioTrack, setAudioBpm,
-  splitAudioClip, updateAudioClip, updateAudioTrack,
+  deleteAudioTrack, readAudioClip, readAudioClipSamples, readAudioTrack,
+  setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
 
 const TRACK_H = 60;
 
-// ── Canvas waveform ──────────────────────────────────────────────────────────
+// ── Canvas waveform — reads samples from the Yjs map ref on mount only ───────
 
-const WaveformCanvas = memo(function WaveformCanvas({ samples, channels, width, color }: {
-  samples: number[]; channels: number; width: number; color: string;
+const WaveformCanvas = memo(function WaveformCanvas({ yMap, channels, width, color }: {
+  yMap: Y.Map<unknown>; channels: number; width: number; color: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const height = TRACK_H - 6;
@@ -41,6 +45,7 @@ const WaveformCanvas = memo(function WaveformCanvas({ samples, channels, width, 
     const ctx = canvas.getContext('2d')!;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, height);
+    const samples = readAudioClipSamples(yMap);
     const total = samples.length / channels;
     if (total === 0) return;
     const mid = height / 2;
@@ -53,28 +58,33 @@ const WaveformCanvas = memo(function WaveformCanvas({ samples, channels, width, 
       const bh = Math.max(1, peak * mid * 0.85);
       ctx.fillRect(x, mid - bh, 1, bh * 2);
     }
-  }, [samples, channels, width, height, color]);
+  }, [yMap, channels, width, height, color]);
 
   return <canvas ref={canvasRef} className="pointer-events-none" />;
 });
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function normalizeSamples(clip: AudioClip): number[] {
+function normalizeSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
+  const yo = slate.audioClips().get(clipId); if (!yo) return;
+  const samples = readAudioClipSamples(yo);
+  const channels = (yo.get('channels') as number) ?? 1;
   let max = 0;
-  for (let i = 0; i < clip.samples.length; i += clip.channels)
-    for (let ch = 0; ch < clip.channels; ch++) max = Math.max(max, Math.abs(clip.samples[i + ch] ?? 0));
-  if (max < 1e-6) return clip.samples;
+  for (let i = 0; i < samples.length; i += channels)
+    for (let ch = 0; ch < channels; ch++) max = Math.max(max, Math.abs(samples[i + ch] ?? 0));
+  if (max < 1e-6) return;
   const g = 1 / max;
-  return clip.samples.map((s) => s * g);
+  updateAudioClip(slate, clipId, { samples: samples.map((s) => s * g) });
 }
 
-function reverseSamples(clip: AudioClip): number[] {
-  const ch = clip.channels;
-  const frames = clip.samples.length / ch;
-  const out: number[] = new Array(clip.samples.length);
-  for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = clip.samples[s + c] ?? 0; }
-  return out;
+function reverseSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
+  const yo = slate.audioClips().get(clipId); if (!yo) return;
+  const samples = readAudioClipSamples(yo);
+  const ch = (yo.get('channels') as number) ?? 1;
+  const frames = samples.length / ch;
+  const out: number[] = new Array(samples.length);
+  for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
+  updateAudioClip(slate, clipId, { samples: out });
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -90,7 +100,9 @@ export function AudioEditor() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [masterVol, setMasterVol] = useState(0.85);
   const [looping, setLooping] = useState(false);
-  const [pxPerSec, setPxPerSec] = useState(100);
+  const [loopStart, setLoopStart] = useState(0);
+  const [loopEnd, setLoopEnd] = useState(8);
+  const [pxPerSec, setPxPerSec] = useState(80);
   const engineRef = useRef<AudioEngine | null>(null);
   const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
   const rafRef = useRef(0);
@@ -99,7 +111,6 @@ export function AudioEditor() {
   const posDisplayRef = useRef<HTMLSpanElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ clipId: string; el: HTMLElement; os: number; od: number; oo: number; sx: number; mode: 'drag' | 'trimL' | 'trimR' } | null>(null);
-  /** Refs for stable callbacks — avoid creating new function identities. */
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedClipId;
   const pxRef = useRef(pxPerSec);
@@ -147,7 +158,7 @@ export function AudioEditor() {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setPxPerSec((c) => Math.max(20, Math.min(500, c * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+      setPxPerSec((c) => Math.max(10, Math.min(800, c * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -191,8 +202,8 @@ export function AudioEditor() {
       else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
       else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
       else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
-      else if (k === 'arrowleft') { e.preventDefault(); seek(positionRef.current - 1); }
-      else if (k === 'arrowright') { e.preventDefault(); seek(positionRef.current + 1); }
+      else if (k === 'arrowleft') { e.preventDefault(); seek(positionRef.current - 2); }
+      else if (k === 'arrowright') { e.preventDefault(); seek(positionRef.current + 2); }
       else if (k === 'home') { e.preventDefault(); seek(0); }
     };
     window.addEventListener('keydown', onKey);
@@ -200,7 +211,7 @@ export function AudioEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, recording]);
 
-  // Read from Yjs.
+  // Read from Yjs — lightweight (no samples copied).
   const tracks: AudioTrack[] = useMemo(() => {
     const list: AudioTrack[] = [];
     slate.audioTracks().forEach((m, id) => { const t = readAudioTrack(m, id); if (t) list.push(t); });
@@ -218,13 +229,13 @@ export function AudioEditor() {
 
   const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
 
-  // ── Transport (stable callbacks via useCallback) ──────────────────────────
+  // ── Transport ─────────────────────────────────────────────────────────────
 
   const togglePlay = useCallback(() => {
     const eng = engineRef.current; if (!eng) return;
     if (playing) { eng.stop(); setPlaying(false); }
-    else { eng.play(slate, positionRef.current); setPlaying(true); }
-  }, [playing, slate]);
+    else { if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null); eng.play(slate, positionRef.current); setPlaying(true); }
+  }, [playing, slate, looping, loopStart, loopEnd]);
 
   const seek = useCallback((t: number) => {
     const pos = Math.max(0, t);
@@ -237,8 +248,7 @@ export function AudioEditor() {
     if (recording) {
       const stopFn = stopRecRef.current;
       if (stopFn) {
-        const r = await stopFn();
-        stopRecRef.current = null; setRecording(false);
+        const r = await stopFn(); stopRecRef.current = null; setRecording(false);
         let tid = tracks.find((t) => t.armed)?.id;
         if (!tid) tid = addAudioTrack(slate, { name: 'Recording' });
         addAudioClip(slate, tid, { start: positionRef.current, samples: r.samples, sampleRate: r.sampleRate, channels: r.channels, duration: r.duration, name: `Rec ${new Date().toLocaleTimeString()}` });
@@ -253,7 +263,8 @@ export function AudioEditor() {
   const dupClip = useCallback((id: string) => {
     const yo = slate.audioClips().get(id); if (!yo) return;
     const c = readAudioClip(yo, id); if (!c) return;
-    addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples: c.samples, sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
+    const samples = readAudioClipSamples(yo);
+    addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples, sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
   }, [slate]);
 
   const handleFileImport = useCallback(async (file: File) => {
@@ -265,7 +276,7 @@ export function AudioEditor() {
     } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
   }, [slate]);
 
-  // ── Drag start (stable callbacks) ─────────────────────────────────────────
+  // ── Drag start ────────────────────────────────────────────────────────────
 
   const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => {
     e.stopPropagation(); setSelectedClipId(clip.id);
@@ -277,15 +288,30 @@ export function AudioEditor() {
     dragRef.current = { clipId: clip.id, el, os: clip.start, od: clip.duration, oo: clip.offset, sx: e.clientX, mode: side === 'left' ? 'trimL' : 'trimR' };
   }, []);
 
+  // ── Loop region drag ──────────────────────────────────────────────────────
+
+  const loopDragRef = useRef<{ mode: 'start' | 'end' | 'move'; sx: number; os: number; oe: number } | null>(null);
+  const startLoopDrag = useCallback((mode: 'start' | 'end' | 'move', e: React.PointerEvent) => {
+    e.stopPropagation();
+    loopDragRef.current = { mode, sx: e.clientX, os: loopStart, oe: loopEnd };
+    const onMove = (ev: PointerEvent) => {
+      const d = loopDragRef.current; if (!d) return;
+      const dt = (ev.clientX - d.sx) / pxRef.current;
+      if (d.mode === 'start') { setLoopStart(Math.max(0, Math.min(d.oe - 0.5, d.os + dt))); }
+      else if (d.mode === 'end') { setLoopEnd(Math.max(d.os + 0.5, d.oe + dt)); }
+      else if (d.mode === 'move') { setLoopStart(Math.max(0, d.os + dt)); setLoopEnd(Math.max(0.5, d.oe + dt)); }
+    };
+    const onUp = () => { loopDragRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  }, [loopStart, loopEnd, pxPerSec]);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const gridStyle = {
-    backgroundImage: `repeating-linear-gradient(to right, var(--border, #333) 0 1px, transparent 1px ${pxPerSec}px)`,
-  };
+  const gridStyle = { backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.1) 0 1px, transparent 1px ${pxPerSec}px)` };
 
   return (
     <div className="flex h-full flex-col bg-bg overflow-hidden" onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
-      {/* Transport — compact */}
+      {/* Transport */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
         <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
         <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
@@ -301,8 +327,8 @@ export function AudioEditor() {
         <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-        <button onClick={() => setPxPerSec((c) => Math.max(20, c / 1.4))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
-        <button onClick={() => setPxPerSec((c) => Math.min(500, c * 1.4))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+        <button onClick={() => setPxPerSec((c) => Math.max(10, c / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={() => setPxPerSec((c) => Math.min(800, c * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
         <div className="flex-1" />
         <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
@@ -312,22 +338,29 @@ export function AudioEditor() {
       <div ref={scrollRef} className="flex flex-1 min-h-0 overflow-auto">
         {/* Headers */}
         <div className="sticky left-0 z-10 w-44 shrink-0 border-r border-border bg-bg-2">
-          <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 24 }}>Tracks</div>
+          <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
           {tracks.length === 0 && <div className="p-3 text-center text-[11px] text-text-dim">No tracks. Import audio or add a track.</div>}
           {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef} />)}
         </div>
 
-        {/* Timeline — CSS background grid, no per-second DOM divs */}
+        {/* Timeline */}
         <div className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
-          {/* Ruler */}
-          <div className="sticky top-0 z-10 flex items-center border-b border-border bg-bg-2/95" style={{ height: 24 }}>
+          {/* Ruler + loop handles */}
+          <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
             {Array.from({ length: Math.ceil(timelineDuration / 5) + 1 }, (_, i) => (
-              <span key={i} className="absolute pl-1 text-[8px] font-mono text-text-dim" style={{ left: i * 5 * pxPerSec }}>{i * 5}s</span>
+              <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: i * 5 * pxPerSec }}>{i * 5}s</span>
             ))}
+            {/* Loop region handles */}
+            {looping && (
+              <>
+                <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
+                <div onPointerDown={(e) => startLoopDrag('end', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopEnd * pxPerSec, width: 8 }} title="Drag loop end"><ChevronRight size={10} className="text-white" /></div>
+              </>
+            )}
           </div>
-          {/* Lanes with CSS grid background */}
-          <div className="absolute inset-0 top-6" style={gridStyle}>
-            {looping && <div className="absolute top-0 bottom-0 bg-accent/8 border-x border-accent/30" style={{ left: 0, width: 8 * pxPerSec }} />}
+          {/* Grid background */}
+          <div className="absolute inset-0 top-7" style={gridStyle}>
+            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
           </div>
           {/* Playhead */}
           <div ref={playheadRef} className="absolute top-0 bottom-0 z-20 w-0.5 bg-warn pointer-events-none" style={{ transform: 'translateX(0px)' }}>
@@ -336,10 +369,13 @@ export function AudioEditor() {
           {/* Clips */}
           {tracks.map((t) => (
             <div key={t.id} className="relative border-b border-border/15" style={{ height: TRACK_H }}>
-              {clips.filter((c) => c.trackId === t.id).map((c) => (
-                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
-                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
-              ))}
+              {clips.filter((c) => c.trackId === t.id).map((c) => {
+                const yMap = slate.audioClips().get(c.id);
+                return (
+                  <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id} yMap={yMap}
+                    onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
+                );
+              })}
             </div>
           ))}
           {/* Seek */}
@@ -358,7 +394,7 @@ export function AudioEditor() {
   );
 }
 
-// ── Track header (self-contained, no parent callbacks) ──────────────────────
+// ── Track header ────────────────────────────────────────────────────────────
 
 const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef }: {
   track: AudioTrack; hasSolo: boolean;
@@ -395,10 +431,10 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
   );
 });
 
-// ── Clip block (stable callbacks — no inline functions) ─────────────────────
+// ── Clip block ──────────────────────────────────────────────────────────────
 
-const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart, slate }: {
-  clip: AudioClip; pxPerSec: number; selected: boolean;
+const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, yMap, onSelect, onDragStart, onTrimStart, slate }: {
+  clip: AudioClip; pxPerSec: number; selected: boolean; yMap: Y.Map<unknown> | undefined;
   onSelect: (id: string) => void;
   onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => void;
   onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => void;
@@ -410,17 +446,17 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
   const w = Math.max(2, Math.floor(width));
 
   return (
-    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); onDragStart(clip, e, elRef.current); } }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onSelect(clip.id); }}
+    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); onDragStart(clip, e, elRef.current); } }}
       className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
-      <WaveformCanvas samples={clip.samples} channels={clip.channels} width={w} color={clip.color} />
+      {yMap && <WaveformCanvas yMap={yMap} channels={clip.channels} width={w} color={clip.color} />}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current); }} className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
       {selected && (
         <div className="absolute bottom-0.5 left-1 right-1 flex items-center gap-0.5">
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Split"><Scissors size={7} /></button>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => { const cl = readAudioClip(slate.audioClips().get(clip.id)!, clip.id); if (cl) updateAudioClip(slate, clip.id, { samples: normalizeSamples(cl) }); }} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Normalize"><Wand2 size={7} /></button>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => { const cl = readAudioClip(slate.audioClips().get(clip.id)!, clip.id); if (cl) updateAudioClip(slate, clip.id, { samples: reverseSamples(cl) }); }} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Reverse"><FlipHorizontal2 size={7} /></button>
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => normalizeSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Normalize"><Wand2 size={7} /></button>
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => reverseSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Reverse"><FlipHorizontal2 size={7} /></button>
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => { deleteAudioClip(slate, clip.id); }} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-danger" title="Delete"><Trash2 size={7} /></button>
         </div>
       )}

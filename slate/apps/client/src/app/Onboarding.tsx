@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
 import { useAppStore } from './store';
@@ -127,7 +127,7 @@ export function Onboarding() {
             <IconToggle
               active={mode !== '2d'}
               onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : '2d')}
-              onIcon={<BoxIcon size={15} />}
+              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
               offIcon={<PenLine size={15} />}
               onLabel={mode === '3d' ? '3D' : 'Audio'}
               offLabel="2D"

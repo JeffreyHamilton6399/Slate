@@ -438,7 +438,12 @@ export class AudioEngine {
     };
   }
 
-  /** Update live track settings (volume/pan/mute/solo) without restarting. */
+  /** Update live track settings (volume/pan/mute/solo) without restarting.
+   *  Re-reads ALL tracks from Yjs and rebuilds the per-track gain/panner
+   *  values via setupTrackNodes — use this when the track SET changed (add/
+   *  delete) or mute/solo toggled (which rebalances every track's audibility).
+   *  For a single track's volume/pan DRAG, prefer setTrackVolume / setTrackPan
+   *  (O(1) direct node write, no Yjs read, no graph rebuild) to avoid lag. */
   updateTracks(slate: SlateDoc): void {
     if (!this.ctx) return;
     const tracks: AudioTrack[] = [];
@@ -447,6 +452,37 @@ export class AudioEngine {
       if (t) tracks.push(t);
     });
     this.setupTrackNodes(tracks);
+  }
+
+  /** Set a single track's volume DIRECTLY on its gain node — O(1), no Yjs
+   *  read, no audio-graph rebuild. Used by the TrackHeader volume slider
+   *  during a drag for immediate audio feedback; the Yjs commit happens on
+   *  pointerup via updateAudioTrack. No-op if the AudioContext hasn't been
+   *  created yet or the track's gain node doesn't exist (e.g. playback hasn't
+   *  started — there's no audio to adjust anyway, and the next play() will
+   *  read the committed Yjs value).
+   *
+   *  `audible` mirrors setupTrackNodes' mute/solo logic so dragging the
+   *  volume slider on a muted (or non-soloed-while-another-track-is-soloed)
+   *  track doesn't briefly un-mute it: if not audible, the gain is forced
+   *  to 0 regardless of `volume`. The React side computes `audible` from
+   *  the track's `muted`/`solo` props + the `hasSolo` flag. */
+  setTrackVolume(trackId: string, volume: number, audible: boolean): void {
+    if (!this.ctx) return;
+    const gain = this.trackGains.get(trackId);
+    if (!gain) return;
+    gain.gain.value = audible ? volume : 0;
+  }
+
+  /** Set a single track's pan DIRECTLY on its StereoPannerNode — O(1), no
+   *  Yjs read, no audio-graph rebuild. See setTrackVolume for the rationale.
+   *  Pan is clamped to [-1, 1] (StereoPannerNode's legal range) — values
+   *  outside that throw a NotSupportedError on assignment. */
+  setTrackPan(trackId: string, pan: number): void {
+    if (!this.ctx) return;
+    const panner = this.trackPanners.get(trackId);
+    if (!panner) return;
+    panner.pan.value = Math.max(-1, Math.min(1, pan));
   }
 
   /** Clear the buffer cache (e.g. when a clip's samples change). */

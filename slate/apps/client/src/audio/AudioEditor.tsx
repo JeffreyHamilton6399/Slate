@@ -126,10 +126,19 @@ const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sam
       void loadSamples(sampleKey).then((samples) => {
         if (cancelled) return;
         // Empty samples = the IndexedDB write for this sampleKey hasn't landed
-        // yet (e.g. brand-new clip from a split). DON'T cache a blank PNG —
-        // retry a few times so the real waveform appears.
+        // yet (e.g. brand-new clip from a split, OR a remote peer's clip whose
+        // sample blob is still in flight via the Yjs sync map). DON'T cache a
+        // blank PNG — retry for up to 10s (20 × 500ms) so the real waveform
+        // appears once the samples arrive. The previous 5-retry / 2.5s budget
+        // was too short for cross-peer sample sync, which can take several
+        // seconds for a 5MB blob over a slow link. The `slate:audio-clip-changed`
+        // event (dispatched by onClipsAdded when a remote clip is added, and by
+        // registerSampleSyncMap when samples arrive) resets `retryRef` to 0 so
+        // the WaveformImg re-tries immediately on the signal — this retry
+        // budget is the safety net for the case where the event fires before
+        // the WaveformImg mounts, or doesn't fire at all.
         if (samples.length === 0) {
-          if (retryRef.current < 5) {
+          if (retryRef.current < 20) {
             retryRef.current += 1;
             retryTimer = setTimeout(attempt, 500);
           }
@@ -198,6 +207,17 @@ export function AudioEditor() {
     leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
     neighbours: { start: number; end: number }[];
   } | null>(null);
+  /** Latest pointer `clientX` during an active drag — written by every
+   *  `pointermove` and read inside a `requestAnimationFrame` callback. Decouples
+   *  the high-frequency pointermove stream (~60-120Hz on modern pointers) from
+   *  the actual DOM-mutation work, so multiple moves within the same frame
+   *  coalesce into a single `style.left`/`style.width` write. Null when no
+   *  drag is in progress. */
+  const moveXRef = useRef<number | null>(null);
+  /** Pending rAF id for processing the next drag move. Zero when no frame is
+   *  scheduled. Lets `onMove` bail out cheaply (one ref read + one rAF check)
+   *  when a frame is already queued. */
+  const moveRafRef = useRef(0);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedClipId;
   const clipsRef = useRef<AudioClip[]>([]);
@@ -242,13 +262,36 @@ export function AudioEditor() {
     // existing clip (which would restart playback every time a peer nudged
     // a clip's volume, fighting the user). The restart is debounced 500ms so
     // a burst of additions (e.g. a peer imports 5 files) coalesces into one.
+    //
+    // LIVE WAVEFORM REFRESH: when a remote peer adds a clip, its metadata
+    // arrives via Yjs immediately but the sample blob travels separately via
+    // the audioSampleSync Y.Map (see sampleStore.ts). If we don't ping the
+    // WaveformImg, it might have already exhausted its empty-samples retry
+    // budget (now 10s, but a slow link can still exceed that) and given up
+    // showing a blank "···" placeholder until the user refreshes. So for
+    // each newly-added clip we:
+    //   1. clearCache(clipId) on the engine so the next play re-loads samples
+    //      (the cache might hold a null/empty entry from a prior failed getBuffer)
+    //   2. dispatch `slate:audio-clip-changed` with the clipId — the
+    //      AudioEditor's listener (below) re-invalidates the waveform cache +
+    //      clears the engine cache + bumps version, AND the WaveformImg's own
+    //      listener resets its retryRef to 0 and bumps `bust` to immediately
+    //      re-attempt loadSamples (which will now find the synced blob once
+    //      it lands).
+    //   3. scheduleRestart() so if we're currently playing, the new clip is
+    //      picked up atomically (debounced 500ms to coalesce bursts).
     const onClipsAdded = (event: Y.YMapEvent<Y.Map<unknown>>) => {
-      let hasAddition = false;
+      const addedIds: string[] = [];
       for (const key of event.keysChanged) {
         const change = event.changes.keys.get(key);
-        if (change?.action === 'add') { hasAddition = true; break; }
+        if (change?.action === 'add') addedIds.push(key);
       }
-      if (hasAddition) scheduleRestart();
+      if (addedIds.length === 0) return;
+      for (const id of addedIds) {
+        engineRef.current?.clearCache(id);
+        window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: id }));
+      }
+      scheduleRestart();
     };
     clips.observe(onClipsAdded);
     const lateRead = setTimeout(bump, 200);
@@ -337,11 +380,32 @@ export function AudioEditor() {
   }, [zoomAtPlayhead]);
 
   // Global pointermove/up — pure DOM, zero React state.
+  // rAF-throttled: pointermove fires at the hardware's report rate (often
+  // 60-120Hz), and the move handler does a neighbours-overlap scan on every
+  // event. Coalescing multiple moves into a single rAF callback caps the work
+  // at the display refresh rate (~60fps) so a fast pointer drag never stalls
+  // the main thread. A no-op skip (cursor hasn't moved since the last
+  // processed frame) avoids redundant DOM writes for stationary pointers.
   useEffect(() => {
-    const onMove = (ev: PointerEvent) => {
-      const d = dragRef.current; if (!d) return;
+    /** Last clientX we actually applied to the DOM. Lets us skip work when
+     *  pointermove fires with the same x (e.g. a touchpad reporting pressure
+     *  changes without movement, or sub-pixel jitter that rounds to the same
+     *  px). */
+    let lastProcessedX: number | null = null;
+
+    const applyMove = () => {
+      moveRafRef.current = 0;
+      const d = dragRef.current;
+      if (!d) return;
+      const clientX = moveXRef.current;
+      if (clientX === null) return;
+      // Skip no-op moves — cursor hasn't moved to a new pixel since the last
+      // frame we processed. Saves a neighbours scan + 1-2 style writes.
+      if (lastProcessedX === clientX) return;
+      lastProcessedX = clientX;
+
       const pps = pxRef.current;
-      const dt = (ev.clientX - d.sx) / pps;
+      const dt = (clientX - d.sx) / pps;
       const oldEnd = d.os + d.od;
       if (d.mode === 'drag') {
         // Snap-to-neighbour drag: the clip follows the mouse, but if the new
@@ -385,19 +449,56 @@ export function AudioEditor() {
         d.el.style.width = `${(end - d.os) * pps}px`;
       }
     };
+
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current; if (!d) return;
+      // Stash the latest clientX — the rAF callback reads it. Cheap (one ref
+      // write) so even 120Hz pointermove streams don't pile up work.
+      moveXRef.current = ev.clientX;
+      // Schedule a frame if one isn't already pending. The guard is what
+      // coalesces multiple moves within the same frame into one DOM write.
+      if (!moveRafRef.current) {
+        moveRafRef.current = requestAnimationFrame(applyMove);
+      }
+    };
     const onUp = () => {
       const d = dragRef.current; if (!d) return;
+      // Cancel any pending rAF — we'll process the final position
+      // SYNCHRONOUSLY here so the committed Yjs value reflects the exact
+      // pointer-up location (otherwise the last pointermove before pointerup
+      // could be dropped, leaving the committed position ~1 frame behind the
+      // cursor). The `force` flag bypasses the no-op skip in case the final
+      // pointermove had the same clientX as the prior processed frame but we
+      // still need to read the just-written style to commit to Yjs.
+      if (moveRafRef.current) {
+        cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = 0;
+      }
+      if (moveXRef.current !== null) {
+        lastProcessedX = null; // bypass the no-op skip on the final flush
+        applyMove();
+      }
       const pps = pxRef.current;
       const left = parseFloat(d.el.style.left) / pps;
       const width = parseFloat(d.el.style.width) / pps;
       if (d.mode === 'drag') updateAudioClip(slate, d.clipId, { start: Math.max(0, left) });
       else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
       else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
+      moveXRef.current = null;
+      lastProcessedX = null;
       dragRef.current = null;
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      // Don't leak a pending rAF if the component unmounts mid-drag.
+      if (moveRafRef.current) {
+        cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = 0;
+      }
+    };
   }, [slate]);
 
   // Hotkeys.
@@ -688,21 +789,43 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
 }) {
   const [vol, setVol] = useState(track.volume);
   const [pan, setPan] = useState(track.pan);
-  // While the user is dragging either slider, DON'T let the prop-sync effects
-  // overwrite the local state — otherwise the Yjs observe fired by the engine's
-  // live `updateTracks` would clobber `vol`/`pan` mid-drag, causing the slider
-  // to fight the user (the "big slider does nothing" symptom).
-  const isDraggingRef = useRef(false);
-  useEffect(() => { if (!isDraggingRef.current) setVol(track.volume); }, [track.volume]);
-  useEffect(() => { if (!isDraggingRef.current) setPan(track.pan); }, [track.pan]);
+  // Separate drag flags per slider — the previous single shared `isDraggingRef`
+  // meant starting a volume drag also blocked the pan prop-sync effect (and
+  // vice versa), which could cause one slider's committed Yjs value to be
+  // momentarily ignored by the other's gating. Per-slider flags keep each
+  // slider's prop-sync independent.
+  const isDraggingVolRef = useRef(false);
+  const isDraggingPanRef = useRef(false);
+  useEffect(() => { if (!isDraggingVolRef.current) setVol(track.volume); }, [track.volume]);
+  useEffect(() => { if (!isDraggingPanRef.current) setPan(track.pan); }, [track.pan]);
 
+  // Audibility — mirrors engine.setupTrackNodes so the live gain we write
+  // during a volume drag respects mute/solo (don't briefly un-mute a muted
+  // track just because the user is dragging its volume slider).
+  const audible = hasSolo ? track.solo : !track.muted;
+
+  // `update` is for non-slider track edits (name/mute/solo/arm) — these DO
+  // need a full updateTracks so the audio graph reflects the new state
+  // (e.g. toggling solo rebalances every track's gain).
   const update = (patch: Partial<AudioTrack>) => { updateAudioTrack(slate, track.id, patch); engineRef.current?.updateTracks(slate); };
-  const onVolDown = () => { isDraggingRef.current = true; };
-  const onVol = (v: number) => { setVol(v); engineRef.current?.updateTracks(slate); };
-  const onVolEnd = () => { isDraggingRef.current = false; updateAudioTrack(slate, track.id, { volume: vol }); };
-  const onPanDown = () => { isDraggingRef.current = true; };
-  const onPan = (p: number) => { setPan(p); engineRef.current?.updateTracks(slate); };
-  const onPanEnd = () => { isDraggingRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
+
+  // Volume slider: update local state + the engine's gain node DIRECTLY for
+  // immediate audio feedback. Do NOT call updateTracks (which re-reads every
+  // track from Yjs and rebuilds the audio graph — far too expensive per
+  // onChange event, and the source of the reported lag). Commit to Yjs once
+  // on pointerup.
+  const onVolDown = () => { isDraggingVolRef.current = true; };
+  const onVol = (v: number) => { setVol(v); engineRef.current?.setTrackVolume(track.id, v, audible); };
+  const onVolEnd = () => { isDraggingVolRef.current = false; updateAudioTrack(slate, track.id, { volume: vol }); };
+
+  // Pan slider: same pattern — set the panner node directly, commit on
+  // pointerup. The pan slider is smaller than the volume slider (secondary
+  // control) but still usable, with L/R labels so its function is obvious
+  // (the user complaint was "two sliders, only one works" — partly because
+  // neither slider was labelled, so it wasn't clear what each did).
+  const onPanDown = () => { isDraggingPanRef.current = true; };
+  const onPan = (p: number) => { setPan(p); engineRef.current?.setTrackPan(track.id, p); };
+  const onPanEnd = () => { isDraggingPanRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
 
   return (
     <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
@@ -715,9 +838,11 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
         <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
       </div>
       <div className="mt-0.5 flex items-center gap-1">
-        <Volume2 size={8} className="shrink-0 text-text-dim" />
-        <input type="range" min={0} max={1} step={0.01} value={vol} onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-0.5 flex-1 accent-accent" />
-        <input type="range" min={-1} max={1} step={0.01} value={pan} onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-0.5 w-8 accent-accent" />
+        <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
+        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 flex-1 accent-accent" />
+        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
+        <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
+        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
       </div>
     </div>
   );

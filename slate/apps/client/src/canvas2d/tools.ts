@@ -248,32 +248,96 @@ class ShapeDragTool implements Tool {
 class EraserTool implements Tool {
   readonly id = 'eraser';
   private erasing = false;
+  /** Latest pointer position not yet consumed by an erase pass. pointermove
+   *  events fire much faster than rAF (often 4–8× per frame on a fast
+   *  pointer), so we coalesce all moves within a frame into a single erase
+   *  at the latest point — without this, each move snapshots the whole scene
+   *  + iterates all strokes + opens a Yjs transaction, stacking work that
+   *  the browser can't keep up with (the "eraser deletes weirdly" symptom). */
+  private pendingPoint: BoardPoint | null = null;
+  private rafScheduled = false;
+  private rafId: number | null = null;
+  /** Stroke ids already erased/split during the current gesture. Once a
+   *  stroke has been split, its fragments have new ids — re-running the
+   *  split on the (now-deleted) original id is a no-op, but re-running it
+   *  on a fragment that hasn't been re-touched wastes a transaction and
+   *  can shave off another tiny piece. Tracking the original id lets us
+   *  skip it on subsequent erase passes; new fragment ids are picked up
+   *  naturally if the cursor is still over them. */
+  private erasedThisGesture = new Set<string>();
   constructor(private ctx: ToolContext) {}
   preview(): ToolPreview {
     return { stroke: null, shape: null, marquee: null, selection: null };
   }
   start(input: PointerInput): void {
     this.erasing = true;
+    this.erasedThisGesture.clear();
+    // Drop any leftover pending point from a previous gesture (shouldn't
+    // normally happen, but cancel() may not have fired).
+    this.cancelRaf();
+    this.pendingPoint = null;
     this.eraseAt(input.point);
   }
   move(input: PointerInput): void {
-    if (this.erasing) this.eraseAt(input.point);
+    if (!this.erasing) return;
+    // Stash the latest point and schedule ONE erase for the next frame.
+    // Subsequent moves within the same frame just overwrite pendingPoint,
+    // so we always erase at the most recent cursor position.
+    this.pendingPoint = input.point;
+    if (!this.rafScheduled) {
+      this.rafScheduled = true;
+      this.rafId = requestAnimationFrame(() => {
+        this.rafScheduled = false;
+        this.rafId = null;
+        const p = this.pendingPoint;
+        this.pendingPoint = null;
+        if (p && this.erasing) this.eraseAt(p);
+      });
+    }
   }
   end(_input: PointerInput): void {
+    // Flush the last pending point immediately so the final cursor position
+    // is included in the erase — don't wait a frame for a gesture that's
+    // already over (the user expects the eraser to have reached where they
+    // released).
+    this.cancelRaf();
+    if (this.pendingPoint) {
+      const p = this.pendingPoint;
+      this.pendingPoint = null;
+      this.eraseAt(p);
+    }
     this.erasing = false;
   }
   cancel(): void {
     this.erasing = false;
+    this.cancelRaf();
+    this.pendingPoint = null;
+    this.erasedThisGesture.clear();
+  }
+  private cancelRaf(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+      this.rafScheduled = false;
+    }
   }
   private eraseAt(p: BoardPoint): void {
     const snap = this.ctx.engine.snapshot();
-    const radius = Math.max(6, this.ctx.strokeWidth * 2);
+    // Fixed eraser radius — DECOUPLED from the brush width. The previous
+    // `Math.max(6, strokeWidth * 2)` meant a size-50 brush gave the eraser a
+    // 100px radius, nuking a huge area. Now: 8px floor (usable on small
+    // strokes), 40px ceiling (a huge brush setting doesn't erase an entire
+    // board region in one tap), and `* 1` (not `* 2`) so the eraser feels
+    // like the same size as the brush, not twice as aggressive.
+    const radius = Math.min(40, Math.max(8, this.ctx.strokeWidth));
     const deadShapes: string[] = [];
     for (const layer of snap.layers) {
       if (!layer.visible || layer.locked) continue;
       // Strokes get partial erasure — split into sub-strokes at the erased
-      // segments so only the part under the cursor disappears.
+      // segments so only the part under the cursor disappears. Skip any
+      // stroke we've already processed this gesture (see erasedThisGesture).
       for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+        if (this.erasedThisGesture.has(st.id)) continue;
         this.eraseStrokePartial(st, p, radius);
       }
       // Shapes are erased whole (point-in-shape test).
@@ -289,9 +353,12 @@ class EraserTool implements Tool {
    *  `engine.splitStroke`. No-op if the cursor isn't over any segment. */
   private eraseStrokePartial(stroke: Stroke, p: BoardPoint, radius: number): void {
     const points = stroke.points;
-    // Stroke points are interleaved [x, y, pressure?] — most strokes carry
-    // pressure (3 values per point) but older/simpler ones may not.
-    const stride = points.length % 3 === 0 ? 3 : 2;
+    // InkTool always writes 3 values per point [x, y, pressure]. If the
+    // points array isn't a multiple of 3, the stroke is malformed (a future
+    // tool writing a different format, or corrupted data) — skip it rather
+    // than guessing the stride and reading garbage coordinates.
+    if (points.length % 3 !== 0) return;
+    const stride = 3;
     const numPts = points.length / stride;
     if (numPts < 2) return; // single-point stroke — can't split, leave alone
 
@@ -317,31 +384,40 @@ class EraserTool implements Tool {
     // Build sub-strokes from contiguous runs of non-erased segments. A point
     // touched by an erased segment on either side ends the current run; an
     // isolated point (both neighbours erased) is dropped because a single
-    // point can't form a stroke.
+    // point can't form a stroke. Require ≥ 3 points (stride*3 values) per
+    // sub-stroke — 2-point dots were creating tiny fragments that stacked up
+    // in Yjs and cluttered the scene without adding visible ink.
+    const minLen = stride * 3;
     const subStrokes: number[][] = [];
     let current: number[] = [];
     for (let i = 0; i < numPts; i++) {
       if (i > 0 && erased[i - 1]) {
         // Segment before this point was erased — close out the current run.
-        if (current.length >= stride * 2) subStrokes.push(current);
+        if (current.length >= minLen) subStrokes.push(current);
         current = [];
       }
       if (i < numPts - 1 && erased[i]) {
         // Segment after this point is erased — include this point as the
         // tail of the current run, then close it out.
         for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
-        if (current.length >= stride * 2) subStrokes.push(current);
+        if (current.length >= minLen) subStrokes.push(current);
         current = [];
       } else {
         for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
       }
     }
-    if (current.length >= stride * 2) subStrokes.push(current);
+    if (current.length >= minLen) subStrokes.push(current);
 
     // Untouched — the only erased segments were at the very ends, so the
     // resulting single sub-stroke is identical to the original. Skip the
     // delete+recommit round-trip.
     if (subStrokes.length === 1 && subStrokes[0]!.length === points.length) return;
+
+    // Mark the original stroke as processed for this gesture — whether we
+    // delete it outright or split it, we don't want to re-process the same
+    // id on the next erase pass (the split fragments have new ids and will
+    // be picked up naturally if the cursor is still over them).
+    this.erasedThisGesture.add(stroke.id);
 
     if (subStrokes.length === 0) {
       // Entire stroke was under the cursor — delete it outright.

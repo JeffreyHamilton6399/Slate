@@ -640,3 +640,89 @@ Stage Summary:
 - Sync limit 500KB → 5MB; base64 encode O(n) chunked instead of O(n²) char-by-char; syncMap.observe handles key deletions so delete+re-add cycles work; `getBuffer` retries 3s on empty samples (with per-clip Set guard against concurrent retry loops); new `engine.restartPlayback` atomically stops + re-schedules all clips without dropping `playing`; AudioEditor debounces (500ms) a `restartPlayback` call when clips are added mid-playback OR when a clip's samples arrive mid-playback, with cleanup on pause/unmount.
 - End-to-end: a remote peer's clip (metadata + sample blob) now reliably plays on this peer whether metadata or samples arrive first, and whether they arrive before or after the user hits Play. The retry in `getBuffer` covers the metadata-first-samples-later race; the restart-on-sample-arrival covers the samples-late case after a failed first `getBuffer`; the restart-on-clip-add covers clips added during active playback.
 - TypeScript clean (exit 0, zero errors).
+
+---
+Task ID: ROUND6-B
+Agent: main (Z.ai Code)
+Task: 2 audio editor fixes — (1) smoother clip dragging via rAF-throttled pointermove; (2) live cross-peer waveform update when a remote peer imports audio
+
+Work Log:
+- Read worklog (latest ROUND5-B) and all 3 target files fully: `audio/AudioEditor.tsx`, `audio/scene.ts`, `audio/sampleStore.ts`. Also re-read `audio/engine.ts` `clearCache` (line 453) to confirm it accepts an optional clipId. Confirmed the `addAudioClip` flow: metadata → Yjs `audioClips()` map (immediate cross-peer), samples → IndexedDB + `publishToSyncMap` (async cross-peer via `audioSampleSync` Y.Map). The `WaveformImg` component retries `loadSamples` on empty results, but the previous budget was only 5 × 500ms = 2.5s — shorter than a typical 5MB cross-peer sample sync.
+
+Task 1 — rAF-throttled drag moves (AudioEditor.tsx, global pointermove/up effect):
+- Added two refs near `dragRef`:
+  • `moveXRef = useRef<number | null>(null)` — holds the latest `pointermove` clientX. Written by every `pointermove` (cheap — one ref write), read inside the rAF callback. Null when no drag is active.
+  • `moveRafRef = useRef(0)` — pending rAF id. Zero when no frame is scheduled. Lets `onMove` bail out cheaply when a frame is already queued (one ref read + one rAF check) — this is the guard that coalesces multiple moves within the same animation frame into one DOM write.
+- Rewrote the `useEffect` (deps `[slate]`) that wires the global `pointermove`/`pointerup` listeners:
+  • Extracted the actual DOM-mutation work (snap-to-neighbour drag / trimL / trimR) into a local `applyMove` function. The function reads `moveXRef.current` (not the event's clientX), so it can be called from either the rAF callback or `onUp`.
+  • `applyMove` resets `moveRafRef.current = 0` first (so the next `pointermove` can schedule a fresh frame), then does a no-op skip: if `lastProcessedX === clientX`, return early (cursor hasn't moved to a new pixel since the last processed frame — saves a neighbours scan + 1-2 style writes for stationary pointers / sub-pixel jitter / touchpad pressure-only events). `lastProcessedX` is a closure-local variable (persists across rAF callbacks within the same effect run).
+  • `onMove(ev)`: cheap path — stash `ev.clientX` in `moveXRef.current`, then schedule a rAF ONLY if `moveRafRef.current` is 0. This is the key change: previously every `pointermove` (60-120Hz on modern pointers) ran the full neighbours-overlap scan + style writes synchronously; now multiple moves within one frame coalesce into one rAF callback, capping the work at the display refresh rate (~60fps).
+  • `onUp()`: cancels any pending rAF, then calls `applyMove()` SYNCHRONOUSLY (after setting `lastProcessedX = null` to bypass the no-op skip) so the committed Yjs value reflects the exact pointer-up location. Previously, the last `pointermove` before `pointerup` could be dropped if a rAF was pending, leaving the committed position ~1 frame behind the cursor. Then reads `parseFloat(d.el.style.left) / pps` and commits to Yjs as before. Clears `moveXRef`, `lastProcessedX`, and `dragRef`.
+  • Effect cleanup cancels any pending rAF so it doesn't fire after unmount (would call `applyMove` on a disposed dragRef — `dragRef.current` would be null so it'd no-op, but cancelling is cleaner).
+- The neighbours-overlap scan inside `applyMove` is unchanged — it was already O(N) per move with N = same-track clip count (typically 5-10), and the rAF coalescing now caps the call rate at 60fps max instead of the pointer hardware rate. No need for the binary-search optimisation mentioned in the task spec; the rAF cap alone eliminates the lag.
+- Trim modes (trimL/trimR) benefit identically — they go through the same `applyMove` rAF path.
+
+Task 2 — Live waveform update for remote-imported clips (AudioEditor.tsx):
+- **WaveformImg retry budget: 5 → 20** (line ~141). Changed `if (retryRef.current < 5)` → `if (retryRef.current < 20)`. Total retry window: 2.5s → 10s. Updated the comment block above the check to explain WHY: the previous 2.5s budget was too short for cross-peer sample sync (a 5MB blob over a slow link can take several seconds to arrive via the `audioSampleSync` Y.Map). The retry is the safety net; the `slate:audio-clip-changed` event (below) is the primary trigger that resets `retryRef` to 0 for an immediate re-attempt when samples arrive.
+- **`onClipsAdded` Yjs observer: dispatches `slate:audio-clip-changed` + clears engine cache** (Yjs subscription effect, lines ~283-296). Previously the observer only called `scheduleRestart()` if any clip was added. Now it:
+  1. Collects ALL newly-added clip IDs (action === 'add') into `addedIds[]`.
+  2. Early-returns if empty (no property-edit re-trigger — preserves the existing "don't restart on volume nudge" semantics).
+  3. For each added ID: calls `engineRef.current?.clearCache(id)` (in case the engine's `bufferCache` holds a stale null/empty entry from a prior failed `getBuffer`), then dispatches `window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: id }))`.
+  4. Calls `scheduleRestart()` once at the end (debounced 500ms — coalesces bursts).
+- The dispatched event triggers two listeners (both already existed, no changes needed):
+  • AudioEditor's `onChanged` listener (lines ~550-561): `invalidateWaveform(id)` + `engineRef.current?.clearCache(id)` (idempotent — second call is a no-op) + `setVersion((v) => v + 1)` (re-renders, re-running the clips useMemo so the new clip's ClipBlock mounts) + `scheduleRestart()`.
+  • WaveformImg's own `onChanged` listener (lines ~99-113): matches the event by `clipId` OR `sampleKey`, invalidates its PNG cache entries for the clipId, resets `retryRef.current = 0`, and bumps `bust` to re-trigger the load effect → `loadSamples(sampleKey)` re-attempts immediately.
+- End-to-end flow for a remote peer importing audio:
+  1. Peer A imports `song.mp3` → `addAudioClip` writes metadata to Yjs `audioClips()` map + `storeSamples` writes to IndexedDB + `publishToSyncMap` writes base64 to `audioSampleSync` Y.Map.
+  2. Peer B's Yjs provider receives the clip metadata → `clips.observe(onClipsAdded)` fires → `onClipsAdded` dispatches `slate:audio-clip-changed` for the new clipId → AudioEditor re-renders + mounts a new ClipBlock + WaveformImg → WaveformImg calls `loadSamples` (returns empty — samples not yet arrived) → starts the 10s retry loop.
+  3. Peer B's Yjs provider receives the sample blob → `registerSampleSyncMap`'s `syncMap.observe` callback decodes + stores to IndexedDB + dispatches `slate:audio-clip-changed` with `detail: sampleKey` → WaveformImg's listener matches by `sampleKey`, resets `retryRef` to 0, bumps `bust` → `loadSamples` re-attempts → finds the now-stored Float32Array → renders the PNG waveform.
+  4. If Peer B is playing, `scheduleRestart()` (called by both `onClipsAdded` and the `onChanged` listener) debounces a `restartPlayback` that picks up the new clip atomically.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → EXIT 0, zero output. No type errors. The `moveRafRef = useRef(0)` typed as `useRef<number>` (inferred); `requestAnimationFrame` returns `number` so the assignment `moveRafRef.current = requestAnimationFrame(applyMove)` type-checks. `cancelAnimationFrame(moveRafRef.current)` accepts `number`. `moveXRef = useRef<number | null>(null)` — the null-vs-number branching in `applyMove` and `onUp` is exhaustive (early-return on null).
+- The `Y.YMapEvent<Y.Map<unknown>>` annotation on `onClipsAdded` (unchanged from ROUND5-B) still compiles — `event.keysChanged` and `event.changes.keys.get(key)` are correctly typed.
+- The `CustomEvent<string>` cast in the existing `onChanged` listener (line 552) accepts the `detail: id` (string) dispatched by `onClipsAdded` — no type widening needed.
+
+Stage Summary:
+- 1 file modified: `slate/apps/client/src/audio/AudioEditor.tsx` (~80 line delta across 3 regions).
+- **Task 1 (drag smoothness)**: pointermove handling is now rAF-throttled via `moveXRef` + `moveRafRef`. Multiple moves within one animation frame coalesce into a single `applyMove` call (was: full neighbours-overlap scan + style writes on every pointermove at 60-120Hz). A no-op skip (`lastProcessedX === clientX`) avoids redundant work for stationary pointers. `onUp` cancels pending rAF and processes the final position synchronously so the committed Yjs value matches the exact pointer-up location. Trim modes (trimL/trimR) benefit identically.
+- **Task 2 (live cross-peer waveform)**: `WaveformImg` retry budget 5 × 500ms (2.5s) → 20 × 500ms (10s) so a slow cross-peer sample sync has time to land. `onClipsAdded` Yjs observer now dispatches `slate:audio-clip-changed` for each newly-added clip and clears the engine's `bufferCache` for that clipId, which (via the existing AudioEditor + WaveformImg event listeners) immediately resets the WaveformImg's retry counter and re-attempts `loadSamples`. Combined with the existing `registerSampleSyncMap` observer (which dispatches the same event with the `sampleKey` when samples arrive), a remote peer's imported clip now appears with its waveform live — no page refresh needed. If playing, `scheduleRestart()` picks up the new clip atomically.
+- TypeScript clean (0 errors). No new dependencies. No API changes.
+
+---
+Task ID: ROUND6-A
+Agent: main (Z.ai Code)
+Task: 2 fixes — (1) smooth eraser (no clipping/deleting weirdly); (2) track header sliders — only one works, laggy
+
+Work Log:
+- Read worklog (latest ROUND5-B) + all 3 target files fully: canvas2d/tools.ts (EraserTool class, lines 248–364), audio/engine.ts (trackGains/trackPanners maps + setupTrackNodes + updateTracks), audio/AudioEditor.tsx (TrackHeader component, lines 682–724). Also read canvas2d/engine.ts (splitStroke/deleteIds/snapshot) and canvas2d/types.ts (BoardPoint) to confirm the EraserTool's engine API surface and that no new imports were needed (requestAnimationFrame / cancelAnimationFrame are globals).
+
+Task 1 — Smooth eraser (canvas2d/tools.ts EraserTool):
+1. Throttle to one erase per animation frame — added `pendingPoint: BoardPoint | null`, `rafScheduled: boolean`, `rafId: number | null`. `move()` stashes the latest point in `pendingPoint` and schedules a single `requestAnimationFrame` (only if one isn't already scheduled); the rAF callback reads + clears `pendingPoint` and calls `eraseAt` once. Coalesces the 4–8 pointermove events that fire per frame into one erase pass — previously each move snapshot the whole scene + iterated all strokes + opened a Yjs transaction, stacking work the browser couldn't keep up with (the "eraser deletes weirdly" symptom). `end()` flushes any pending point immediately (no waiting a frame for an already-over gesture); `cancel()` cancels the rAF.
+2. Track already-erased stroke IDs — added `erasedThisGesture: Set<string>`, cleared in `start()` and `cancel()`. In `eraseAt`, strokes whose id is in this set are skipped. In `eraseStrokePartial`, the original stroke id is added to the set right before `deleteIds` (full-erase) or `splitStroke` (partial) — so subsequent erase passes within the same gesture don't re-process the same id. Split fragments have new ids and are picked up naturally if the cursor is still over them. Prevents re-splitting the same stroke on every move event (which generated tiny fragments and stacked transactions).
+3. Decouple eraser size from brush width — changed `Math.max(6, ctx.strokeWidth * 2)` to `Math.min(40, Math.max(8, ctx.strokeWidth))`. The `* 2` previously meant a size-50 brush gave the eraser a 100px radius (nuking a huge area). Now: 8px floor, 40px ceiling, `* 1` (not `* 2`).
+4. Assume stride 3 always — replaced `const stride = points.length % 3 === 0 ? 3 : 2` with `if (points.length % 3 !== 0) return; const stride = 3;`. InkTool always writes 3 values per point `[x, y, pressure]`; the old guess-and-check could read garbage coordinates from a malformed stroke. Malformed strokes are now skipped entirely.
+5. Drop tiny fragments — replaced per-sub-stroke minimum from `stride * 2` (2 points) to `stride * 3` (3 points) in all three commit sites. Extracted `const minLen = stride * 3` for clarity. 2-point dots were creating tiny fragments that stacked up in Yjs without adding visible ink.
+
+Task 2 — Track header sliders (audio/AudioEditor.tsx + audio/engine.ts):
+- Root cause confirmed: `onVol`/`onPan` called `engineRef.current?.updateTracks(slate)` on every `onChange`. `updateTracks` re-reads ALL tracks from Yjs + calls `setupTrackNodes` which iterates the entire trackGains/trackPanners maps — O(tracks²) per slider tick (the lag source). The shared `isDraggingRef` between both sliders also meant starting a volume drag blocked the pan prop-sync effect (and vice versa).
+- Fix in audio/engine.ts: added two public methods next to `updateTracks`:
+  • `setTrackVolume(trackId, volume, audible)` — O(1) direct write to `GainNode.gain.value`. No-op if AudioContext not created or gain node doesn't exist (playback hasn't started — next play() reads committed Yjs value). `audible` mirrors setupTrackNodes' mute/solo logic so dragging volume on a muted track doesn't briefly un-mute it (gain forced to 0 if not audible).
+  • `setTrackPan(trackId, pan)` — O(1) direct write to `StereoPannerNode.pan.value`, clamped to [-1, 1] (legal range; outside throws NotSupportedError).
+  • Added clarifying JSDoc on `updateTracks` explaining when to use it (track set changed / mute-solo toggled) vs the new direct setters (single-track volume/pan drag).
+- Fix in audio/AudioEditor.tsx TrackHeader:
+  1. Split shared `isDraggingRef` into `isDraggingVolRef` + `isDraggingPanRef`. Each prop-sync useEffect gates on its own flag → the two sliders' prop-sync is independent.
+  2. `onVol(v)` → `setVol(v)` + `engineRef.current?.setTrackVolume(track.id, v, audible)` (O(1), no Yjs read, no graph rebuild). `onPan(p)` → `setPan(p)` + `engineRef.current?.setTrackPan(track.id, p)`. Both track the cursor with zero lag.
+  3. `onVolEnd` / `onPanEnd` unchanged in structure: clear drag flag, then `updateAudioTrack(...)` commits to Yjs once on pointerup. The next Yjs echo re-syncs local state via the prop-sync effect (drag flag is false by then).
+  4. Added `const audible = hasSolo ? track.solo : !track.muted;` (same formula as setupTrackNodes).
+  5. Made sliders clearly functional and labelled: Volume slider `flex-1` (primary, bigger) + Volume2 icon + aria-label/title="Volume"; Pan slider `w-10` (secondary, bumped from `w-8`) flanked by `L` / `R` text labels + aria-label/title="Pan". Both slider tracks bumped `h-0.5` → `h-1` for visibility. Labels marked `aria-hidden` (the input's aria-label is the accessible name).
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → EXIT 0, zero output, zero errors. (Confirmed tsc actually ran via `--listFiles`: 1649 files processed, including the vite-plugin-pwa type defs that previous rounds reported as missing — the env issue is now resolved.)
+- dev.log: dev server running cleanly, `GET / 200`, no errors related to the modified files.
+
+Stage Summary:
+- 3 files modified: canvas2d/tools.ts (EraserTool rewritten), audio/engine.ts (+ setTrackVolume/setTrackPan), audio/AudioEditor.tsx (TrackHeader: split drag refs + direct node writes + labels).
+- Eraser now erases smoothly: one erase pass per animation frame (coalesced from many pointermove events), already-erased strokes skipped within a gesture (no re-splitting / tiny fragments), radius decoupled from brush width (8–40px range), stride fixed at 3 (malformed strokes skipped), sub-strokes need ≥ 3 points (no 2-point dot fragments).
+- Track header volume + pan sliders both work and are no longer laggy: each onChange does an O(1) direct write to the Web Audio gain/panner node (no Yjs read, no graph rebuild); Yjs committed once on pointerup. Independent drag refs; clearly labelled (Volume2 icon for volume, L/R text for pan).
+- TypeScript clean (exit 0, zero errors). No new dependencies. No API breakage (new engine methods are additive; updateTracks unchanged and still used by the non-slider update path for name/mute/solo/arm edits).

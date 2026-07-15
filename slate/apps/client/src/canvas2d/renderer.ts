@@ -37,6 +37,10 @@ export interface SceneFrame {
   paper: string;
   /** Current animation playback time (seconds). 0 = no animation. */
   animTime?: number;
+  /** Onion skin: draw previous/next frames as ghost overlays. */
+  onionSkin?: boolean;
+  /** Frames per second (for onion skin frame stepping). */
+  animFps?: number;
 }
 
 export interface ViewportSize {
@@ -130,6 +134,30 @@ export function renderScene(
     const shapes = scene.shapesByLayer.get(layer.id) ?? [];
     const strokes = scene.strokesByLayer.get(layer.id) ?? [];
     const animTime = scene.animTime ?? 0;
+    const fps = scene.animFps ?? 24;
+
+    // Onion skin: draw previous and next frames as ghost overlays.
+    if (scene.onionSkin && animTime > 0) {
+      const frame = Math.round(animTime * fps);
+      // Previous frame (red ghost)
+      if (frame > 0) {
+        const prevTime = (frame - 1) / fps;
+        ctx.globalAlpha = layer.opacity * 0.25;
+        for (const sh of shapes) {
+          const o = sampleAnim2D(sh.anim, prevTime);
+          if (o) { ctx.save(); drawShapeWithAnimTint(ctx, sh, o, '#ff4444'); ctx.restore(); }
+        }
+      }
+      // Next frame (green ghost)
+      const nextTime = (frame + 1) / fps;
+      ctx.globalAlpha = layer.opacity * 0.25;
+      for (const sh of shapes) {
+        const o = sampleAnim2D(sh.anim, nextTime);
+        if (o) { ctx.save(); drawShapeWithAnimTint(ctx, sh, o, '#44ff44'); ctx.restore(); }
+      }
+      ctx.globalAlpha = layer.opacity;
+    }
+
     for (const sh of shapes) {
       // If the shape has animation keyframes, sample the transform at animTime
       // and apply it as a canvas transform override. The shape's base x/y/rotation
@@ -241,6 +269,30 @@ function drawShapeWithAnim(ctx: CanvasRenderingContext2D, s: Shape, t: Transform
     y: t.y,
     rotation: 0,
     strokeOpacity: s.strokeOpacity * t.opacity,
+  };
+  drawShape(ctx, overridden);
+  ctx.restore();
+}
+
+/** Draw a shape with an animation transform + a tint color (onion skin ghost).
+ *  Overrides stroke and fill with the tint color so the ghost is a solid
+ *  silhouette in the tint color (red for previous frame, green for next). */
+function drawShapeWithAnimTint(ctx: CanvasRenderingContext2D, s: Shape, t: Transform2D, tint: string): void {
+  ctx.save();
+  const cx = t.x + s.w / 2;
+  const cy = t.y + s.h / 2;
+  ctx.translate(cx, cy);
+  ctx.rotate(t.rotation);
+  ctx.scale(t.scaleX || 0.001, t.scaleY || 0.001);
+  ctx.translate(-cx, -cy);
+  const overridden: Shape = {
+    ...s,
+    x: t.x,
+    y: t.y,
+    rotation: 0,
+    stroke: tint,
+    fill: tint,
+    strokeOpacity: t.opacity * 0.5,
   };
   drawShape(ctx, overridden);
   ctx.restore();

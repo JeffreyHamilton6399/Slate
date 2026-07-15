@@ -224,6 +224,8 @@ export function Canvas2D({ room }: Canvas2DProps) {
       getPaper: () => paperRef.current,
       getAnimTime: () => useCanvasStore.getState().animTime,
       getAnimPreview: () => useCanvasStore.getState().animPreview,
+      getOnionSkin: () => useCanvasStore.getState().onionSkin,
+      getAnimFps: () => useCanvasStore.getState().animFps,
     });
     engineRef.current = engine;
     return () => {
@@ -259,9 +261,10 @@ export function Canvas2D({ room }: Canvas2DProps) {
   // Repaint when animation time changes (scrubbing / playback).
   const animTime = useCanvasStore((s) => s.animTime);
   const animPreview = useCanvasStore((s) => s.animPreview);
+  const onionSkin = useCanvasStore((s) => s.onionSkin);
   useEffect(() => {
     engineRef.current?.markDirty();
-  }, [animTime, animPreview]);
+  }, [animTime, animPreview, onionSkin]);
 
   // Resize observer.
   useEffect(() => {

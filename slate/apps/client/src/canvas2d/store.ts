@@ -57,6 +57,15 @@ interface CanvasState {
   animPlaying: boolean;
   /** True while scrubbing/playing — engine repaints every frame. */
   animPreview: boolean;
+  /** Animation mode toggle — when true, shows the frame-based animation UI
+   *  (Adobe Animate style: frame strip, onion skin, playhead in frames). */
+  animMode: boolean;
+  /** Frames per second for frame-based animation (default 24, like film). */
+  animFps: number;
+  /** Current frame (derived from animTime, but stored for display). */
+  animFrame: number;
+  /** Onion skin: show previous/next frames as ghost overlays. */
+  onionSkin: boolean;
 
   setTool: (t: ToolId) => void;
   setStroke: (c: string) => void;
@@ -76,6 +85,10 @@ interface CanvasState {
   setAnimDuration: (d: number) => void;
   setAnimPlaying: (p: boolean) => void;
   setAnimPreview: (p: boolean) => void;
+  setAnimMode: (m: boolean) => void;
+  setAnimFps: (fps: number) => void;
+  setAnimFrame: (f: number) => void;
+  setOnionSkin: (o: boolean) => void;
 }
 
 const DEFAULT_STROKE = '#e0dff5';
@@ -99,6 +112,10 @@ export const useCanvasStore = create<CanvasState>()(
       animDuration: 5,
       animPlaying: false,
       animPreview: false,
+      animMode: false,
+      animFps: 24,
+      animFrame: 0,
+      onionSkin: false,
       setTool: (tool) => set({ tool }),
       setStroke: (stroke) => set({ stroke }),
       setFill: (fill) => set({ fill }),
@@ -134,6 +151,14 @@ export const useCanvasStore = create<CanvasState>()(
       }),
       setAnimPlaying: (p) => set((s) => ({ animPlaying: p, animPreview: p || s.animPreview })),
       setAnimPreview: (animPreview) => set({ animPreview }),
+      setAnimMode: (animMode) => set({ animMode }),
+      setAnimFps: (fps) => set({ animFps: Math.max(1, Math.min(60, Math.round(fps))) }),
+      setAnimFrame: (f) => set((s) => {
+        const frame = Math.max(0, Math.floor(f));
+        const fps = s.animFps;
+        return { animFrame: frame, animTime: frame / fps, animPreview: s.animPlaying || frame > 0 };
+      }),
+      setOnionSkin: (onionSkin) => set({ onionSkin }),
     }),
     {
       name: 'slate.canvas.v1',

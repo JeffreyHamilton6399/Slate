@@ -38,6 +38,8 @@ interface EngineOpts {
   getPaper: () => string;
   getAnimTime: () => number;
   getAnimPreview: () => boolean;
+  getOnionSkin: () => boolean;
+  getAnimFps: () => number;
 }
 
 export class CanvasEngine {
@@ -303,6 +305,8 @@ export class CanvasEngine {
       liveShape: live.shape,
       paper,
       animTime,
+      onionSkin: this.opts.getOnionSkin(),
+      animFps: this.opts.getAnimFps(),
     };
     renderScene(this.opts.canvas, this.scene, transform, size);
   };

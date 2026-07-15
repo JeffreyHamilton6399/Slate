@@ -132,36 +132,48 @@ export class AudioEngine {
     for (const clip of clips) {
       const track = tracks.find((t) => t.id === clip.trackId);
       if (!track) continue;
+      if (clip.mute) continue; // clip muted individually
       const buffer = await this.getBuffer(clip);
       if (!buffer) continue;
 
       const clipEnd = clip.start + clip.duration;
       if (clipEnd <= offset) continue; // clip already finished
 
+      const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+      const clipOffset = clip.offset ?? 0; // trim from the source (buffer seconds)
+      const clipVol = clip.gain ?? 1;
+
       const source = ctx.createBufferSource();
       source.buffer = buffer;
+      source.playbackRate.value = speed;
 
-      // Per-clip gain for fades.
+      // Per-clip gain (fades + clip volume) → per-clip panner → track chain.
       const clipGain = ctx.createGain();
+      const clipPan = ctx.createStereoPanner();
+      clipPan.pan.value = Math.max(-1, Math.min(1, clip.pan ?? 0));
       source.connect(clipGain);
+      clipGain.connect(clipPan);
       const trackGain = this.trackGains.get(track.id);
-      if (trackGain) clipGain.connect(trackGain);
-      else clipGain.connect(this.masterGain!);
+      if (trackGain) clipPan.connect(trackGain);
+      else clipPan.connect(this.masterGain!);
 
-      // Apply offset (trim from start if we're mid-clip).
+      // How far the playhead is already into the clip (real seconds), and where
+      // that lands in the source buffer (buffer seconds → scaled by speed).
       const skipTo = Math.max(0, offset - clip.start);
       const whenToStart = ctx.currentTime + Math.max(0, clip.start - offset);
-      const playDuration = clip.duration - skipTo;
+      const playDuration = clip.duration - skipTo; // real seconds left on the timeline
+      const bufStart = clipOffset + skipTo * speed;
+      const bufDuration = playDuration * speed;
 
-      source.start(whenToStart, skipTo, playDuration);
+      source.start(whenToStart, bufStart, bufDuration);
 
-      // Fades.
+      // Fades (real-time). Base level is the clip gain.
+      clipGain.gain.setValueAtTime(clip.fadeIn > 0 ? 0 : clipVol, whenToStart);
       if (clip.fadeIn > 0) {
-        clipGain.gain.setValueAtTime(0, whenToStart);
-        clipGain.gain.linearRampToValueAtTime(1, whenToStart + clip.fadeIn);
+        clipGain.gain.linearRampToValueAtTime(clipVol, whenToStart + clip.fadeIn);
       }
       if (clip.fadeOut > 0) {
-        clipGain.gain.setValueAtTime(1, whenToStart + playDuration - clip.fadeOut);
+        clipGain.gain.setValueAtTime(clipVol, whenToStart + playDuration - clip.fadeOut);
         clipGain.gain.linearRampToValueAtTime(0, whenToStart + playDuration);
       }
 

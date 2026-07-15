@@ -292,6 +292,14 @@ export interface AudioClip {
   fadeIn: number;
   /** Fade out duration (seconds). */
   fadeOut: number;
+  /** Clip gain 0..1.5 (linear), multiplied with the track volume. Default 1. */
+  gain?: number;
+  /** Clip pan -1 (left) .. 0 .. 1 (right), applied on top of the track pan. Default 0. */
+  pan?: number;
+  /** Mute just this clip without affecting the rest of the track. Default false. */
+  mute?: boolean;
+  /** Playback speed (also shifts pitch), 0.25..4. Default 1. */
+  speed?: number;
 }
 
 /** Transport state for the audio editor — synced via awareness (ephemeral). */

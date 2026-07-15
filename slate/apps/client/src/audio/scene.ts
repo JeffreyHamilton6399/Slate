@@ -148,6 +148,10 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     color: (m.get('color') as string) ?? '#7c6aff',
     fadeIn: (m.get('fadeIn') as number) ?? 0,
     fadeOut: (m.get('fadeOut') as number) ?? 0,
+    gain: (m.get('gain') as number) ?? 1,
+    pan: (m.get('pan') as number) ?? 0,
+    mute: (m.get('mute') as boolean) ?? false,
+    speed: (m.get('speed') as number) ?? 1,
   };
 }
 

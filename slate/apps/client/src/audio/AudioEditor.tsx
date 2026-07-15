@@ -9,7 +9,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
-  Wand2, FlipHorizontal2, ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -20,7 +20,7 @@ import {
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
-import { storeSamples, loadSamples, float32ToNumberArray } from './sampleStore';
+import { loadSamples, float32ToNumberArray } from './sampleStore';
 
 const TRACK_H = 60;
 
@@ -28,7 +28,10 @@ const TRACK_H = 60;
 // Key: `${clipId}:${sampleCount}:${width}` → data URL
 const waveformPNGCache = new Map<string, string>();
 
-function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number): string {
+// Draw only the window [startFrame, endFrame) of the sample across `width`
+// pixels. Rendering the *window* (not the whole sample stretched) is what makes
+// trimming look like cutting the audio away rather than squashing it.
+function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number, startFrame: number, endFrame: number): string {
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   const w = Math.max(2, Math.floor(width));
@@ -37,76 +40,56 @@ function computeWaveformPNG(samples: Float32Array, channels: number, width: numb
   const ctx = canvas.getContext('2d')!;
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, height);
-  const total = samples.length / channels;
-  if (total === 0) return canvas.toDataURL();
+  const totalFrames = samples.length / channels;
+  const s = Math.max(0, Math.min(totalFrames, Math.floor(startFrame)));
+  const e = Math.max(s, Math.min(totalFrames, Math.floor(endFrame)));
+  const span = e - s;
+  if (span <= 0) return canvas.toDataURL();
   const mid = height / 2;
   ctx.fillStyle = color;
   for (let x = 0; x < w; x++) {
-    const s0 = Math.floor((x / w) * total);
-    const s1 = Math.min(total, Math.floor(((x + 1) / w) * total) + 1);
+    const f0 = s + Math.floor((x / w) * span);
+    const f1 = Math.min(e, s + Math.floor(((x + 1) / w) * span) + 1);
     let peak = 0;
-    for (let i = s0; i < s1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
+    for (let i = f0; i < f1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
     const bh = Math.max(1, peak * mid * 0.85);
     ctx.fillRect(x, mid - bh, 1, bh * 2);
   }
   return canvas.toDataURL();
 }
 
-/** Waveform image — loads samples async from IndexedDB, caches PNG. */
-const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, width, color }: {
-  clipId: string; sampleKey: string; channels: number; width: number; color: string;
+/** Waveform image for the buffer window the clip actually plays. With speed s,
+ *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds. */
+const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color }: {
+  clipId: string; sampleKey: string; channels: number; sampleRate: number;
+  offset: number; duration: number; speed: number; width: number; color: string;
 }) {
   const height = TRACK_H - 6;
   const [imgUrl, setImgUrl] = useState<string>('');
 
   useEffect(() => {
-    const cacheKey = `${clipId}:${sampleKey}:${Math.floor(width)}`;
+    const startFrame = Math.round(offset * sampleRate);
+    const endFrame = Math.round((offset + duration * speed) * sampleRate);
+    const cacheKey = `${clipId}:${sampleKey}:${startFrame}:${endFrame}:${Math.floor(width)}`;
     const cached = waveformPNGCache.get(cacheKey);
     if (cached) { setImgUrl(cached); return; }
     let cancelled = false;
     void loadSamples(sampleKey).then((samples) => {
       if (cancelled) return;
-      const url = computeWaveformPNG(samples, channels, width, color, height);
+      const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
       waveformPNGCache.set(cacheKey, url);
       setImgUrl(url);
     });
     return () => { cancelled = true; };
-  }, [clipId, sampleKey, channels, width, color, height]);
+  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height]);
 
   if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
   return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
 });
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function normalizeSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
-  const yo = slate.audioClips().get(clipId); if (!yo) return;
-  const sampleKey = yo.get('sampleKey') as string;
-  const channels = (yo.get('channels') as number) ?? 1;
-  void loadSamples(sampleKey).then((samples) => {
-    let max = 0;
-    for (let i = 0; i < samples.length; i += channels)
-      for (let ch = 0; ch < channels; ch++) max = Math.max(max, Math.abs(samples[i + ch] ?? 0));
-    if (max < 1e-6) return;
-    const g = 1 / max;
-    const normed = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) normed[i] = samples[i]! * g;
-    void storeSamples(sampleKey, float32ToNumberArray(normed));
-    for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
-  });
-}
-
-function reverseSamples(slate: ReturnType<typeof useRoom>['slate'], clipId: string): void {
-  const yo = slate.audioClips().get(clipId); if (!yo) return;
-  const sampleKey = yo.get('sampleKey') as string;
-  const ch = (yo.get('channels') as number) ?? 1;
-  void loadSamples(sampleKey).then((samples) => {
-    const frames = samples.length / ch;
-    const out = new Float32Array(samples.length);
-    for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
-    void storeSamples(sampleKey, float32ToNumberArray(out));
-    for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
-  });
+/** Drop cached waveform PNGs for a clip (call when its samples change). */
+function invalidateWaveform(clipId: string): void {
+  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -132,9 +115,14 @@ export function AudioEditor() {
   const playheadRef = useRef<HTMLDivElement | null>(null);
   const posDisplayRef = useRef<HTMLSpanElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ clipId: string; el: HTMLElement; os: number; od: number; oo: number; sx: number; mode: 'drag' | 'trimL' | 'trimR' } | null>(null);
+  const dragRef = useRef<{
+    clipId: string; el: HTMLElement; waveEl: HTMLElement | null;
+    os: number; od: number; oo: number; speed: number; sx: number;
+    leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
+  } | null>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedClipId;
+  const clipsRef = useRef<AudioClip[]>([]);
   const pxRef = useRef(pxPerSec);
   pxRef.current = pxPerSec;
 
@@ -192,9 +180,28 @@ export function AudioEditor() {
       const d = dragRef.current; if (!d) return;
       const pps = pxRef.current;
       const dt = (ev.clientX - d.sx) / pps;
-      if (d.mode === 'drag') { d.el.style.left = `${Math.max(0, d.os + dt) * pps}px`; }
-      else if (d.mode === 'trimL') { const nd = d.od - dt; if (nd > 0.1 && d.oo + dt >= 0) { d.el.style.left = `${(d.os + dt) * pps}px`; d.el.style.width = `${nd * pps}px`; } }
-      else if (d.mode === 'trimR') { d.el.style.width = `${Math.max(0.1, d.od + dt) * pps}px`; }
+      const oldEnd = d.os + d.od;
+      if (d.mode === 'drag') {
+        // Keep the whole clip inside the free gap between its neighbours.
+        const maxStart = Math.max(d.leftLimit, d.rightLimit - d.od);
+        const start = Math.min(maxStart, Math.max(d.leftLimit, d.os + dt));
+        d.el.style.left = `${start * pps}px`;
+      } else if (d.mode === 'trimL') {
+        // Cut from the left: never past the left neighbour, the source start
+        // (offset ≥ 0 → limited by the trimmed head in timeline seconds), or a
+        // minimum width.
+        const minStart = Math.max(d.leftLimit, d.os - d.oo / d.speed);
+        const start = Math.min(oldEnd - 0.1, Math.max(minStart, d.os + dt));
+        d.el.style.left = `${start * pps}px`;
+        d.el.style.width = `${(oldEnd - start) * pps}px`;
+        // Shift the (fixed-width) waveform the opposite way so the audio stays
+        // anchored — the newly-trimmed head is clipped, not squashed.
+        if (d.waveEl) d.waveEl.style.left = `${-(start - d.os) * pps}px`;
+      } else if (d.mode === 'trimR') {
+        // Cut from the right: never past the right neighbour or a min width.
+        const end = Math.min(d.rightLimit, Math.max(d.os + 0.1, oldEnd + dt));
+        d.el.style.width = `${(end - d.os) * pps}px`;
+      }
     };
     const onUp = () => {
       const d = dragRef.current; if (!d) return;
@@ -202,7 +209,7 @@ export function AudioEditor() {
       const left = parseFloat(d.el.style.left) / pps;
       const width = parseFloat(d.el.style.width) / pps;
       if (d.mode === 'drag') updateAudioClip(slate, d.clipId, { start: Math.max(0, left) });
-      else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: d.oo + (left - d.os) });
+      else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
       else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
       dragRef.current = null;
     };
@@ -248,6 +255,20 @@ export function AudioEditor() {
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slate, version]);
+  clipsRef.current = clips;
+
+  // When a clip's samples change (normalize/reverse from the settings panel),
+  // drop the cached waveform + decoded buffer so both refresh.
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      invalidateWaveform(id);
+      engineRef.current?.clearCache(id);
+      setVersion((v) => v + 1);
+    };
+    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+  }, []);
 
   const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
 
@@ -300,15 +321,32 @@ export function AudioEditor() {
 
   // ── Drag start ────────────────────────────────────────────────────────────
 
-  const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => {
-    e.stopPropagation(); setSelectedClipId(clip.id);
-    dragRef.current = { clipId: clip.id, el, os: clip.start, od: clip.duration, oo: clip.offset, sx: e.clientX, mode: 'drag' };
+  // The free interval [leftLimit, rightLimit] the clip may occupy without
+  // overlapping any other clip on the same track.
+  const neighbourBounds = useCallback((clip: AudioClip): { leftLimit: number; rightLimit: number } => {
+    let leftLimit = 0;
+    let rightLimit = Infinity;
+    const clipEnd = clip.start + clip.duration;
+    for (const o of clipsRef.current) {
+      if (o.id === clip.id || o.trackId !== clip.trackId) continue;
+      const oEnd = o.start + o.duration;
+      if (oEnd <= clip.start + 1e-4) leftLimit = Math.max(leftLimit, oEnd);
+      else if (o.start >= clipEnd - 1e-4) rightLimit = Math.min(rightLimit, o.start);
+    }
+    return { leftLimit, rightLimit };
   }, []);
 
-  const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => {
+  const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
     e.stopPropagation(); setSelectedClipId(clip.id);
-    dragRef.current = { clipId: clip.id, el, os: clip.start, od: clip.duration, oo: clip.offset, sx: e.clientX, mode: side === 'left' ? 'trimL' : 'trimR' };
-  }, []);
+    const { leftLimit, rightLimit } = neighbourBounds(clip);
+    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: 'drag' };
+  }, [neighbourBounds]);
+
+  const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+    e.stopPropagation(); setSelectedClipId(clip.id);
+    const { leftLimit, rightLimit } = neighbourBounds(clip);
+    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: side === 'left' ? 'trimL' : 'trimR' };
+  }, [neighbourBounds]);
 
   // ── Loop region drag ──────────────────────────────────────────────────────
 
@@ -347,7 +385,7 @@ export function AudioEditor() {
         <button onClick={() => selectedRef.current && dupClip(selectedRef.current)} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
         <button onClick={() => { if (selectedRef.current) { deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); } }} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
-        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-10 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
         <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
         <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
@@ -397,7 +435,7 @@ export function AudioEditor() {
             <div key={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
               {clips.filter((c) => c.trackId === t.id).map((c) => (
                 <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
-                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} slate={slate} />
+                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} />
               ))}
             </div>
           ))}
@@ -454,33 +492,29 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
 
 // ── Clip block ──────────────────────────────────────────────────────────────
 
-const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart, slate }: {
+const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart }: {
   clip: AudioClip; pxPerSec: number; selected: boolean;
   onSelect: (id: string) => void;
-  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement) => void;
-  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement) => void;
-  slate: ReturnType<typeof useRoom>['slate'];
+  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
 }) {
   const left = clip.start * pxPerSec;
   const width = Math.max(4, clip.duration * pxPerSec);
   const elRef = useRef<HTMLDivElement | null>(null);
+  const waveRef = useRef<HTMLDivElement | null>(null);
   const w = Math.max(2, Math.floor(width));
 
   return (
-    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current); } }}
+    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current, waveRef.current); } }}
       className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
-      {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} width={w} color={clip.color} />}
-      <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>
-      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current); }} className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
-      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current); }} className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize opacity-0 group-hover:opacity-100" style={{ backgroundColor: 'rgba(255,255,255,0.3)' }} />
-      {selected && (
-        <div className="absolute bottom-0.5 left-1 right-1 flex items-center gap-0.5">
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => void splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Split"><Scissors size={7} /></button>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => normalizeSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Normalize"><Wand2 size={7} /></button>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => reverseSamples(slate, clip.id)} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-accent" title="Reverse"><FlipHorizontal2 size={7} /></button>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => { deleteAudioClip(slate, clip.id); }} className="flex h-3 w-3 items-center justify-center rounded bg-bg/80 text-text-mid hover:text-danger" title="Delete"><Trash2 size={7} /></button>
-        </div>
-      )}
+      {/* Fixed-width waveform layer — clipped by the box so trimming cuts the
+          audio rather than squashing the whole wave into a smaller space. */}
+      <div ref={waveRef} className="pointer-events-none absolute top-0 bottom-0 left-0" style={{ width }}>
+        {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} sampleRate={clip.sampleRate} offset={clip.offset} duration={clip.duration} speed={clip.speed ?? 1} width={w} color={clip.color} />}
+      </div>
+      <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}{clip.mute ? ' (muted)' : ''}</span>
+      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current, waveRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current, waveRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
     </div>
   );
 });

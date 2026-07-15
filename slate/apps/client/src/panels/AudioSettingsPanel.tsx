@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Trash2, Wand2, FlipHorizontal2, Scissors, Sliders, Volume2 } from 'lucide-react';
+import { Trash2, Wand2, FlipHorizontal2, Scissors, Sliders, Volume2, VolumeX, Gauge } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
@@ -113,6 +113,37 @@ export function AudioSettingsPanel() {
               <input type="range" min={0} max={clip.duration / 2} step={0.05} value={clip.fadeOut} onChange={(e) => setClip({ fadeOut: Number(e.target.value) })} className="w-full accent-accent" />
               <span className="text-[9px] font-mono text-text-dim">{clip.fadeOut.toFixed(2)}s</span>
             </div>
+          </div>
+          {/* Gain + pan */}
+          <div>
+            <label className="field-label">Gain</label>
+            <div className="flex items-center gap-2">
+              <Volume2 size={12} className="text-text-dim" />
+              <input type="range" min={0} max={1.5} step={0.01} value={clip.gain ?? 1} onChange={(e) => setClip({ gain: Number(e.target.value) })} className="flex-1 accent-accent" />
+              <span className="w-8 text-right font-mono text-[10px] text-text-dim">{Math.round((clip.gain ?? 1) * 100)}</span>
+            </div>
+          </div>
+          <div>
+            <label className="field-label">Pan</label>
+            <div className="flex items-center gap-2">
+              <Sliders size={12} className="text-text-dim" />
+              <input type="range" min={-1} max={1} step={0.01} value={clip.pan ?? 0} onChange={(e) => setClip({ pan: Number(e.target.value) })} className="flex-1 accent-accent" />
+              <span className="w-8 text-right font-mono text-[10px] text-text-dim">{(clip.pan ?? 0) > 0 ? `R${Math.round((clip.pan ?? 0) * 100)}` : (clip.pan ?? 0) < 0 ? `L${Math.round(-(clip.pan ?? 0) * 100)}` : 'C'}</span>
+            </div>
+          </div>
+          {/* Speed */}
+          <div>
+            <label className="field-label">Speed / Pitch</label>
+            <div className="flex items-center gap-2">
+              <Gauge size={12} className="text-text-dim" />
+              <input type="range" min={0.25} max={4} step={0.05} value={clip.speed ?? 1} onChange={(e) => setClip({ speed: Number(e.target.value) })} className="flex-1 accent-accent" />
+              <span className="w-10 text-right font-mono text-[10px] text-text-dim">{(clip.speed ?? 1).toFixed(2)}×</span>
+            </div>
+          </div>
+          {/* Mute + source info */}
+          <div className="flex items-center justify-between">
+            <button onClick={() => setClip({ mute: !clip.mute })} className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${clip.mute ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{clip.mute ? <VolumeX size={11} /> : <Volume2 size={11} />}{clip.mute ? 'Muted' : 'Mute clip'}</button>
+            <span className="font-mono text-[9px] text-text-dim">{clip.sampleRate} Hz · {clip.channels === 2 ? 'stereo' : 'mono'}</span>
           </div>
           {/* Quick actions */}
           <div className="flex gap-1">

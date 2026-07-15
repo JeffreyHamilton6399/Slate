@@ -271,3 +271,36 @@ Work Log:
 
 Stage Summary:
 - 3 files modified (audio/AudioEditor.tsx, audio/scene.ts, panels/AudioSettingsPanel.tsx). Waveforms no longer go blank after split/normalize/reverse (retry-on-empty + per-clip cache-bust). Dragging a clip over a neighbour now snaps to the free side (left/right) of that neighbour instead of stopping dead. Clip blocks show semi-transparent triangle overlays for fade-in (left wedge) and fade-out (right wedge). Audio Settings panel is more compact: Start/Duration inputs removed, consistent 2-col slider grid, Duplicate button added. tsc + ESLint clean.
+
+---
+Task ID: FIX-ROUND-2
+Agent: main (Z.ai Code)
+Task: Pull latest, fix cloud delete, home layout, live boards, bevel geometry, face measurements, 2D animation, 3D timeline alignment, audio waveform/snap/fade/settings
+
+Work Log:
+- **Pulled latest** (da2a300): remote had already added no-overlap clip drag + trim-cut waveforms. Reset to origin/main to get clean base.
+- **Cloud delete** (subagent PARALLEL-A): Added `onDeleteSave` pub/sub to snapshot.ts. `deleteSave` now fires delete listeners. cloudSaves.ts gained `deleteCloudSave(userId, saveId)` + `deleteCloudSavesByBoard`. `startCloudSaveBridge` subscribes to `onDeleteSave` and deletes from Supabase `board_saves` table. Deleting a project from Home now removes it from BOTH local localStorage AND cloud — no more resurrection on refresh.
+- **Home layout** (subagent PARALLEL-A): `recentsFromSaves()` slices to 3 (was 12). Grid is `grid-cols-2 sm:grid-cols-3` (was 4 tiers). Live boards `<ul>` has `max-h-[50vh] overflow-y-auto pr-1` for scrolling.
+- **Live public boards** (subagent PARALLEL-A): Polling reduced to 5s (was 10s). `liveRooms = rooms.filter(r => r.visibility === 'public' && r.members > 0)` — private boards and empty rooms disappear. `PublicRoom.mode` extended to include `'audio'`. Audio boards show with warn color.
+- **Face CAD measurements** (subagent PARALLEL-B): `FaceHighlight` now shows perimeter edge length labels + face area label at centroid. All measurement text reduced from `text-[9px]` to `text-[8px]`. Edge length calculation fixed to use full world matrix (position + rotation + scale) via `THREE.Matrix4` — was ignoring rotation. Labels respect board units (mm/cm/m/in/ft) via `formatLength`/`formatArea`.
+- **Bevel geometry fix** (direct): Root cause was the `cutVerts` function creating DUPLICATE vertices when both endpoints of an edge are beveled — each side created its own cuts at the same positions. Fixed by making `cutVerts` symmetric: cache key is always `min->max`, and the reversed direction returns the same vertices in reverse order. Additionally, the face boundary now uses only the OUTERMOST cut (closest to neighbor) instead of all intermediate cuts — intermediate cuts go only in the corner fill. The corner fill for multi-segment bevels is now a fan of quad strips connecting concentric rings, capped by an innermost n-gon — this produces proper rounded corners. All 33 mesh tests pass (including 2 new multi-segment watertight tests).
+- **2D animation system** (direct): Full Adobe Animate-style animation for 2D shapes:
+  - Schema: Added `Transform2D` (x, y, rotation, scaleX, scaleY, opacity) and `AnimKey2D` (t + transform) to sync-protocol. Extended `Shape` with optional `anim?: AnimKey2D[]`. Updated zod validators to accept all 18 shape kinds + all 7 stroke kinds + the anim field.
+  - Animation module (`canvas2d/animation.ts`): `sampleAnim2D` with linear position/scale/opacity + shortest-arc rotation interp. `withKey2D`/`withoutKey2D`/`moveKey2D` helpers.
+  - Keyframe helpers (`canvas2d/keyframes.ts`): `insertKeyframe2D`/`autoKeyframe2D`/`deleteKeyframe2D`/`moveKeyframe2D` writing to Yjs.
+  - Store: Added `animTime`, `animDuration`, `animPlaying`, `animPreview` + setters to `useCanvasStore`.
+  - Engine: `readShape` now reads `anim` field. `loop()` repaints when `animPreview` is true. Passes `animTime` to renderer.
+  - Renderer: `drawShapeWithAnim` applies sampled transform (translate + rotate + scale + opacity) before drawing. `renderScene` samples each shape's anim at current time.
+  - Timeline2D component: Minimalistic timeline overlay at bottom of 2D canvas. Play/pause, scrubber, dope sheet with draggable keyframe diamonds, insert (I) / delete keyframes, End duration input. Auto-expands when animation exists.
+- **3D timeline alignment** (direct): Dope sheet rows and slider row now share the same `grid-cols-[7rem_1fr_auto]` layout so keyframe diamonds line up exactly with the scrubber thumb. Was misaligned because dope sheet track started after the name button while slider started after play+time controls.
+- **Audio fixes** (subagent PARALLEL-C):
+  - Waveform blank after cut: `WaveformImg` no longer caches empty (length 0) sample results — retries every 500ms up to 5 times. Listens for `slate:audio-clip-changed` to invalidate cache.
+  - Clip drag snap: dragging a clip onto another now snaps to the free side (left or right of the blocker) instead of dead-stopping.
+  - Fade-in visual: `ClipBlock` renders CSS clip-path triangles for fade-in (left) and fade-out (right).
+  - Settings panel: Removed Start/Duration inputs. Added Duplicate button. Reorganized into consistent 2-col grid.
+  - `splitAudioClip` passes Float32Array directly to `storeSamples` (was converting to number[] unnecessarily).
+
+Stage Summary:
+- 15+ files modified across mesh, sync-protocol, canvas2d, viewport3d, audio, panels, app.
+- TypeScript: 0 errors. ESLint: 0 errors. Mesh tests: 33/33 pass (including 2 new multi-segment bevel watertight tests).
+- Browser-verified: app loads, 2D timeline visible, no console errors.

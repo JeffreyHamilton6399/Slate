@@ -1,31 +1,22 @@
 'use client'
 
+import { useEffect } from 'react'
+
 export default function Home() {
+  useEffect(() => {
+    window.location.replace('/slate/index.html')
+  }, [])
+
   return (
     <div style={{
       display: 'flex',
-      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
       minHeight: '100vh',
-      gap: '2rem',
-      padding: '1rem'
+      fontFamily: 'system-ui, sans-serif',
+      color: '#888',
     }}>
-      <div style={{
-        position: 'relative',
-        width: '6rem',
-        height: '6rem'
-      }}>
-        <img
-          src="/logo.svg"
-          alt="Z.ai Logo"
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain'
-          }}
-        />
-      </div>
+      Loading Slate…
     </div>
   )
 }

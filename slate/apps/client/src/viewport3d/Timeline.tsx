@@ -79,16 +79,18 @@ export function Timeline({ room, snapshot }: { room: SlateRoom; snapshot: SceneS
 
   return (
     <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col gap-1 rounded-md border border-border bg-bg-2/95 px-2 py-1.5 shadow-lg backdrop-blur">
-      {/* Dope sheet: only the selected object's keyframes (Blender-style). */}
+      {/* Dope sheet: only the selected object's keyframes (Blender-style).
+          Uses the same two-column grid as the slider row below so keyframe
+          diamonds line up exactly with the scrubber thumb. */}
       {animated.length > 0 && (
         <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto border-b border-border pb-1">
           {animated.map((o) => (
-            <div key={o.id} className="flex items-center gap-2">
+            <div key={o.id} className="grid grid-cols-[7rem_1fr] items-center gap-2">
               <button
                 type="button"
                 onClick={() => useScene3DStore.getState().setSelection([o.id])}
                 className={
-                  'w-28 truncate rounded-sm px-1.5 py-0.5 text-left text-[11px] ' +
+                  'truncate rounded-sm px-1.5 py-0.5 text-left text-[11px] ' +
                   (selection.includes(o.id)
                     ? 'bg-accent/15 text-accent'
                     : 'text-text-mid hover:bg-bg-3 hover:text-text')
@@ -165,7 +167,8 @@ export function Timeline({ room, snapshot }: { room: SlateRoom; snapshot: SceneS
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="grid grid-cols-[7rem_1fr_auto] items-center gap-2">
+      <div className="flex items-center gap-1">
       <Tooltip content={playing ? 'Pause' : 'Play (loops)'}>
         <button
           type="button"
@@ -176,7 +179,8 @@ export function Timeline({ room, snapshot }: { room: SlateRoom; snapshot: SceneS
           {playing ? <Pause size={13} /> : <Play size={13} />}
         </button>
       </Tooltip>
-      <span className="w-16 text-right font-mono text-xs text-text">{animTime.toFixed(2)}s</span>
+      <span className="w-12 text-right font-mono text-xs text-text">{animTime.toFixed(2)}s</span>
+      </div>
 
       {/* Track: scrubber + keyframe diamonds for the primary selection. */}
       <div className="relative min-w-0 flex-1">
@@ -205,6 +209,7 @@ export function Timeline({ room, snapshot }: { room: SlateRoom; snapshot: SceneS
         </div>
       </div>
 
+      <div className="flex items-center gap-1">
       <label className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-text-dim">
         End
         <input
@@ -255,6 +260,7 @@ export function Timeline({ room, snapshot }: { room: SlateRoom; snapshot: SceneS
       >
         <ChevronDown size={13} />
       </button>
+      </div>
       </div>
     </div>
   );

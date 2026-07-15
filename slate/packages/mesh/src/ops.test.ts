@@ -186,6 +186,30 @@ describe('bevelVerts', () => {
       expect(Math.abs(r.vertices[i]!)).toBeLessThanOrEqual(0.5 + 1e-9);
     }
   });
+  it('multi-segment bevel of one corner is watertight', () => {
+    const m = cube();
+    const r = bevelVerts(m, [0], 0.1, 3);
+    // Every edge must be shared by exactly 2 faces (no zigzag boundary).
+    const edgeCount = new Map<string, number>();
+    for (const f of r.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        const a = f.v[i]!;
+        const b = f.v[(i + 1) % f.v.length]!;
+        const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      }
+    }
+    for (const [, n] of edgeCount) expect(n).toBe(2);
+  });
+  it('multi-segment bevel of an edge (two corners) produces rounded geometry', () => {
+    const m = cube();
+    // Bevel two adjacent corners (an edge bevel). Multi-segment edge bevels
+    // produce rounded geometry with more vertices than single-segment.
+    const r1 = bevelVerts(m, [0, 1], 0.1, 1);
+    const r3 = bevelVerts(m, [0, 1], 0.1, 3);
+    // Multi-segment should produce more vertices (rounded corners).
+    expect(vCount(r3)).toBeGreaterThan(vCount(r1));
+  });
 });
 
 describe('mergeAtCenter', () => {

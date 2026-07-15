@@ -198,9 +198,14 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   // edge — this is Blender's "Segments" bevel setting (a rounded chamfer
   // instead of a single flat cut). Each segment vertex sits at a fractional
   // position along the edge.
+  // KEY INVARIANT: cutVerts(a, b) and cutVerts(b, a) return the SAME vertex ids
+  // (just in reverse order). This is critical when both endpoints of an edge
+  // are beveled — without sharing, each side would create duplicate vertices
+  // at the same positions, breaking the watertight property.
   const edgeVerts = new Map<string, number[]>();
   const cutVerts = (cur: number, nb: number): number[] => {
-    const key = `${cur}->${nb}`;
+    const key = cur < nb ? `${cur}->${nb}` : `${nb}->${cur}`;
+    const reversed = cur > nb;
     let ids = edgeVerts.get(key);
     if (ids === undefined) {
       const c = vGet(m, cur);
@@ -215,7 +220,9 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       }
       edgeVerts.set(key, ids);
     }
-    return ids;
+    // Return a copy so callers can reverse without mutating the cache.
+    // If reversed, the cuts go from nb toward cur (caller wants cur→nb order).
+    return reversed ? [...ids].reverse() : [...ids];
   };
 
   // Average incident-face normal per beveled vertex (orients its corner face).
@@ -243,42 +250,78 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       // Walking the loop prev→cur→next, the boundary meets the cut on the
       // prev-side edge first (arriving from prev toward cur), then the cut
       // on the next-side edge (departing from cur toward next).
-      // cutVerts returns verts ordered from cur toward the neighbour, so:
-      //   - nextCuts (cur→next) are already in the correct walking direction
-      //   - prevCuts (cur→prev) must be REVERSED so they go prev→cur
-      // This is critical when both endpoints of an edge are beveled: without
-      // the reversal, the two halves of the edge produce a zigzag boundary.
+      // For multi-segment bevels, only the OUTERMOST cut (closest to the
+      // neighbour) goes into the face boundary. The intermediate cuts form
+      // the rounded corner fill only — putting them in both the face AND the
+      // corner fill creates non-manifold (shared) edges.
       const prevCuts = cutVerts(cur, prev);
       const nextCuts = cutVerts(cur, next);
-      // Reverse a COPY — cutVerts returns a cached array shared across faces.
-      newV.push(...[...prevCuts].reverse(), ...nextCuts);
+      // prevCuts goes cur→prev; last element is closest to prev.
+      // nextCuts goes cur→next; last element is closest to next.
+      newV.push(prevCuts[prevCuts.length - 1]!, nextCuts[nextCuts.length - 1]!);
     }
     m.faces[fi] = { v: newV };
   }
 
-  // Fill the hole left at each beveled vertex with a corner strip. With
-  // segments, the cut points form a fan that rounds the corner.
+  // Fill the hole left at each beveled vertex with a rounded corner. For
+  // single-segment bevels this is a single n-gon. For multi-segment, it's a
+  // fan of quad strips connecting concentric rings of cut vertices, capped
+  // by a small innermost n-gon — this is what produces the smooth round.
   for (const vi of new Set(vertIds)) {
-    const ids: number[] = [];
-    const prefix = `${vi}->`;
+    // Collect cut vertices per incident edge, ordered from vi outward.
+    const edges: number[][] = [];
     for (const [key, cutIds] of edgeVerts) {
-      if (key.startsWith(prefix)) ids.push(...cutIds);
+      const [a, b] = key.split('->');
+      if (a === String(vi) || b === String(vi)) {
+        // cuts are stored from the smaller-id vertex toward the larger.
+        // If vi is the smaller (a===vi), cuts go vi→nb: correct (outward).
+        // If vi is the larger (b===vi), cuts go nb→vi: reverse for outward.
+        if (b === String(vi)) {
+          edges.push([...cutIds].reverse());
+        } else {
+          edges.push([...cutIds]);
+        }
+      }
     }
-    if (ids.length < 3) continue;
+    if (edges.length < 3) continue;
+    // Sort edges by angle around the vertex normal so adjacent edges in the
+    // array are physically adjacent around the corner.
     const c = vGet(m, vi);
     const n = normalize(vertNormal.get(vi) ?? { x: 0, y: 1, z: 0 });
     const seed = Math.abs(n.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
     const u = normalize(cross(n, seed));
     const w = cross(n, u);
-    ids.sort((a, b) => {
-      const pa = sub(vGet(m, a), c);
-      const pb = sub(vGet(m, b), c);
+    edges.sort((ea, eb) => {
+      const pa = sub(vGet(m, ea[0]!), c); // first cut = closest to vi
+      const pb = sub(vGet(m, eb[0]!), c);
       return Math.atan2(dot(pa, w), dot(pa, u)) - Math.atan2(dot(pb, w), dot(pb, u));
     });
-    // Angle-sorting around n yields CCW seen from outside; verify + flip in
-    // case the vertex normal was degenerate.
-    if (dot(faceNormal(m, { v: ids }), n) < 0) ids.reverse();
-    m.faces.push({ v: ids });
+    // Verify winding (CCW seen from outside).
+    const outerRing = edges.map((e) => e[e.length - 1]!); // outermost cuts
+    if (dot(faceNormal(m, { v: outerRing }), n) < 0) edges.reverse();
+
+    // For single-segment (seg=1), each edge has 1 cut. The corner fill is a
+    // single n-gon connecting all cuts — edges shared with the modified faces.
+    if (seg === 1) {
+      m.faces.push({ v: edges.map((e) => e[0]!) });
+      continue;
+    }
+    // For multi-segment, create concentric rings connected by quad strips.
+    // Ring s (0-indexed from innermost=0 to outermost=seg-1) has one cut per edge.
+    // The outermost ring (s=seg-1) has its outer edges shared with modified faces.
+    // Quad strips connect ring s to ring s+1 for s = 0..seg-2.
+    // The innermost ring (s=0) is capped with a small n-gon.
+    const numEdges = edges.length;
+    for (let s = 0; s < seg - 1; s++) {
+      for (let e = 0; e < numEdges; e++) {
+        const e1 = edges[e]!;
+        const e2 = edges[(e + 1) % numEdges]!;
+        // Quad: inner(s) on e1, outer(s+1) on e1, outer(s+1) on e2, inner(s) on e2
+        m.faces.push({ v: [e1[s]!, e1[s + 1]!, e2[s + 1]!, e2[s]!] });
+      }
+    }
+    // Innermost n-gon cap (ring 0).
+    m.faces.push({ v: edges.map((e) => e[0]!) });
   }
 
   // The original beveled vertices are now unreferenced; drop them.

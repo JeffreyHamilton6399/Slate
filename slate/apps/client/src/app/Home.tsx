@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -18,7 +18,7 @@ import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
 import { SettingsDialog } from './Settings';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
-import { listSaves } from '../files/snapshot';
+import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
@@ -455,16 +455,16 @@ function Home({ email, userId }: { email: string; userId: string }) {
           ) : (
             <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {recents.map((r) => (
-                <li key={r.boardName}>
+                <li key={r.boardName} className="group relative">
                   <button
                     type="button"
                     onClick={() => open(r.boardName, r.mode, false)}
-                    className="group flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
+                    className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
                   >
                     <span
                       className={cn(
                         'grid h-20 w-full place-items-center text-sm font-bold tracking-wider',
-                        r.mode === '3d' ? 'bg-accent/10 text-accent' : 'bg-green/10 text-green',
+                        r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : 'bg-green/10 text-green',
                       )}
                     >
                       {r.mode.toUpperCase()}
@@ -477,6 +477,18 @@ function Home({ email, userId }: { email: string; userId: string }) {
                         <Clock size={10} /> {timeAgo(r.savedAt)}
                       </span>
                     </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm(`Delete saved project "${r.boardName}"? This only removes the local save, not the board itself.`)) return;
+                      deleteSaveByBoardName(r.boardName);
+                      setRecents(recentsFromSaves());
+                    }}
+                    className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+                    aria-label="Delete project"
+                  >
+                    <Trash2 size={11} />
                   </button>
                 </li>
               ))}
@@ -564,6 +576,13 @@ function recentsFromSaves(): RecentProject[] {
     }
   }
   return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 12);
+}
+
+/** Delete all saves for a board name. */
+function deleteSaveByBoardName(boardName: string): void {
+  for (const e of listSaves()) {
+    if (e.boardName === boardName) deleteSave(e.id);
+  }
 }
 
 function timeAgo(t: number): string {

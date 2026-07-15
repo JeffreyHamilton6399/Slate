@@ -144,13 +144,17 @@ export function Viewport3D({ room }: Viewport3DProps) {
   const bgColor = paperFollowsTheme
     ? viewportColors.bg[shading === 'rendered' ? 1 : 0]
     : paper;
-  // CAD grid: cell/section spacing follows the chosen display units.
+  // CAD grid: cell/section spacing follows the chosen display units AND the
+  // camera distance — when zoomed out far, grid lines increase spacing so
+  // the screen doesn't go black from overdraw. When zoomed in, lines decrease.
+  const camDist = cameraInfoRef.current?.pxScale ?? 0.01;
+  const zoomFactor = Math.pow(2, Math.round(Math.log2(Math.max(0.01, camDist * 100))));
   const grid =
     units === 'mm' || units === 'cm'
-      ? { cell: 0.1, section: 1 } // 10 cm minor, 1 m major
+      ? { cell: 0.1 * zoomFactor, section: 1 * zoomFactor }
       : units === 'in' || units === 'ft'
-        ? { cell: 0.3048, section: 3.048 } // 1 ft minor, 10 ft major
-        : { cell: 1, section: 5 }; // meters (default)
+        ? { cell: 0.3048 * zoomFactor, section: 3.048 * zoomFactor }
+        : { cell: 1 * zoomFactor, section: 5 * zoomFactor };
   // Animation: while the playhead is scrubbing/playing, animated objects render
   // at their sampled keyframe pose so you can see the animation. Editing still
   // writes the base transform; the gizmo syncs from the sampled pose so it

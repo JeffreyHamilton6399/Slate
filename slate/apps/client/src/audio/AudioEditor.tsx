@@ -329,7 +329,10 @@ export function AudioEditor() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const gridStyle = { backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.1) 0 1px, transparent 1px ${pxPerSec}px)` };
+  const beatDur = 60 / bpm; // seconds per beat
+  const gridStyle = {
+    backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0 1px, transparent 1px ${beatDur * pxPerSec}px), repeating-linear-gradient(to right, rgba(128,128,128,0.2) 0 1px, transparent 1px ${beatDur * 4 * pxPerSec}px)`,
+  };
 
   return (
     <div className="flex h-full flex-col bg-bg overflow-hidden" onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>

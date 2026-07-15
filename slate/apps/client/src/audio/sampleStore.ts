@@ -29,14 +29,14 @@ function openDB(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-/** Store audio samples in IndexedDB. Returns the key to reference them. */
-export async function storeSamples(key: string, samples: number[]): Promise<void> {
+/** Store audio samples in IndexedDB. Accepts number[] or Float32Array. */
+export async function storeSamples(key: string, samples: number[] | Float32Array): Promise<void> {
   const db = await openDB();
-  // Store as Float32Array for compactness (4 bytes per sample vs 8 for number).
-  const float32 = new Float32Array(samples);
+  // Convert to Float32Array for compactness if not already.
+  const float32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(float32.buffer, key); // Store the ArrayBuffer
+    tx.objectStore(STORE).put(float32.buffer, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

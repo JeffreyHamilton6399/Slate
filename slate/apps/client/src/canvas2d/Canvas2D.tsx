@@ -274,7 +274,7 @@ export function Canvas2D({ room }: Canvas2DProps) {
 
   const toolCtx: ToolContext = useMemo(
     () => ({
-      engine: engineRef.current!,
+      engine: engineRef.current!,  // May be null on first render; ensureTool re-checks.
       authorId: room.identity.peerId,
       layerId: activeLayerId ?? '',
       stroke,
@@ -286,6 +286,12 @@ export function Canvas2D({ room }: Canvas2DProps) {
     }),
     [room, activeLayerId, stroke, fill, strokeWidth, strokeOpacity, fontSize],
   );
+
+  // Keep toolCtx.engine in sync — the engine is created in a useEffect, so
+  // the first useMemo capture may have engine=null. This ref always has the
+  // latest engine, and ensureTool reads from it.
+  const engineForToolRef = useRef(engineRef.current);
+  engineForToolRef.current = engineRef.current;
 
   // ── Inline text editing ────────────────────────────────────────────────────
   const commitTextEdit = useCallback(() => {
@@ -468,8 +474,9 @@ export function Canvas2D({ room }: Canvas2DProps) {
 
   const ensureTool = useCallback(
     (additive: boolean): Tool | null => {
-      if (!engineRef.current || !activeLayerId) return null;
-      const ctx: ToolContext = { ...toolCtx, additive };
+      const engine = engineForToolRef.current;
+      if (!engine || !activeLayerId) return null;
+      const ctx: ToolContext = { ...toolCtx, engine, additive };
       const t = createTool({
         toolId: tool,
         context: ctx,

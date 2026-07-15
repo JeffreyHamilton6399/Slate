@@ -68,8 +68,9 @@ export async function addAudioClip(
 ): Promise<string> {
   const id = makeId('clip');
   const sampleKey = `samples:${id}`;
-  // Store samples in IndexedDB (NOT Yjs).
-  await storeSamples(sampleKey, clip.samples);
+  // Store samples in IndexedDB (NOT Yjs). Pass as Float32Array for speed.
+  const f32 = new Float32Array(clip.samples);
+  await storeSamples(sampleKey, f32);
   const track = slate.audioTracks().get(trackId);
   const color = clip.color ?? (track ? (track.get('color') as string) : '#7c6aff');
   const full: AudioClip = {
@@ -177,5 +178,9 @@ export async function decodeAudioFile(file: File): Promise<{
     const data = audioBuffer.getChannelData(ch);
     for (let i = 0; i < length; i++) interleaved[i * channels + ch] = data[i]!;
   }
-  return { samples: Array.from(interleaved), sampleRate: audioBuffer.sampleRate, channels, duration: audioBuffer.duration };
+  // Convert to number[] — but use a plain for loop instead of Array.from
+  // for better performance with large arrays.
+  const samples: number[] = new Array(interleaved.length);
+  for (let i = 0; i < interleaved.length; i++) samples[i] = interleaved[i]!;
+  return { samples, sampleRate: audioBuffer.sampleRate, channels, duration: audioBuffer.duration };
 }

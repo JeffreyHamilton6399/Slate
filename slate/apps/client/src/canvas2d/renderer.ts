@@ -41,11 +41,14 @@ export interface SceneFrame {
   onionSkin?: boolean;
   /** Frames per second (for onion skin frame stepping). */
   animFps?: number;
+<<<<<<< HEAD
   /** Frame-based (cel) animation mode — only the current frame's content
    *  (plus any static, frame-less content) is drawn. */
   animMode?: boolean;
   /** Current cel frame index (used when animMode is on). */
   animFrame?: number;
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
 }
 
 export interface ViewportSize {
@@ -143,6 +146,7 @@ export function renderScene(
     const animTime = scene.animTime ?? 0;
     const fps = scene.animFps ?? 24;
 
+<<<<<<< HEAD
     if (celMode) {
       // Frame-based (cel) animation: each frame is its own drawing. Only the
       // content stamped onto the current frame — plus any static, frame-less
@@ -172,6 +176,8 @@ export function renderScene(
       continue;
     }
 
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
     // Onion skin: draw previous and next frames as ghost overlays.
     if (scene.onionSkin && animTime > 0) {
       const frame = Math.round(animTime * fps);
@@ -338,6 +344,7 @@ function drawShapeWithAnimTint(ctx: CanvasRenderingContext2D, s: Shape, t: Trans
   ctx.restore();
 }
 
+<<<<<<< HEAD
 /** Draw a shape at its own position as a flat tinted silhouette — used for
  *  cel-mode onion skinning (neighbour frames as coloured ghosts). */
 function drawShapeTint(ctx: CanvasRenderingContext2D, s: Shape, tint: string): void {
@@ -349,6 +356,8 @@ function drawStrokeTint(ctx: CanvasRenderingContext2D, s: Stroke, tint: string):
   drawStroke(ctx, { ...s, color: tint });
 }
 
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
 function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {
   const b = shapeBounds(s);
   if (s.rotation) {

@@ -226,8 +226,11 @@ export function Canvas2D({ room }: Canvas2DProps) {
       getAnimPreview: () => useCanvasStore.getState().animPreview,
       getOnionSkin: () => useCanvasStore.getState().onionSkin,
       getAnimFps: () => useCanvasStore.getState().animFps,
+<<<<<<< HEAD
       getAnimMode: () => useCanvasStore.getState().animMode,
       getAnimFrame: () => useCanvasStore.getState().animFrame,
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
     });
     engineRef.current = engine;
     return () => {
@@ -264,11 +267,17 @@ export function Canvas2D({ room }: Canvas2DProps) {
   const animTime = useCanvasStore((s) => s.animTime);
   const animPreview = useCanvasStore((s) => s.animPreview);
   const onionSkin = useCanvasStore((s) => s.onionSkin);
+<<<<<<< HEAD
   const animMode = useCanvasStore((s) => s.animMode);
   const animFrame = useCanvasStore((s) => s.animFrame);
   useEffect(() => {
     engineRef.current?.markDirty();
   }, [animTime, animPreview, onionSkin, animMode, animFrame]);
+=======
+  useEffect(() => {
+    engineRef.current?.markDirty();
+  }, [animTime, animPreview, onionSkin]);
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
 
   // Resize observer.
   useEffect(() => {

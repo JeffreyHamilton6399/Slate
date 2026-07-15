@@ -40,10 +40,13 @@ interface EngineOpts {
   getAnimPreview: () => boolean;
   getOnionSkin: () => boolean;
   getAnimFps: () => number;
+<<<<<<< HEAD
   /** Frame-based (cel) animation mode is active. */
   getAnimMode: () => boolean;
   /** Current cel frame index. */
   getAnimFrame: () => number;
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
 }
 
 export class CanvasEngine {
@@ -320,8 +323,11 @@ export class CanvasEngine {
       animTime,
       onionSkin: this.opts.getOnionSkin(),
       animFps: this.opts.getAnimFps(),
+<<<<<<< HEAD
       animMode: this.opts.getAnimMode(),
       animFrame: this.opts.getAnimFrame(),
+=======
+>>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
     };
     renderScene(this.opts.canvas, this.scene, transform, size);
   };

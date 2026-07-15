@@ -9,6 +9,7 @@
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import type { SlateDoc } from '../sync/doc';
 import { readAudioClip, readAudioTrack } from './scene';
+import { loadSamples } from './sampleStore';
 
 interface PlayingClip {
   source: AudioBufferSourceNode;
@@ -54,18 +55,20 @@ export class AudioEngine {
     return this.ctx;
   }
 
-  /** Get or create an AudioBuffer for a clip's PCM samples. */
-  private getBuffer(clip: AudioClip): AudioBuffer | null {
+  /** Get or create an AudioBuffer for a clip — loads samples from IndexedDB. */
+  private async getBuffer(clip: AudioClip): Promise<AudioBuffer | null> {
     const ctx = this.ctx!;
     let buf = this.bufferCache.get(clip.id);
     if (buf) return buf;
+    const samples = await loadSamples(clip.sampleKey);
     const channels = clip.channels;
-    const length = clip.samples.length / channels;
+    const length = samples.length / channels;
+    if (length === 0) return null;
     buf = ctx.createBuffer(channels, length, clip.sampleRate);
     for (let ch = 0; ch < channels; ch++) {
       const data = buf.getChannelData(ch);
       for (let i = 0; i < length; i++) {
-        data[i] = clip.samples[i * channels + ch] ?? 0;
+        data[i] = samples[i * channels + ch] ?? 0;
       }
     }
     this.bufferCache.set(clip.id, buf);
@@ -105,7 +108,7 @@ export class AudioEngine {
   }
 
   /** Play all clips that intersect the current playhead. */
-  play(slate: SlateDoc, offset: number): void {
+  async play(slate: SlateDoc, offset: number): Promise<void> {
     const ctx = this.ensureContext();
     this.playing = true;
     this.startOffset = offset;
@@ -129,7 +132,7 @@ export class AudioEngine {
     for (const clip of clips) {
       const track = tracks.find((t) => t.id === clip.trackId);
       if (!track) continue;
-      const buffer = this.getBuffer(clip);
+      const buffer = await this.getBuffer(clip);
       if (!buffer) continue;
 
       const clipEnd = clip.start + clip.duration;

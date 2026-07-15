@@ -10,6 +10,7 @@ import { FileAudio, Upload, Music, Trash2, Plus } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import { addAudioClip, addAudioTrack, decodeAudioFile, readAudioClip } from '../audio/scene';
+import { loadSamples, float32ToNumberArray } from '../audio/sampleStore';
 
 export function AudioAssetsPanel() {
   const room = useRoom();
@@ -97,13 +98,14 @@ export function AudioAssetsPanel() {
               </div>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const clip = readAudioClip(slate.audioClips().get(asset.id)!, asset.id);
                   if (!clip) return;
                   const trackId = addAudioTrack(slate, { name: `${asset.name} track` });
-                  addAudioClip(slate, trackId, {
+                  const samples = await loadSamples(clip.sampleKey);
+                  await addAudioClip(slate, trackId, {
                     start: 0,
-                    samples: clip.samples,
+                    samples: float32ToNumberArray(samples),
                     sampleRate: clip.sampleRate,
                     channels: clip.channels,
                     duration: clip.duration,

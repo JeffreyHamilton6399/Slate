@@ -6,7 +6,6 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import * as Y from 'yjs';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
@@ -17,7 +16,7 @@ import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
   addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
-  deleteAudioTrack, readAudioClip, readAudioClipSamples, readAudioTrack,
+  deleteAudioTrack, readAudioClip, readAudioTrack,
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
@@ -257,7 +256,7 @@ export function AudioEditor() {
   const togglePlay = useCallback(() => {
     const eng = engineRef.current; if (!eng) return;
     if (playing) { eng.stop(); setPlaying(false); }
-    else { if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null); eng.play(slate, positionRef.current); setPlaying(true); }
+    else { if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null); void eng.play(slate, positionRef.current); setPlaying(true); }
   }, [playing, slate, looping, loopStart, loopEnd]);
 
   const seek = useCallback((t: number) => {

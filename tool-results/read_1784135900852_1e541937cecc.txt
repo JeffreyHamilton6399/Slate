@@ -1,0 +1,779 @@
+     1→/**
+     2→ * Render committed 3D objects from the scene snapshot using react-three-fiber.
+     3→ *
+     4→ * Each mesh object becomes a <mesh> with a BufferGeometry built from MeshData.
+     5→ * Light objects render as always-visible gizmos plus a real THREE light when
+     6→ * the viewport shading is 'rendered'. Empties render as a small axes cross.
+     7→ *
+     8→ * Shading modes (Blender's viewport shading):
+     9→ *   wireframe — wires only
+    10→ *   solid     — neutral studio gray, materials ignored
+    11→ *   material  — PBR materials under the built-in studio rig
+    12→ *   rendered  — PBR materials lit only by the scene's own lights
+    13→ */
+    14→
+    15→import { useEffect, useMemo, useRef, useState } from 'react';
+    16→import * as THREE from 'three';
+    17→import { Html } from '@react-three/drei';
+    18→import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
+    19→import type { LightData, Material, MeshData, Object3D, Transform } from '@slate/sync-protocol';
+    20→import { triangulateFace } from '@slate/mesh';
+    21→import { applyBoxUVs, loadImageTexture, proceduralTexture } from './textures';
+    22→import type { ShadingMode } from './store';
+    23→
+    24→export interface ElementHit {
+    25→  /** Source polygon index under the cursor. */
+    26→  face: number;
+    27→  /** Hit position in the mesh's local space. */
+    28→  local: { x: number; y: number; z: number };
+    29→}
+    30→
+    31→interface SceneObjectsProps {
+    32→  objects: Object3D[];
+    33→  meshes: Map<string, MeshData>;
+    34→  materials: Map<string, Material>;
+    35→  selection: Set<string>;
+    36→  onObjectPick: (id: string, additive: boolean) => void;
+    37→  /** Sub-element pick in edit mode; mode resolution happens in the caller. */
+    38→  onElementPick: (objectId: string, hit: ElementHit, additive: boolean) => void;
+    39→  selectedFaces: number[];
+    40→  selectedVerts: number[];
+    41→  /** Flat [a,b, a,b, …] vertex-index pairs. */
+    42→  selectedEdges: number[];
+    43→  shading: ShadingMode;
+    44→  /** Blender-style edit mode: show vertex/edge overlay on selected objects. */
+    45→  editMode: boolean;
+    46→  /** Animation preview poses — objects present here render at the sampled
+    47→   *  transform instead of their document transform. */
+    48→  overrides?: Map<string, Transform> | null;
+    49→  /** Camera being looked through — its glyph is hidden (you're inside it). */
+    50→  viewingCameraId?: string | null;
+    51→  /** While rendering an animation, hide ALL camera glyphs so the wireframe
+    52→   *  cones/boxes don't show up in the recording. */
+    53→  hideCameras?: boolean;
+    54→}
+    55→
+    56→export function SceneObjects({
+    57→  objects,
+    58→  meshes,
+    59→  materials,
+    60→  selection,
+    61→  onObjectPick,
+    62→  onElementPick,
+    63→  selectedFaces,
+    64→  selectedVerts,
+    65→  selectedEdges,
+    66→  shading,
+    67→  editMode,
+    68→  overrides,
+    69→  viewingCameraId,
+    70→  hideCameras,
+    71→}: SceneObjectsProps) {
+    72→  return (
+    73→    <>
+    74→      {objects.map((rawObj) => {
+    75→        if (!rawObj.visible || rawObj.type === 'folder') return null;
+    76→        if (rawObj.id === viewingCameraId) return null;
+    77→        if (hideCameras && rawObj.type === 'camera') return null;
+    78→        const sampled = overrides?.get(rawObj.id);
+    79→        const obj = sampled ? { ...rawObj, transform: sampled } : rawObj;
+    80→        if (obj.type === 'light') {
+    81→          return (
+    82→            <LightObject
+    83→              key={obj.id}
+    84→              obj={obj}
+    85→              selected={selection.has(obj.id)}
+    86→              emitLight={shading === 'rendered'}
+    87→              onPick={(additive) => onObjectPick(obj.id, additive)}
+    88→            />
+    89→          );
+    90→        }
+    91→        if (obj.type === 'camera') {
+    92→          return (
+    93→            <CameraObject
+    94→              key={obj.id}
+    95→              obj={obj}
+    96→              selected={selection.has(obj.id)}
+    97→              onPick={(additive) => onObjectPick(obj.id, additive)}
+    98→            />
+    99→          );
+   100→        }
+   101→        if (obj.type === 'empty') {
+   102→          return (
+   103→            <EmptyObject
+   104→              key={obj.id}
+   105→              obj={obj}
+   106→              selected={selection.has(obj.id)}
+   107→              onPick={(additive) => onObjectPick(obj.id, additive)}
+   108→            />
+   109→          );
+   110→        }
+   111→        const mesh = obj.meshId ? meshes.get(obj.meshId) : undefined;
+   112→        if (!mesh) return null;
+   113→        const mat = obj.materialId ? materials.get(obj.materialId) : undefined;
+   114→        const isEditing = editMode && selection.has(obj.id);
+   115→        return (
+   116→          <SceneMesh
+   117→            key={obj.id}
+   118→            obj={obj}
+   119→            data={mesh}
+   120→            material={mat}
+   121→            selected={selection.has(obj.id)}
+   122→            onPick={(additive) => onObjectPick(obj.id, additive)}
+   123→            onElementPick={
+   124→              isEditing ? (hit, additive) => onElementPick(obj.id, hit, additive) : null
+   125→            }
+   126→            selectedFaces={isEditing ? selectedFaces : EMPTY}
+   127→            selectedVerts={isEditing ? selectedVerts : EMPTY}
+   128→            selectedEdges={isEditing ? selectedEdges : EMPTY}
+   129→            shading={shading}
+   130→            editOverlay={isEditing}
+   131→          />
+   132→        );
+   133→      })}
+   134→    </>
+   135→  );
+   136→}
+   137→
+   138→const EMPTY: number[] = [];
+   139→
+   140→/**
+   141→ * Blender-style selection outline: the same geometry re-rendered as an
+   142→ * inverted hull (back faces only, vertices pushed out along their normals)
+   143→ * in Blender's selection orange. One shared material for all outlines.
+   144→ */
+   145→const OUTLINE_MAT = (() => {
+   146→  const m = new THREE.MeshBasicMaterial({ color: '#ff9d2e', side: THREE.BackSide, toneMapped: false });
+   147→  m.onBeforeCompile = (shader) => {
+   148→    shader.vertexShader = shader.vertexShader.replace(
+   149→      '#include <begin_vertex>',
+   150→      '#include <begin_vertex>\n\ttransformed += normal * 0.018;',
+   151→    );
+   152→  };
+   153→  return m;
+   154→})();
+   155→
+   156→/**
+   157→ * Click-vs-drag pick handling shared by meshes, lights, and empties: select
+   158→ * on pointer-up only when the pointer barely moved (left-drag orbits).
+   159→ */
+   160→function usePickHandlers(onPick: (additive: boolean) => void) {
+   161→  const downAt = useRef<{ x: number; y: number } | null>(null);
+   162→  return {
+   163→    onPointerDown: (e: { button: number; clientX: number; clientY: number }) => {
+   164→      if (e.button !== 0) return;
+   165→      downAt.current = { x: e.clientX, y: e.clientY };
+   166→    },
+   167→    onPointerUp: (e: {
+   168→      button: number;
+   169→      clientX: number;
+   170→      clientY: number;
+   171→      shiftKey: boolean;
+   172→      stopPropagation: () => void;
+   173→    }) => {
+   174→      const d = downAt.current;
+   175→      downAt.current = null;
+   176→      if (!d || e.button !== 0) return;
+   177→      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
+   178→      e.stopPropagation();
+   179→      onPick(e.shiftKey);
+   180→    },
+   181→  };
+   182→}
+   183→
+   184→function SceneMesh({
+   185→  obj,
+   186→  data,
+   187→  material,
+   188→  selected,
+   189→  onPick,
+   190→  onElementPick,
+   191→  selectedFaces,
+   192→  selectedVerts,
+   193→  selectedEdges,
+   194→  shading,
+   195→  editOverlay,
+   196→}: {
+   197→  obj: Object3D;
+   198→  data: MeshData;
+   199→  material?: Material;
+   200→  selected: boolean;
+   201→  onPick: (additive: boolean) => void;
+   202→  onElementPick: ((hit: ElementHit, additive: boolean) => void) | null;
+   203→  selectedFaces: number[];
+   204→  selectedVerts: number[];
+   205→  selectedEdges: number[];
+   206→  shading: ShadingMode;
+   207→  editOverlay: boolean;
+   208→}) {
+   209→  // triFace maps each rendered triangle back to its source polygon so a
+   210→  // raycast hit (triangle index) resolves to a face selection. wireGeo holds
+   211→  // the REAL polygon face edges (not triangulated) for wireframe display.
+   212→  const { geometry, triFace, wireGeo } = useMemo(() => {
+   213→    const g = new THREE.BufferGeometry();
+   214→    const tris: number[] = [];
+   215→    const triFace: number[] = [];
+   216→    data.faces.forEach((face, fi) => {
+   217→      for (const t of triangulateFace(face)) {
+   218→        tris.push(...t.v);
+   219→        triFace.push(fi);
+   220→      }
+   221→    });
+   222→    const positions = new Float32Array(data.vertices);
+   223→    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+   224→    g.setIndex(tris);
+   225→    if (obj.smooth) g.computeVertexNormals();
+   226→    else nonIndexedFlatNormals(g);
+   227→    // UVs for procedural textures (box projection needs the normals above).
+   228→    applyBoxUVs(g);
+   229→    g.computeBoundingSphere();
+   230→    // Build a segment list of each polygon's perimeter edges (real face
+   231→    // edges, NOT the triangulation diagonals) for wireframe display.
+   232→    const seg: number[] = [];
+   233→    for (const f of data.faces) {
+   234→      for (let i = 0; i < f.v.length; i++) {
+   235→        const a = f.v[i]!;
+   236→        const b = f.v[(i + 1) % f.v.length]!;
+   237→        seg.push(
+   238→          data.vertices[a * 3] ?? 0,
+   239→          data.vertices[a * 3 + 1] ?? 0,
+   240→          data.vertices[a * 3 + 2] ?? 0,
+   241→          data.vertices[b * 3] ?? 0,
+   242→          data.vertices[b * 3 + 1] ?? 0,
+   243→          data.vertices[b * 3 + 2] ?? 0,
+   244→        );
+   245→      }
+   246→    }
+   247→    const wireGeo = new THREE.BufferGeometry();
+   248→    wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   249→    return { geometry: g, triFace, wireGeo };
+   250→  }, [data, obj.smooth]);
+   251→
+   252→  // Solid shading ignores materials (Blender's neutral studio gray).
+   253→  const solid = shading === 'solid';
+   254→  const color = solid ? '#b9bac3' : (material?.color ?? '#7c6aff');
+   255→  const metalness = solid ? 0.05 : (material?.metalness ?? 0);
+   256→  const roughness = solid ? 0.65 : (material?.roughness ?? 0.5);
+   257→  const opacity = solid ? 1 : (material?.opacity ?? 1);
+   258→  const emissive = solid ? '#000000' : (material?.emissive ?? '#000000');
+   259→  const emissiveIntensity = solid ? 0 : (material?.emissiveIntensity ?? 0);
+   260→  // Procedural texture map — only where materials matter.
+   261→  const showTexture = shading === 'material' || shading === 'rendered';
+   262→  const map = useMemo(
+   263→    () => (showTexture && material?.texture ? proceduralTexture(material.texture) : null),
+   264→    [showTexture, material?.texture],
+   265→  );
+   266→  // Image textures load async: kick off the load and force a re-render when
+   267→  // it completes so the mesh picks up the texture.
+   268→  const [, forceTextureUpdate] = useState(0);
+   269→  useEffect(() => {
+   270→    if (showTexture && material?.texture?.kind === 'image' && material.texture.src) {
+   271→      loadImageTexture(material.texture.src, () => forceTextureUpdate((n) => n + 1));
+   272→    }
+   273→  }, [showTexture, material?.texture?.kind, material?.texture?.src]);
+   274→
+   275→  // Select on click, not pointer-down: left-drag orbits the camera, and a
+   276→  // pick should only land when the pointer barely moved.
+   277→  const downAt = useRef<{ x: number; y: number } | null>(null);
+   278→
+   279→  return (
+   280→    <mesh
+   281→      castShadow
+   282→      receiveShadow
+   283→      position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]}
+   284→      rotation={[obj.transform.rotation.x, obj.transform.rotation.y, obj.transform.rotation.z]}
+   285→      scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]}
+   286→      geometry={geometry}
+   287→      onPointerDown={(e) => {
+   288→        if (e.button !== 0) return;
+   289→        downAt.current = { x: e.clientX, y: e.clientY };
+   290→      }}
+   291→      onPointerUp={(e) => {
+   292→        const d = downAt.current;
+   293→        downAt.current = null;
+   294→        if (!d || e.button !== 0) return;
+   295→        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
+   296→        e.stopPropagation();
+   297→        // Editing this object: clicks select sub-elements instead of objects.
+   298→        if (onElementPick && e.faceIndex !== undefined && e.faceIndex !== null) {
+   299→          const fi = triFace[e.faceIndex];
+   300→          if (fi !== undefined) {
+   301→            const local = (e.object as THREE.Mesh).worldToLocal(e.point.clone());
+   302→            onElementPick({ face: fi, local: { x: local.x, y: local.y, z: local.z } }, e.shiftKey);
+   303→          }
+   304→          return;
+   305→        }
+   306→        onPick(e.shiftKey);
+   307→      }}
+   308→      userData={{ slateId: obj.id }}
+   309→    >
+   310→      <meshStandardMaterial
+   311→        // Remount when the map slot toggles so the shader picks up USE_MAP.
+   312→        key={map ? 'textured' : 'plain'}
+   313→        color={color}
+   314→        map={map}
+   315→        metalness={metalness}
+   316→        roughness={roughness}
+   317→        // In wireframe mode the filled surface is hidden (transparent) so
+   318→        // ONLY the real face-edge overlay below is visible — no triangulated
+   319→        // diagonals bleed through.
+   320→        transparent={opacity < 1 || shading === 'wireframe'}
+   321→        opacity={shading === 'wireframe' ? 0 : opacity}
+   322→        emissive={new THREE.Color(emissive)}
+   323→        emissiveIntensity={emissiveIntensity}
+   324→        side={THREE.DoubleSide}
+   325→      />
+   326→      {/* Wireframe overlay: real polygon face edges (not triangulated). */}
+   327→      {shading === 'wireframe' && (
+   328→        <lineSegments geometry={wireGeo} raycast={NO_RAYCAST}>
+   329→          <lineBasicMaterial color={color} />
+   330→        </lineSegments>
+   331→      )}
+   332→      {/* Selection reads as Blender's silhouette outline, not a tint. */}
+   333→      {selected && !editOverlay && shading !== 'wireframe' && (
+   334→        <mesh geometry={geometry} material={OUTLINE_MAT} raycast={NO_RAYCAST} />
+   335→      )}
+   336→      {editOverlay && <EditOverlay data={data} />}
+   337→      {editOverlay && selectedFaces.length > 0 && (
+   338→        <FaceHighlight data={data} faces={selectedFaces} />
+   339→      )}
+   340→      {editOverlay && (selectedVerts.length > 0 || selectedEdges.length > 0) && (
+   341→        <ElementHighlight data={data} verts={selectedVerts} edges={selectedEdges} scale={obj.transform.scale} />
+   342→      )}
+   343→    </mesh>
+   344→  );
+   345→}
+   346→
+   347→const LIGHT_FALLBACK: LightData = { kind: 'point', color: '#ffffff', intensity: 25, distance: 0, angle: Math.PI / 6 };
+   348→
+   349→// RectAreaLight renders black until its BRDF LUT uniforms are initialized;
+   350→// do it once at module load.
+   351→RectAreaLightUniformsLib.init();
+   352→
+   353→/**
+   354→ * A light object: selectable gizmo, plus the actual THREE light in rendered
+   355→ * shading. Sun and spot lights shine along the object's rotated -Y axis
+   356→ * (Blender-style): R re-aims them, and addLight pre-aims new ones at the
+   357→ * scene center.
+   358→ */
+   359→function LightObject({
+   360→  obj,
+   361→  selected,
+   362→  emitLight,
+   363→  onPick,
+   364→}: {
+   365→  obj: Object3D;
+   366→  selected: boolean;
+   367→  emitLight: boolean;
+   368→  onPick: (additive: boolean) => void;
+   369→}) {
+   370→  const light = obj.light ?? LIGHT_FALLBACK;
+   371→  const pick = usePickHandlers(onPick);
+   372→  const t = obj.transform;
+   373→  // Direction comes from rotation: the target sits below the light in local
+   374→  // space, so rotating the group steers sun/spot beams.
+   375→  const target = useMemo(() => new THREE.Object3D(), []);
+   376→  const gizmoColor = selected ? '#ffb84d' : light.color;
+   377→  const spotAngle = Math.max(0.05, light.angle || Math.PI / 6);
+   378→
+   379→  return (
+   380→    <group
+   381→      position={[t.position.x, t.position.y, t.position.z]}
+   382→      rotation={[t.rotation.x, t.rotation.y, t.rotation.z]}
+   383→      userData={{ slateId: obj.id }}
+   384→    >
+   385→      {/* Invisible pick target — lights are tiny, give them a fat hitbox. */}
+   386→      <mesh onPointerDown={pick.onPointerDown} onPointerUp={pick.onPointerUp}>
+   387→        <sphereGeometry args={[0.3, 8, 8]} />
+   388→        <meshBasicMaterial visible={false} />
+   389→      </mesh>
+   390→
+   391→      {/* Gizmo core: a small glowing dot, always visible. */}
+   392→      <mesh raycast={NO_RAYCAST}>
+   393→        <sphereGeometry args={[0.07, 12, 12]} />
+   394→        <meshBasicMaterial color={gizmoColor} />
+   395→      </mesh>
+   396→
+   397→      {light.kind === 'point' && <PointRays color={gizmoColor} />}
+   398→      {light.kind === 'sun' && <SunGizmo color={gizmoColor} />}
+   399→      {light.kind === 'hemisphere' && <PointRays color={gizmoColor} />}
+   400→      {light.kind === 'spot' && (
+   401→        <mesh position={[0, -0.45, 0]} raycast={NO_RAYCAST}>
+   402→          <coneGeometry args={[Math.tan(spotAngle) * 0.9, 0.9, 16, 1, true]} />
+   403→          <meshBasicMaterial color={gizmoColor} wireframe transparent opacity={0.5} />
+   404→        </mesh>
+   405→      )}
+   406→      {light.kind === 'area' && (
+   407→        <mesh raycast={NO_RAYCAST}>
+   408→          <planeGeometry args={[Math.max(0.2, (light.angle || 1) * 2), Math.max(0.2, (light.angle || 1) * 2)]} />
+   409→          <meshBasicMaterial color={gizmoColor} wireframe transparent opacity={0.6} side={THREE.DoubleSide} />
+   410→        </mesh>
+   411→      )}
+   412→
+   413→      {emitLight && light.kind === 'point' && (
+   414→        <pointLight
+   415→          color={light.color}
+   416→          intensity={light.intensity}
+   417→          distance={light.distance || 0}
+   418→          castShadow
+   419→          shadow-mapSize={[512, 512]}
+   420→          shadow-bias={-0.0003}
+   421→        />
+   422→      )}
+   423→      {emitLight && light.kind === 'sun' && (
+   424→        <>
+   425→          <primitive object={target} position={[0, -10, 0]} />
+   426→          <directionalLight
+   427→            color={light.color}
+   428→            intensity={light.intensity}
+   429→            target={target}
+   430→            castShadow
+   431→            shadow-mapSize={[2048, 2048]}
+   432→            shadow-bias={-0.0003}
+   433→            shadow-camera-left={-15}
+   434→            shadow-camera-right={15}
+   435→            shadow-camera-top={15}
+   436→            shadow-camera-bottom={-15}
+   437→            shadow-camera-near={0.5}
+   438→            shadow-camera-far={60}
+   439→          />
+   440→        </>
+   441→      )}
+   442→      {emitLight && light.kind === 'spot' && (
+   443→        <>
+   444→          <primitive object={target} position={[0, -10, 0]} />
+   445→          <spotLight
+   446→            color={light.color}
+   447→            intensity={light.intensity}
+   448→            distance={light.distance || 0}
+   449→            angle={spotAngle}
+   450→            penumbra={0.35}
+   451→            target={target}
+   452→            castShadow
+   453→            shadow-mapSize={[1024, 1024]}
+   454→            shadow-bias={-0.0003}
+   455→          />
+   456→        </>
+   457→      )}
+   458→      {emitLight && light.kind === 'hemisphere' && (
+   459→        // Sky color from above, a muted ground bounce from below.
+   460→        <hemisphereLight args={[light.color, '#3a3428', light.intensity]} />
+   461→      )}
+   462→      {emitLight && light.kind === 'area' && (
+   463→        // RectAreaLight faces local -Z; our aim convention points -Y, so tip
+   464→        // it forward 90° about X. No shadows (three limitation).
+   465→        <group rotation={[-Math.PI / 2, 0, 0]}>
+   466→          <rectAreaLight
+   467→            color={light.color}
+   468→            intensity={light.intensity}
+   469→            width={Math.max(0.2, (light.angle || 1) * 2)}
+   470→            height={Math.max(0.2, (light.angle || 1) * 2)}
+   471→          />
+   472→        </group>
+   473→      )}
+   474→    </group>
+   475→  );
+   476→}
+   477→
+   478→/** Short rays in all directions — Blender's point-light glyph. */
+   479→function PointRays({ color }: { color: string }) {
+   480→  const geo = useMemo(() => {
+   481→    const seg: number[] = [];
+   482→    const dirs: [number, number, number][] = [
+   483→      [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+   484→      [0.7, 0.7, 0], [-0.7, 0.7, 0], [0.7, -0.7, 0], [-0.7, -0.7, 0],
+   485→    ];
+   486→    for (const [x, y, z] of dirs) seg.push(x * 0.12, y * 0.12, z * 0.12, x * 0.24, y * 0.24, z * 0.24);
+   487→    const g = new THREE.BufferGeometry();
+   488→    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   489→    return g;
+   490→  }, []);
+   491→  return (
+   492→    <lineSegments geometry={geo} raycast={NO_RAYCAST}>
+   493→      <lineBasicMaterial color={color} transparent opacity={0.85} />
+   494→    </lineSegments>
+   495→  );
+   496→}
+   497→
+   498→/** Circle + direction line pointing -Y (the aim direction) — sun glyph. */
+   499→function SunGizmo({ color }: { color: string }) {
+   500→  const geo = useMemo(() => {
+   501→    const seg: number[] = [];
+   502→    const R = 0.16;
+   503→    const N = 24;
+   504→    for (let i = 0; i < N; i++) {
+   505→      const a0 = (i / N) * Math.PI * 2;
+   506→      const a1 = ((i + 1) / N) * Math.PI * 2;
+   507→      seg.push(Math.cos(a0) * R, 0, Math.sin(a0) * R, Math.cos(a1) * R, 0, Math.sin(a1) * R);
+   508→    }
+   509→    seg.push(0, 0, 0, 0, -0.8, 0);
+   510→    const g = new THREE.BufferGeometry();
+   511→    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   512→    return g;
+   513→  }, []);
+   514→  return (
+   515→    <lineSegments geometry={geo} raycast={NO_RAYCAST}>
+   516→      <lineBasicMaterial color={color} transparent opacity={0.85} />
+   517→    </lineSegments>
+   518→  );
+   519→}
+   520→
+   521→/** Scene camera glyph: wire frustum opening along local -Y (the view axis),
+   522→ *  plus an up-pointer triangle. Selectable; Numpad 0 looks through it. */
+   523→const CAMERA_LINES = (() => {
+   524→  const w = 0.32, h = 0.22, d = 0.7; // half-extents of the far rect + depth
+   525→  const seg: number[] = [];
+   526→  const corners = [
+   527→    [-w, -d, h], [w, -d, h], [w, -d, -h], [-w, -d, -h],
+   528→  ];
+   529→  for (const c of corners) seg.push(0, 0, 0, ...c);
+   530→  for (let i = 0; i < 4; i++) seg.push(...corners[i]!, ...corners[(i + 1) % 4]!);
+   531→  // Up indicator on the top edge (+z side is "up" for a -Y-aimed camera).
+   532→  seg.push(-w * 0.4, -d, h, 0, -d, h + 0.14);
+   533→  seg.push(0, -d, h + 0.14, w * 0.4, -d, h);
+   534→  const g = new THREE.BufferGeometry();
+   535→  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   536→  return g;
+   537→})();
+   538→
+   539→function CameraObject({
+   540→  obj,
+   541→  selected,
+   542→  onPick,
+   543→}: {
+   544→  obj: Object3D;
+   545→  selected: boolean;
+   546→  onPick: (additive: boolean) => void;
+   547→}) {
+   548→  const pick = usePickHandlers(onPick);
+   549→  const t = obj.transform;
+   550→  return (
+   551→    <group
+   552→      position={[t.position.x, t.position.y, t.position.z]}
+   553→      rotation={[t.rotation.x, t.rotation.y, t.rotation.z]}
+   554→      userData={{ slateId: obj.id }}
+   555→    >
+   556→      <mesh onPointerDown={pick.onPointerDown} onPointerUp={pick.onPointerUp}>
+   557→        <sphereGeometry args={[0.35, 8, 8]} />
+   558→        <meshBasicMaterial visible={false} />
+   559→      </mesh>
+   560→      <lineSegments geometry={CAMERA_LINES} raycast={NO_RAYCAST}>
+   561→        <lineBasicMaterial color={selected ? '#ffb84d' : '#c9c9dd'} transparent opacity={0.95} />
+   562→      </lineSegments>
+   563→      <mesh raycast={NO_RAYCAST}>
+   564→        <boxGeometry args={[0.18, 0.26, 0.14]} />
+   565→        <meshBasicMaterial color={selected ? '#ffb84d' : '#8f8fa3'} wireframe />
+   566→      </mesh>
+   567→    </group>
+   568→  );
+   569→}
+   570→
+   571→/** A selectable axes cross for empties (Blender's plain-axes empty). */
+   572→function EmptyObject({
+   573→  obj,
+   574→  selected,
+   575→  onPick,
+   576→}: {
+   577→  obj: Object3D;
+   578→  selected: boolean;
+   579→  onPick: (additive: boolean) => void;
+   580→}) {
+   581→  const pick = usePickHandlers(onPick);
+   582→  const geo = useMemo(() => {
+   583→    const s = 0.35;
+   584→    const seg = [-s, 0, 0, s, 0, 0, 0, -s, 0, 0, s, 0, 0, 0, -s, 0, 0, s];
+   585→    const g = new THREE.BufferGeometry();
+   586→    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   587→    return g;
+   588→  }, []);
+   589→  const t = obj.transform;
+   590→  return (
+   591→    <group
+   592→      position={[t.position.x, t.position.y, t.position.z]}
+   593→      rotation={[t.rotation.x, t.rotation.y, t.rotation.z]}
+   594→      scale={[t.scale.x, t.scale.y, t.scale.z]}
+   595→      userData={{ slateId: obj.id }}
+   596→    >
+   597→      <mesh onPointerDown={pick.onPointerDown} onPointerUp={pick.onPointerUp}>
+   598→        <sphereGeometry args={[0.3, 8, 8]} />
+   599→        <meshBasicMaterial visible={false} />
+   600→      </mesh>
+   601→      <lineSegments geometry={geo} raycast={NO_RAYCAST}>
+   602→        <lineBasicMaterial color={selected ? '#ffb84d' : '#8f8fa3'} />
+   603→      </lineSegments>
+   604→    </group>
+   605→  );
+   606→}
+   607→
+   608→/** Orange markers for selected vertices and edges, with on-edge length labels
+   609→ *  (CAD-style — the measurement sits on the line itself, not in a HUD). */
+   610→function ElementHighlight({
+   611→  data,
+   612→  verts,
+   613→  edges,
+   614→  scale,
+   615→}: {
+   616→  data: MeshData;
+   617→  verts: number[];
+   618→  edges: number[];
+   619→  scale: { x: number; y: number; z: number };
+   620→}) {
+   621→  const { vGeo, eGeo, edgeLabels } = useMemo(() => {
+   622→    const vPos: number[] = [];
+   623→    for (const vi of verts) {
+   624→      vPos.push(data.vertices[vi * 3] ?? 0, data.vertices[vi * 3 + 1] ?? 0, data.vertices[vi * 3 + 2] ?? 0);
+   625→    }
+   626→    const ePos: number[] = [];
+   627→    const edgeLabels: { pos: [number, number, number]; len: string }[] = [];
+   628→    for (let i = 0; i + 1 < edges.length; i += 2) {
+   629→      const a = edges[i]!;
+   630→      const b = edges[i + 1]!;
+   631→      const ax = data.vertices[a * 3] ?? 0;
+   632→      const ay = data.vertices[a * 3 + 1] ?? 0;
+   633→      const az = data.vertices[a * 3 + 2] ?? 0;
+   634→      const bx = data.vertices[b * 3] ?? 0;
+   635→      const by = data.vertices[b * 3 + 1] ?? 0;
+   636→      const bz = data.vertices[b * 3 + 2] ?? 0;
+   637→      ePos.push(ax, ay, az, bx, by, bz);
+   638→      // World-space length (scaled), label at the midpoint.
+   639→      const wx = (bx - ax) * scale.x;
+   640→      const wy = (by - ay) * scale.y;
+   641→      const wz = (bz - az) * scale.z;
+   642→      const len = Math.hypot(wx, wy, wz);
+   643→      edgeLabels.push({
+   644→        pos: [(ax + bx) / 2, (ay + by) / 2, (az + bz) / 2],
+   645→        len: `${len.toFixed(3)} m`,
+   646→      });
+   647→    }
+   648→    const vGeo = new THREE.BufferGeometry();
+   649→    vGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vPos), 3));
+   650→    const eGeo = new THREE.BufferGeometry();
+   651→    eGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ePos), 3));
+   652→    return { vGeo, eGeo, edgeLabels };
+   653→  }, [data, verts, edges, scale]);
+   654→
+   655→  return (
+   656→    <>
+   657→      {edges.length > 0 && (
+   658→        <lineSegments geometry={eGeo} raycast={NO_RAYCAST}>
+   659→          <lineBasicMaterial color="#ffb84d" transparent opacity={0.95} depthTest={false} />
+   660→        </lineSegments>
+   661→      )}
+   662→      {/* On-edge length labels (CAD-style, sit on the line itself). */}
+   663→      {edgeLabels.map((lbl, i) => (
+   664→        <Html key={i} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
+   665→          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-px font-mono text-[9px] font-medium text-black shadow">
+   666→            {lbl.len}
+   667→          </div>
+   668→        </Html>
+   669→      ))}
+   670→      {verts.length > 0 && (
+   671→        <points geometry={vGeo} raycast={NO_RAYCAST}>
+   672→          <pointsMaterial color="#ffb84d" size={8} sizeAttenuation={false} depthTest={false} />
+   673→        </points>
+   674→      )}
+   675→    </>
+   676→  );
+   677→}
+   678→
+   679→/** Translucent fill over the currently selected faces. */
+   680→function FaceHighlight({ data, faces }: { data: MeshData; faces: number[] }) {
+   681→  const geo = useMemo(() => {
+   682→    const pos: number[] = [];
+   683→    for (const fi of faces) {
+   684→      const face = data.faces[fi];
+   685→      if (!face) continue;
+   686→      for (const t of triangulateFace(face)) {
+   687→        for (const vi of t.v) {
+   688→          pos.push(
+   689→            data.vertices[vi * 3] ?? 0,
+   690→            data.vertices[vi * 3 + 1] ?? 0,
+   691→            data.vertices[vi * 3 + 2] ?? 0,
+   692→          );
+   693→        }
+   694→      }
+   695→    }
+   696→    const g = new THREE.BufferGeometry();
+   697→    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+   698→    g.computeVertexNormals();
+   699→    return g;
+   700→  }, [data, faces]);
+   701→
+   702→  return (
+   703→    <mesh geometry={geo} raycast={() => null}>
+   704→      <meshBasicMaterial
+   705→        color="#ffb84d"
+   706→        transparent
+   707→        opacity={0.4}
+   708→        side={THREE.DoubleSide}
+   709→        depthWrite={false}
+   710→        polygonOffset
+   711→        polygonOffsetFactor={-2}
+   712→      />
+   713→    </mesh>
+   714→  );
+   715→}
+   716→
+   717→/** Vertex dots + polygon edges for the object being edited. */
+   718→function EditOverlay({ data }: { data: MeshData }) {
+   719→  const { pointsGeo, edgesGeo } = useMemo(() => {
+   720→    const verts = new Float32Array(data.vertices);
+   721→    const seg: number[] = [];
+   722→    for (const f of data.faces) {
+   723→      for (let i = 0; i < f.v.length; i++) {
+   724→        const a = f.v[i]!;
+   725→        const b = f.v[(i + 1) % f.v.length]!;
+   726→        seg.push(
+   727→          data.vertices[a * 3] ?? 0,
+   728→          data.vertices[a * 3 + 1] ?? 0,
+   729→          data.vertices[a * 3 + 2] ?? 0,
+   730→          data.vertices[b * 3] ?? 0,
+   731→          data.vertices[b * 3 + 1] ?? 0,
+   732→          data.vertices[b * 3 + 2] ?? 0,
+   733→        );
+   734→      }
+   735→    }
+   736→    const pointsGeo = new THREE.BufferGeometry();
+   737→    pointsGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+   738→    const edgesGeo = new THREE.BufferGeometry();
+   739→    edgesGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+   740→    return { pointsGeo, edgesGeo };
+   741→  }, [data]);
+   742→
+   743→  // raycast disabled: the overlay must never swallow face-picking clicks
+   744→  // (THREE.Points' default pick threshold is a whole world unit).
+   745→  return (
+   746→    <>
+   747→      <lineSegments geometry={edgesGeo} raycast={NO_RAYCAST}>
+   748→        <lineBasicMaterial color="#7c6aff" transparent opacity={0.9} />
+   749→      </lineSegments>
+   750→      <points geometry={pointsGeo} raycast={NO_RAYCAST}>
+   751→        <pointsMaterial color="#ffffff" size={5} sizeAttenuation={false} depthTest={false} />
+   752→      </points>
+   753→    </>
+   754→  );
+   755→}
+   756→
+   757→function NO_RAYCAST() {
+   758→  /* not pickable */
+   759→}
+   760→
+   761→function nonIndexedFlatNormals(g: THREE.BufferGeometry): void {
+   762→  // Drop the index and duplicate positions so each triangle has its own
+   763→  // flat normal. We do this only when the user explicitly requested flat
+   764→  // shading; otherwise computeVertexNormals gives smooth shading.
+   765→  const idx = g.getIndex();
+   766→  if (!idx) return;
+   767→  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+   768→  const flat = new Float32Array(idx.count * 3);
+   769→  for (let i = 0; i < idx.count; i++) {
+   770→    const v = idx.getX(i);
+   771→    flat[i * 3] = pos.getX(v);
+   772→    flat[i * 3 + 1] = pos.getY(v);
+   773→    flat[i * 3 + 2] = pos.getZ(v);
+   774→  }
+   775→  g.setIndex(null);
+   776→  g.setAttribute('position', new THREE.BufferAttribute(flat, 3));
+   777→  g.computeVertexNormals();
+   778→}
+   779→

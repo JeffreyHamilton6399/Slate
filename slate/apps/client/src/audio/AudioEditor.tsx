@@ -16,11 +16,11 @@ import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
   addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
-  deleteAudioTrack, readAudioClip, readAudioTrack,
+  deleteAudioTrack, duplicateAudioClip, readAudioClip, readAudioTrack,
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
-import { loadSamples, float32ToNumberArray } from './sampleStore';
+import { loadSamples } from './sampleStore';
 
 const TRACK_H = 60;
 
@@ -59,13 +59,44 @@ function computeWaveformPNG(samples: Float32Array, channels: number, width: numb
 }
 
 /** Waveform image for the buffer window the clip actually plays. With speed s,
- *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds. */
+ *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds.
+ *
+ *  Two robustness fixes:
+ *  1. If `loadSamples` returns an EMPTY Float32Array (length 0) — which happens
+ *     when a freshly-split/created clip's IndexedDB write hasn't landed yet —
+ *     we DON'T cache the resulting blank PNG. Instead we show the `···`
+ *     placeholder and retry a few times (500ms apart) so the real waveform
+ *     appears once the samples are available.
+ *  2. We listen for `slate:audio-clip-changed` (fired by Normalize/Reverse/split)
+ *     and invalidate our cache entry for the current clipId, then force a
+ *     recompute via a `bust` counter — otherwise the memoised component would
+ *     keep showing the stale PNG even after the cache was cleared. */
 const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color }: {
   clipId: string; sampleKey: string; channels: number; sampleRate: number;
   offset: number; duration: number; speed: number; width: number; color: string;
 }) {
   const height = TRACK_H - 6;
   const [imgUrl, setImgUrl] = useState<string>('');
+  const [bust, setBust] = useState(0);
+  const retryRef = useRef(0);
+
+  // Invalidate cached PNGs for this clip when its samples change (normalize /
+  // reverse / split). The parent AudioEditor also invalidates + bumps version,
+  // but the memoised WaveformImg wouldn't otherwise recompute (its primitive
+  // props are unchanged) — the `bust` counter forces the load effect to re-run.
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id !== clipId) return;
+      for (const key of waveformPNGCache.keys()) {
+        if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+      }
+      retryRef.current = 0;
+      setBust((n) => n + 1);
+    };
+    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+  }, [clipId]);
 
   useEffect(() => {
     const startFrame = Math.round(offset * sampleRate);
@@ -74,14 +105,35 @@ const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sam
     const cached = waveformPNGCache.get(cacheKey);
     if (cached) { setImgUrl(cached); return; }
     let cancelled = false;
-    void loadSamples(sampleKey).then((samples) => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const attempt = () => {
       if (cancelled) return;
-      const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
-      waveformPNGCache.set(cacheKey, url);
-      setImgUrl(url);
-    });
-    return () => { cancelled = true; };
-  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height]);
+      void loadSamples(sampleKey).then((samples) => {
+        if (cancelled) return;
+        // Empty samples = the IndexedDB write for this sampleKey hasn't landed
+        // yet (e.g. brand-new clip from a split). DON'T cache a blank PNG —
+        // retry a few times so the real waveform appears.
+        if (samples.length === 0) {
+          if (retryRef.current < 5) {
+            retryRef.current += 1;
+            retryTimer = setTimeout(attempt, 500);
+          }
+          return;
+        }
+        retryRef.current = 0;
+        const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
+        waveformPNGCache.set(cacheKey, url);
+        setImgUrl(url);
+      });
+    };
+    attempt();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height, bust]);
 
   if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
   return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
@@ -119,6 +171,7 @@ export function AudioEditor() {
     clipId: string; el: HTMLElement; waveEl: HTMLElement | null;
     os: number; od: number; oo: number; speed: number; sx: number;
     leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
+    neighbours: { start: number; end: number }[];
   } | null>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedClipId;
@@ -182,9 +235,29 @@ export function AudioEditor() {
       const dt = (ev.clientX - d.sx) / pps;
       const oldEnd = d.os + d.od;
       if (d.mode === 'drag') {
-        // Keep the whole clip inside the free gap between its neighbours.
-        const maxStart = Math.max(d.leftLimit, d.rightLimit - d.od);
-        const start = Math.min(maxStart, Math.max(d.leftLimit, d.os + dt));
+        // Snap-to-neighbour drag: the clip follows the mouse, but if the new
+        // position would overlap another clip on the same track, instead of
+        // stopping dead at the neighbour's edge we JUMP to the free side of
+        // that neighbour (right of it when dragging right, left of it when
+        // dragging left). Iterates so a chain of back-to-back clips resolves
+        // to the next free slot. A small overlap threshold avoids accidental
+        // snaps when the cursor barely crosses the boundary.
+        const duration = d.od;
+        const rawStart = d.os + dt;
+        let start = rawStart;
+        const overlapThreshold = 0.05; // s — ignore near-boundary jitter
+        for (let iter = 0; iter < d.neighbours.length + 1; iter++) {
+          const blocker = d.neighbours.find((n) => {
+            const ovStart = Math.max(start, n.start);
+            const ovEnd = Math.min(start + duration, n.end);
+            return ovEnd - ovStart > overlapThreshold;
+          });
+          if (!blocker) break;
+          if (dt >= 0) start = blocker.end;          // snap to RIGHT of blocker
+          else start = blocker.start - duration;     // snap to LEFT of blocker
+        }
+        // Fallback clamp: never let the clip start before t=0.
+        start = Math.max(0, start);
         d.el.style.left = `${start * pps}px`;
       } else if (d.mode === 'trimL') {
         // Cut from the left: never past the left neighbour, the source start
@@ -304,10 +377,7 @@ export function AudioEditor() {
   }, [recording, tracks, slate]);
 
   const dupClip = useCallback(async (id: string) => {
-    const yo = slate.audioClips().get(id); if (!yo) return;
-    const c = readAudioClip(yo, id); if (!c) return;
-    const samples = await loadSamples(c.sampleKey);
-    await addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples: float32ToNumberArray(samples), sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
+    await duplicateAudioClip(slate, id);
   }, [slate]);
 
   const handleFileImport = useCallback(async (file: File) => {
@@ -322,30 +392,34 @@ export function AudioEditor() {
   // ── Drag start ────────────────────────────────────────────────────────────
 
   // The free interval [leftLimit, rightLimit] the clip may occupy without
-  // overlapping any other clip on the same track.
-  const neighbourBounds = useCallback((clip: AudioClip): { leftLimit: number; rightLimit: number } => {
+  // overlapping any other clip on the same track. `neighbours` is the full
+  // list of same-track clip bounds (used by drag-snap to jump past a clip to
+  // the free slot on its other side).
+  const neighbourBounds = useCallback((clip: AudioClip): { leftLimit: number; rightLimit: number; neighbours: { start: number; end: number }[] } => {
     let leftLimit = 0;
     let rightLimit = Infinity;
+    const neighbours: { start: number; end: number }[] = [];
     const clipEnd = clip.start + clip.duration;
     for (const o of clipsRef.current) {
       if (o.id === clip.id || o.trackId !== clip.trackId) continue;
       const oEnd = o.start + o.duration;
       if (oEnd <= clip.start + 1e-4) leftLimit = Math.max(leftLimit, oEnd);
       else if (o.start >= clipEnd - 1e-4) rightLimit = Math.min(rightLimit, o.start);
+      neighbours.push({ start: o.start, end: oEnd });
     }
-    return { leftLimit, rightLimit };
+    return { leftLimit, rightLimit, neighbours };
   }, []);
 
   const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
     e.stopPropagation(); setSelectedClipId(clip.id);
-    const { leftLimit, rightLimit } = neighbourBounds(clip);
-    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: 'drag' };
+    const { leftLimit, rightLimit, neighbours } = neighbourBounds(clip);
+    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, neighbours, mode: 'drag' };
   }, [neighbourBounds]);
 
   const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
     e.stopPropagation(); setSelectedClipId(clip.id);
-    const { leftLimit, rightLimit } = neighbourBounds(clip);
-    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: side === 'left' ? 'trimL' : 'trimR' };
+    const { leftLimit, rightLimit, neighbours } = neighbourBounds(clip);
+    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, neighbours, mode: side === 'left' ? 'trimL' : 'trimR' };
   }, [neighbourBounds]);
 
   // ── Loop region drag ──────────────────────────────────────────────────────
@@ -503,6 +577,10 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
   const elRef = useRef<HTMLDivElement | null>(null);
   const waveRef = useRef<HTMLDivElement | null>(null);
   const w = Math.max(2, Math.floor(width));
+  // Fade overlay widths (clamped to the clip box so a too-long fade doesn't
+  // spill past the opposite edge).
+  const fadeInW = clip.fadeIn > 0 ? Math.min(width, clip.fadeIn * pxPerSec) : 0;
+  const fadeOutW = clip.fadeOut > 0 ? Math.min(width, clip.fadeOut * pxPerSec) : 0;
 
   return (
     <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current, waveRef.current); } }}
@@ -512,6 +590,16 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
       <div ref={waveRef} className="pointer-events-none absolute top-0 bottom-0 left-0" style={{ width }}>
         {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} sampleRate={clip.sampleRate} offset={clip.offset} duration={clip.duration} speed={clip.speed ?? 1} width={w} color={clip.color} />}
       </div>
+      {/* Fade-in overlay: triangle from full height at the outer (left) edge
+          tapering to 0 at the inner edge — the dark wedge represents the
+          portion of the clip still under the fade. */}
+      {fadeInW > 0 && (
+        <div className="pointer-events-none absolute top-0 bottom-0 left-0 bg-black/30" style={{ width: fadeInW, clipPath: 'polygon(0% 0%, 0% 100%, 100% 50%)' }} />
+      )}
+      {/* Fade-out overlay: mirrored on the right side. */}
+      {fadeOutW > 0 && (
+        <div className="pointer-events-none absolute top-0 bottom-0 right-0 bg-black/30" style={{ width: fadeOutW, clipPath: 'polygon(100% 0%, 100% 100%, 0% 50%)' }} />
+      )}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}{clip.mute ? ' (muted)' : ''}</span>
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current, waveRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
       <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current, waveRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />

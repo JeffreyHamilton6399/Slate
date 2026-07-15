@@ -51,6 +51,12 @@ interface CanvasState {
   zoom: number;
   panX: number;
   panY: number;
+  /** 2D animation playback state. */
+  animTime: number;
+  animDuration: number;
+  animPlaying: boolean;
+  /** True while scrubbing/playing — engine repaints every frame. */
+  animPreview: boolean;
 
   setTool: (t: ToolId) => void;
   setStroke: (c: string) => void;
@@ -66,6 +72,10 @@ interface CanvasState {
   pan: (dx: number, dy: number) => void;
   zoomAt: (sx: number, sy: number, factor: number) => void;
   fit: () => void;
+  setAnimTime: (t: number) => void;
+  setAnimDuration: (d: number) => void;
+  setAnimPlaying: (p: boolean) => void;
+  setAnimPreview: (p: boolean) => void;
 }
 
 const DEFAULT_STROKE = '#e0dff5';
@@ -85,6 +95,10 @@ export const useCanvasStore = create<CanvasState>()(
       zoom: 1,
       panX: 0,
       panY: 0,
+      animTime: 0,
+      animDuration: 5,
+      animPlaying: false,
+      animPreview: false,
       setTool: (tool) => set({ tool }),
       setStroke: (stroke) => set({ stroke }),
       setFill: (fill) => set({ fill }),
@@ -113,6 +127,13 @@ export const useCanvasStore = create<CanvasState>()(
         set({ zoom: nextZoom, panX: nextPanX, panY: nextPanY });
       },
       fit: () => set({ zoom: 1, panX: 0, panY: 0 }),
+      setAnimTime: (t) => set((s) => ({ animTime: Math.max(0, t), animPreview: s.animPlaying || t > 0 })),
+      setAnimDuration: (d) => set((s) => {
+        const duration = Math.max(0.5, Math.min(600, d));
+        return { animDuration: duration, animTime: Math.min(s.animTime, duration) };
+      }),
+      setAnimPlaying: (p) => set((s) => ({ animPlaying: p, animPreview: p || s.animPreview })),
+      setAnimPreview: (animPreview) => set({ animPreview }),
     }),
     {
       name: 'slate.canvas.v1',

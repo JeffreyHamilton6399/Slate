@@ -48,3 +48,13 @@ export function formatLength(meters: number, unit: LengthUnit): string {
   }
   return `${metersToUnit(meters, unit).toFixed(unitDecimals(unit))} ${unit}`;
 }
+
+/** Format an area given in m² to the chosen display unit. e.g. 0.5 m² →
+ *  "5000.0 cm²" (cm) or "5.382 ft²" (ft). Uses 1 extra decimal for area
+ *  since values are usually small. */
+export function formatArea(metersSquared: number, unit: LengthUnit): string {
+  const factor = UNIT_PER_METER[unit];
+  const value = metersSquared * factor * factor;
+  const decimals = unit === 'mm' ? 0 : unit === 'cm' ? 1 : unit === 'm' ? 3 : 2;
+  return `${value.toFixed(decimals)} ${unit}²`;
+}

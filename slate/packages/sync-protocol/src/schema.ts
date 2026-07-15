@@ -42,6 +42,22 @@ export type ShapeKind =
   | 'trapezoid'
   | 'cross';
 
+/** 2D transform — position, rotation, scale, opacity (for animation). */
+export interface Transform2D {
+  x: number;
+  y: number;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  opacity: number;
+}
+
+/** A 2D transform keyframe at time `t` (seconds). */
+export interface AnimKey2D {
+  t: number;
+  transform: Transform2D;
+}
+
 export interface Shape {
   id: string;
   kind: ShapeKind;
@@ -64,6 +80,8 @@ export interface Shape {
   src?: string;
   createdAt: number;
   authorId: string;
+  /** 2D animation keyframes (Adobe Animate / After Effects style). */
+  anim?: AnimKey2D[];
 }
 
 export type StrokeKind = 'pen' | 'highlighter' | 'eraser' | 'pencil' | 'marker' | 'calligraphy' | 'airbrush';

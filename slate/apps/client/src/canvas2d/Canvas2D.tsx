@@ -17,6 +17,7 @@ import { Canvas2DToolbar } from './Toolbar';
 import { Minimap } from './Minimap';
 import { RemoteCursors } from './RemoteCursors';
 import { SelectionHandles } from './SelectionHandles';
+import { Timeline2D } from './Timeline2D';
 import { useCanvasStore } from './store';
 import { useLayersStore } from './store';
 import { useAppStore } from '../app/store';
@@ -221,6 +222,8 @@ export function Canvas2D({ room }: Canvas2DProps) {
       getLivePreview: () => livePreviewRef.current,
       getViewport: () => sizeRef.current,
       getPaper: () => paperRef.current,
+      getAnimTime: () => useCanvasStore.getState().animTime,
+      getAnimPreview: () => useCanvasStore.getState().animPreview,
     });
     engineRef.current = engine;
     return () => {
@@ -253,6 +256,12 @@ export function Canvas2D({ room }: Canvas2DProps) {
   useEffect(() => {
     engineRef.current?.markDirty();
   }, [zoom, panX, panY]);
+  // Repaint when animation time changes (scrubbing / playback).
+  const animTime = useCanvasStore((s) => s.animTime);
+  const animPreview = useCanvasStore((s) => s.animPreview);
+  useEffect(() => {
+    engineRef.current?.markDirty();
+  }, [animTime, animPreview]);
 
   // Resize observer.
   useEffect(() => {
@@ -943,6 +952,7 @@ export function Canvas2D({ room }: Canvas2DProps) {
           setViewport(zoom, r.width / 2 - boardCenter.x * zoom, r.height / 2 - boardCenter.y * zoom);
         }}
       />
+      <Timeline2D selection={selection} />
     </div>
   );
 

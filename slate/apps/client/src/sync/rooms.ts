@@ -11,7 +11,7 @@ export interface PublicRoom {
   visibility: 'public' | 'private';
   hostId: string;
   topic: string;
-  mode: '2d' | '3d';
+  mode: '2d' | '3d' | 'audio';
   members: number;
   createdAt: number;
 }

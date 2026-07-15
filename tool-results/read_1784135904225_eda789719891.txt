@@ -1,0 +1,1606 @@
+     1→/**
+     2→ * 3D viewport — react-three-fiber canvas wired up to:
+     3→ *   - SceneObjects (mesh rendering from Yjs)
+     4→ *   - Object selection (click + Shift+click)
+     5→ *   - Camera (OrbitControls)
+     6→ *   - Grid + axes + lighting
+     7→ *   - GizmoHelper + view gizmo
+     8→ *   - Modal tool driver (G / R / S)
+     9→ *   - Toolbar3D + keyboard shortcuts
+    10→ */
+    11→
+    12→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    13→import { Canvas, useFrame, useThree } from '@react-three/fiber';
+    14→import {
+    15→  GizmoHelper,
+    16→  GizmoViewport,
+    17→  Grid,
+    18→  Html,
+    19→  OrbitControls,
+    20→} from '@react-three/drei';
+    21→import * as THREE from 'three';
+    22→import type {
+    23→  AwarenessState,
+    24→  Object3D as Object3DSchema,
+    25→  Transform,
+    26→} from '@slate/sync-protocol';
+    27→import type { SlateRoom } from '../sync/provider';
+    28→import { useAppStore } from '../app/store';
+    29→import { useBoardUnits } from '../sync/useBoardSettings';
+    30→import { Toolbar3D } from './Toolbar3D';
+    31→import { AddObjectMenu } from './AddObjectMenu';
+    32→import { FlyMode } from './FlyMode';
+    33→import { ObjectGizmo } from './ObjectGizmo';
+    34→import { Timeline } from './Timeline';
+    35→import { sampleAnim } from './animation';
+    36→import { SceneObjects, type ElementHit } from './SceneObjects';
+    37→import {
+    38→  applyMeshModal,
+    39→  applyMeshScalar,
+    40→  cancelMeshModal,
+    41→  meshModalLabel,
+    42→  rotateVertices,
+    43→  scaleVertices,
+    44→  startMeshExtrude,
+    45→  startMeshGrab,
+    46→  startMeshScalar,
+    47→  writeVertices,
+    48→  type MeshModalKind,
+    49→  type MeshModalState,
+    50→} from './meshModal';
+    51→import { useScene3DStore } from './store';
+    52→import { autoKeyframe, instantiateAsset, readSceneSnapshot, setTransform, type SceneSnapshot } from './scene';
+    53→import { importModel } from '../files/import3d';
+    54→import { toast } from '../ui/Toast';
+    55→import { useViewport3DShortcuts } from './useViewport3DShortcuts';
+    56→import {
+    57→  applyDelta,
+    58→  axisDragAmount,
+    59→  deltaFromModal,
+    60→  handleModalKey,
+    61→  modalLabel,
+    62→  startObjectModal,
+    63→  type CameraBasis,
+    64→  type ModalKind,
+    65→  type ObjectModalState,
+    66→} from './modalTools';
+    67→
+    68→interface CameraInfo {
+    69→  basis: CameraBasis;
+    70→  /** World units per pixel at the orbit target's distance. */
+    71→  pxScale: number;
+    72→}
+    73→
+    74→interface Viewport3DProps {
+    75→  room: SlateRoom;
+    76→}
+    77→
+    78→/** Viewport chrome colors per app theme (bg: [normal, rendered]). Section grid
+    79→ *  lines follow the accent color (read from the --accent CSS variable at
+    80→ *  runtime so the custom-accent setting recolors the grid); cell lines are a
+    81→ *  faint tint of the same hue. */
+    82→const VIEWPORT_BG = {
+    83→  dark: ['#0c0c0e', '#08080a'],
+    84→  light: ['#dfdfe7', '#d4d4de'],
+    85→} as const;
+    86→
+    87→/** Read the current accent color from the CSS variable (falls back to the
+    88→ *  default purple). Used for grid lines + default material so the custom
+    89→ *  accent setting recolors both. */
+    90→function readAccentColor(): string {
+    91→  if (typeof window === 'undefined') return '#7c6aff';
+    92→  const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    93→  return v || '#7c6aff';
+    94→}
+    95→
+    96→/** Darken a hex color by mixing it with black (factor 0..1). */
+    97→function darken(hex: string, factor: number): string {
+    98→  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+    99→  if (!m) return hex;
+   100→  const r = parseInt(m[1]!.slice(0, 2), 16);
+   101→  const g = parseInt(m[1]!.slice(2, 4), 16);
+   102→  const b = parseInt(m[1]!.slice(4, 6), 16);
+   103→  const dr = Math.round(r * (1 - factor));
+   104→  const dg = Math.round(g * (1 - factor));
+   105→  const db = Math.round(b * (1 - factor));
+   106→  return `#${dr.toString(16).padStart(2, '0')}${dg.toString(16).padStart(2, '0')}${db.toString(16).padStart(2, '0')}`;
+   107→}
+   108→
+   109→export function Viewport3D({ room }: Viewport3DProps) {
+   110→  const [snapshot, setSnapshot] = useState<SceneSnapshot>(() =>
+   111→    readSceneSnapshot(room.slate),
+   112→  );
+   113→  const selection = useScene3DStore((s) => s.selection);
+   114→  const setSelection = useScene3DStore((s) => s.setSelection);
+   115→  const toggleSelection = useScene3DStore((s) => s.toggleSelection);
+   116→  const clearSelection = useScene3DStore((s) => s.clearSelection);
+   117→  const showGrid = useScene3DStore((s) => s.showGrid);
+   118→  const shading = useScene3DStore((s) => s.shading);
+   119→  const flying = useScene3DStore((s) => s.flying);
+   120→  const flySpeed = useScene3DStore((s) => s.flySpeed);
+   121→  const theme = useAppStore((s) => s.theme);
+   122→  const accent = useAppStore((s) => s.accent);
+   123→  const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
+   124→  const showTransformHud = useAppStore((s) => s.showTransformHud);
+   125→  const [units] = useBoardUnits(room);
+   126→  // Grid lines follow the accent color: section = accent, cell = darkened
+   127→  // accent (a faint tint). Recomputed when the accent setting changes.
+   128→  const accentColor = accent || readAccentColor();
+   129→  const viewportColors = {
+   130→    bg: VIEWPORT_BG[theme],
+   131→    cell: darken(accentColor, theme === 'dark' ? 0.72 : 0.45),
+   132→    section: accentColor,
+   133→  };
+   134→  // File → Background sets the board's shared paper color; like the 2D
+   135→  // canvas, the 3D viewport shows it once "follows theme" is off.
+   136→  const [paper, setPaper] = useState('#0c0c0e');
+   137→  useEffect(() => {
+   138→    const meta = room.slate.meta();
+   139→    const apply = () => setPaper((meta.get('paper') as string) || '#0c0c0e');
+   140→    apply();
+   141→    meta.observe(apply);
+   142→    return () => meta.unobserve(apply);
+   143→  }, [room]);
+   144→  const bgColor = paperFollowsTheme
+   145→    ? viewportColors.bg[shading === 'rendered' ? 1 : 0]
+   146→    : paper;
+   147→  // CAD grid: cell/section spacing follows the chosen display units.
+   148→  // The Grid component's infiniteGrid + followCamera handles the rest.
+   149→  const grid =
+   150→    units === 'mm' || units === 'cm'
+   151→      ? { cell: 0.1, section: 1 }
+   152→      : units === 'in' || units === 'ft'
+   153→        ? { cell: 0.3048, section: 3.048 }
+   154→        : { cell: 1, section: 5 };
+   155→  // Animation: while the playhead is scrubbing/playing, animated objects render
+   156→  // at their sampled keyframe pose so you can see the animation. Editing still
+   157→  // writes the base transform; the gizmo syncs from the sampled pose so it
+   158→  // stays attached to the visible mesh (no desync glitch). The Properties
+   159→  // panel reads the sampled transform too so its numbers update as you scrub.
+   160→  const animTime = useScene3DStore((s) => s.animTime);
+   161→  const modalTool = useScene3DStore((s) => s.modal.tool);
+   162→  const gizmoDragging = useScene3DStore((s) => s.gizmoDragging);
+   163→  const animOverrides = useMemo(() => {
+   164→    // Only sample when there's actually animation and the playhead is moving
+   165→    // or parked away from a base transform. When stopped at t=0 with no
+   166→    // scrubbing intent, show base transforms so editing feels natural.
+   167→    const hasAnim = snapshot.objects.some((o) => (o.anim?.length ?? 0) > 0);
+   168→    if (!hasAnim) return null;
+   169→    // While a G/R/S modal OR a gizmo drag is running, DON'T override the
+   170→    // objects being transformed — the edit writes the base transform live and
+   171→    // the override would mask it (object appears stuck/invisible). Show their
+   172→    // real base transform so the drag is visible.
+   173→    const transforming = modalTool || gizmoDragging ? new Set(selection) : null;
+   174→    const m = new Map<string, Transform>();
+   175→    for (const o of snapshot.objects) {
+   176→      if (transforming?.has(o.id)) continue; // show base transform during edit
+   177→      const t = sampleAnim(o.anim, animTime);
+   178→      if (t) m.set(o.id, t);
+   179→    }
+   180→    return m.size > 0 ? m : null;
+   181→  }, [animTime, snapshot, modalTool, gizmoDragging, selection]);
+   182→  const viewingCameraId = useScene3DStore((s) => s.viewingCameraId);
+   183→  const editorMode = useScene3DStore((s) => s.editorMode);
+   184→  const editSelection = useScene3DStore((s) => s.editSelection);
+   185→  const selectMode = useScene3DStore((s) => s.selectMode);
+   186→  const setEditSelection = useScene3DStore((s) => s.setEditSelection);
+   187→  const [awareness, setAwareness] = useState<AwarenessState[]>([]);
+   188→  // Blender-style navigation: Shift+MMB pans instead of orbiting.
+   189→  const [shiftDown, setShiftDown] = useState(false);
+   190→  // Shift+A add menu, opened at the last-known cursor position.
+   191→  const [addMenuPos, setAddMenuPos] = useState<{ x: number; y: number } | null>(null);
+   192→  const lastPointerRef = useRef({ x: 80, y: 80 });
+   193→  /** Screen position (container px) of the selection pivot, for the guide line. */
+   194→  const pivotScreenRef = useRef<{ x: number; y: number } | null>(null);
+   195→  const guideLineRef = useRef<SVGLineElement | null>(null);
+   196→
+   197→  useEffect(() => room.onAwarenessChange(setAwareness), [room]);
+   198→
+   199→  useEffect(() => {
+   200→    const down = (e: KeyboardEvent) => {
+   201→      if (e.key === 'Shift') setShiftDown(true);
+   202→    };
+   203→    const up = (e: KeyboardEvent) => {
+   204→      if (e.key === 'Shift') setShiftDown(false);
+   205→    };
+   206→    window.addEventListener('keydown', down);
+   207→    window.addEventListener('keyup', up);
+   208→    return () => {
+   209→      window.removeEventListener('keydown', down);
+   210→      window.removeEventListener('keyup', up);
+   211→    };
+   212→  }, []);
+   213→
+   214→  // Live subscription to Yjs.
+   215→  useEffect(() => {
+   216→    const objects = room.slate.scene3dObjects();
+   217→    const meshes = room.slate.scene3dMeshes();
+   218→    const materials = room.slate.scene3dMaterials();
+   219→    const refresh = () => setSnapshot(readSceneSnapshot(room.slate));
+   220→    objects.observeDeep(refresh);
+   221→    meshes.observeDeep(refresh);
+   222→    materials.observeDeep(refresh);
+   223→    refresh();
+   224→    // IndexedDB hydration can complete slightly after the room resolves (the
+   225→    // `whenSynced` callback fires, then Yjs applies updates on a microtask).
+   226→    // Re-read once after a tick so a freshly-hydrated doc's objects appear
+   227→    // immediately instead of showing an empty board until the next edit.
+   228→    const lateRead = setTimeout(refresh, 200);
+   229→    return () => {
+   230→      clearTimeout(lateRead);
+   231→      objects.unobserveDeep(refresh);
+   232→      meshes.unobserveDeep(refresh);
+   233→      materials.unobserveDeep(refresh);
+   234→    };
+   235→  }, [room]);
+   236→
+   237→  // Modal tool state — independent of zustand so high-frequency updates
+   238→  // don't trigger React re-renders. The store's `modal.tool` mirrors whether
+   239→  // a modal is active so the shortcut hook can route keys correctly.
+   240→  const modalRef = useRef<ObjectModalState | null>(null);
+   241→  const meshModalRef = useRef<MeshModalState | null>(null);
+   242→  const [modalLabelText, setModalLabelText] = useState<string | null>(null);
+   243→  /** True while the left mouse button is held down over the viewport — hides
+   244→   *  the cursor during drags (orbit/pan/select) like the modal-transform
+   245→   *  cursor hide, so the pointer doesn't float over the working area. */
+   246→  const [leftHeld, setLeftHeld] = useState(false);
+   247→  const frameSelectedRef = useRef<(all: boolean) => void>(() => {});
+   248→  const cameraInfoRef = useRef<CameraInfo | null>(null);
+   249→  /** Set when a modal just ended so the confirming click doesn't clear selection. */
+   250→  const modalEndedAtRef = useRef(0);
+   251→  const snapshotRef = useRef(snapshot);
+   252→  snapshotRef.current = snapshot;
+   253→  /** The viewport element — pointer-locked while a modal drag is running. */
+   254→  const containerRef = useRef<HTMLDivElement | null>(null);
+   255→  /** Where the last primary press landed — drags must not clear selection. */
+   256→  const pointerDownAtRef = useRef<{ x: number; y: number } | null>(null);
+   257→
+   258→  // The Import dialog (and other non-viewport callers) can't reach the camera
+   259→  // directly, so they dispatch a 'slate:frame-selection' window event after
+   260→  // adding objects; frame them here so imported models are always in view.
+   261→  useEffect(() => {
+   262→    const onFrame = () => requestAnimationFrame(() => frameSelectedRef.current(false));
+   263→    window.addEventListener('slate:frame-selection', onFrame);
+   264→    return () => window.removeEventListener('slate:frame-selection', onFrame);
+   265→  }, []);
+   266→
+   267→  // Blender keeps the cursor visible during modal transforms (G/R/S) and just
+   268→  // reads pointer motion — no pointer lock. Locking hides the cursor and feels
+   269→  // jarring ("the weird preview mouse thing"), so we leave the cursor visible
+   270→  // and let the guide line track it. movementX/Y still drive the delta.
+   271→  const requestModalLock = useCallback(() => {}, []);
+   272→  const releaseModalLock = useCallback(() => {}, []);
+   273→
+   274→  const onObjectPick = useCallback(
+   275→    (id: string, additive: boolean) => {
+   276→      // The click that confirms a modal transform must not also re-pick.
+   277→      if (Date.now() - modalEndedAtRef.current < 350) return;
+   278→      if (additive) toggleSelection(id);
+   279→      else setSelection([id]);
+   280→    },
+   281→    [setSelection, toggleSelection],
+   282→  );
+   283→
+   284→  // Resolve a sub-element click according to the active select mode
+   285→  // (1 = vertex, 2 = edge, 3 = face — Blender's layout).
+   286→  const onElementPick = useCallback(
+   287→    (objectId: string, hit: ElementHit, additive: boolean) => {
+   288→      // Ignore the click that confirms a mesh modal so it can't re-pick a face.
+   289→      if (Date.now() - modalEndedAtRef.current < 350) return;
+   290→      const store = useScene3DStore.getState();
+   291→      const obj = snapshotRef.current.objects.find((o) => o.id === objectId);
+   292→      const mesh = obj?.meshId ? snapshotRef.current.meshes.get(obj.meshId) : undefined;
+   293→      const poly = mesh?.faces[hit.face]?.v;
+   294→      if (!mesh || !poly) return;
+   295→
+   296→      if (store.selectMode === 'face') {
+   297→        const cur = store.editSelection.faces;
+   298→        const next = additive
+   299→          ? cur.includes(hit.face)
+   300→            ? cur.filter((f) => f !== hit.face)
+   301→            : [...cur, hit.face]
+   302→          : cur.length === 1 && cur[0] === hit.face
+   303→            ? []
+   304→            : [hit.face];
+   305→        setEditSelection({ faces: next, verts: [], edges: [] });
+   306→        return;
+   307→      }
+   308→
+   309→      const vpos = (vi: number) => ({
+   310→        x: mesh.vertices[vi * 3] ?? 0,
+   311→        y: mesh.vertices[vi * 3 + 1] ?? 0,
+   312→        z: mesh.vertices[vi * 3 + 2] ?? 0,
+   313→      });
+   314→      if (store.selectMode === 'vertex') {
+   315→        let best = poly[0]!;
+   316→        let bestD = Infinity;
+   317→        for (const vi of poly) {
+   318→          const p = vpos(vi);
+   319→          const d = (p.x - hit.local.x) ** 2 + (p.y - hit.local.y) ** 2 + (p.z - hit.local.z) ** 2;
+   320→          if (d < bestD) {
+   321→            bestD = d;
+   322→            best = vi;
+   323→          }
+   324→        }
+   325→        const cur = store.editSelection.verts;
+   326→        const next = additive
+   327→          ? cur.includes(best)
+   328→            ? cur.filter((v) => v !== best)
+   329→            : [...cur, best]
+   330→          : cur.length === 1 && cur[0] === best
+   331→            ? []
+   332→            : [best];
+   333→        setEditSelection({ verts: next, faces: [], edges: [] });
+   334→        return;
+   335→      }
+   336→
+   337→      // Edge mode: nearest polygon edge to the hit point.
+   338→      let bestA = poly[0]!;
+   339→      let bestB = poly[1] ?? poly[0]!;
+   340→      let bestD = Infinity;
+   341→      for (let i = 0; i < poly.length; i++) {
+   342→        const a = poly[i]!;
+   343→        const b = poly[(i + 1) % poly.length]!;
+   344→        const pa = vpos(a);
+   345→        const pb = vpos(b);
+   346→        const abx = pb.x - pa.x,
+   347→          aby = pb.y - pa.y,
+   348→          abz = pb.z - pa.z;
+   349→        const len2 = abx * abx + aby * aby + abz * abz || 1;
+   350→        let t =
+   351→          ((hit.local.x - pa.x) * abx + (hit.local.y - pa.y) * aby + (hit.local.z - pa.z) * abz) /
+   352→          len2;
+   353→        t = Math.max(0, Math.min(1, t));
+   354→        const dx = hit.local.x - (pa.x + t * abx);
+   355→        const dy = hit.local.y - (pa.y + t * aby);
+   356→        const dz = hit.local.z - (pa.z + t * abz);
+   357→        const d = dx * dx + dy * dy + dz * dz;
+   358→        if (d < bestD) {
+   359→          bestD = d;
+   360→          bestA = Math.min(a, b);
+   361→          bestB = Math.max(a, b);
+   362→        }
+   363→      }
+   364→      const cur = store.editSelection.edges;
+   365→      const pairs: [number, number][] = [];
+   366→      for (let i = 0; i + 1 < cur.length; i += 2) pairs.push([cur[i]!, cur[i + 1]!]);
+   367→      const idx = pairs.findIndex(([a, b]) => a === bestA && b === bestB);
+   368→      let nextPairs: [number, number][];
+   369→      if (additive) {
+   370→        nextPairs = idx >= 0 ? pairs.filter((_, i) => i !== idx) : [...pairs, [bestA, bestB]];
+   371→      } else {
+   372→        nextPairs = pairs.length === 1 && idx === 0 ? [] : [[bestA, bestB]];
+   373→      }
+   374→      setEditSelection({ edges: nextPairs.flat(), faces: [], verts: [] });
+   375→    },
+   376→    [setEditSelection],
+   377→  );
+   378→
+   379→  void clearSelection;
+   380→
+   381→  const onStartModal = useCallback(
+   382→    (kind: ModalKind) => {
+   383→      const ids = useScene3DStore.getState().selection;
+   384→      if (ids.length === 0) return;
+   385→      const animTimeNow = useScene3DStore.getState().animTime;
+   386→      const base = new Map<string, Object3DSchema>();
+   387→      for (const id of ids) {
+   388→        const yo = room.slate.scene3dObjects().get(id);
+   389→        if (!yo) continue;
+   390→        const baseTransform = yo.get('transform') as Transform | undefined;
+   391→        if (!baseTransform) continue;
+   392→        // Start the modal from the pose the object is actually SHOWING: when
+   393→        // it's animated and the playhead is scrubbed, that's the sampled
+   394→        // keyframe pose, not the stored base transform — otherwise the object
+   395→        // would jump at drag start (and auto-key would record the jump).
+   396→        const anim = yo.get('anim') as Parameters<typeof sampleAnim>[0];
+   397→        const transform = sampleAnim(anim, animTimeNow) ?? baseTransform;
+   398→        base.set(id, {
+   399→          id,
+   400→          parentId: (yo.get('parentId') as string | null) ?? null,
+   401→          type: yo.get('type') as Object3DSchema['type'],
+   402→          name: (yo.get('name') as string) ?? 'Object',
+   403→          visible: (yo.get('visible') as boolean) ?? true,
+   404→          transform,
+   405→          meshId: (yo.get('meshId') as string | null) ?? null,
+   406→          materialId: (yo.get('materialId') as string | null) ?? null,
+   407→        });
+   408→      }
+   409→      if (base.size === 0) return;
+   410→      // G/R/S are one-shot modal previews (Blender). They must NOT change the
+   411→      // active tool: the gizmo stays on whatever the user picked (Move/Rotate/
+   412→      // Scale) and is only hidden while the modal runs (see ObjectGizmo). When
+   413→      // the modal confirms/cancels the gizmo reappears in the active mode.
+   414→      modalRef.current = startObjectModal(kind, base);
+   415→      setModalLabelText(modalLabel(modalRef.current));
+   416→      useScene3DStore.getState().setModal({ tool: kind });
+   417→      requestModalLock();
+   418→    },
+   419→    [room, requestModalLock],
+   420→  );
+   421→
+   422→  // Blender-style modal mesh edits: E extrudes-and-follows-the-mouse,
+   423→  // G drags the selected verts/edges/faces.
+   424→  const onStartMeshModal = useCallback(
+   425→    (kind: MeshModalKind) => {
+   426→      const store = useScene3DStore.getState();
+   427→      const objectId = store.selection[0];
+   428→      if (!objectId || store.selection.length !== 1) return;
+   429→      const sel = store.editSelection;
+   430→      let state: MeshModalState | null = null;
+   431→      if (kind === 'bevel' || kind === 'inset' || kind === 'loop-cut') {
+   432→        state = startMeshScalar(room, objectId, kind, sel.faces, sel.verts);
+   433→      } else if (kind === 'extrude') {
+   434→        state = startMeshExtrude(room, objectId, sel.faces);
+   435→      } else {
+   436→        const obj = snapshotRef.current.objects.find((o) => o.id === objectId);
+   437→        const mesh = obj?.meshId ? snapshotRef.current.meshes.get(obj.meshId) : undefined;
+   438→        if (!mesh) return;
+   439→        const verts =
+   440→          sel.verts.length > 0
+   441→            ? sel.verts
+   442→            : sel.edges.length > 0
+   443→              ? [...new Set(sel.edges)]
+   444→              : [...new Set(sel.faces.flatMap((fi) => mesh.faces[fi]?.v ?? []))];
+   445→        state = startMeshGrab(room, objectId, verts, sel.faces, kind);
+   446→      }
+   447→      if (!state) return;
+   448→      meshModalRef.current = state;
+   449→      // For scalar ops (bevel/inset/loop-cut), apply the initial preview
+   450→      // immediately so the user sees the result before moving the mouse —
+   451→      // Blender shows the cut/bevel the moment you press the shortcut.
+   452→      if (state.scalar) {
+   453→        applyMeshScalar(room, state);
+   454→      }
+   455→      setModalLabelText(meshModalLabel(state));
+   456→      useScene3DStore.getState().setModal({ tool: kind });
+   457→      requestModalLock();
+   458→    },
+   459→    [room, requestModalLock],
+   460→  );
+   461→
+   462→  const endMeshModal = useCallback(
+   463→    (commit: boolean) => {
+   464→      const state = meshModalRef.current;
+   465→      if (!state) return;
+   466→      meshModalRef.current = null;
+   467→      modalEndedAtRef.current = Date.now();
+   468→      setModalLabelText(null);
+   469→      releaseModalLock();
+   470→      useScene3DStore.getState().setModal({ tool: null });
+   471→      if (commit) {
+   472→        useScene3DStore.getState().setEditSelection({ faces: state.resultFaces, verts: [], edges: [] });
+   473→      } else {
+   474→        cancelMeshModal(room, state);
+   475→        useScene3DStore.getState().setEditSelection({ faces: state.baseFaces, verts: [], edges: [] });
+   476→      }
+   477→    },
+   478→    [room, releaseModalLock],
+   479→  );
+   480→
+   481→  const onCancelModal = useCallback(() => {
+   482→    if (meshModalRef.current) {
+   483→      endMeshModal(false);
+   484→      return;
+   485→    }
+   486→    const state = modalRef.current;
+   487→    if (!state) return;
+   488→    room.slate.doc.transact(() => {
+   489→      for (const [id, snap] of state.snapshot) {
+   490→        setTransform(room.slate, id, snap.transform);
+   491→      }
+   492→    });
+   493→    modalRef.current = null;
+   494→    modalEndedAtRef.current = Date.now();
+   495→    setModalLabelText(null);
+   496→    releaseModalLock();
+   497→    useScene3DStore.getState().setModal({ tool: null });
+   498→  }, [room, endMeshModal, releaseModalLock]);
+   499→
+   500→  const onConfirmModal = useCallback(() => {
+   501→    if (meshModalRef.current) {
+   502→      endMeshModal(true);
+   503→      return;
+   504→    }
+   505→    if (!modalRef.current) return;
+   506→    // Auto-key any animated objects at the playhead so a G/R/S edit made while
+   507→    // scrubbed to a time is recorded there (else it snaps back on release).
+   508→    const ids = [...modalRef.current.snapshot.keys()];
+   509→    modalRef.current = null;
+   510→    modalEndedAtRef.current = Date.now();
+   511→    setModalLabelText(null);
+   512→    releaseModalLock();
+   513→    useScene3DStore.getState().setModal({ tool: null });
+   514→    autoKeyframe(room.slate, ids, useScene3DStore.getState().animTime);
+   515→  }, [endMeshModal, releaseModalLock, room]);
+   516→
+   517→  // Listen for modal keys globally.
+   518→  useEffect(() => {
+   519→    const onKey = (e: KeyboardEvent) => {
+   520→      const mesh = meshModalRef.current;
+   521→      if (mesh) {
+   522→        const k = e.key.toLowerCase();
+   523→        if (k === 'enter' || k === ' ') {
+   524→          e.preventDefault();
+   525→          onConfirmModal();
+   526→        } else if (k === 'escape') {
+   527→          e.preventDefault();
+   528→          onCancelModal();
+   529→        } else if (k === 'x' || k === 'y' || k === 'z') {
+   530→          // Axis lock: replaces the default direction; same key clears it.
+   531→          e.preventDefault();
+   532→          const axis = { x: 0, y: 0, z: 0, [k]: 1 } as { x: number; y: number; z: number };
+   533→          const same =
+   534→            mesh.lockDir && mesh.lockDir.x === axis.x && mesh.lockDir.y === axis.y && mesh.lockDir.z === axis.z;
+   535→          mesh.lockDir = same ? null : axis;
+   536→          setModalLabelText(meshModalLabel(mesh));
+   537→        }
+   538→        return;
+   539→      }
+   540→      const state = modalRef.current;
+   541→      if (!state) return;
+   542→      const r = handleModalKey(state, e);
+   543→      if (r.consumed) {
+   544→        e.preventDefault();
+   545→        setModalLabelText(modalLabel(state));
+   546→      }
+   547→      if (r.confirm) onConfirmModal();
+   548→      if (r.cancel) onCancelModal();
+   549→    };
+   550→    window.addEventListener('keydown', onKey);
+   551→    return () => window.removeEventListener('keydown', onKey);
+   552→  }, [onConfirmModal, onCancelModal]);
+   553→
+   554→  // Track mouse for modal pixel delta + LMB to confirm / RMB to cancel.
+   555→  // Writes are throttled to ~30 Hz (pixel deltas keep accumulating, so
+   556→  // nothing is lost). Snapping: Blender-style Ctrl-to-snap, or inverted
+   557→  // when CAD snapping is on (snap by default, Ctrl frees the drag).
+   558→  const lastModalWriteRef = useRef(0);
+   559→  useEffect(() => {
+   560→    const snapTo = (v: number, step: number) => Math.round(v / step) * step;
+   561→    const snapping = (e: PointerEvent) =>
+   562→      e.ctrlKey !== ((room.slate.meta().get('cadSnap') as boolean | undefined) ?? false);
+   563→    const onMove = (e: PointerEvent) => {
+   564→      const mesh = meshModalRef.current;
+   565→      const state = modalRef.current;
+   566→      if (!mesh && !state) return;
+   567→      const now = performance.now();
+   568→      const target = mesh ?? state!;
+   569→      target.pixelDelta.x += e.movementX;
+   570→      target.pixelDelta.y += e.movementY;
+   571→      if (now - lastModalWriteRef.current < 33) return;
+   572→      lastModalWriteRef.current = now;
+   573→
+   574→      const cam = cameraInfoRef.current;
+   575→      if (mesh) {
+   576→        // Scalar ops (bevel/inset): mouse distance sets the amount. Loop-cut's
+   577→        // count comes from the wheel handler, so its mouse move is a no-op
+   578→        // beyond keeping the preview fresh.
+   579→        if (mesh.scalar) {
+   580→          if (mesh.scalar.op === 'loop-cut') {
+   581→            // Move left/right to slide the cut along the ring (Blender-style).
+   582→            mesh.scalar.slide = Math.max(-1, Math.min(1, mesh.pixelDelta.x * 0.004));
+   583→          } else {
+   584→            const drag = mesh.pixelDelta.x + -mesh.pixelDelta.y;
+   585→            // ~half the diagonal at a full-screen drag; clamp to a sane range.
+   586→            mesh.scalar.amount = Math.max(0, Math.min(0.5, drag * 0.0015));
+   587→          }
+   588→          applyMeshScalar(room, mesh);
+   589→          setModalLabelText(meshModalLabel(mesh));
+   590→          return;
+   591→        }
+   592→        const s = cam?.pxScale ?? 0.01;
+   593→        const amount = mesh.pixelDelta.x + -mesh.pixelDelta.y;
+   594→        if (mesh.kind === 'rotate') {
+   595→          // Around the locked axis, or the view axis — like Blender's R.
+   596→          const axis = mesh.lockDir ?? cam?.basis.forward ?? { x: 0, y: 1, z: 0 };
+   597→          let angle = (amount * Math.PI) / 360;
+   598→          if (snapping(e)) angle = snapTo(angle, Math.PI / 12);
+   599→          writeVertices(room, mesh, rotateVertices(mesh, axis, angle));
+   600→          return;
+   601→        }
+   602→        if (mesh.kind === 'scale') {
+   603→          let k = Math.max(0.02, 1 + amount * 0.005);
+   604→          if (snapping(e)) k = Math.max(0.05, snapTo(k, 0.05));
+   605→          const factor = mesh.lockDir
+   606→            ? {
+   607→                x: mesh.lockDir.x ? k : 1,
+   608→                y: mesh.lockDir.y ? k : 1,
+   609→                z: mesh.lockDir.z ? k : 1,
+   610→              }
+   611→            : { x: k, y: k, z: k };
+   612→          writeVertices(room, mesh, scaleVertices(mesh, factor));
+   613→          return;
+   614→        }
+   615→        let delta: { x: number; y: number; z: number };
+   616→        if (mesh.lockDir) {
+   617→          // Extrude / axis-locked grab: geometry follows the mouse projected
+   618→          // onto the axis (the face normal for extrude), like Blender.
+   619→          const a = axisDragAmount(mesh.lockDir, mesh.pixelDelta, cam?.basis, s);
+   620→          delta = { x: mesh.lockDir.x * a, y: mesh.lockDir.y * a, z: mesh.lockDir.z * a };
+   621→        } else if (cam) {
+   622→          const dx = mesh.pixelDelta.x * s;
+   623→          const dy = -mesh.pixelDelta.y * s;
+   624→          delta = {
+   625→            x: cam.basis.right.x * dx + cam.basis.up.x * dy,
+   626→            y: cam.basis.right.y * dx + cam.basis.up.y * dy,
+   627→            z: cam.basis.right.z * dx + cam.basis.up.z * dy,
+   628→          };
+   629→        } else {
+   630→          delta = { x: 0, y: 0, z: 0 };
+   631→        }
+   632→        if (snapping(e)) {
+   633→          delta = {
+   634→            x: snapTo(delta.x, 0.25),
+   635→            y: snapTo(delta.y, 0.25),
+   636→            z: snapTo(delta.z, 0.25),
+   637→          };
+   638→        }
+   639→        applyMeshModal(room, mesh, delta);
+   640→        return;
+   641→      }
+   642→
+   643→      const obj = state!;
+   644→      const delta = deltaFromModal(obj, cam?.pxScale ?? 0.01, cam?.basis);
+   645→      if (snapping(e)) {
+   646→        if (delta.translate) {
+   647→          delta.translate = {
+   648→            x: snapTo(delta.translate.x, 0.5),
+   649→            y: snapTo(delta.translate.y, 0.5),
+   650→            z: snapTo(delta.translate.z, 0.5),
+   651→          };
+   652→        }
+   653→        if (delta.rotate) {
+   654→          delta.rotate = {
+   655→            x: snapTo(delta.rotate.x, Math.PI / 12),
+   656→            y: snapTo(delta.rotate.y, Math.PI / 12),
+   657→            z: snapTo(delta.rotate.z, Math.PI / 12),
+   658→          };
+   659→        }
+   660→        if (delta.scale) {
+   661→          delta.scale = {
+   662→            x: Math.max(0.05, snapTo(delta.scale.x, 0.05)),
+   663→            y: Math.max(0.05, snapTo(delta.scale.y, 0.05)),
+   664→            z: Math.max(0.05, snapTo(delta.scale.z, 0.05)),
+   665→          };
+   666→        }
+   667→      }
+   668→      room.slate.doc.transact(() => {
+   669→        for (const [id, snap] of obj.snapshot) {
+   670→          setTransform(room.slate, id, applyDelta(snap.transform, delta));
+   671→        }
+   672→      });
+   673→      setModalLabelText(modalLabel(obj));
+   674→    };
+   675→    const onDown = (e: PointerEvent) => {
+   676→      if (meshModalRef.current) {
+   677→        if (e.button === 0) onConfirmModal();
+   678→        else if (e.button === 2) onCancelModal();
+   679→        return;
+   680→      }
+   681→      if (!modalRef.current) return;
+   682→      if (e.button === 0) {
+   683→        onConfirmModal();
+   684→      } else if (e.button === 2) {
+   685→        onCancelModal();
+   686→      }
+   687→    };
+   688→    // Bevel/loop-cut: wheel changes the number of cuts/segments (Blender's
+   689→    // scroll-to-add). Both bevel and loop-cut use `cuts` — bevel segments =
+   690→    // resolution of the rounded chamfer, loop-cut cuts = number of edge
+   691→    // loops. The handler is attached to the viewport container in the CAPTURE
+   692→    // phase so it fires before OrbitControls' canvas-level wheel listener.
+   693→    const onWheel = (e: WheelEvent) => {
+   694→      const mesh = meshModalRef.current;
+   695→      if (!mesh?.scalar) return;
+   696→      if (mesh.scalar.op !== 'loop-cut' && mesh.scalar.op !== 'bevel') return;
+   697→      e.preventDefault();
+   698→      e.stopPropagation();
+   699→      const delta = e.deltaY < 0 ? 1 : -1;
+   700→      // Both ops: scroll increases/decreases the number of cuts.
+   701→      mesh.scalar.cuts = Math.max(1, Math.min(20, (mesh.scalar.cuts ?? 1) + delta));
+   702→      applyMeshScalar(room, mesh);
+   703→      setModalLabelText(meshModalLabel(mesh));
+   704→    };
+   705→    // Attach to the container element (not window) in capture phase so this
+   706→    // fires BEFORE OrbitControls' wheel listener on the canvas.
+   707→    const container = containerRef.current;
+   708→    window.addEventListener('pointermove', onMove);
+   709→    window.addEventListener('pointerdown', onDown, true);
+   710→    if (container) container.addEventListener('wheel', onWheel, { capture: true, passive: false });
+   711→    return () => {
+   712→      window.removeEventListener('pointermove', onMove);
+   713→      window.removeEventListener('pointerdown', onDown, true);
+   714→      if (container) container.removeEventListener('wheel', onWheel, { capture: true });
+   715→    };
+   716→  }, [room, onCancelModal, onConfirmModal]);
+   717→
+   718→  // Blender-style guide line: while a modal transform runs, draw a dashed line
+   719→  // from the pivot to the cursor so you always see where the mouse is. Driven
+   720→  // imperatively (no per-frame React state) for smoothness.
+   721→  useEffect(() => {
+   722→    if (!modalLabelText) {
+   723→      const l = guideLineRef.current;
+   724→      if (l) l.style.display = 'none';
+   725→      return;
+   726→    }
+   727→    let raf = 0;
+   728→    const tick = () => {
+   729→      raf = requestAnimationFrame(tick);
+   730→      const l = guideLineRef.current;
+   731→      const pivot = pivotScreenRef.current;
+   732→      if (!l || !pivot) {
+   733→        if (l) l.style.display = 'none';
+   734→        return;
+   735→      }
+   736→      const m = lastPointerRef.current;
+   737→      l.style.display = '';
+   738→      l.setAttribute('x1', String(pivot.x));
+   739→      l.setAttribute('y1', String(pivot.y));
+   740→      l.setAttribute('x2', String(m.x));
+   741→      l.setAttribute('y2', String(m.y));
+   742→    };
+   743→    raf = requestAnimationFrame(tick);
+   744→    return () => cancelAnimationFrame(raf);
+   745→  }, [modalLabelText]);
+   746→
+   747→  // Pointer lock is no longer used (cursor stays visible during modals), so
+   748→  // there's no lock-loss to recover from. Kept as a no-op for the hook below.
+   749→  useEffect(() => {
+   750→    const onLockChange = () => {
+   751→      if (document.pointerLockElement) return;
+   752→      if (meshModalRef.current || modalRef.current) onCancelModal();
+   753→    };
+   754→    document.addEventListener('pointerlockchange', onLockChange);
+   755→    return () => {
+   756→      document.removeEventListener('pointerlockchange', onLockChange);
+   757→      if (document.pointerLockElement) document.exitPointerLock?.();
+   758→    };
+   759→  }, [onCancelModal]);
+   760→
+   761→  /** Fly/pan must never start while a G/R/S drag owns the pointer — nor on
+   762→   *  the very press that just cancelled one (RMB cancel fires first). */
+   763→  const isModalActive = useCallback(
+   764→    () =>
+   765→      !!(modalRef.current || meshModalRef.current) ||
+   766→      Date.now() - modalEndedAtRef.current < 350,
+   767→    [],
+   768→  );
+   769→
+   770→  // Shift+A: open the add menu at the cursor, clamped inside the viewport.
+   771→  const onOpenAddMenu = useCallback(() => {
+   772→    setAddMenuPos((cur) => {
+   773→      if (cur) return null; // pressing Shift+A again closes it
+   774→      const el = containerRef.current;
+   775→      const p = lastPointerRef.current;
+   776→      const w = el?.clientWidth ?? 800;
+   777→      const h = el?.clientHeight ?? 600;
+   778→      return {
+   779→        x: Math.max(8, Math.min(p.x, w - 176)),
+   780→        y: Math.max(8, Math.min(p.y, h - 360)),
+   781→      };
+   782→    });
+   783→  }, []);
+   784→
+   785→  useEffect(() => {
+   786→    if (!addMenuPos) return;
+   787→    const onKey = (e: KeyboardEvent) => {
+   788→      if (e.key === 'Escape') {
+   789→        e.preventDefault();
+   790→        e.stopPropagation();
+   791→        setAddMenuPos(null);
+   792→      }
+   793→    };
+   794→    window.addEventListener('keydown', onKey, true);
+   795→    return () => window.removeEventListener('keydown', onKey, true);
+   796→  }, [addMenuPos]);
+   797→
+   798→  useViewport3DShortcuts({
+   799→    room,
+   800→    onFrameSelected: () => frameSelectedRef.current(false),
+   801→    onFrameAll: () => frameSelectedRef.current(true),
+   802→    onStartModal,
+   803→    onStartMeshModal,
+   804→    onCancelModal,
+   805→    onConfirmModal,
+   806→    onOpenAddMenu,
+   807→  });
+   808→
+   809→  /** Set by ViewPresets — jumps the view into the scene camera. */
+   810→  const lookThroughRef = useRef<() => boolean>(() => false);
+   811→  /** Set by ViewPresets — points the view at the scene camera's pose sampled
+   812→   *  at time `t` (follows camera keyframes). Returns false with no camera. */
+   813→  const cameraFollowRef = useRef<(t: number) => boolean>(() => false);
+   814→  const [rendering, setRendering] = useState(false);
+   815→
+   816→  // "Render image" — Blender F12 style: when the scene has a camera, render
+   817→  // from it (jump the view in, wait for the frames to draw, capture);
+   818→  // otherwise capture the current viewport.
+   819→  const onRenderImage = useCallback(() => {
+   820→    const capture = () => {
+   821→      const canvas = containerRef.current?.querySelector('canvas');
+   822→      if (!canvas) return;
+   823→      canvas.toBlob((blob) => {
+   824→        if (!blob) return;
+   825→        const a = document.createElement('a');
+   826→        a.href = URL.createObjectURL(blob);
+   827→        a.download = `${room.room}-render.png`;
+   828→        a.click();
+   829→        URL.revokeObjectURL(a.href);
+   830→      }, 'image/png');
+   831→    };
+   832→    const jumped = lookThroughRef.current();
+   833→    if (jumped) {
+   834→      // Give the render loop two frames to draw from the new pose.
+   835→      requestAnimationFrame(() => requestAnimationFrame(capture));
+   836→    } else {
+   837→      capture();
+   838→    }
+   839→  }, [room]);
+   840→
+   841→  // "Render animation" — play the timeline through the scene camera (or the
+   842→  // current view when there's none) and record the canvas to a video. MP4
+   843→  // (H.264) is preferred so the file plays everywhere; browsers that can't
+   844→  // record MP4 fall back to WebM.
+   845→  const onRenderAnimation = useCallback(() => {
+   846→    if (rendering) return;
+   847→    const canvas = containerRef.current?.querySelector('canvas') as HTMLCanvasElement | null;
+   848→    if (!canvas || typeof canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+   849→      toast({ title: 'Recording unsupported', description: 'This browser can’t record the canvas.', variant: 'error' });
+   850→      return;
+   851→    }
+   852→    const store = useScene3DStore.getState();
+   853→    const duration = store.animDuration;
+   854→    const hasAnim = snapshotRef.current.objects.some((o) => (o.anim?.length ?? 0) > 0);
+   855→    if (!hasAnim) {
+   856→      toast({ title: 'Nothing to render', description: 'Add keyframes on the timeline first (select an object, press I).' });
+   857→      return;
+   858→    }
+   859→    // Prefer MP4/H.264 (universally playable); fall back to WebM where the
+   860→    // browser can't encode MP4 from a canvas stream (e.g. Firefox).
+   861→    const mime = [
+   862→      'video/mp4;codecs=avc1.640028',
+   863→      'video/mp4;codecs=avc1',
+   864→      'video/mp4',
+   865→      'video/webm;codecs=vp9',
+   866→      'video/webm;codecs=vp8',
+   867→      'video/webm',
+   868→    ].find((m) => MediaRecorder.isTypeSupported(m));
+   869→    if (!mime) {
+   870→      toast({ title: 'Recording unsupported', variant: 'error' });
+   871→      return;
+   872→    }
+   873→    const isMp4 = mime.startsWith('video/mp4');
+   874→    const ext = isMp4 ? 'mp4' : 'webm';
+   875→    const stream = canvas.captureStream(30);
+   876→    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
+   877→    const chunks: BlobPart[] = [];
+   878→    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+   879→    recorder.onstop = () => {
+   880→      const blob = new Blob(chunks, { type: isMp4 ? 'video/mp4' : 'video/webm' });
+   881→      const a = document.createElement('a');
+   882→      a.href = URL.createObjectURL(blob);
+   883→      a.download = `${room.room}-animation.${ext}`;
+   884→      a.click();
+   885→      URL.revokeObjectURL(a.href);
+   886→      toast({
+   887→        title: 'Animation rendered',
+   888→        description: isMp4 ? 'Saved as an MP4 video.' : 'Saved as a WebM video (MP4 unsupported here).',
+   889→      });
+   890→    };
+   891→
+   892→    // Freeze interactive playback; drive time ourselves for the render. The
+   893→    // store `rendering` flag hides viewport aids (camera glyphs, gizmo, grid).
+   894→    store.setAnimPlaying(false);
+   895→    store.setRendering(true);
+   896→    setRendering(true);
+   897→    const usingCamera = cameraFollowRef.current(0);
+   898→    store.setAnimTime(0);
+   899→
+   900→    let start = 0;
+   901→    // Give React a frame to hide the viewport aids before recording starts.
+   902→    requestAnimationFrame(() => {
+   903→      recorder.start();
+   904→      const step = (now: number) => {
+   905→        if (!start) start = now;
+   906→        const t = (now - start) / 1000;
+   907→        const clamped = Math.min(t, duration);
+   908→        useScene3DStore.getState().setAnimTime(clamped);
+   909→        if (usingCamera) cameraFollowRef.current(clamped);
+   910→        if (t < duration) {
+   911→          requestAnimationFrame(step);
+   912→        } else {
+   913→          // Let the last frame paint, then finalize.
+   914→          requestAnimationFrame(() => {
+   915→            recorder.stop();
+   916→            const s = useScene3DStore.getState();
+   917→            s.setAnimTime(0);
+   918→            s.setRendering(false);
+   919→            setRendering(false);
+   920→          });
+   921→        }
+   922→      };
+   923→      requestAnimationFrame(step);
+   924→    });
+   925→  }, [room, rendering]);
+   926→
+   927→  return (
+   928→    <div
+   929→      ref={containerRef}
+   930→      className="relative h-full w-full bg-bg overflow-hidden"
+   931→      style={{ touchAction: 'none', cursor: modalLabelText || leftHeld ? 'none' : 'default' }}
+   932→      onContextMenu={(e) => e.preventDefault()}
+   933→      onPointerMove={(e) => {
+   934→        const rect = e.currentTarget.getBoundingClientRect();
+   935→        lastPointerRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+   936→      }}
+   937→      onPointerDownCapture={(e) => {
+   938→        // Only track left-held + hide cursor when the click lands on the 3D
+   939→        // canvas itself — NOT on UI overlays (timeline scrubber, toolbar
+   940→        // buttons, etc). Setting leftHeld on the timeline caused the range
+   941→        // input drag to conflict with cursor:none, producing a stop-sign
+   942→        // (not-allowed) cursor.
+   943→        const target = e.target as HTMLElement;
+   944→        const onCanvas = target.tagName === 'CANVAS';
+   945→        if (e.button === 0 && onCanvas) {
+   946→          pointerDownAtRef.current = { x: e.clientX, y: e.clientY };
+   947→          setLeftHeld(true);
+   948→        }
+   949→        // A slider/number input elsewhere (timeline, properties) keeps
+   950→        // keyboard focus after use and silently eats every hotkey. Clicking
+   951→        // into the viewport hands the keyboard back.
+   952→        const active = document.activeElement as HTMLElement | null;
+   953→        if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) active.blur();
+   954→        // Blender-style camera view lock: the view stays locked to the scene
+   955→        // camera until you MMB (orbit/pan) out of it. LMB/RMB drags stay
+   956→        // locked so you can still select without leaving camera view.
+   957→        if (e.button === 1 && useScene3DStore.getState().viewingCameraId) {
+   958→          useScene3DStore.getState().setViewingCamera(null);
+   959→        }
+   960→      }}
+   961→      onPointerUpCapture={(e) => {
+   962→        if (e.button === 0) setLeftHeld(false);
+   963→      }}
+   964→      onPointerLeave={() => setLeftHeld(false)}
+   965→      onDragOver={(e) => {
+   966→        const items = [...(e.dataTransfer?.items ?? [])];
+   967→        if (items.some((i) => i.kind === 'file' || i.type === 'application/x-slate-asset')) {
+   968→          e.preventDefault();
+   969→        }
+   970→      }}
+   971→      onDrop={(e) => {
+   972→        // 1) A library asset dragged out of the Assets panel (Unity-style).
+   973→        const assetId = e.dataTransfer?.getData('application/x-slate-asset');
+   974→        if (assetId) {
+   975→          e.preventDefault();
+   976→          const objId = instantiateAsset(room.slate, assetId, {
+   977→            position: { x: 0, y: 0, z: 0 },
+   978→            selection: useScene3DStore.getState().selection,
+   979→          });
+   980→          if (objId) {
+   981→            useScene3DStore.getState().setSelection([objId]);
+   982→            toast({ title: 'Placed in scene', description: 'Press G to move it.' });
+   983→          }
+   984→          return;
+   985→        }
+   986→        // 2) Model files dropped from the OS.
+   987→        const files = [...(e.dataTransfer?.files ?? [])].filter((f) =>
+   988→          /\.(obj|stl|ply|gltf|glb|fbx)$/i.test(f.name),
+   989→        );
+   990→        if (!files.length) return;
+   991→        e.preventDefault();
+   992→        void (async () => {
+   993→          const allIds: string[] = [];
+   994→          for (const file of files) {
+   995→            try {
+   996→              const ids = await importModel(room, file);
+   997→              allIds.push(...ids);
+   998→              toast({
+   999→                title: `Imported ${file.name}`,
+  1000→                description: `${ids.length} object${ids.length === 1 ? '' : 's'} added to the scene`,
+  1001→              });
+  1002→            } catch (err) {
+  1003→              toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' });
+  1004→            }
+  1005→          }
+  1006→          // Select the freshly imported objects and frame the camera on them so
+  1007→          // the model is immediately visible — regardless of how big/small the
+  1008→          // source file's units were or where the camera was looking.
+  1009→          if (allIds.length > 0) {
+  1010→            useScene3DStore.getState().setSelection(allIds);
+  1011→            requestAnimationFrame(() => frameSelectedRef.current(false));
+  1012→          }
+  1013→        })();
+  1014→      }}
+  1015→    >
+  1016→      <Canvas
+  1017→        camera={{ position: [4, 3, 4], fov: 50, near: 0.1, far: 200 }}
+  1018→        shadows
+  1019→        onPointerMissed={(e) => {
+  1020→          // Don't clear when the click was confirming/cancelling a modal tool.
+  1021→          if (modalRef.current || meshModalRef.current) return;
+  1022→          if (Date.now() - modalEndedAtRef.current < 350) return;
+  1023→          // Browsers fire `click` even after a long drag; an orbit/pan drag
+  1024→          // must not deselect (that also hides the properties + material UI).
+  1025→          const down = pointerDownAtRef.current;
+  1026→          if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+  1027→          if (!e.shiftKey) clearSelection();
+  1028→        }}
+  1029→        // preserveDrawingBuffer lets "Render image" capture the canvas.
+  1030→        gl={{ antialias: true, preserveDrawingBuffer: true }}
+  1031→        dpr={[1, 2]}
+  1032→      >
+  1033→        <color attach="background" args={[bgColor]} />
+  1034→        {shading === 'rendered' ? (
+  1035→          // Rendered shading: the scene's own lights do the work (they're
+  1036→          // emitted by SceneObjects); keep a moderate ambient so an unlit
+  1037→          // scene is still visible while you add lights.
+  1038→          <ambientLight intensity={0.35} />
+  1039→        ) : (
+  1040→          // Studio rig for wireframe/solid/material preview shading:
+  1041→          // sky/ground hemisphere fill + shadowed key + cool rim, roughly
+  1042→          // Blender's default studio look — boosted so meshes read clearly.
+  1043→          <>
+  1044→            <hemisphereLight args={[0xdcdcff, 0x33332e, 1.4]} />
+  1045→            <directionalLight
+  1046→              position={[6, 8, 5]}
+  1047→              intensity={2.0}
+  1048→              castShadow
+  1049→              shadow-mapSize={[2048, 2048]}
+  1050→              shadow-bias={-0.0003}
+  1051→              shadow-camera-left={-15}
+  1052→              shadow-camera-right={15}
+  1053→              shadow-camera-top={15}
+  1054→              shadow-camera-bottom={-15}
+  1055→              shadow-camera-near={0.5}
+  1056→              shadow-camera-far={60}
+  1057→            />
+  1058→            <directionalLight position={[-4, 3, -3]} intensity={0.6} color="#bcd0ff" />
+  1059→          </>
+  1060→        )}
+  1061→        {showGrid && !rendering && (
+  1062→          <Grid
+  1063→            args={[20, 20]}
+  1064→            cellSize={grid.cell}
+  1065→            cellThickness={0.6}
+  1066→            cellColor={viewportColors.cell}
+  1067→            sectionSize={grid.section}
+  1068→            sectionThickness={1.2}
+  1069→            sectionColor={viewportColors.section}
+  1070→            infiniteGrid
+  1071→            fadeDistance={10000}
+  1072→            fadeStrength={1}
+  1073→            // followCamera keeps the grid centered under the camera as you
+  1074→            // fly/orbit around — Blender's ground plane always sits under the
+  1075→            // view, not stuck at the origin where it gets left behind.
+  1076→            followCamera
+  1077→          />
+  1078→        )}
+  1079→        <SceneObjects
+  1080→          objects={snapshot.objects}
+  1081→          meshes={snapshot.meshes}
+  1082→          materials={snapshot.materials}
+  1083→          selection={new Set(selection)}
+  1084→          onObjectPick={onObjectPick}
+  1085→          onElementPick={onElementPick}
+  1086→          selectedFaces={editSelection.faces}
+  1087→          selectedVerts={editSelection.verts}
+  1088→          selectedEdges={editSelection.edges}
+  1089→          shading={shading}
+  1090→          editMode={editorMode === 'edit'}
+  1091→          overrides={animOverrides}
+  1092→          viewingCameraId={viewingCameraId}
+  1093→          hideCameras={rendering}
+  1094→        />
+  1095→        <OrbitControls
+  1096→          makeDefault
+  1097→          enableDamping
+  1098→          dampingFactor={0.08}
+  1099→          // No maxDistance — let the user zoom out basically forever
+  1100→          // (Blender-style). minDistance prevents clipping through the scene.
+  1101→          minDistance={0.1}
+  1102→          enabled={!viewingCameraId}
+  1103→          mouseButtons={{
+  1104→            // Blender-style: MMB orbits, Shift+MMB pans, wheel zooms.
+  1105→            // Left-drag also orbits (friendlier for mice/trackpads); plain
+  1106→            // clicks still select.
+  1107→            LEFT: THREE.MOUSE.ROTATE,
+  1108→            MIDDLE: shiftDown ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+  1109→            RIGHT: THREE.MOUSE.PAN,
+  1110→          }}
+  1111→          touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
+  1112→        />
+  1113→        <FlyMode containerRef={containerRef} isModalActive={isModalActive} />
+  1114→        <ObjectGizmo room={room} snapshot={snapshot} overrides={animOverrides} />
+  1115→        <ViewPresets snapshot={snapshot} lookThroughRef={lookThroughRef} cameraFollowRef={cameraFollowRef} />
+  1116→        <PivotProjector snapshot={snapshot} out={pivotScreenRef} />
+  1117→        <CameraTracking out={cameraInfoRef} room={room} />
+  1118→        <RemotePeers3D peers={awareness} selfId={room.identity.peerId} />
+  1119→        <FrameSelectedBinding
+  1120→          frameRef={frameSelectedRef}
+  1121→          snapshot={snapshot}
+  1122→          selection={selection}
+  1123→        />
+  1124→        <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+  1125→          {/* hideNegativeAxes=false keeps all six spheres so the axis letters
+  1126→              stay visible no matter how the view is orbited. */}
+  1127→          <GizmoViewport
+  1128→            axisColors={['#f87171', '#22d3a5', '#7c6aff']}
+  1129→            labelColor="white"
+  1130→            hideNegativeAxes={false}
+  1131→          />
+  1132→        </GizmoHelper>
+  1133→      </Canvas>
+  1134→      <Toolbar3D
+  1135→        room={room}
+  1136→        snapshot={snapshot}
+  1137→        onStartModal={onStartModal}
+  1138→        onStartMeshModal={onStartMeshModal}
+  1139→        onFrameSelected={() => frameSelectedRef.current(false)}
+  1140→        onRenderImage={onRenderImage}
+  1141→        onRenderAnimation={onRenderAnimation}
+  1142→        rendering={rendering}
+  1143→      />
+  1144→      <Timeline room={room} snapshot={snapshot} />
+  1145→      {rendering && (
+  1146→        <div
+  1147→          className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-md border border-danger/60 bg-bg-2/95 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-danger shadow-lg backdrop-blur"
+  1148→          role="status"
+  1149→        >
+  1150→          ● Recording animation…
+  1151→        </div>
+  1152→      )}
+  1153→      {addMenuPos && (
+  1154→        <AddObjectMenu room={room} pos={addMenuPos} onClose={() => setAddMenuPos(null)} />
+  1155→      )}
+  1156→      {viewingCameraId && (
+  1157→        <>
+  1158→          {/* Blender-style camera-view frame: a passe-partout border. */}
+  1159→          <div className="pointer-events-none absolute inset-4 z-10 rounded-sm border-2 border-warn/50" />
+  1160→          <div
+  1161→            className="pointer-events-none absolute left-1/2 top-12 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-warn/60 bg-bg-2/95 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-warn shadow-lg backdrop-blur"
+  1162→            role="status"
+  1163→          >
+  1164→            Camera view — MMB to exit
+  1165→          </div>
+  1166→        </>
+  1167→      )}
+  1168→      {showTransformHud && flying && (
+  1169→        <div
+  1170→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-accent/60 bg-bg-2/95 px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg backdrop-blur"
+  1171→          role="status"
+  1172→        >
+  1173→          Fly — WASD move · Q/E down/up · Shift fast · wheel speed ({flySpeed.toFixed(1)}) · release MMB to exit
+  1174→        </div>
+  1175→      )}
+  1176→      {showTransformHud && editorMode === 'edit' && !modalLabelText && !flying && (
+  1177→        <div
+  1178→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-border bg-bg-2/95 px-3 py-1.5 text-xs text-text-dim backdrop-blur"
+  1179→          role="status"
+  1180→        >
+  1181→          {selection.length === 0
+  1182→            ? 'Edit mode — click an object to edit its mesh'
+  1183→            : (() => {
+  1184→                const obj = snapshot.objects.find((o) => o.id === selection[0]);
+  1185→                const mesh = obj?.meshId ? snapshot.meshes.get(obj.meshId) : undefined;
+  1186→                return editHudText(selectMode, editSelection, mesh?.vertices, obj?.transform);
+  1187→              })()}
+  1188→        </div>
+  1189→      )}
+  1190→      {showTransformHud && modalLabelText && (
+  1191→        <div
+  1192→          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-accent/60 bg-bg-2/95 backdrop-blur px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg"
+  1193→          role="status"
+  1194→        >
+  1195→          {modalLabelText} — LMB / Enter to confirm, RMB / Esc to cancel
+  1196→        </div>
+  1197→      )}
+  1198→      {/* Guide line from the pivot to the cursor during modal transforms. */}
+  1199→      <svg className="pointer-events-none absolute inset-0 z-20 h-full w-full" aria-hidden>
+  1200→        <line
+  1201→          ref={guideLineRef}
+  1202→          style={{ display: 'none' }}
+  1203→          stroke="var(--accent, #7c6aff)"
+  1204→          strokeWidth={1}
+  1205→          strokeDasharray="5 4"
+  1206→          opacity={0.8}
+  1207→        />
+  1208→      </svg>
+  1209→      {/* Kept left of the view gizmo, which owns the bottom-right corner. */}
+  1210→      <div className="pointer-events-none absolute right-32 bottom-2 z-10 hidden rounded-md bg-bg-2/80 px-2 py-1 font-mono text-[10px] text-text-dim sm:block">
+  1211→        {snapshot.objects.length} object{snapshot.objects.length === 1 ? '' : 's'}
+  1212→      </div>
+  1213→    </div>
+  1214→  );
+  1215→}
+  1216→
+  1217→/**
+  1218→ * Projects the selection pivot (centroid of selected objects) to screen-space
+  1219→ * container pixels each frame, so the DOM guide-line overlay can anchor to it.
+  1220→ */
+  1221→function PivotProjector({
+  1222→  snapshot,
+  1223→  out,
+  1224→}: {
+  1225→  snapshot: SceneSnapshot;
+  1226→  out: React.MutableRefObject<{ x: number; y: number } | null>;
+  1227→}) {
+  1228→  const { camera, size } = useThree();
+  1229→  const snapRef = useRef(snapshot);
+  1230→  snapRef.current = snapshot;
+  1231→  useFrame(() => {
+  1232→    const sel = useScene3DStore.getState().selection;
+  1233→    if (sel.length === 0) {
+  1234→      out.current = null;
+  1235→      return;
+  1236→    }
+  1237→    let x = 0, y = 0, z = 0, n = 0;
+  1238→    for (const id of sel) {
+  1239→      const o = snapRef.current.objects.find((ob) => ob.id === id);
+  1240→      if (o) {
+  1241→        x += o.transform.position.x;
+  1242→        y += o.transform.position.y;
+  1243→        z += o.transform.position.z;
+  1244→        n++;
+  1245→      }
+  1246→    }
+  1247→    if (n === 0) {
+  1248→      out.current = null;
+  1249→      return;
+  1250→    }
+  1251→    const v = new THREE.Vector3(x / n, y / n, z / n).project(camera);
+  1252→    out.current = { x: (v.x * 0.5 + 0.5) * size.width, y: (-v.y * 0.5 + 0.5) * size.height };
+  1253→  });
+  1254→  return null;
+  1255→}
+  1256→
+  1257→/**
+  1258→ * Publishes the camera basis + world-units-per-pixel each frame so the modal
+  1259→ * tool driver (which lives outside the R3F canvas) can map pointer motion
+  1260→ * into the screen plane at the right sensitivity.
+  1261→ */
+  1262→function CameraTracking({
+  1263→  out,
+  1264→  room,
+  1265→}: {
+  1266→  out: React.MutableRefObject<CameraInfo | null>;
+  1267→  room: SlateRoom;
+  1268→}) {
+  1269→  const { camera, controls, size } = useThree();
+  1270→  const lastPublish = useRef({ t: 0, key: '' });
+  1271→  useFrame(() => {
+  1272→    const cam = camera as THREE.PerspectiveCamera;
+  1273→    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+  1274→    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+  1275→    const forward = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 2).negate();
+  1276→    const target = (controls as { target?: THREE.Vector3 } | null)?.target;
+  1277→    const dist = target ? cam.position.distanceTo(target) : Math.max(cam.position.length(), 1);
+  1278→    const pxScale =
+  1279→      (2 * Math.max(dist, 0.5) * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) /
+  1280→      Math.max(size.height, 1);
+  1281→    out.current = {
+  1282→      basis: {
+  1283→        right: { x: right.x, y: right.y, z: right.z },
+  1284→        up: { x: up.x, y: up.y, z: up.z },
+  1285→        forward: { x: forward.x, y: forward.y, z: forward.z },
+  1286→      },
+  1287→      pxScale,
+  1288→    };
+  1289→    // Publish the camera pose so other peers can see where we're looking.
+  1290→    // Throttled and change-gated — awareness messages count against the
+  1291→    // server's per-peer rate limit. During fly mode (walk navigation) we
+  1292→    // publish more often so remote peers see the camera move smoothly in
+  1293→    // real time instead of snapping once on release.
+  1294→    const now = performance.now();
+  1295→    const flying = useScene3DStore.getState().flying;
+  1296→    const interval = flying ? 50 : 150;
+  1297→    if (now - lastPublish.current.t < interval) return;
+  1298→    const t = target ?? new THREE.Vector3();
+  1299→    const r = (n: number) => Math.round(n * 100) / 100;
+  1300→    const p: [number, number, number] = [r(cam.position.x), r(cam.position.y), r(cam.position.z)];
+  1301→    const tt: [number, number, number] = [r(t.x), r(t.y), r(t.z)];
+  1302→    const key = p.join(',') + '|' + tt.join(',');
+  1303→    if (key === lastPublish.current.key) return;
+  1304→    lastPublish.current = { t: now, key };
+  1305→    room.setLocalAwareness({ cam: { p, t: tt } });
+  1306→  });
+  1307→  return null;
+  1308→}
+  1309→
+  1310→/** Other peers' cameras: a colored wire pyramid at their eye, name attached. */
+  1311→function RemotePeers3D({ peers, selfId }: { peers: AwarenessState[]; selfId: string }) {
+  1312→  const remote = peers.filter((p) => p.id !== selfId && p.cam);
+  1313→  if (remote.length === 0) return null;
+  1314→  return (
+  1315→    <>
+  1316→      {remote.map((p) => (
+  1317→        <PeerCamera key={p.id} state={p} />
+  1318→      ))}
+  1319→    </>
+  1320→  );
+  1321→}
+  1322→
+  1323→/** Blender-style camera glyph: wire frustum + up-triangle, apex at the eye. */
+  1324→const PEER_CAM_LINES = (() => {
+  1325→  const w = 0.42, h = 0.28, d = 0.85; // frustum half-extents + depth
+  1326→  const a = [0, 0, 0];
+  1327→  const c = [
+  1328→    [-w, h, d], [w, h, d], [w, -h, d], [-w, -h, d],
+  1329→  ];
+  1330→  const seg: number[] = [];
+  1331→  for (const p of c) seg.push(...a, ...p); // apex → corners
+  1332→  for (let i = 0; i < 4; i++) seg.push(...c[i]!, ...c[(i + 1) % 4]!); // rect
+  1333→  // Up indicator above the top edge.
+  1334→  seg.push(-w * 0.5, h, d, 0, h + 0.18, d);
+  1335→  seg.push(0, h + 0.18, d, w * 0.5, h, d);
+  1336→  seg.push(w * 0.5, h, d, -w * 0.5, h, d);
+  1337→  const g = new THREE.BufferGeometry();
+  1338→  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
+  1339→  return g;
+  1340→})();
+  1341→
+  1342→function PeerCamera({ state }: { state: AwarenessState }) {
+  1343→  const cam = state.cam!;
+  1344→  const groupRef = useRef<THREE.Group | null>(null);
+  1345→  // Poses arrive ~6/s; damp per frame so remote cameras glide, not hop.
+  1346→  const targetPos = useRef(new THREE.Vector3(cam.p[0], cam.p[1], cam.p[2]));
+  1347→  const lookCur = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
+  1348→  const lookTarget = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
+  1349→  targetPos.current.set(cam.p[0], cam.p[1], cam.p[2]);
+  1350→  lookTarget.current.set(cam.t[0], cam.t[1], cam.t[2]);
+  1351→  useFrame((_, delta) => {
+  1352→    const g = groupRef.current;
+  1353→    if (!g) return;
+  1354→    // Frame-rate-independent smoothing (~90 ms time constant); teleport when
+  1355→    // the peer jumps far so the glyph never streaks across the whole scene.
+  1356→    if (g.position.distanceToSquared(targetPos.current) > 400) {
+  1357→      g.position.copy(targetPos.current);
+  1358→      lookCur.current.copy(lookTarget.current);
+  1359→    } else {
+  1360→      const k = 1 - Math.exp(-delta * 11);
+  1361→      g.position.lerp(targetPos.current, k);
+  1362→      lookCur.current.lerp(lookTarget.current, k);
+  1363→    }
+  1364→    g.lookAt(lookCur.current);
+  1365→  });
+  1366→  return (
+  1367→    <group ref={groupRef} position={[cam.p[0], cam.p[1], cam.p[2]]}>
+  1368→      <lineSegments geometry={PEER_CAM_LINES} raycast={() => null}>
+  1369→        <lineBasicMaterial color={state.color} transparent opacity={0.9} />
+  1370→      </lineSegments>
+  1371→      {/* Small solid eye so the camera reads at a distance. */}
+  1372→      <mesh raycast={() => null}>
+  1373→        <sphereGeometry args={[0.06, 10, 10]} />
+  1374→        <meshBasicMaterial color={state.color} />
+  1375→      </mesh>
+  1376→      <Html position={[0, 0.55, 0]} center distanceFactor={14} occlude={false}>
+  1377→        <div
+  1378→          className="pointer-events-none w-max max-w-[140px] truncate rounded-full px-1.5 py-px text-[10px] font-medium leading-4 text-black/85 shadow"
+  1379→          style={{ backgroundColor: state.color }}
+  1380→        >
+  1381→          {state.name}
+  1382→        </div>
+  1383→      </Html>
+  1384→    </group>
+  1385→  );
+  1386→}
+  1387→
+  1388→function editHudText(
+  1389→  mode: 'vertex' | 'edge' | 'face',
+  1390→  sel: { verts: number[]; edges: number[]; faces: number[] },
+  1391→  vertices?: number[],
+  1392→  transform?: { scale: { x: number; y: number; z: number } },
+  1393→): string {
+  1394→  const counts: Record<string, number> = {
+  1395→    vertex: sel.verts.length,
+  1396→    edge: sel.edges.length / 2,
+  1397→    face: sel.faces.length,
+  1398→  };
+  1399→  const n = counts[mode] ?? 0;
+  1400→  if (n === 0) {
+  1401→    const noun = mode === 'vertex' ? 'vertex' : mode;
+  1402→    return `Click a ${noun} to select it · Shift+Click adds · 1/2/3 switch vert/edge/face`;
+  1403→  }
+  1404→  const plural = mode === 'vertex' ? 'vertices' : `${mode}s`;
+  1405→  // CAD-style measurements (Blender's N-panel): edge lengths + face area.
+  1406→  if (mode === 'edge' && vertices && vertices.length >= 3 && transform) {
+  1407→    let total = 0;
+  1408→    for (let i = 0; i + 1 < sel.edges.length; i += 2) {
+  1409→      const a = sel.edges[i]!;
+  1410→      const b = sel.edges[i + 1]!;
+  1411→      const ax = (vertices[a * 3] ?? 0) * transform.scale.x;
+  1412→      const ay = (vertices[a * 3 + 1] ?? 0) * transform.scale.y;
+  1413→      const az = (vertices[a * 3 + 2] ?? 0) * transform.scale.z;
+  1414→      const bx = (vertices[b * 3] ?? 0) * transform.scale.x;
+  1415→      const by = (vertices[b * 3 + 1] ?? 0) * transform.scale.y;
+  1416→      const bz = (vertices[b * 3 + 2] ?? 0) * transform.scale.z;
+  1417→      total += Math.hypot(bx - ax, by - ay, bz - az);
+  1418→    }
+  1419→    return `${n} ${n === 1 ? 'edge' : plural} selected — length ${total.toFixed(3)} m · G moves`;
+  1420→  }
+  1421→  if (mode === 'face') {
+  1422→    return `${n} ${n === 1 ? 'face' : plural} selected · E extrudes · G moves`;
+  1423→  }
+  1424→  const verb = ' · G moves';
+  1425→  return `${n} ${n === 1 ? (mode === 'vertex' ? 'vertex' : mode) : plural} selected${verb}`;
+  1426→}
+  1427→
+  1428→/** Blender-style numpad view presets: 1 front, 3 right, 7 top, 0 camera. */
+  1429→function ViewPresets({
+  1430→  snapshot,
+  1431→  lookThroughRef,
+  1432→  cameraFollowRef,
+  1433→}: {
+  1434→  snapshot: SceneSnapshot;
+  1435→  lookThroughRef: React.MutableRefObject<() => boolean>;
+  1436→  cameraFollowRef?: React.MutableRefObject<(t: number) => boolean>;
+  1437→}) {
+  1438→  const { camera, controls } = useThree();
+  1439→  const snapRef = useRef(snapshot);
+  1440→  snapRef.current = snapshot;
+  1441→
+  1442→  // Point the R3F camera at the scene camera's pose sampled at time `t`, so
+  1443→  // an animation render follows keyframed camera moves. Returns false when
+  1444→  // there's no scene camera.
+  1445→  useEffect(() => {
+  1446→    if (!cameraFollowRef) return;
+  1447→    cameraFollowRef.current = (t: number) => {
+  1448→      const sel = useScene3DStore.getState().selection;
+  1449→      const cams = snapRef.current.objects.filter((o) => o.type === 'camera');
+  1450→      const cam = cams.find((o) => sel.includes(o.id)) ?? cams[0];
+  1451→      if (!cam) return false;
+  1452→      const tr = (cam.anim?.length ? sampleAnim(cam.anim, t) : null) ?? cam.transform;
+  1453→      const dir = new THREE.Vector3(0, -1, 0).applyEuler(
+  1454→        new THREE.Euler(tr.rotation.x, tr.rotation.y, tr.rotation.z),
+  1455→      );
+  1456→      camera.position.set(tr.position.x, tr.position.y, tr.position.z);
+  1457→      const persp = camera as THREE.PerspectiveCamera;
+  1458→      persp.fov = cam.camera?.fov ?? 50;
+  1459→      persp.updateProjectionMatrix();
+  1460→      camera.lookAt(new THREE.Vector3().copy(camera.position).addScaledVector(dir, 8));
+  1461→      return true;
+  1462→    };
+  1463→  }, [camera, cameraFollowRef]);
+  1464→
+  1465→  // Jump the viewport into the selected (or first) scene camera. Shared by
+  1466→  // Numpad 0 and the render button. Returns false when the scene has none.
+  1467→  useEffect(() => {
+  1468→    lookThroughRef.current = () => {
+  1469→      const sel = useScene3DStore.getState().selection;
+  1470→      const cams = snapRef.current.objects.filter((o) => o.type === 'camera');
+  1471→      const cam = cams.find((o) => sel.includes(o.id)) ?? cams[0];
+  1472→      if (!cam) return false;
+  1473→      const t = cam.transform;
+  1474→      const dir = new THREE.Vector3(0, -1, 0).applyEuler(
+  1475→        new THREE.Euler(t.rotation.x, t.rotation.y, t.rotation.z),
+  1476→      );
+  1477→      camera.position.set(t.position.x, t.position.y, t.position.z);
+  1478→      const persp = camera as THREE.PerspectiveCamera;
+  1479→      persp.fov = cam.camera?.fov ?? 50;
+  1480→      persp.updateProjectionMatrix();
+  1481→      (controls as { target?: THREE.Vector3 } | null)?.target?.copy(
+  1482→        new THREE.Vector3().copy(camera.position).addScaledVector(dir, 8),
+  1483→      );
+  1484→      (controls as { update?: () => void } | null)?.update?.();
+  1485→      // Enter "camera view": the glyph hides and a frame HUD shows until the
+  1486→      // user orbits/flies away (Blender's Numpad 0 behavior).
+  1487→      useScene3DStore.getState().setViewingCamera(cam.id);
+  1488→      return true;
+  1489→    };
+  1490→  }, [camera, controls, lookThroughRef]);
+  1491→
+  1492→  useEffect(() => {
+  1493→    const onKey = (e: KeyboardEvent) => {
+  1494→      const target = e.target as HTMLElement;
+  1495→      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+  1496→      if (useScene3DStore.getState().flying) return;
+  1497→      if (e.code === 'Numpad0') {
+  1498→        if (lookThroughRef.current()) e.preventDefault();
+  1499→        return;
+  1500→      }
+  1501→      let dir: THREE.Vector3 | null = null;
+  1502→      if (e.code === 'Numpad1') dir = new THREE.Vector3(0, 0, 1);
+  1503→      else if (e.code === 'Numpad3') dir = new THREE.Vector3(1, 0, 0);
+  1504→      else if (e.code === 'Numpad7') dir = new THREE.Vector3(0.0001, 1, 0.0001);
+  1505→      if (!dir) return;
+  1506→      // Ctrl+Numpad flips to the opposite view (back/left/bottom), as in Blender.
+  1507→      if (e.ctrlKey) dir.negate();
+  1508→      e.preventDefault();
+  1509→      const t = (controls as { target?: THREE.Vector3 } | null)?.target ?? new THREE.Vector3();
+  1510→      const dist = camera.position.distanceTo(t) || 8;
+  1511→      camera.position.copy(t.clone().add(dir.normalize().multiplyScalar(dist)));
+  1512→      (controls as { update?: () => void } | null)?.update?.();
+  1513→    };
+  1514→    window.addEventListener('keydown', onKey);
+  1515→    return () => window.removeEventListener('keydown', onKey);
+  1516→  }, [camera, controls]);
+  1517→  return null;
+  1518→}
+  1519→
+  1520→/**
+  1521→ * Tiny in-canvas component that captures `useThree` and exposes a callback
+  1522→ * to frame the current selection. Kept inside <Canvas> so it has access to
+  1523→ * the camera and controls.
+  1524→ */
+  1525→function FrameSelectedBinding({
+  1526→  frameRef,
+  1527→  snapshot,
+  1528→  selection,
+  1529→}: {
+  1530→  frameRef: React.MutableRefObject<(all: boolean) => void>;
+  1531→  snapshot: SceneSnapshot;
+  1532→  selection: string[];
+  1533→}) {
+  1534→  const { camera, controls } = useThree();
+  1535→  useFrame(() => {});
+  1536→  useEffect(() => {
+  1537→    frameRef.current = (all: boolean) => {
+  1538→      // Frame the selection; with `all` (or nothing selected), frame the scene.
+  1539→      const ids = !all && selection.length > 0 ? selection : snapshot.objects.map((o) => o.id);
+  1540→      // Build a world-space bounding box from each object's mesh vertices
+  1541→      // (transformed by position/rotation/scale) — not just its origin point.
+  1542→      // A model imported at the origin would otherwise frame as a zero-size
+  1543→      // point and the camera would dive inside it.
+  1544→      const box = new THREE.Box3();
+  1545→      let any = false;
+  1546→      for (const id of ids) {
+  1547→        const obj = snapshot.objects.find((o) => o.id === id);
+  1548→        if (!obj) continue;
+  1549→        const mesh = obj.meshId ? snapshot.meshes.get(obj.meshId) : undefined;
+  1550→        if (mesh && mesh.vertices.length > 0) {
+  1551→          // Local AABB of the raw vertices.
+  1552→          const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  1553→          const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  1554→          for (let i = 0; i < mesh.vertices.length; i += 3) {
+  1555→            min.min(new THREE.Vector3(mesh.vertices[i]!, mesh.vertices[i + 1]!, mesh.vertices[i + 2]!));
+  1556→            max.max(new THREE.Vector3(mesh.vertices[i]!, mesh.vertices[i + 1]!, mesh.vertices[i + 2]!));
+  1557→          }
+  1558→          // Transform the 8 corners into world space and expand the box.
+  1559→          const m = new THREE.Matrix4().compose(
+  1560→            new THREE.Vector3(obj.transform.position.x, obj.transform.position.y, obj.transform.position.z),
+  1561→            new THREE.Quaternion().setFromEuler(
+  1562→              new THREE.Euler(obj.transform.rotation.x, obj.transform.rotation.y, obj.transform.rotation.z),
+  1563→            ),
+  1564→            new THREE.Vector3(obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z),
+  1565→          );
+  1566→          const corners = [
+  1567→            new THREE.Vector3(min.x, min.y, min.z),
+  1568→            new THREE.Vector3(max.x, min.y, min.z),
+  1569→            new THREE.Vector3(min.x, max.y, min.z),
+  1570→            new THREE.Vector3(max.x, max.y, min.z),
+  1571→            new THREE.Vector3(min.x, min.y, max.z),
+  1572→            new THREE.Vector3(max.x, min.y, max.z),
+  1573→            new THREE.Vector3(min.x, max.y, max.z),
+  1574→            new THREE.Vector3(max.x, max.y, max.z),
+  1575→          ].map((c) => c.applyMatrix4(m));
+  1576→          for (const c of corners) box.expandByPoint(c);
+  1577→          any = true;
+  1578→        } else {
+  1579→          // Lights / empties: just their position.
+  1580→          box.expandByPoint(
+  1581→            new THREE.Vector3(obj.transform.position.x, obj.transform.position.y, obj.transform.position.z),
+  1582→          );
+  1583→          any = true;
+  1584→        }
+  1585→      }
+  1586→      if (!any) return;
+  1587→      const size = new THREE.Vector3();
+  1588→      const center = new THREE.Vector3();
+  1589→      box.getSize(size);
+  1590→      box.getCenter(center);
+  1591→      // Pad so the object isn't flush against the frame edge, and never let a
+  1592→      // degenerate (point) box dive the camera inside the model.
+  1593→      const padded = size.clone().max(new THREE.Vector3(0.5, 0.5, 0.5)).multiplyScalar(1.25);
+  1594→      const radius = Math.max(padded.length() / 2, 1.5);
+  1595→      const dir = new THREE.Vector3()
+  1596→        .subVectors(camera.position, (controls as { target?: THREE.Vector3 })?.target ?? new THREE.Vector3())
+  1597→        .normalize();
+  1598→      if (!Number.isFinite(dir.x) || dir.lengthSq() < 1e-9) dir.set(1, 0.8, 1).normalize();
+  1599→      camera.position.copy(center.clone().add(dir.multiplyScalar(radius)));
+  1600→      (controls as { target?: THREE.Vector3 } | null)?.target?.copy(center);
+  1601→      (controls as { update?: () => void } | null)?.update?.();
+  1602→    };
+  1603→  }, [camera, controls, snapshot, selection, frameRef]);
+  1604→  return null;
+  1605→}
+  1606→

@@ -261,6 +261,16 @@ export function onSavePersisted(cb: SaveListener): () => void {
   return () => saveListeners.delete(cb);
 }
 
+/** Fired after every deleteSave — the cloud-backup bridge listens here so it
+ *  can mirror the deletion to Supabase (otherwise restoreSavesFromCloud would
+ *  pull the deleted save back on next refresh). */
+type DeleteListener = (saveId: string) => void;
+const deleteListeners = new Set<DeleteListener>();
+export function onDeleteSave(cb: DeleteListener): () => void {
+  deleteListeners.add(cb);
+  return () => deleteListeners.delete(cb);
+}
+
 export function persistSave(snapshot: SavedSnapshot, label?: string, id?: string): SaveIndexEntry {
   const saveId = id ?? `${snapshot.boardName}-${snapshot.savedAt}`;
   const serialized = JSON.stringify(snapshot);
@@ -284,6 +294,7 @@ export function deleteSave(id: string): void {
   const list = listSaves().filter((e) => e.id !== id);
   localStorage.setItem(`${KEY}.index`, JSON.stringify(list));
   localStorage.removeItem(`${KEY}.${id}`);
+  for (const cb of deleteListeners) cb(id);
 }
 
 function defaultLabel(s: SavedSnapshot): string {

@@ -43,6 +43,15 @@ export const layerSchema = z.object({
   opacity: z.number().min(0).max(1),
 });
 
+export const transform2DSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  rotation: z.number().finite(),
+  scaleX: z.number().finite(),
+  scaleY: z.number().finite(),
+  opacity: z.number().min(0).max(1),
+});
+
 export const shapeSchema = z.object({
   id: idSchema,
   kind: z.enum([
@@ -55,6 +64,15 @@ export const shapeSchema = z.object({
     'polygon',
     'star',
     'image',
+    'heart',
+    'cloud',
+    'speech',
+    'diamond',
+    'pentagon',
+    'hexagon',
+    'parallelogram',
+    'trapezoid',
+    'cross',
   ]),
   layerId: idSchema,
   x: z.number().finite(),
@@ -74,11 +92,15 @@ export const shapeSchema = z.object({
   src: z.string().max(600_000).optional(),
   createdAt: z.number().int().nonnegative(),
   authorId: idSchema,
+  anim: z
+    .array(z.object({ t: z.number().min(0).max(3600), transform: transform2DSchema }))
+    .max(500)
+    .optional(),
 });
 
 export const strokeSchema = z.object({
   id: idSchema,
-  kind: z.enum(['pen', 'highlighter', 'eraser']),
+  kind: z.enum(['pen', 'highlighter', 'eraser', 'pencil', 'marker', 'calligraphy', 'airbrush']),
   layerId: idSchema,
   color: colorString,
   size: z.number().min(0).max(200),

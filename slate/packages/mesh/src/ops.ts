@@ -241,11 +241,17 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       const prev = f.v[(i - 1 + f.v.length) % f.v.length]!;
       const next = f.v[(i + 1) % f.v.length]!;
       // Walking the loop prev→cur→next, the boundary meets the cut on the
-      // prev-side edge first, then the cut on the next-side edge. With
-      // segments, each side contributes `seg` verts in order.
+      // prev-side edge first (arriving from prev toward cur), then the cut
+      // on the next-side edge (departing from cur toward next).
+      // cutVerts returns verts ordered from cur toward the neighbour, so:
+      //   - nextCuts (cur→next) are already in the correct walking direction
+      //   - prevCuts (cur→prev) must be REVERSED so they go prev→cur
+      // This is critical when both endpoints of an edge are beveled: without
+      // the reversal, the two halves of the edge produce a zigzag boundary.
       const prevCuts = cutVerts(cur, prev);
       const nextCuts = cutVerts(cur, next);
-      newV.push(...prevCuts, ...nextCuts);
+      // Reverse a COPY — cutVerts returns a cached array shared across faces.
+      newV.push(...[...prevCuts].reverse(), ...nextCuts);
     }
     m.faces[fi] = { v: newV };
   }

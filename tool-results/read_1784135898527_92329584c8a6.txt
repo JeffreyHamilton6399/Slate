@@ -1,0 +1,521 @@
+     1→     1→/**
+     2→     2→ * AudioEditor — CapCut/BandLab-style DAW.
+     3→     3→ * Key optimization: waveforms are pre-computed as PNG data URLs cached per
+     4→     4→ * clip id + sample count. The canvas only draws ONCE when a clip is first
+     5→     5→ * seen or its samples change — not on every version bump.
+     6→     6→ */
+     7→     7→
+     8→     8→import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+     9→     9→import {
+    10→    10→  Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
+    11→    11→  Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
+    12→    12→  ChevronLeft, ChevronRight,
+    13→    13→} from 'lucide-react';
+    14→    14→import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
+    15→    15→import { useRoom } from '../sync/RoomContext';
+    16→    16→import { toast } from '../ui/Toast';
+    17→    17→import {
+    18→    18→  addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
+    19→    19→  deleteAudioTrack, readAudioClip, readAudioTrack,
+    20→    20→  setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
+    21→    21→} from './scene';
+    22→    22→import { AudioEngine } from './engine';
+    23→    23→import { loadSamples, float32ToNumberArray } from './sampleStore';
+    24→    24→
+    25→    25→const TRACK_H = 60;
+    26→    26→
+    27→    27→// ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
+    28→    28→// Key: `${clipId}:${sampleCount}:${width}` → data URL
+    29→    29→const waveformPNGCache = new Map<string, string>();
+    30→    30→
+    31→    31→// Draw only the window [startFrame, endFrame) of the sample across `width`
+    32→    32→// pixels. Rendering the *window* (not the whole sample stretched) is what makes
+    33→    33→// trimming look like cutting the audio away rather than squashing it.
+    34→    34→function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number, startFrame: number, endFrame: number): string {
+    35→    35→  const canvas = document.createElement('canvas');
+    36→    36→  const dpr = window.devicePixelRatio || 1;
+    37→    37→  const w = Math.max(2, Math.floor(width));
+    38→    38→  canvas.width = w * dpr;
+    39→    39→  canvas.height = height * dpr;
+    40→    40→  const ctx = canvas.getContext('2d')!;
+    41→    41→  ctx.scale(dpr, dpr);
+    42→    42→  ctx.clearRect(0, 0, w, height);
+    43→    43→  const totalFrames = samples.length / channels;
+    44→    44→  const s = Math.max(0, Math.min(totalFrames, Math.floor(startFrame)));
+    45→    45→  const e = Math.max(s, Math.min(totalFrames, Math.floor(endFrame)));
+    46→    46→  const span = e - s;
+    47→    47→  if (span <= 0) return canvas.toDataURL();
+    48→    48→  const mid = height / 2;
+    49→    49→  ctx.fillStyle = color;
+    50→    50→  for (let x = 0; x < w; x++) {
+    51→    51→    const f0 = s + Math.floor((x / w) * span);
+    52→    52→    const f1 = Math.min(e, s + Math.floor(((x + 1) / w) * span) + 1);
+    53→    53→    let peak = 0;
+    54→    54→    for (let i = f0; i < f1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
+    55→    55→    const bh = Math.max(1, peak * mid * 0.85);
+    56→    56→    ctx.fillRect(x, mid - bh, 1, bh * 2);
+    57→    57→  }
+    58→    58→  return canvas.toDataURL();
+    59→    59→}
+    60→    60→
+    61→    61→/** Waveform image for the buffer window the clip actually plays. With speed s,
+    62→    62→ *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds. */
+    63→    63→const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color }: {
+    64→    64→  clipId: string; sampleKey: string; channels: number; sampleRate: number;
+    65→    65→  offset: number; duration: number; speed: number; width: number; color: string;
+    66→    66→}) {
+    67→    67→  const height = TRACK_H - 6;
+    68→    68→  const [imgUrl, setImgUrl] = useState<string>('');
+    69→    69→
+    70→    70→  useEffect(() => {
+    71→    71→    const startFrame = Math.round(offset * sampleRate);
+    72→    72→    const endFrame = Math.round((offset + duration * speed) * sampleRate);
+    73→    73→    const cacheKey = `${clipId}:${sampleKey}:${startFrame}:${endFrame}:${Math.floor(width)}`;
+    74→    74→    const cached = waveformPNGCache.get(cacheKey);
+    75→    75→    if (cached) { setImgUrl(cached); return; }
+    76→    76→    let cancelled = false;
+    77→    77→    void loadSamples(sampleKey).then((samples) => {
+    78→    78→      if (cancelled) return;
+    79→    79→      const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
+    80→    80→      waveformPNGCache.set(cacheKey, url);
+    81→    81→      setImgUrl(url);
+    82→    82→    });
+    83→    83→    return () => { cancelled = true; };
+    84→    84→  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height]);
+    85→    85→
+    86→    86→  if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
+    87→    87→  return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
+    88→    88→});
+    89→    89→
+    90→    90→/** Drop cached waveform PNGs for a clip (call when its samples change). */
+    91→    91→function invalidateWaveform(clipId: string): void {
+    92→    92→  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+    93→    93→}
+    94→    94→
+    95→    95→// ── Main ────────────────────────────────────────────────────────────────────
+    96→    96→
+    97→    97→export function AudioEditor() {
+    98→    98→  const room = useRoom();
+    99→    99→  const slate = room.slate;
+   100→   100→  const [version, setVersion] = useState(0);
+   101→   101→  const [playing, setPlaying] = useState(false);
+   102→   102→  const [bpm, setBpmState] = useState(slate.audioBpm());
+   103→   103→  const [metronome, setMetronome] = useState(false);
+   104→   104→  const [recording, setRecording] = useState(false);
+   105→   105→  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+   106→   106→  const [masterVol, setMasterVol] = useState(0.85);
+   107→   107→  const [looping, setLooping] = useState(false);
+   108→   108→  const [loopStart, setLoopStart] = useState(0);
+   109→   109→  const [loopEnd, setLoopEnd] = useState(8);
+   110→   110→  const [pxPerSec, setPxPerSec] = useState(80);
+   111→   111→  const engineRef = useRef<AudioEngine | null>(null);
+   112→   112→  const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
+   113→   113→  const rafRef = useRef(0);
+   114→   114→  const positionRef = useRef(0);
+   115→   115→  const playheadRef = useRef<HTMLDivElement | null>(null);
+   116→   116→  const posDisplayRef = useRef<HTMLSpanElement | null>(null);
+   117→   117→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   118→   118→  const dragRef = useRef<{
+   119→   119→    clipId: string; el: HTMLElement; waveEl: HTMLElement | null;
+   120→   120→    os: number; od: number; oo: number; speed: number; sx: number;
+   121→   121→    leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
+   122→   122→  } | null>(null);
+   123→   123→  const selectedRef = useRef<string | null>(null);
+   124→   124→  selectedRef.current = selectedClipId;
+   125→   125→  const clipsRef = useRef<AudioClip[]>([]);
+   126→   126→  const pxRef = useRef(pxPerSec);
+   127→   127→  pxRef.current = pxPerSec;
+   128→   128→
+   129→   129→  // Yjs subscription.
+   130→   130→  useEffect(() => {
+   131→   131→    const tracks = slate.audioTracks();
+   132→   132→    const clips = slate.audioClips();
+   133→   133→    const audioMap = slate.doc.getMap('audio');
+   134→   134→    let pending = false;
+   135→   135→    const bump = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; setVersion((v) => v + 1); }); };
+   136→   136→    tracks.observeDeep(bump); clips.observeDeep(bump); audioMap.observe(bump); bump();
+   137→   137→    const lateRead = setTimeout(bump, 200);
+   138→   138→    return () => { clearTimeout(lateRead); tracks.unobserveDeep(bump); clips.unobserveDeep(bump); audioMap.unobserve(bump); };
+   139→   139→  }, [slate]);
+   140→   140→
+   141→   141→  useEffect(() => {
+   142→   142→    engineRef.current = new AudioEngine();
+   143→   143→    engineRef.current.setMasterVolume(masterVol);
+   144→   144→    return () => { engineRef.current?.dispose(); engineRef.current = null; };
+   145→   145→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   146→   146→  }, []);
+   147→   147→
+   148→   148→  // Playhead — direct DOM.
+   149→   149→  useEffect(() => {
+   150→   150→    if (!playing) return;
+   151→   151→    const tick = () => {
+   152→   152→      rafRef.current = requestAnimationFrame(tick);
+   153→   153→      const eng = engineRef.current; if (!eng) return;
+   154→   154→      const pos = eng.getPosition();
+   155→   155→      positionRef.current = pos;
+   156→   156→      if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
+   157→   157→      if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+   158→   158→      if (pos > timelineDuration + 2) { eng.stop(); setPlaying(false); }
+   159→   159→    };
+   160→   160→    rafRef.current = requestAnimationFrame(tick);
+   161→   161→    return () => cancelAnimationFrame(rafRef.current);
+   162→   162→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   163→   163→  }, [playing]);
+   164→   164→
+   165→   165→  // Ctrl+scroll zoom.
+   166→   166→  useEffect(() => {
+   167→   167→    const el = scrollRef.current; if (!el) return;
+   168→   168→    const onWheel = (e: WheelEvent) => {
+   169→   169→      if (!e.ctrlKey && !e.metaKey) return;
+   170→   170→      e.preventDefault();
+   171→   171→      setPxPerSec((c) => Math.max(10, Math.min(800, c * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+   172→   172→    };
+   173→   173→    el.addEventListener('wheel', onWheel, { passive: false });
+   174→   174→    return () => el.removeEventListener('wheel', onWheel);
+   175→   175→  }, []);
+   176→   176→
+   177→   177→  // Global pointermove/up — pure DOM, zero React state.
+   178→   178→  useEffect(() => {
+   179→   179→    const onMove = (ev: PointerEvent) => {
+   180→   180→      const d = dragRef.current; if (!d) return;
+   181→   181→      const pps = pxRef.current;
+   182→   182→      const dt = (ev.clientX - d.sx) / pps;
+   183→   183→      const oldEnd = d.os + d.od;
+   184→   184→      if (d.mode === 'drag') {
+   185→   185→        // Keep the whole clip inside the free gap between its neighbours.
+   186→   186→        const maxStart = Math.max(d.leftLimit, d.rightLimit - d.od);
+   187→   187→        const start = Math.min(maxStart, Math.max(d.leftLimit, d.os + dt));
+   188→   188→        d.el.style.left = `${start * pps}px`;
+   189→   189→      } else if (d.mode === 'trimL') {
+   190→   190→        // Cut from the left: never past the left neighbour, the source start
+   191→   191→        // (offset ≥ 0 → limited by the trimmed head in timeline seconds), or a
+   192→   192→        // minimum width.
+   193→   193→        const minStart = Math.max(d.leftLimit, d.os - d.oo / d.speed);
+   194→   194→        const start = Math.min(oldEnd - 0.1, Math.max(minStart, d.os + dt));
+   195→   195→        d.el.style.left = `${start * pps}px`;
+   196→   196→        d.el.style.width = `${(oldEnd - start) * pps}px`;
+   197→   197→        // Shift the (fixed-width) waveform the opposite way so the audio stays
+   198→   198→        // anchored — the newly-trimmed head is clipped, not squashed.
+   199→   199→        if (d.waveEl) d.waveEl.style.left = `${-(start - d.os) * pps}px`;
+   200→   200→      } else if (d.mode === 'trimR') {
+   201→   201→        // Cut from the right: never past the right neighbour or a min width.
+   202→   202→        const end = Math.min(d.rightLimit, Math.max(d.os + 0.1, oldEnd + dt));
+   203→   203→        d.el.style.width = `${(end - d.os) * pps}px`;
+   204→   204→      }
+   205→   205→    };
+   206→   206→    const onUp = () => {
+   207→   207→      const d = dragRef.current; if (!d) return;
+   208→   208→      const pps = pxRef.current;
+   209→   209→      const left = parseFloat(d.el.style.left) / pps;
+   210→   210→      const width = parseFloat(d.el.style.width) / pps;
+   211→   211→      if (d.mode === 'drag') updateAudioClip(slate, d.clipId, { start: Math.max(0, left) });
+   212→   212→      else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
+   213→   213→      else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
+   214→   214→      dragRef.current = null;
+   215→   215→    };
+   216→   216→    window.addEventListener('pointermove', onMove);
+   217→   217→    window.addEventListener('pointerup', onUp);
+   218→   218→    return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+   219→   219→  }, [slate]);
+   220→   220→
+   221→   221→  // Hotkeys.
+   222→   222→  useEffect(() => {
+   223→   223→    const onKey = (e: KeyboardEvent) => {
+   224→   224→      const t = e.target as HTMLElement;
+   225→   225→      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+   226→   226→      const k = e.key.toLowerCase();
+   227→   227→      if (k === ' ') { e.preventDefault(); togglePlay(); }
+   228→   228→      else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); void splitAudioClip(slate, selectedRef.current, positionRef.current); }
+   229→   229→      else if ((k === 'delete' || k === 'backspace') && selectedRef.current) { e.preventDefault(); deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); }
+   230→   230→      else if (k === 'd' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); dupClip(selectedRef.current); }
+   231→   231→      else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
+   232→   232→      else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
+   233→   233→      else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
+   234→   234→      else if (k === 'arrowleft') { e.preventDefault(); seek(positionRef.current - 2); }
+   235→   235→      else if (k === 'arrowright') { e.preventDefault(); seek(positionRef.current + 2); }
+   236→   236→      else if (k === 'home') { e.preventDefault(); seek(0); }
+   237→   237→    };
+   238→   238→    window.addEventListener('keydown', onKey);
+   239→   239→    return () => window.removeEventListener('keydown', onKey);
+   240→   240→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   241→   241→  }, [playing, recording]);
+   242→   242→
+   243→   243→  // Read from Yjs — lightweight (no samples copied).
+   244→   244→  const tracks: AudioTrack[] = useMemo(() => {
+   245→   245→    const list: AudioTrack[] = [];
+   246→   246→    slate.audioTracks().forEach((m, id) => { const t = readAudioTrack(m, id); if (t) list.push(t); });
+   247→   247→    list.sort((a, b) => a.order - b.order);
+   248→   248→    return list;
+   249→   249→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   250→   250→  }, [slate, version]);
+   251→   251→
+   252→   252→  const clips: AudioClip[] = useMemo(() => {
+   253→   253→    const list: AudioClip[] = [];
+   254→   254→    slate.audioClips().forEach((m, id) => { const c = readAudioClip(m, id); if (c) list.push(c); });
+   255→   255→    return list;
+   256→   256→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   257→   257→  }, [slate, version]);
+   258→   258→  clipsRef.current = clips;
+   259→   259→
+   260→   260→  // When a clip's samples change (normalize/reverse from the settings panel),
+   261→   261→  // drop the cached waveform + decoded buffer so both refresh.
+   262→   262→  useEffect(() => {
+   263→   263→    const onChanged = (e: Event) => {
+   264→   264→      const id = (e as CustomEvent<string>).detail;
+   265→   265→      invalidateWaveform(id);
+   266→   266→      engineRef.current?.clearCache(id);
+   267→   267→      setVersion((v) => v + 1);
+   268→   268→    };
+   269→   269→    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   270→   270→    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   271→   271→  }, []);
+   272→   272→
+   273→   273→  const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
+   274→   274→
+   275→   275→  // ── Transport ─────────────────────────────────────────────────────────────
+   276→   276→
+   277→   277→  const togglePlay = useCallback(() => {
+   278→   278→    const eng = engineRef.current; if (!eng) return;
+   279→   279→    if (playing) { eng.stop(); setPlaying(false); }
+   280→   280→    else { if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null); void eng.play(slate, positionRef.current); setPlaying(true); }
+   281→   281→  }, [playing, slate, looping, loopStart, loopEnd]);
+   282→   282→
+   283→   283→  const seek = useCallback((t: number) => {
+   284→   284→    const pos = Math.max(0, t);
+   285→   285→    positionRef.current = pos;
+   286→   286→    if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
+   287→   287→    if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+   288→   288→  }, []);
+   289→   289→
+   290→   290→  const toggleRecord = useCallback(async () => {
+   291→   291→    if (recording) {
+   292→   292→      const stopFn = stopRecRef.current;
+   293→   293→      if (stopFn) {
+   294→   294→        const r = await stopFn(); stopRecRef.current = null; setRecording(false);
+   295→   295→        let tid = tracks.find((t) => t.armed)?.id;
+   296→   296→        if (!tid) tid = addAudioTrack(slate, { name: 'Recording' });
+   297→   297→        addAudioClip(slate, tid, { start: positionRef.current, samples: r.samples, sampleRate: r.sampleRate, channels: r.channels, duration: r.duration, name: `Rec ${new Date().toLocaleTimeString()}` });
+   298→   298→        toast({ title: 'Recording added' });
+   299→   299→      }
+   300→   300→    } else {
+   301→   301→      try { const sf = await engineRef.current?.startRecording(); stopRecRef.current = sf ?? null; setRecording(true); }
+   302→   302→      catch { toast({ title: 'Mic denied', variant: 'error' }); }
+   303→   303→    }
+   304→   304→  }, [recording, tracks, slate]);
+   305→   305→
+   306→   306→  const dupClip = useCallback(async (id: string) => {
+   307→   307→    const yo = slate.audioClips().get(id); if (!yo) return;
+   308→   308→    const c = readAudioClip(yo, id); if (!c) return;
+   309→   309→    const samples = await loadSamples(c.sampleKey);
+   310→   310→    await addAudioClip(slate, c.trackId, { start: c.start + c.duration, samples: float32ToNumberArray(samples), sampleRate: c.sampleRate, channels: c.channels, duration: c.duration, name: `${c.name} copy` });
+   311→   311→  }, [slate]);
+   312→   312→
+   313→   313→  const handleFileImport = useCallback(async (file: File) => {
+   314→   314→    try {
+   315→   315→      const d = await decodeAudioFile(file);
+   316→   316→      const tid = addAudioTrack(slate, { name: file.name.replace(/\.[^.]+$/, '') });
+   317→   317→      addAudioClip(slate, tid, { start: positionRef.current, samples: d.samples, sampleRate: d.sampleRate, channels: d.channels, duration: d.duration, name: file.name });
+   318→   318→      toast({ title: 'Imported', description: file.name });
+   319→   319→    } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
+   320→   320→  }, [slate]);
+   321→   321→
+   322→   322→  // ── Drag start ────────────────────────────────────────────────────────────
+   323→   323→
+   324→   324→  // The free interval [leftLimit, rightLimit] the clip may occupy without
+   325→   325→  // overlapping any other clip on the same track.
+   326→   326→  const neighbourBounds = useCallback((clip: AudioClip): { leftLimit: number; rightLimit: number } => {
+   327→   327→    let leftLimit = 0;
+   328→   328→    let rightLimit = Infinity;
+   329→   329→    const clipEnd = clip.start + clip.duration;
+   330→   330→    for (const o of clipsRef.current) {
+   331→   331→      if (o.id === clip.id || o.trackId !== clip.trackId) continue;
+   332→   332→      const oEnd = o.start + o.duration;
+   333→   333→      if (oEnd <= clip.start + 1e-4) leftLimit = Math.max(leftLimit, oEnd);
+   334→   334→      else if (o.start >= clipEnd - 1e-4) rightLimit = Math.min(rightLimit, o.start);
+   335→   335→    }
+   336→   336→    return { leftLimit, rightLimit };
+   337→   337→  }, []);
+   338→   338→
+   339→   339→  const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+   340→   340→    e.stopPropagation(); setSelectedClipId(clip.id);
+   341→   341→    const { leftLimit, rightLimit } = neighbourBounds(clip);
+   342→   342→    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: 'drag' };
+   343→   343→  }, [neighbourBounds]);
+   344→   344→
+   345→   345→  const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+   346→   346→    e.stopPropagation(); setSelectedClipId(clip.id);
+   347→   347→    const { leftLimit, rightLimit } = neighbourBounds(clip);
+   348→   348→    dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, mode: side === 'left' ? 'trimL' : 'trimR' };
+   349→   349→  }, [neighbourBounds]);
+   350→   350→
+   351→   351→  // ── Loop region drag ──────────────────────────────────────────────────────
+   352→   352→
+   353→   353→  const loopDragRef = useRef<{ mode: 'start' | 'end' | 'move'; sx: number; os: number; oe: number } | null>(null);
+   354→   354→  const startLoopDrag = useCallback((mode: 'start' | 'end' | 'move', e: React.PointerEvent) => {
+   355→   355→    e.stopPropagation();
+   356→   356→    loopDragRef.current = { mode, sx: e.clientX, os: loopStart, oe: loopEnd };
+   357→   357→    const onMove = (ev: PointerEvent) => {
+   358→   358→      const d = loopDragRef.current; if (!d) return;
+   359→   359→      const dt = (ev.clientX - d.sx) / pxRef.current;
+   360→   360→      if (d.mode === 'start') { setLoopStart(Math.max(0, Math.min(d.oe - 0.5, d.os + dt))); }
+   361→   361→      else if (d.mode === 'end') { setLoopEnd(Math.max(d.os + 0.5, d.oe + dt)); }
+   362→   362→      else if (d.mode === 'move') { setLoopStart(Math.max(0, d.os + dt)); setLoopEnd(Math.max(0.5, d.oe + dt)); }
+   363→   363→    };
+   364→   364→    const onUp = () => { loopDragRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+   365→   365→    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+   366→   366→  }, [loopStart, loopEnd, pxPerSec]);
+   367→   367→
+   368→   368→  // ── Render ────────────────────────────────────────────────────────────────
+   369→   369→
+   370→   370→  const beatDur = 60 / bpm; // seconds per beat
+   371→   371→  const gridStyle = {
+   372→   372→    backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0 1px, transparent 1px ${beatDur * pxPerSec}px), repeating-linear-gradient(to right, rgba(128,128,128,0.2) 0 1px, transparent 1px ${beatDur * 4 * pxPerSec}px)`,
+   373→   373→  };
+   374→   374→
+   375→   375→  return (
+   376→   376→    <div className="flex h-full flex-col bg-bg overflow-hidden" onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
+   377→   377→      {/* Transport */}
+   378→   378→      <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
+   379→   379→        <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
+   380→   380→        <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
+   381→   381→        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Record (R)"><Mic size={15} /></button>
+   382→   382→        <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
+   383→   383→        <div className="mx-1 h-5 w-px bg-border" />
+   384→   384→        <button onClick={() => selectedRef.current && splitAudioClip(slate, selectedRef.current, positionRef.current)} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
+   385→   385→        <button onClick={() => selectedRef.current && dupClip(selectedRef.current)} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+   386→   386→        <button onClick={() => { if (selectedRef.current) { deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); } }} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
+   387→   387→        <div className="mx-1 h-5 w-px bg-border" />
+   388→   388→        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+   389→   389→        <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
+   390→   390→        <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
+   391→   391→        <div className="mx-1 h-5 w-px bg-border" />
+   392→   392→        <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
+   393→   393→        <button onClick={() => setPxPerSec((c) => Math.max(10, c / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+   394→   394→        <button onClick={() => setPxPerSec((c) => Math.min(800, c * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+   395→   395→        <div className="flex-1" />
+   396→   396→        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
+   397→   397→        <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
+   398→   398→      </div>
+   399→   399→
+   400→   400→      {/* Track area */}
+   401→   401→      <div ref={scrollRef} className="flex flex-1 min-h-0 overflow-auto">
+   402→   402→        {/* Headers */}
+   403→   403→        <div className="sticky left-0 z-10 w-44 shrink-0 border-r border-border bg-bg-2">
+   404→   404→          <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
+   405→   405→          {tracks.length === 0 && <div className="p-3 text-center text-[11px] text-text-dim">No tracks. Import audio or add a track.</div>}
+   406→   406→          {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef} />)}
+   407→   407→        </div>
+   408→   408→
+   409→   409→        {/* Timeline */}
+   410→   410→        <div className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
+   411→   411→          {/* Ruler + loop handles */}
+   412→   412→          <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
+   413→   413→            {Array.from({ length: Math.ceil(timelineDuration / 5) + 1 }, (_, i) => (
+   414→   414→              <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: i * 5 * pxPerSec }}>{i * 5}s</span>
+   415→   415→            ))}
+   416→   416→            {looping && (
+   417→   417→              <>
+   418→   418→                <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
+   419→   419→                <div onPointerDown={(e) => startLoopDrag('end', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopEnd * pxPerSec, width: 8 }} title="Drag loop end"><ChevronRight size={10} className="text-white" /></div>
+   420→   420→              </>
+   421→   421→            )}
+   422→   422→          </div>
+   423→   423→          {/* Seek layer — background click catcher (behind clips) */}
+   424→   424→          <div className="absolute inset-0 top-7" onPointerDown={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / pxRef.current); }} />
+   425→   425→          {/* Grid background */}
+   426→   426→          <div className="pointer-events-none absolute inset-0 top-7" style={gridStyle}>
+   427→   427→            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="pointer-events-auto absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
+   428→   428→          </div>
+   429→   429→          {/* Playhead */}
+   430→   430→          <div ref={playheadRef} className="absolute top-0 bottom-0 z-20 w-0.5 bg-warn pointer-events-none" style={{ transform: 'translateX(0px)' }}>
+   431→   431→            <div className="absolute top-0 -left-1 h-2 w-2 rounded-full bg-warn" />
+   432→   432→          </div>
+   433→   433→          {/* Clips */}
+   434→   434→          {tracks.map((t) => (
+   435→   435→            <div key={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
+   436→   436→              {clips.filter((c) => c.trackId === t.id).map((c) => (
+   437→   437→                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
+   438→   438→                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} />
+   439→   439→              ))}
+   440→   440→            </div>
+   441→   441→          ))}
+   442→   442→        </div>
+   443→   443→      </div>
+   444→   444→
+   445→   445→      {/* Status */}
+   446→   446→      <div className="flex shrink-0 items-center gap-2 border-t border-border px-2 py-0.5 text-[8px] font-mono uppercase text-text-dim">
+   447→   447→        <span>{tracks.length}T · {clips.length}C</span>
+   448→   448→        {recording && <span className="text-danger">● Rec</span>}
+   449→   449→        {playing && <span className="text-accent">▶ Play</span>}
+   450→   450→        <span className="ml-auto">Space · C=Split · D=Dup · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
+   451→   451→      </div>
+   452→   452→    </div>
+   453→   453→  );
+   454→   454→}
+   455→   455→
+   456→   456→// ── Track header ────────────────────────────────────────────────────────────
+   457→   457→
+   458→   458→const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef }: {
+   459→   459→  track: AudioTrack; hasSolo: boolean;
+   460→   460→  slate: ReturnType<typeof useRoom>['slate'];
+   461→   461→  engineRef: React.RefObject<AudioEngine | null>;
+   462→   462→}) {
+   463→   463→  const [vol, setVol] = useState(track.volume);
+   464→   464→  const [pan, setPan] = useState(track.pan);
+   465→   465→  useEffect(() => { setVol(track.volume); }, [track.volume]);
+   466→   466→  useEffect(() => { setPan(track.pan); }, [track.pan]);
+   467→   467→
+   468→   468→  const update = (patch: Partial<AudioTrack>) => { updateAudioTrack(slate, track.id, patch); engineRef.current?.updateTracks(slate); };
+   469→   469→  const onVol = (v: number) => { setVol(v); engineRef.current?.updateTracks(slate); };
+   470→   470→  const onVolEnd = () => updateAudioTrack(slate, track.id, { volume: vol });
+   471→   471→  const onPan = (p: number) => { setPan(p); engineRef.current?.updateTracks(slate); };
+   472→   472→  const onPanEnd = () => updateAudioTrack(slate, track.id, { pan: pan });
+   473→   473→
+   474→   474→  return (
+   475→   475→    <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
+   476→   476→      <div className="flex items-center gap-0.5">
+   477→   477→        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: track.color }} />
+   478→   478→        <input type="text" value={track.name} onChange={(e) => update({ name: e.target.value })} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-text outline-none" />
+   479→   479→        <button onClick={() => update({ muted: !track.muted })} className={`flex h-4 w-4 items-center justify-center rounded ${track.muted && !hasSolo ? 'bg-warn/30 text-warn' : 'text-text-mid hover:bg-bg-3'}`} title="M">{track.muted ? <VolumeX size={9} /> : <Volume2 size={9} />}</button>
+   480→   480→        <button onClick={() => update({ solo: !track.solo })} className={`flex h-4 w-4 items-center justify-center rounded ${track.solo ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="S"><Headphones size={9} /></button>
+   481→   481→        <button onClick={() => update({ armed: !track.armed, input: !track.armed ? 'mic' : 'none' })} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title="Arm"><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
+   482→   482→        <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
+   483→   483→      </div>
+   484→   484→      <div className="mt-0.5 flex items-center gap-1">
+   485→   485→        <Volume2 size={8} className="shrink-0 text-text-dim" />
+   486→   486→        <input type="range" min={0} max={1} step={0.01} value={vol} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-0.5 flex-1 accent-accent" />
+   487→   487→        <input type="range" min={-1} max={1} step={0.01} value={pan} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-0.5 w-8 accent-accent" />
+   488→   488→      </div>
+   489→   489→    </div>
+   490→   490→  );
+   491→   491→});
+   492→   492→
+   493→   493→// ── Clip block ──────────────────────────────────────────────────────────────
+   494→   494→
+   495→   495→const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, onDragStart, onTrimStart }: {
+   496→   496→  clip: AudioClip; pxPerSec: number; selected: boolean;
+   497→   497→  onSelect: (id: string) => void;
+   498→   498→  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+   499→   499→  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+   500→   500→}) {
+   501→   501→  const left = clip.start * pxPerSec;
+   502→   502→  const width = Math.max(4, clip.duration * pxPerSec);
+   503→   503→  const elRef = useRef<HTMLDivElement | null>(null);
+   504→   504→  const waveRef = useRef<HTMLDivElement | null>(null);
+   505→   505→  const w = Math.max(2, Math.floor(width));
+   506→   506→
+   507→   507→  return (
+   508→   508→    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current, waveRef.current); } }}
+   509→   509→      className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
+   510→   510→      {/* Fixed-width waveform layer — clipped by the box so trimming cuts the
+   511→   511→          audio rather than squashing the whole wave into a smaller space. */}
+   512→   512→      <div ref={waveRef} className="pointer-events-none absolute top-0 bottom-0 left-0" style={{ width }}>
+   513→   513→        {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} sampleRate={clip.sampleRate} offset={clip.offset} duration={clip.duration} speed={clip.speed ?? 1} width={w} color={clip.color} />}
+   514→   514→      </div>
+   515→   515→      <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}{clip.mute ? ' (muted)' : ''}</span>
+   516→   516→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current, waveRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+   517→   517→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current, waveRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+   518→   518→    </div>
+   519→   519→  );
+   520→   520→});
+   521→   521→

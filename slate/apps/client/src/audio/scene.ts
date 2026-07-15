@@ -9,7 +9,7 @@ import * as Y from 'yjs';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import type { SlateDoc } from '../sync/doc';
 import { makeId } from '../utils/id';
-import { storeSamples, loadSamples, deleteSamples, float32ToNumberArray } from './sampleStore';
+import { storeSamples, loadSamples, deleteSamples } from './sampleStore';
 
 const TRACK_COLORS = ['#7c6aff', '#22d3a5', '#fbbf24', '#f87171', '#60a5fa', '#f472b6', '#34d399', '#fb923c'];
 
@@ -60,16 +60,19 @@ export function readAudioTrack(m: Y.Map<unknown>, id: string): AudioTrack | null
 
 // ── Clip helpers ────────────────────────────────────────────────────────────
 
-/** Add a clip. Samples are stored in IndexedDB; only a key goes in Yjs. */
+/** Add a clip. Samples are stored in IndexedDB; only a key goes in Yjs.
+ *  `samples` may be a `number[]` (from decode/recording) or a `Float32Array`
+ *  (from loadSamples/processing) — the latter is passed straight through to
+ *  IndexedDB without an intermediate copy. */
 export async function addAudioClip(
   slate: SlateDoc,
   trackId: string,
-  clip: { start: number; samples: number[]; sampleRate: number; channels: number; duration: number; name: string; color?: string },
+  clip: { start: number; samples: number[] | Float32Array; sampleRate: number; channels: number; duration: number; name: string; color?: string },
 ): Promise<string> {
   const id = makeId('clip');
   const sampleKey = `samples:${id}`;
   // Store samples in IndexedDB (NOT Yjs). Pass as Float32Array for speed.
-  const f32 = new Float32Array(clip.samples);
+  const f32 = clip.samples instanceof Float32Array ? clip.samples : new Float32Array(clip.samples);
   await storeSamples(sampleKey, f32);
   const track = slate.audioTracks().get(trackId);
   const color = clip.color ?? (track ? (track.get('color') as string) : '#7c6aff');
@@ -108,10 +111,12 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
   const samplesA = fullSamples.slice(0, splitSample);
   const samplesB = fullSamples.slice(splitSample);
 
-  // Store the two halves in IndexedDB.
+  // Store the two halves in IndexedDB. samplesA/samplesB are already Float32Array
+  // (slice() on a Float32Array returns Float32Array) — pass them straight through
+  // without converting to number[] (which would double the memory for big clips).
   const newKey = `samples:${makeId('clip')}`;
-  await storeSamples(clip.sampleKey, float32ToNumberArray(samplesA));
-  await storeSamples(newKey, float32ToNumberArray(samplesB));
+  await storeSamples(clip.sampleKey, samplesA);
+  await storeSamples(newKey, samplesB);
 
   slate.doc.transact(() => {
     yo.set('duration', relTime);
@@ -130,6 +135,24 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
     m.set('fadeIn', 0);
     m.set('fadeOut', 0);
     slate.audioClips().set(newId, m);
+  });
+}
+
+/** Duplicate a clip (same track, placed right after the original). Shares the
+ *  underlying samples by copying the IndexedDB blob to a new key so the dupe can
+ *  be normalized/reversed independently. */
+export async function duplicateAudioClip(slate: SlateDoc, id: string): Promise<string | null> {
+  const yo = slate.audioClips().get(id); if (!yo) return null;
+  const clip = readAudioClip(yo, id); if (!clip) return null;
+  const samples = await loadSamples(clip.sampleKey);
+  return addAudioClip(slate, clip.trackId, {
+    start: clip.start + clip.duration,
+    samples, // Float32Array passed directly — no number[] copy.
+    sampleRate: clip.sampleRate,
+    channels: clip.channels,
+    duration: clip.duration,
+    name: `${clip.name} copy`,
+    color: clip.color,
   });
 }
 

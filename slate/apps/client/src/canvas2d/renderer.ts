@@ -14,9 +14,10 @@
  */
 
 import { getStroke } from 'perfect-freehand';
-import type { Layer, Shape, Stroke } from '@slate/sync-protocol';
+import type { Layer, Shape, Stroke, Transform2D } from '@slate/sync-protocol';
 import type { Rect, ViewportTransform } from './types';
 import { shapeBounds, smoothPath, strokeBounds } from './geometry';
+import { sampleAnim2D } from './animation';
 
 export interface SceneFrame {
   layers: Layer[];
@@ -34,6 +35,8 @@ export interface SceneFrame {
   marquee?: Rect | null;
   /** Page background color. */
   paper: string;
+  /** Current animation playback time (seconds). 0 = no animation. */
+  animTime?: number;
 }
 
 export interface ViewportSize {
@@ -126,7 +129,18 @@ export function renderScene(
     ctx.globalAlpha = layer.opacity;
     const shapes = scene.shapesByLayer.get(layer.id) ?? [];
     const strokes = scene.strokesByLayer.get(layer.id) ?? [];
-    for (const sh of shapes) drawShape(ctx, sh);
+    const animTime = scene.animTime ?? 0;
+    for (const sh of shapes) {
+      // If the shape has animation keyframes, sample the transform at animTime
+      // and apply it as a canvas transform override. The shape's base x/y/rotation
+      // are replaced by the sampled values; scale and opacity multiply on top.
+      const override = (animTime > 0 || (sh.anim?.length ?? 0) > 0) ? sampleAnim2D(sh.anim, animTime) : null;
+      if (override) {
+        drawShapeWithAnim(ctx, sh, override);
+      } else {
+        drawShape(ctx, sh);
+      }
+    }
     for (const st of strokes) drawStroke(ctx, st);
     ctx.globalAlpha = 1;
   }
@@ -204,6 +218,32 @@ function drawGrid(
     ctx.lineTo(right, y);
   }
   ctx.stroke();
+}
+
+/** Draw a shape with an animation transform override applied.
+ *  The override replaces the shape's base x/y/rotation; scale and opacity
+ *  multiply on top. Used while the 2D timeline is scrubbing or playing. */
+function drawShapeWithAnim(ctx: CanvasRenderingContext2D, s: Shape, t: Transform2D): void {
+  ctx.save();
+  // Compute the center at the OVERRIDDEN position.
+  const cx = t.x + s.w / 2;
+  const cy = t.y + s.h / 2;
+  // Translate to center, apply override rotation + scale, translate back.
+  ctx.translate(cx, cy);
+  ctx.rotate(t.rotation);
+  ctx.scale(t.scaleX || 0.001, t.scaleY || 0.001); // guard against 0 scale
+  ctx.translate(-cx, -cy);
+  // Draw the shape at the overridden position with rotation=0 (rotation
+  // already applied via canvas transform) and multiplied opacity.
+  const overridden: Shape = {
+    ...s,
+    x: t.x,
+    y: t.y,
+    rotation: 0,
+    strokeOpacity: s.strokeOpacity * t.opacity,
+  };
+  drawShape(ctx, overridden);
+  ctx.restore();
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {

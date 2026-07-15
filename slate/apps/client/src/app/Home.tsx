@@ -343,10 +343,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
     fetchRooms().then(setRooms).catch(() => setRooms([]));
     // Poll for live board updates (visibility toggles, member counts) so
     // changes made by other users in their boards reflect here without a
-    // manual refresh. 10s is infrequent enough to be cheap.
+    // manual refresh. 5s keeps the list feeling live.
     const interval = setInterval(() => {
       fetchRooms().then(setRooms).catch(() => {});
-    }, 10_000);
+    }, 5_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -384,6 +384,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
   };
 
   const greeting = displayName || (email.split('@')[0] ?? 'there');
+
+  // Live public boards: only public boards with at least one member. Private
+  // boards and empty rooms disappear from the discovery list.
+  const liveRooms = rooms.filter((r) => r.visibility === 'public' && r.members > 0);
 
   return (
     <div className="fixed inset-0 overflow-auto bg-bg">
@@ -457,7 +461,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
               sign in to.
             </div>
           ) : (
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {recents.map((r) => (
                 <li key={r.boardName} className="group relative">
                   <button
@@ -485,7 +489,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
                   <button
                     type="button"
                     onClick={() => {
-                      if (!window.confirm(`Delete saved project "${r.boardName}"? This only removes the local save, not the board itself.`)) return;
+                      if (!window.confirm(`Delete saved project "${r.boardName}"? This removes the local + cloud saves, not the live board itself.`)) return;
                       deleteSaveByBoardName(r.boardName);
                       setRecents(recentsFromSaves());
                     }}
@@ -501,11 +505,11 @@ function Home({ email, userId }: { email: string; userId: string }) {
         </section>
 
         {/* Live public boards */}
-        {rooms.length > 0 && (
+        {liveRooms.length > 0 && (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-text">Live public boards</h2>
-            <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {rooms.map((r) => (
+            <ul className="grid max-h-[50vh] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+              {liveRooms.map((r) => (
                 <li key={r.name}>
                   <button
                     type="button"
@@ -515,7 +519,11 @@ function Home({ email, userId }: { email: string; userId: string }) {
                     <span
                       className={cn(
                         'rounded px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
-                        r.mode === '3d' ? 'bg-accent/15 text-accent' : 'bg-green/15 text-green',
+                        r.mode === '3d'
+                          ? 'bg-accent/15 text-accent'
+                          : r.mode === 'audio'
+                            ? 'bg-warn/15 text-warn'
+                            : 'bg-green/15 text-green',
                       )}
                     >
                       {r.mode}
@@ -579,7 +587,7 @@ function recentsFromSaves(): RecentProject[] {
       byBoard.set(e.boardName, { boardName: e.boardName, mode: e.mode, savedAt: e.savedAt });
     }
   }
-  return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 12);
+  return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 3);
 }
 
 /** Delete all saves for a board name. */

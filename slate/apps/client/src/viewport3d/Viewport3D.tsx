@@ -1091,6 +1091,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
           overrides={animOverrides}
           viewingCameraId={viewingCameraId}
           hideCameras={rendering}
+          unit={units}
         />
         <OrbitControls
           makeDefault

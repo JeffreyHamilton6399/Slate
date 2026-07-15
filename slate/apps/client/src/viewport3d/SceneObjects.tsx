@@ -19,6 +19,7 @@ import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLigh
 import type { LightData, Material, MeshData, Object3D, Transform } from '@slate/sync-protocol';
 import { triangulateFace } from '@slate/mesh';
 import { applyBoxUVs, loadImageTexture, proceduralTexture } from './textures';
+import { formatLength, formatArea, type LengthUnit } from './units';
 import type { ShadingMode } from './store';
 
 export interface ElementHit {
@@ -51,6 +52,8 @@ interface SceneObjectsProps {
   /** While rendering an animation, hide ALL camera glyphs so the wireframe
    *  cones/boxes don't show up in the recording. */
   hideCameras?: boolean;
+  /** Board display unit — drives CAD label formatting on selection. */
+  unit?: LengthUnit;
 }
 
 export function SceneObjects({
@@ -68,6 +71,7 @@ export function SceneObjects({
   overrides,
   viewingCameraId,
   hideCameras,
+  unit = 'm',
 }: SceneObjectsProps) {
   return (
     <>
@@ -128,6 +132,7 @@ export function SceneObjects({
             selectedEdges={isEditing ? selectedEdges : EMPTY}
             shading={shading}
             editOverlay={isEditing}
+            unit={unit}
           />
         );
       })}
@@ -193,6 +198,7 @@ function SceneMesh({
   selectedEdges,
   shading,
   editOverlay,
+  unit,
 }: {
   obj: Object3D;
   data: MeshData;
@@ -205,6 +211,7 @@ function SceneMesh({
   selectedEdges: number[];
   shading: ShadingMode;
   editOverlay: boolean;
+  unit: LengthUnit;
 }) {
   // triFace maps each rendered triangle back to its source polygon so a
   // raycast hit (triangle index) resolves to a face selection. wireGeo holds
@@ -335,10 +342,16 @@ function SceneMesh({
       )}
       {editOverlay && <EditOverlay data={data} />}
       {editOverlay && selectedFaces.length > 0 && (
-        <FaceHighlight data={data} faces={selectedFaces} />
+        <FaceHighlight data={data} faces={selectedFaces} transform={obj.transform} unit={unit} />
       )}
       {editOverlay && (selectedVerts.length > 0 || selectedEdges.length > 0) && (
-        <ElementHighlight data={data} verts={selectedVerts} edges={selectedEdges} scale={obj.transform.scale} />
+        <ElementHighlight
+          data={data}
+          verts={selectedVerts}
+          edges={selectedEdges}
+          transform={obj.transform}
+          unit={unit}
+        />
       )}
     </mesh>
   );
@@ -605,18 +618,35 @@ function EmptyObject({
   );
 }
 
+/** Compose a world matrix from a Slate Transform (position + Euler rotation +
+ *  scale). Used to project mesh-local vertices into world space for CAD
+ *  measurement math, which must respect object rotation (not just scale). */
+function worldMatrix(t: Transform): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(t.position.x, t.position.y, t.position.z),
+    new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(t.rotation.x, t.rotation.y, t.rotation.z),
+    ),
+    new THREE.Vector3(t.scale.x, t.scale.y, t.scale.z),
+  );
+}
+
 /** Orange markers for selected vertices and edges, with on-edge length labels
- *  (CAD-style — the measurement sits on the line itself, not in a HUD). */
+ *  (CAD-style — the measurement sits on the line itself, not in a HUD).
+ *  Length is measured in WORLD space (through the object's full transform,
+ *  so rotation is respected), then formatted in the board's display unit. */
 function ElementHighlight({
   data,
   verts,
   edges,
-  scale,
+  transform,
+  unit,
 }: {
   data: MeshData;
   verts: number[];
   edges: number[];
-  scale: { x: number; y: number; z: number };
+  transform: Transform;
+  unit: LengthUnit;
 }) {
   const { vGeo, eGeo, edgeLabels } = useMemo(() => {
     const vPos: number[] = [];
@@ -625,6 +655,9 @@ function ElementHighlight({
     }
     const ePos: number[] = [];
     const edgeLabels: { pos: [number, number, number]; len: string }[] = [];
+    const m = worldMatrix(transform);
+    const va = new THREE.Vector3();
+    const vb = new THREE.Vector3();
     for (let i = 0; i + 1 < edges.length; i += 2) {
       const a = edges[i]!;
       const b = edges[i + 1]!;
@@ -635,14 +668,12 @@ function ElementHighlight({
       const by = data.vertices[b * 3 + 1] ?? 0;
       const bz = data.vertices[b * 3 + 2] ?? 0;
       ePos.push(ax, ay, az, bx, by, bz);
-      // World-space length (scaled), label at the midpoint.
-      const wx = (bx - ax) * scale.x;
-      const wy = (by - ay) * scale.y;
-      const wz = (bz - az) * scale.z;
-      const len = Math.hypot(wx, wy, wz);
+      // World-space length (respects rotation + scale + position), label at the midpoint.
+      va.set(ax, ay, az).applyMatrix4(m);
+      vb.set(bx, by, bz).applyMatrix4(m);
       edgeLabels.push({
         pos: [(ax + bx) / 2, (ay + by) / 2, (az + bz) / 2],
-        len: `${len.toFixed(3)} m`,
+        len: formatLength(va.distanceTo(vb), unit),
       });
     }
     const vGeo = new THREE.BufferGeometry();
@@ -650,7 +681,7 @@ function ElementHighlight({
     const eGeo = new THREE.BufferGeometry();
     eGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ePos), 3));
     return { vGeo, eGeo, edgeLabels };
-  }, [data, verts, edges, scale]);
+  }, [data, verts, edges, transform, unit]);
 
   return (
     <>
@@ -662,7 +693,7 @@ function ElementHighlight({
       {/* On-edge length labels (CAD-style, sit on the line itself). */}
       {edgeLabels.map((lbl, i) => (
         <Html key={i} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
-          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-px font-mono text-[9px] font-medium text-black shadow">
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-0 font-mono text-[8px] font-medium text-black shadow">
             {lbl.len}
           </div>
         </Html>
@@ -676,13 +707,36 @@ function ElementHighlight({
   );
 }
 
-/** Translucent fill over the currently selected faces. */
-function FaceHighlight({ data, faces }: { data: MeshData; faces: number[] }) {
-  const geo = useMemo(() => {
+/** Translucent fill over the currently selected faces, PLUS CAD measurement
+ *  labels: each face's perimeter edges show their world-space length, and each
+ *  face's centroid shows its world-space area. Mirrors ElementHighlight's
+ *  label style so selecting a face reads like a tape measure + area callout. */
+function FaceHighlight({
+  data,
+  faces,
+  transform,
+  unit,
+}: {
+  data: MeshData;
+  faces: number[];
+  transform: Transform;
+  unit: LengthUnit;
+}) {
+  const { geo, edgeLabels, areaLabels } = useMemo(() => {
     const pos: number[] = [];
+    const edgeLabels: { pos: [number, number, number]; len: string }[] = [];
+    const areaLabels: { pos: [number, number, number]; area: string }[] = [];
+    const m = worldMatrix(transform);
+    const va = new THREE.Vector3();
+    const vb = new THREE.Vector3();
+    const vc = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const ac = new THREE.Vector3();
+    const cross = new THREE.Vector3();
     for (const fi of faces) {
       const face = data.faces[fi];
       if (!face) continue;
+      // Reuse the triangulated fill geometry for the highlight surface.
       for (const t of triangulateFace(face)) {
         for (const vi of t.v) {
           pos.push(
@@ -692,25 +746,93 @@ function FaceHighlight({ data, faces }: { data: MeshData; faces: number[] }) {
           );
         }
       }
+      // Perimeter edges (consecutive vertex pairs, wrap-around). Each edge
+      // endpoint is projected into world space before measuring, so rotated
+      // faces read correctly. Label sits at the local-space midpoint (the
+      // <Html> is parented under the mesh, which applies the transform).
+      for (let i = 0; i < face.v.length; i++) {
+        const a = face.v[i]!;
+        const b = face.v[(i + 1) % face.v.length]!;
+        const ax = data.vertices[a * 3] ?? 0;
+        const ay = data.vertices[a * 3 + 1] ?? 0;
+        const az = data.vertices[a * 3 + 2] ?? 0;
+        const bx = data.vertices[b * 3] ?? 0;
+        const by = data.vertices[b * 3 + 1] ?? 0;
+        const bz = data.vertices[b * 3 + 2] ?? 0;
+        va.set(ax, ay, az).applyMatrix4(m);
+        vb.set(bx, by, bz).applyMatrix4(m);
+        edgeLabels.push({
+          pos: [(ax + bx) / 2, (ay + by) / 2, (az + bz) / 2],
+          len: formatLength(va.distanceTo(vb), unit),
+        });
+      }
+      // Face area in world space = sum of fan-triangulated triangle areas,
+      // each measured as half the cross-product magnitude. Local-space
+      // centroid (vertex average) is the label anchor.
+      let area = 0;
+      let cx = 0,
+        cy = 0,
+        cz = 0;
+      for (let i = 0; i < face.v.length; i++) {
+        const vi = face.v[i]!;
+        cx += data.vertices[vi * 3] ?? 0;
+        cy += data.vertices[vi * 3 + 1] ?? 0;
+        cz += data.vertices[vi * 3 + 2] ?? 0;
+      }
+      const n = face.v.length || 1;
+      const tris = triangulateFace(face);
+      for (const t of tris) {
+        const [ia, ib, ic] = t.v;
+        if (ia === undefined || ib === undefined || ic === undefined) continue;
+        va.set(data.vertices[ia * 3] ?? 0, data.vertices[ia * 3 + 1] ?? 0, data.vertices[ia * 3 + 2] ?? 0).applyMatrix4(m);
+        vb.set(data.vertices[ib * 3] ?? 0, data.vertices[ib * 3 + 1] ?? 0, data.vertices[ib * 3 + 2] ?? 0).applyMatrix4(m);
+        vc.set(data.vertices[ic * 3] ?? 0, data.vertices[ic * 3 + 1] ?? 0, data.vertices[ic * 3 + 2] ?? 0).applyMatrix4(m);
+        ab.subVectors(vb, va);
+        ac.subVectors(vc, va);
+        cross.crossVectors(ab, ac);
+        area += cross.length() * 0.5;
+      }
+      areaLabels.push({
+        pos: [cx / n, cy / n, cz / n],
+        area: formatArea(area, unit),
+      });
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
     g.computeVertexNormals();
-    return g;
-  }, [data, faces]);
+    return { geo: g, edgeLabels, areaLabels };
+  }, [data, faces, transform, unit]);
 
   return (
-    <mesh geometry={geo} raycast={() => null}>
-      <meshBasicMaterial
-        color="#ffb84d"
-        transparent
-        opacity={0.4}
-        side={THREE.DoubleSide}
-        depthWrite={false}
-        polygonOffset
-        polygonOffsetFactor={-2}
-      />
-    </mesh>
+    <>
+      <mesh geometry={geo} raycast={() => null}>
+        <meshBasicMaterial
+          color="#ffb84d"
+          transparent
+          opacity={0.4}
+          side={THREE.DoubleSide}
+          depthWrite={false}
+          polygonOffset
+          polygonOffsetFactor={-2}
+        />
+      </mesh>
+      {/* Perimeter edge length labels (CAD-style, sit on each edge midpoint). */}
+      {edgeLabels.map((lbl, i) => (
+        <Html key={`e${i}`} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-1 py-0 font-mono text-[8px] font-medium text-black shadow">
+            {lbl.len}
+          </div>
+        </Html>
+      ))}
+      {/* Face area label at the centroid (slightly larger pill so it reads as the "primary" callout). */}
+      {areaLabels.map((lbl, i) => (
+        <Html key={`a${i}`} position={lbl.pos} center distanceFactor={8} occlude={false} zIndexRange={[20, 0]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn px-1 py-0 font-mono text-[8px] font-semibold text-black shadow">
+            {lbl.area}
+          </div>
+        </Html>
+      ))}
+    </>
   );
 }
 

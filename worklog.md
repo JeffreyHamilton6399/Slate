@@ -191,3 +191,83 @@ Work Log:
 
 Stage Summary:
 - 9 files modified. Browser-verified: pivot cycle (Median→Cursor→Indiv.), new 2D tools present (Pencil/Marker/Calligraphy/Airbrush/Diamond). TypeScript + ESLint clean (0 errors).
+
+---
+Task ID: PARALLEL-B
+Agent: main (Z.ai Code)
+Task: Face-selection CAD measurements + smaller numbers + rotation-correct edge lengths + unit-aware labels
+
+Work Log:
+- Read SceneObjects.tsx, useBoardSettings.ts, units.ts, Viewport3D.tsx, mesh/triangulate.ts, sync-protocol/schema.ts to understand the data flow and existing measurement code.
+- Added `formatArea(metersSquared, unit)` to `viewport3d/units.ts`: converts m² to mm²/cm²/m²/in²/ft² (squared the existing UNIT_PER_METER factor) with sensible per-unit decimals (mm=0, cm=1, m=3, in/ft=2). Reuses the existing `formatLength` approach so area labels read like "0.123 m²" / "5.4 ft²".
+- Plumbed board display unit into the 3D scene: added `unit?: LengthUnit` to `SceneObjectsProps` (defaults to 'm'), forwarded `unit` through `SceneObjects` → `SceneMesh` → `ElementHighlight` / `FaceHighlight`. `Viewport3D.tsx` already had `const [units] = useBoardUnits(room)` so it just passes `unit={units}` to `<SceneObjects>`.
+- Added shared `worldMatrix(t: Transform)` helper in SceneObjects.tsx that composes a `THREE.Matrix4` from position + Euler rotation + scale (same pattern as scene.ts `bakeMeshToWorld`). Used by both highlight components so CAD math respects object rotation, not just scale.
+- ElementHighlight rewrite:
+  - Changed prop from `scale: {x,y,z}` to `transform: Transform` + `unit: LengthUnit`.
+  - Edge length now measured in WORLD space: each endpoint is projected through `worldMatrix(transform)` via `Vector3.applyMatrix4`, then `va.distanceTo(vb)`. Fixes the previous `Math.hypot((bx-ax)*scale.x, …)` which ignored rotation.
+  - Label text now uses `formatLength(len, unit)` so the unit follows the board's setting (mm/cm/m/in/ft with `ft` formatted as `3′ 2.5″`).
+  - Pill: `text-[9px]` → `text-[8px]`; `px-1 py-px` → `px-1 py-0` (smaller numbers + tighter pills).
+- FaceHighlight rewrite (the big one): now accepts `transform` + `unit` and emits CAD labels in addition to the existing translucent orange fill:
+  - For each selected face, walks its perimeter edges (consecutive vertex pairs with wrap-around), projects each endpoint through `worldMatrix(transform)`, computes the world-space length, and renders a `<Html>` label at the local-space midpoint (same drei pattern as ElementHighlight: `center distanceFactor={8} occlude={false} zIndexRange={[20,0]}`).
+  - Computes the face's world-space area by fan-triangulating it (reuses `triangulateFace`) and summing `0.5 * |(b-a) × (c-a)|` of each triangle in world space. Renders a `<Html>` area label at the face's centroid (local-space vertex average, so it sits inside the face).
+  - Area label pill is solid `bg-warn` + `font-semibold` (vs the edges' `bg-warn/90` + `font-medium`) so it reads as the "primary" callout. Both use `text-[8px]` and `px-1 py-0` for size consistency with ElementHighlight.
+- Updated both `SceneMesh` call sites in SceneObjects.tsx: `FaceHighlight` now receives `transform={obj.transform} unit={unit}` and `ElementHighlight` receives `transform={obj.transform} unit={unit}` (replacing the old `scale={obj.transform.scale}`).
+- TypeScript typecheck (`npx tsc --noEmit`) passes clean — no errors.
+
+Stage Summary:
+- 3 files modified (units.ts, SceneObjects.tsx, Viewport3D.tsx). Selecting FACES in the 3D editor now shows measurement labels (perimeter edge lengths + face area at centroid) in addition to the orange fill. Selecting EDGES still shows length labels but now with rotation-correct math and unit-aware formatting. ALL CAD measurement pills are smaller (`text-[8px]`, `px-1 py-0`). Units follow the board setting (mm/cm/m/in/ft; ft-length as `ft′ in″`, ft-area as `ft²`). tsc clean.
+
+---
+Task ID: PARALLEL-A
+Agent: main (Z.ai Code)
+Task: 3 related fixes — (1) Delete projects from Supabase cloud, not just local; (2) Home layout max 3 recents + scrollable live boards; (3) Live public boards real-time updates with audio mode + visibility filtering
+
+Work Log:
+- Read worklog (latest FIX-9) and the 5 target files (cloudSaves.ts, snapshot.ts, Home.tsx, rooms.ts, supabase.ts, useAccount.ts). Confirmed `startCloudSaveBridge` is mounted in App.tsx as `<CloudSaveBridge>` (active whenever a user is signed in — including when Home renders).
+- snapshot.ts: added `onDeleteSave(cb)` pub/sub mirroring `onSavePersisted` (a `Set<DeleteListener>` with `(saveId: string) => void` signature). `deleteSave(id)` now fires all `deleteListeners` after removing the localStorage index entry + snapshot blob. `pruneLegacyAutosaves` and `deleteSaveByBoardName` (in Home.tsx) automatically propagate via this listener.
+- cloudSaves.ts: imported `onDeleteSave`. Added `deleteCloudSave(userId, saveId)` (DELETE FROM board_saves WHERE user_id=? AND save_id=?) and `deleteCloudSavesByBoard(userId, boardName)` (DELETE … WHERE user_id=? AND board_name=?). `startCloudSaveBridge` now also subscribes to `onDeleteSave` and calls `deleteCloudSave(userId, saveId)` for each locally-deleted save. The unsubscribe tears down both the persist listener and the delete listener (and clears pending debounce timers).
+- Home.tsx: 
+  • `recentsFromSaves()` now slices to 3 (was 12).
+  • Recents grid is now `grid-cols-2 sm:grid-cols-3` (dropped the `lg:grid-cols-4` tier so max 3 cards show).
+  • Added `const liveRooms = rooms.filter((r) => r.visibility === 'public' && r.members > 0)` so private boards and empty rooms disappear from the discovery list (matches the "Live public boards" section title).
+  • Live boards `<ul>` now has `max-h-[50vh] overflow-y-auto pr-1` so it scrolls when many boards are present.
+  • Polling interval reduced from 10s to 5s for snappier real-time updates.
+  • Live board mode badge now uses the same color scheme as recents: 3d→accent, audio→warn, 2d→green (audio was previously collapsed into the 2d/green branch because the type didn't include 'audio').
+  • Delete confirm message updated to reflect that BOTH local + cloud saves are removed.
+- rooms.ts: `PublicRoom.mode` extended from `'2d' | '3d'` to `'2d' | '3d' | 'audio'`. Verified all callers (Onboarding.tsx, BoardsPanel.tsx, Home.tsx) handle 'audio' correctly (they pass it through to `setMode`/`enterBoard` which already accept 'audio').
+- Installed workspace deps with `bun install` (node_modules were missing — bun migrated the pnpm-lock.yaml to bun.lock automatically).
+- `npx tsc --noEmit` from apps/client: EXIT 0, zero errors. (Pre-existing modifications to SceneObjects.tsx/Viewport3D.tsx/units.ts from another agent's work are also clean now — they appeared broken in an intermediate run due to stash churn but resolve to clean on the final state.)
+
+Stage Summary:
+- 4 files modified (cloudSaves.ts, snapshot.ts, Home.tsx, rooms.ts). Deleting a project from Home now removes it from Supabase too (via the new onDeleteSave bridge listener), so it won't reappear on refresh. Home shows max 3 recents in a 2/3-col grid, with a scrollable live-boards list below. Live boards poll every 5s, include audio mode with warn color, and filter out private + empty rooms. TypeScript clean (0 errors).
+
+---
+Task ID: PARALLEL-C
+Agent: main (Z.ai Code)
+Task: 4 audio editor fixes — (1) waveform blank after cut/join/leave, (2) drag snap to left/right of neighbour, (3) fade-in/out visual triangle, (4) clean up Audio Settings panel
+
+Work Log:
+- Read worklog (latest PARALLEL-A/B) and the 4 target files (AudioEditor.tsx, scene.ts, sampleStore.ts, AudioSettingsPanel.tsx) fully.
+- Task 1 — waveform blank after cut/join/leave:
+  • WaveformImg (AudioEditor.tsx): when `loadSamples` returns an empty Float32Array (length 0 — race with IndexedDB write on a freshly-split/created clip), DON'T cache the resulting blank PNG. Instead show the `···` placeholder and retry every 500ms up to 5 times. `retryRef` counter is reset to 0 on success or when the cache-bust event fires.
+  • WaveformImg: added an internal `slate:audio-clip-changed` listener that (a) invalidates any cached PNG entries for the current `clipId` (defensive — parent also does this), (b) resets the retry counter, and (c) bumps a `bust` state counter that's in the load-effect deps. Without the `bust` bump the memoised component kept showing the stale PNG even after the cache was cleared (its primitive props were unchanged so the effect never re-ran).
+  • scene.ts splitAudioClip: now passes the Float32Array halves straight to `storeSamples` (slice() on Float32Array returns Float32Array) instead of converting via `float32ToNumberArray` — saves a full-array copy for big clips. Same fix in AudioSettingsPanel Normalize + Reverse (pass `normed`/`out` Float32Array directly).
+  • Added `duplicateAudioClip(slate, id)` helper in scene.ts (loads samples, calls addAudioClip with the Float32Array directly).
+  • Generalised `addAudioClip` to accept `number[] | Float32Array` (uses `instanceof Float32Array` to pass through without copying).
+- Task 2 — drag snap to left/right of neighbour:
+  • Extended `neighbourBounds` to also return the full list of same-track clip `{start,end}` bounds (was just the immediate left/right limits).
+  • `dragRef` now carries the `neighbours` array.
+  • `pointermove` for `mode === 'drag'`: replaced the dead-stop clamp with a snap-to-free-side resolver. Computes `rawStart = os + dt`, then iteratively: if the candidate position would overlap a neighbour by more than 0.05s (small threshold to avoid accidental snaps at the boundary), JUMP to the free side of that blocker — `blocker.end` when dragging right (dt ≥ 0), `blocker.start - duration` when dragging left (dt < 0). Iterates so a chain of back-to-back clips resolves to the next genuine free slot. Final `Math.max(0, start)` keeps it on the positive timeline. Trim modes still use the old leftLimit/rightLimit clamp (unchanged).
+- Task 3 — fade-in/out visual triangles:
+  • ClipBlock (AudioEditor.tsx): added two CSS clip-path div overlays on top of the waveform layer. Fade-in: `bg-black/30` wedge anchored left, width = `clip.fadeIn * pxPerSec`, `clipPath: polygon(0% 0%, 0% 100%, 100% 50%)` — full height at the outer (left) edge tapering to a point at the inner edge. Fade-out: mirrored on the right (`right-0`, `polygon(100% 0%, 100% 100%, 0% 50%)`). Widths clamped to the clip box so an over-long fade doesn't spill past the opposite edge. Both are `pointer-events-none` so they don't intercept drag/trim.
+- Task 4 — clean up Audio Settings panel:
+  • Removed the "Start (s)" and "Duration (s)" numeric inputs (these are controlled by dragging/trimming in the timeline, not typing).
+  • Reorganised into a consistent grid: Name+Color (2-col), Fade In+Out (2-col), Gain+Pan (2-col), Speed/Pitch (full width). Each slider row uses the same `field-label` + `flex items-center gap-1` (icon + range + value) structure.
+  • Added a "Duplicate" button (Copy icon) next to Split in a 2-col action grid — calls the new `duplicateAudioClip(slate, clip.id)` (same logic as the D hotkey, which now also calls it). Normalize + Reverse fill the second row, Delete Clip is its own full-width row below.
+  • Normalize/Reverse now pass the Float32Array directly to `storeSamples` (removed `float32ToNumberArray` import — unused after the fix).
+- `npx tsc --noEmit` from apps/client: EXIT 0, zero errors.
+- ESLint on the 3 changed files: 0 errors, 2 pre-existing warnings (pxPerSec dep in a useCallback, and `version` state set-but-not-read in AudioSettingsPanel — both predate this task).
+- dev.log: clean compile, `GET / 200`.
+
+Stage Summary:
+- 3 files modified (audio/AudioEditor.tsx, audio/scene.ts, panels/AudioSettingsPanel.tsx). Waveforms no longer go blank after split/normalize/reverse (retry-on-empty + per-clip cache-bust). Dragging a clip over a neighbour now snaps to the free side (left/right) of that neighbour instead of stopping dead. Clip blocks show semi-transparent triangle overlays for fade-in (left wedge) and fade-out (right wedge). Audio Settings panel is more compact: Start/Duration inputs removed, consistent 2-col slider grid, Duplicate button added. tsc + ESLint clean.

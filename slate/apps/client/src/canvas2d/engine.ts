@@ -36,6 +36,8 @@ interface EngineOpts {
   getLivePreview: () => { stroke: Stroke | null; shape: Shape | null };
   getViewport: () => ViewportSize;
   getPaper: () => string;
+  getAnimTime: () => number;
+  getAnimPreview: () => boolean;
 }
 
 export class CanvasEngine {
@@ -264,12 +266,14 @@ export class CanvasEngine {
   private loop = (): void => {
     this.rafHandle = requestAnimationFrame(this.loop);
     const live = this.opts.getLivePreview();
-    // Always-paint when there is a live preview (live coords change without dirty).
-    if (!this.dirty && !live.stroke && !live.shape) return;
+    const animPreview = this.opts.getAnimPreview();
+    // Always-paint when there is a live preview OR animation is playing/scrubbing.
+    if (!this.dirty && !live.stroke && !live.shape && !animPreview) return;
     this.dirty = false;
     const transform = this.opts.getTransform();
     const size = this.opts.getViewport();
     const paper = this.opts.getPaper();
+    const animTime = this.opts.getAnimTime();
     this.scene = {
       layers: this.cachedLayers,
       shapesByLayer: this.cachedShapesByLayer,
@@ -279,6 +283,7 @@ export class CanvasEngine {
       liveStroke: live.stroke,
       liveShape: live.shape,
       paper,
+      animTime,
     };
     renderScene(this.opts.canvas, this.scene, transform, size);
   };
@@ -305,6 +310,7 @@ function readShape(m: Y.Map<unknown>): Shape | null {
     src: m.get('src'),
     createdAt: m.get('createdAt'),
     authorId: m.get('authorId'),
+    anim: m.get('anim'),
   };
   const parsed = shapeSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;

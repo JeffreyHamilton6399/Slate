@@ -203,7 +203,7 @@ function parseObject(m: Y.Map<unknown>, id: string) {
 // ── Local store of saves ─────────────────────────────────────────────────────
 const KEY = 'slate.saves.v1';
 
-interface SaveIndexEntry {
+export interface SaveIndexEntry {
   id: string;
   boardName: string;
   label: string;

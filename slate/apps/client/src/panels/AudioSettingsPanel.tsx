@@ -7,26 +7,20 @@
  * Also has an import button + audio asset library at the bottom.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { FileAudio, Upload, Trash2, Plus, Wand2, FlipHorizontal2, Scissors, Sliders, Volume2, Music } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Trash2, Wand2, FlipHorizontal2, Scissors, Sliders, Volume2 } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import {
-  addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
-  readAudioClip, readAudioTrack, updateAudioClip, updateAudioTrack,
-  splitAudioClip, deleteAudioTrack,
+  deleteAudioClip, readAudioClip, readAudioTrack, updateAudioClip,
+  updateAudioTrack, splitAudioClip, deleteAudioTrack,
 } from '../audio/scene';
-import { loadSamples, float32ToNumberArray } from '../audio/sampleStore';
-import { useScene3DStore } from '../viewport3d/store';
+import { loadSamples, float32ToNumberArray, storeSamples } from '../audio/sampleStore';
 
 export function AudioSettingsPanel() {
   const room = useRoom();
   const slate = room.slate;
   const [version, setVersion] = useState(0);
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  // Reuse the 3D store's selection for the selected clip ID.
-  // The AudioEditor sets selectedClipId in its own state, but we share it
-  // via a module-level variable for now.
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 
@@ -74,15 +68,6 @@ export function AudioSettingsPanel() {
     const t = readAudioTrack(m, id);
     if (t) allTracks.push({ id, name: t.name, color: t.color });
   });
-
-  const handleImport = async (file: File) => {
-    try {
-      const d = await decodeAudioFile(file);
-      const tid = addAudioTrack(slate, { name: file.name.replace(/\.[^.]+$/, '') });
-      await addAudioClip(slate, tid, { start: 0, samples: d.samples, sampleRate: d.sampleRate, channels: d.channels, duration: d.duration, name: file.name });
-      toast({ title: 'Imported', description: file.name });
-    } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
-  };
 
   const setClip = (patch: Parameters<typeof updateAudioClip>[2]) => {
     if (selectedClipId) updateAudioClip(slate, selectedClipId, patch);
@@ -140,7 +125,6 @@ export function AudioSettingsPanel() {
               const g = 1 / max;
               const normed = new Float32Array(samples.length);
               for (let i = 0; i < samples.length; i++) normed[i] = samples[i]! * g;
-              const { storeSamples } = await import('../audio/sampleStore');
               await storeSamples(clip.sampleKey, float32ToNumberArray(normed));
               window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
               toast({ title: 'Normalized' });
@@ -151,7 +135,6 @@ export function AudioSettingsPanel() {
               const frames = samples.length / ch;
               const out = new Float32Array(samples.length);
               for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
-              const { storeSamples } = await import('../audio/sampleStore');
               await storeSamples(clip.sampleKey, float32ToNumberArray(out));
               window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
               toast({ title: 'Reversed' });
@@ -202,36 +185,9 @@ export function AudioSettingsPanel() {
         </div>
       ) : (
         <div className="rounded-md border border-dashed border-border p-4 text-center text-xs text-text-dim">
-          Select a clip or track to see its settings.
+          Select a clip in the timeline to edit its settings.
         </div>
       )}
-
-      {/* Import + asset library */}
-      <div className="border-t border-border pt-2">
-        <div className="flex items-center justify-between">
-          <h5 className="panel-title text-[10px] font-mono uppercase tracking-wider text-text-dim">Audio Library</h5>
-          <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-text-mid hover:bg-bg-3"><Upload size={10} />Import</button>
-          <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImport(f); e.target.value = ''; }} />
-        </div>
-        <div className="mt-1 flex flex-col gap-0.5">
-          {Array.from(slate.audioClips().keys()).length === 0 ? (
-            <p className="py-2 text-center text-[10px] text-text-dim">No audio imported yet.</p>
-          ) : (
-            Array.from(slate.audioClips().entries()).map(([id, m]) => {
-              const c = readAudioClip(m, id);
-              if (!c) return null;
-              return (
-                <div key={id} className={`group flex items-center gap-1.5 rounded border px-1.5 py-1 ${selectedClipId === id ? 'border-accent/50 bg-accent/5' : 'border-border'}`}>
-                  <FileAudio size={11} className="shrink-0 text-accent" />
-                  <span className="min-w-0 flex-1 truncate text-[10px] text-text">{c.name}</span>
-                  <span className="text-[9px] font-mono text-text-dim">{c.duration.toFixed(1)}s</span>
-                  <button onClick={() => { setSelectedClipId(id); setSelectedTrackId(c.trackId); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: id })); }} className="opacity-0 group-hover:opacity-100 text-text-mid hover:text-accent"><Plus size={10} /></button>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
     </div>
   );
 }

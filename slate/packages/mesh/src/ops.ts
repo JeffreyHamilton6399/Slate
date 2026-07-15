@@ -351,18 +351,20 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       edges = [...cutsByNb.values()];
     }
 
-    // Winding safety net: ensure the outer ring is CCW seen from outside.
-    // (Topology gives us a consistent cyclic order, but it may be globally
-    // inverted relative to the vertex normal depending on which face we
-    // started the chain from — flip if so.)
+    // Winding safety net: check if the outer ring faces inward.
+    // CRITICAL: do NOT reverse the edges array — that would change which edges
+    // are adjacent in the quad strips, causing a visual "rotation" of the
+    // corner fill. Instead, compute a boolean and reverse vertex order WITHIN
+    // each generated face. This fixes winding without changing topology.
     const n = normalize(vertNormal.get(vi) ?? { x: 0, y: 1, z: 0 });
     const outerRing = edges.map((e) => e[e.length - 1]!); // outermost cuts
-    if (dot(faceNormal(m, { v: outerRing }), n) < 0) edges.reverse();
+    const windingFlip = dot(faceNormal(m, { v: outerRing }), n) < 0;
 
     // For single-segment (seg=1), each edge has 1 cut. The corner fill is a
     // single n-gon connecting all cuts — edges shared with the modified faces.
     if (seg === 1) {
-      m.faces.push({ v: edges.map((e) => e[0]!) });
+      const ring = edges.map((e) => e[0]!);
+      m.faces.push({ v: windingFlip ? [...ring].reverse() : ring });
       continue;
     }
     // For multi-segment, create concentric rings connected by quad strips.
@@ -375,12 +377,17 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       for (let e = 0; e < numEdges; e++) {
         const e1 = edges[e]!;
         const e2 = edges[(e + 1) % numEdges]!;
-        // Quad: inner(s) on e1, outer(s+1) on e1, outer(s+1) on e2, inner(s) on e2
-        m.faces.push({ v: [e1[s]!, e1[s + 1]!, e2[s + 1]!, e2[s]!] });
+        // Normal winding: inner(s) on e1, outer(s+1) on e1, outer(s+1) on e2, inner(s) on e2
+        // If windingFlip: reverse the vertex order within this quad.
+        const quad = windingFlip
+          ? [e2[s]!, e2[s + 1]!, e1[s + 1]!, e1[s]!]
+          : [e1[s]!, e1[s + 1]!, e2[s + 1]!, e2[s]!];
+        m.faces.push({ v: quad });
       }
     }
     // Innermost n-gon cap (ring 0).
-    m.faces.push({ v: edges.map((e) => e[0]!) });
+    const innerRing = edges.map((e) => e[0]!);
+    m.faces.push({ v: windingFlip ? [...innerRing].reverse() : innerRing });
   }
 
   // The original beveled vertices are now unreferenced; drop them.

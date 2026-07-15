@@ -75,7 +75,7 @@ export function pointInShape(s: Shape, p: BoardPoint): boolean {
       y1 = s.y,
       x2 = s.x + s.w,
       y2 = s.y + s.h;
-    return distToSegment(p.x, p.y, x1, y1, x2, y2) <= Math.max(6, s.strokeWidth);
+    return pointToSegmentDistance(p.x, p.y, x1, y1, x2, y2) <= Math.max(6, s.strokeWidth);
   }
   const b = shapeBounds(s);
   if (!rectContains(b, p)) return false;
@@ -121,7 +121,8 @@ function pointInTriangle(
   return !(hasNeg && hasPos);
 }
 
-function distToSegment(
+/** Shortest distance from point (px,py) to the segment (x1,y1)→(x2,y2). */
+export function pointToSegmentDistance(
   px: number,
   py: number,
   x1: number,
@@ -146,7 +147,7 @@ export function pointNearStroke(s: Stroke, p: BoardPoint, tolerance = 0): boolea
     const y1 = pts[i - 2] ?? 0;
     const x2 = pts[i] ?? 0;
     const y2 = pts[i + 1] ?? 0;
-    if (distToSegment(p.x, p.y, x1, y1, x2, y2) <= tol) return true;
+    if (pointToSegmentDistance(p.x, p.y, x1, y1, x2, y2) <= tol) return true;
   }
   return false;
 }

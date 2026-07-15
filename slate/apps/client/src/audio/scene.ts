@@ -175,6 +175,7 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     pan: (m.get('pan') as number) ?? 0,
     mute: (m.get('mute') as boolean) ?? false,
     speed: (m.get('speed') as number) ?? 1,
+    pitch: (m.get('pitch') as number) ?? 0,
   };
 }
 

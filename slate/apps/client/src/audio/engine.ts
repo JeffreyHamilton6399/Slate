@@ -140,12 +140,22 @@ export class AudioEngine {
       if (clipEnd <= offset) continue; // clip already finished
 
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+      const pitchCents = clip.pitch ?? 0;
       const clipOffset = clip.offset ?? 0; // trim from the source (buffer seconds)
       const clipVol = clip.gain ?? 1;
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.playbackRate.value = speed;
+      // Pitch shift (in cents) via the buffer source's `detune` AudioParam.
+      // NOTE: Web Audio's AudioBufferSourceNode couples pitch and speed —
+      // `detune` shifts pitch AND scales the effective playback rate
+      // (effectiveRate = playbackRate * 2^(detune/1200)). True pitch-
+      // independent-of-speed requires offline time-stretching, which is out
+      // of scope here. The two knobs still give the user independent CONTROL:
+      // to hold timeline speed constant while shifting pitch, set
+      // speed = 1 / 2^(pitch/1200) to compensate.
+      if (pitchCents !== 0) source.detune.value = pitchCents;
 
       // Per-clip gain (fades + clip volume) → per-clip panner → track chain.
       const clipGain = ctx.createGain();

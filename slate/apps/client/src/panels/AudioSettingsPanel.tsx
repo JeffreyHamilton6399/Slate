@@ -140,16 +140,35 @@ export function AudioSettingsPanel() {
               format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
             />
           </div>
-          {/* Speed / Pitch — rotary knob */}
-          <RotaryKnob
-            label="Speed / Pitch"
-            value={clip.speed ?? 1}
-            min={0.25}
-            max={4}
-            step={0.05}
-            onChange={(v) => setClip({ speed: v })}
-            format={(v) => `${v.toFixed(2)}×`}
-          />
+          {/* Speed + Pitch — two separate rotary knobs.
+              • Speed: 0.25×..4×, sets clip.speed (timeline rate; Web Audio
+                playbackRate — naturally shifts pitch as a side effect).
+              • Pitch: -12..+12 semitones, sets clip.pitch (stored in Yjs as
+                cents = semitones × 100). Applied via the buffer source's
+                `detune` AudioParam. */}
+          <div className="grid grid-cols-2 gap-2">
+            <RotaryKnob
+              label="Speed"
+              value={clip.speed ?? 1}
+              min={0.25}
+              max={4}
+              step={0.05}
+              onChange={(v) => setClip({ speed: v })}
+              format={(v) => `${v.toFixed(2)}×`}
+            />
+            <RotaryKnob
+              label="Pitch"
+              value={(clip.pitch ?? 0) / 100}
+              min={-12}
+              max={12}
+              step={1}
+              onChange={(v) => setClip({ pitch: v * 100 })}
+              format={(v) => {
+                const n = Math.round(v);
+                return n > 0 ? `+${n} st` : `${n} st`;
+              }}
+            />
+          </div>
           {/* Mute + source info */}
           <div className="flex items-center justify-between">
             <button onClick={() => setClip({ mute: !clip.mute })} className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${clip.mute ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{clip.mute ? 'Muted' : 'Mute clip'}</button>
@@ -330,22 +349,30 @@ function RotaryKnob({ value, min, max, step, label, onChange, format, size = 48 
   const indEnd = { x: cx + rInd * Math.cos(valRad), y: cy + rInd * Math.sin(valRad) };
 
   // ── Pointer drag (vertical: up = increase) ──────────────────────────────
+  // We attach pointermove/pointerup to WINDOW during a drag instead of
+  // relying on `setPointerCapture` — pointer capture is flaky on some
+  // browsers/setups (the capture can be silently lost mid-drag, leaving the
+  // knob stuck following the cursor or not following at all). Window-level
+  // listeners always receive the events regardless of where the pointer goes.
   const onPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    dragRef.current = { startY: e.clientY, startVal: value, fine: e.shiftKey };
-    try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* ignore */ }
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current; if (!d) return;
-    // 200px of drag = full range (600px with Shift for fine control).
-    const sensitivity = d.fine ? 600 : 200;
-    const delta = ((d.startY - e.clientY) / sensitivity) * range;
-    onChange(clamp(d.startVal + delta));
-  };
-  const onPointerUp = (e: React.PointerEvent) => {
-    dragRef.current = null;
-    try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    dragRef.current = { startY: e.clientY, startVal: valueRef.current, fine: e.shiftKey };
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current; if (!d) return;
+      // 150px of drag = full range (400px with Shift for fine control).
+      // Lower denominator = more sensitive (less movement needed).
+      const sensitivity = d.fine ? 400 : 150;
+      const delta = ((d.startY - ev.clientY) / sensitivity) * range;
+      onChangeRef.current(clamp(d.startVal + delta));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   };
 
   // ── Native non-passive wheel listener (so preventDefault works) ─────────
@@ -389,8 +416,6 @@ function RotaryKnob({ value, min, max, step, label, onChange, format, size = 48 
         viewBox={`0 0 ${size} ${size}`}
         className="touch-none cursor-ns-resize"
         onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
         onKeyDown={onKeyDown}
         role="slider"
         aria-label={label}

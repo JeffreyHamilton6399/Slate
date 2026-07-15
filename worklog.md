@@ -390,3 +390,184 @@ Work Log:
 
 Stage Summary:
 - 3 files modified (app/Home.tsx, audio/AudioEditor.tsx, panels/AudioSettingsPanel.tsx). Home now shows a compact Recent widget in the bottom-right of the hero (3 items, single-row entries) + an "All Projects" button/dialog showing ALL saved projects in a scrollable grid with delete. Audio editor zoom-out floor lowered from 10→2 px/sec so long mixes fit in the viewport, plus a Fit-to-window button (Maximize2 icon) that computes the exact px/sec to fit all clips. Audio settings panel now uses DAW-style rotary knobs (270° arc + indicator + drag/wheel/keyboard) for all clip + track numeric params. tsc + ESLint clean.
+
+---
+Task ID: ROUND4-B
+Agent: main (Z.ai Code)
+Task: 2 fixes — (1) 2D timeline overlap with toolbar; (2) eraser partial-stroke erasure (erase like a pen)
+
+Work Log:
+- Read worklog (last entry was ROUND3-B), then read all 4 target files in full:
+  apps/client/src/canvas2d/{Toolbar.tsx, Timeline2D.tsx, tools.ts, engine.ts} plus
+  geometry.ts (to check for an existing point-to-segment helper), types.ts
+  (BoardPoint/Rect/Stroke), utils/id.ts (makeId signature), and the sync-protocol
+  Stroke schema (validators.ts:101 + schema.ts:89) to confirm what fields a Stroke
+  carries and what strokeSchema.safeParse will accept.
+
+Task 1 — Toolbar/Timeline overlap (Toolbar.tsx):
+- Root cause confirmed: the History & zoom bar had responsive positioning that
+  sent it to the bottom-center on `sm:` viewports
+  (`sm:left-1/2 sm:right-auto sm:top-auto sm:bottom-2 sm:-translate-x-1/2`),
+  which is exactly where Timeline2D lives (`absolute bottom-2 left-2 right-2 z-10`).
+  On desktop the two stacked on top of each other.
+- Fix: stripped the 5 `sm:*` overrides so the bar stays at `absolute right-2 top-2
+  z-10` on every viewport. The mobile style strip still lives at the bottom
+  (`absolute bottom-2 left-2 right-2 ... sm:bottom-auto sm:left-1/2 sm:right-auto
+  sm:top-2 sm:-translate-x-1/2` — unchanged), and the left rail (tool selection)
+  is unchanged. Only the History & zoom bar moved; everything else stays where
+  the user is used to it. Updated the comment to explain the new layout
+  ("History & zoom stays top-right on every viewport. The bottom is reserved for
+  the Timeline2D overlay (and the mobile style strip), so the two never overlap.").
+
+Task 2 — Eraser partial stroke erasure (geometry.ts + engine.ts + tools.ts):
+
+  geometry.ts:
+  - The `distToSegment` helper existed but was private (not exported) and only
+    used inside `pointInShape` (line/arrow branch) and `pointNearStroke`.
+    Renamed it to `pointToSegmentDistance` and exported it, then updated the 2
+    internal callers. Same algorithm (project point onto segment, clamp t to
+    [0,1], return hypot). No behavior change for existing callers — just made
+    the helper public so the eraser can reuse it.
+
+  engine.ts:
+  - Added a new `splitStroke(id: string, newStrokes: Stroke[])` method that
+    deletes the original stroke and commits every new stroke in a single Yjs
+    transaction. Mirrors the shape of `commitStroke` (parses each new stroke
+    through strokeSchema, builds a Y.Map, sets it on slate.strokes()). Skips
+    the whole op when `isDrawMuted()` is true (matches commitStroke/commitShape
+    behavior — muted users can't erase-split either). Placed right after
+    `deleteIds` since they're conceptually similar.
+
+  tools.ts:
+  - Added `pointToSegmentDistance` to the existing `./geometry` import list.
+  - Rewrote `EraserTool.eraseAt`: it now iterates strokes calling a new
+    `eraseStrokePartial` (partial erasure) and shapes via the old
+    `pointInShape(sh, p)` test (deleted whole — same as before). The dead-list
+    is now shape-only (`deadShapes`); strokes are deleted/split inside
+    `eraseStrokePartial` so each one is its own atomic splitStroke transaction.
+  - New `eraseStrokePartial(stroke, p, radius)`:
+    1. Detects stride: `points.length % 3 === 0 ? 3 : 2` (pressure vs no-pressure).
+       Early-returns if `numPts < 2` (single-point stroke can't be split).
+    2. Effective radius = `Math.max(stroke.size/2 + 2, radius)` — mirrors
+       `pointNearStroke` so the partial erasure matches the visual hit-test
+       (thick highlighter strokes get the same slack they had before).
+    3. Marks `erased[i]` for each segment whose `pointToSegmentDistance` from
+       `p` is `< effRadius`. If no segment is erased, returns early (no-op —
+       stroke untouched, no Yjs write).
+    4. Walks the points building sub-strokes from contiguous runs of non-erased
+       segments. A point whose prev segment is erased closes the current run;
+       a point whose next segment is erased is added as the tail then closes
+       the run; an isolated point (both neighbours erased) is dropped because
+       a single point can't form a stroke. Each run needs ≥ `stride*2` values
+       (i.e. ≥ 2 points) to be kept.
+    5. If exactly one sub-stroke came out AND its length equals the original
+       `points.length`, the stroke is effectively untouched — early return
+       (skips the delete+recommit round-trip).
+    6. If zero sub-strokes came out, the entire stroke was under the cursor —
+       `engine.deleteIds([stroke.id])`.
+    7. Otherwise, build N new Stroke objects (spread the original, replace
+       `id` with `makeId('stroke')`, replace `points` with the sub-stroke's
+       array — preserves `kind`, `layerId`, `color`, `size`, `opacity`,
+       `createdAt`, `authorId` so the pieces look identical to the original).
+       `createdAt` is intentionally kept from the original so the engine's
+       stable sort by `createdAt` keeps the pieces at the original's z-order
+       slot. Calls `engine.splitStroke(stroke.id, newStrokes)` for the
+       atomic delete+commit.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → only 2
+  pre-existing TS2688 errors about missing `vite/client` and
+  `vite-plugin-pwa/client` type definitions (caused by those packages not
+  being in node_modules — config-level issue, unrelated to my source changes).
+  Verified pre-existing by `git stash && npx tsc --noEmit && git stash pop` —
+  same 2 errors with my changes stashed. Zero source-level type errors.
+- ESLint can't run (missing `eslint-config-prettier` package — also a
+  pre-existing env issue), but the dev server compiles cleanly and serves
+  `GET / 200` per dev.log.
+- Read the full updated Toolbar.tsx, tools.ts (EraserTool block),
+  engine.ts (splitStroke), and geometry.ts (pointToSegmentDistance + the 2
+  updated call sites in pointInShape and pointNearStroke) to confirm the
+  changes are coherent and the partial-erasure logic is correct for all 4
+  edge cases (no segment erased / only-end segments erased / interior-only
+  erased / fully erased).
+
+Stage Summary:
+- 4 files modified: canvas2d/{Toolbar.tsx, geometry.ts, engine.ts, tools.ts}.
+- History & zoom bar now always top-right; bottom is free for Timeline2D on
+  desktop and the style strip on mobile. No more overlap.
+- Eraser now erases like a pen: dragging over a stroke splits it at the
+  erased segments into 1-2 shorter strokes (or deletes it entirely if the
+  whole stroke is under the cursor). Shapes are still deleted whole. The
+  split is a single Yjs transaction (`engine.splitStroke`) so remote peers
+  see one atomic update. Strokes preserve their kind/size/color/opacity/
+  z-order; only the points array is replaced and a fresh id is minted.
+- Zero new TypeScript errors introduced.
+
+---
+Task ID: ROUND4-A
+Agent: main (Z.ai Code)
+Task: 3 audio editor fixes — (1) zoom centering on playhead + adaptive ruler ticks; (2) track header slider drag-fighting fix; (3) RotaryKnob drag reliability + separate speed/pitch knobs
+
+Work Log:
+- Read worklog (latest ROUND4-B) + all target files fully: AudioEditor.tsx, AudioSettingsPanel.tsx, scene.ts, engine.ts, sync-protocol/schema.ts. Confirmed the AudioClip type and readAudioClip shape; confirmed engine applies `source.playbackRate.value = speed` (no detune previously).
+
+Task 1 — Zoom centering on playhead + adaptive ruler (AudioEditor.tsx):
+- Added `useLayoutEffect` to the React import list.
+- Added a `pendingScrollRef` (number | null) — holds the desired `scrollLeft` to apply after the next `pxPerSec` commit.
+- New `zoomAtPlayhead(newPxPerSec)` useCallback (empty deps — only uses refs + stable setState):
+  • Reads `scrollLeft`, `positionRef.current`, `pxRef.current` (old pxPerSec).
+  • Computes `playheadX = position * oldPxPerSec`, `playheadOffset = playheadX - scrollLeft` (playhead's offset from the left edge of the visible viewport, relative to timeline content).
+  • Computes `newPlayheadX = position * newPxPerSec`, `newScrollLeft = newPlayheadX - playheadOffset`.
+  • Stashes `newScrollLeft` in `pendingScrollRef` and calls `setPxPerSec(newPxPerSec)`.
+  • No-op fast path when old === new (just setState).
+- New `useLayoutEffect([pxPerSec])` applies `pendingScrollRef.current` to `scrollRef.current.scrollLeft` and clears it. Layout effect (not regular effect) so the scroll correction lands BEFORE the browser paints — otherwise the user sees a one-frame flash of the wrong scroll position. The layout effect runs AFTER React commits the new `minWidth` on the timeline div, so the new `scrollWidth` is in place and the `scrollLeft` write isn't clamped by stale layout.
+- Ctrl+scroll wheel handler: rewrote to compute `next` from `pxRef.current` (was using the functional `setPxPerSec((c) => ...)`) and call `zoomAtPlayhead(next)`. Dep array now includes `zoomAtPlayhead` (stable, but lint-clean).
+- Zoom out / Zoom in buttons: replaced `setPxPerSec((c) => ...)` with `zoomAtPlayhead(...)` reading `pxRef.current`.
+- `fitToWindow`: now goes through `zoomAtPlayhead` too (keeps the playhead on screen when the fit value still overflows the viewport).
+- Adaptive ruler ticks: added a `useMemo([pxPerSec])` returning `{ tickInterval, formatTick }` based on zoom:
+  • pxPerSec >= 400 → 0.1s ticks, `X.Xs` (millisecond-level when zoomed in tight).
+  • pxPerSec >= 100 → 1s ticks, `Xs`.
+  • pxPerSec >= 40  → 5s ticks, `Xs` (the previous fixed interval).
+  • pxPerSec >= 10  → 10s ticks, `Xs`.
+  • pxPerSec < 10   → 60s (1 min) ticks, `Xm` or `Xm Ys` (so a long mix doesn't turn into a wall of labels).
+- Ruler render: replaced the fixed `5s` step + `{i*5}s` label with `tickInterval` + `formatTick(t)`.
+
+Task 2 — Track header slider drag-fighting fix (AudioEditor.tsx TrackHeader):
+- Root cause confirmed: the `useEffect(() => setVol(track.volume), [track.volume])` was overwriting local `vol` state mid-drag. The drag handler calls `engineRef.current?.updateTracks(slate)` on every `onChange` (for live audio), which writes to Yjs, which fires the observeDeep → `bump` → re-render with a new `track.volume` → the effect clobbers `vol` back to the (slightly stale, rAF-throttled) Yjs value, making the slider "fight" the user. The big volume slider (flex-1) was more affected because its larger drag range made the fighting visible; the small pan slider (w-8) appeared to work because its tiny range hid the jitter.
+- Fix: added `isDraggingRef = useRef(false)`. Both prop-sync effects now early-return when `isDraggingRef.current` is true (`if (!isDraggingRef.current) setVol(...)`).
+- Added `onVolDown` / `onPanDown` handlers that set `isDraggingRef.current = true`. Wired to `onPointerDown` on the respective `<input type="range">`.
+- `onVolEnd` / `onPanEnd` now set `isDraggingRef.current = false` BEFORE committing to Yjs (so the next prop-sync effect runs normally and re-syncs from the committed value, in case Yjs normalised/clamped it).
+- Net effect: during a drag, the slider follows the cursor smoothly (local state, no Yjs echo fighting); on pointerup the value commits to Yjs once.
+
+Task 3a — RotaryKnob drag reliability (AudioSettingsPanel.tsx):
+- Root cause confirmed: the knob used `setPointerCapture` to redirect pointermove events to the SVG element. Pointer capture is flaky across browsers — the capture can be silently lost mid-drag (especially when the cursor crosses iframe boundaries, overlay elements, or on some touchpads), leaving the knob stuck or non-responsive.
+- Fix: replaced pointer-capture with WINDOW-level event listeners attached on pointerdown.
+  • `onPointerDown` creates `onMove` + `onUp` closures, adds them to `window` (`pointermove` + `pointerup`), and stores the drag state in `dragRef.current`.
+  • `onMove` reads from `dragRef.current` (not the closure) and calls `onChangeRef.current(clamp(...))` — using the ref so it always invokes the freshest `onChange` (the closures are created once per pointerdown, but `onChange`/`value` may update on each re-render).
+  • `onUp` clears `dragRef.current` and removes both window listeners.
+- Removed the `onPointerMove` and `onPointerUp` React props from the `<svg>` (no longer needed — window listeners handle everything).
+- Used `valueRef.current` for `startVal` (instead of `value` from closure) for consistency with the wheel listener and to avoid any stale-closure edge cases.
+- Sensitivity increased per task spec: `150` for normal (was `200`), `400` for fine/Shift (was `600`). Lower denominator = more sensitive (less movement needed for the same delta).
+
+Task 3b — Separate speed and pitch (data model + engine):
+- sync-protocol/schema.ts: added `pitch?: number` to the `AudioClip` interface. Documented as cents (-1200..+1200), matching the unit Web Audio's `detune` AudioParam expects, so no conversion needed in the engine. Default 0.
+- audio/scene.ts `readAudioClip`: added `pitch: (m.get('pitch') as number) ?? 0` so old clips without the field default to 0 (no pitch shift).
+- audio/engine.ts: after `source.playbackRate.value = speed`, added `if (pitchCents !== 0) source.detune.value = pitchCents`. Documented the Web Audio limitation in a comment: `AudioBufferSourceNode` couples pitch and speed (`effectiveRate = playbackRate * 2^(detune/1200)`), so true pitch-independent-of-speed requires offline time-stretching (out of scope). The two knobs still give the user independent control — to hold timeline speed constant while shifting pitch, set `speed = 1 / 2^(pitch/1200)` to compensate.
+
+Task 3c — Two knobs in AudioSettingsPanel (AudioSettingsPanel.tsx):
+- Replaced the single "Speed / Pitch" knob (which set `clip.speed`) with a 2-column grid of two knobs:
+  • Speed: 0.25×..4×, step 0.05, `clip.speed`, format `${v.toFixed(2)}×` (unchanged from before).
+  • Pitch: -12..+12 (semitones), step 1, `clip.pitch` (cents). Knob `value` = `(clip.pitch ?? 0) / 100` (cents → semitones for display). `onChange` = `(v) => setClip({ pitch: v * 100 })` (semitones → cents for storage). Format rounds to integer semitones and prefixes `+` for positive: `(v) => { const n = Math.round(v); return n > 0 ? `+${n} st` : `${n} st`; }` → "+5 st", "-3 st", "0 st".
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → only the 2 pre-existing TS2688 errors about missing `vite/client` + `vite-plugin-pwa/client` type defs (confirmed pre-existing by ROUND4-B's work record; not caused by my changes — none of my modified files appear in the error list). Zero source-level type errors.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → only a pre-existing TS2307 about `vitest` in `validators.test.ts` (test file, unrelated). The schema change (`pitch?: number` on AudioClip) compiles clean.
+- dev.log shows the dev server compiling cleanly (`GET / 200`); no errors related to the modified files.
+
+Stage Summary:
+- 5 files modified (audio/AudioEditor.tsx, audio/scene.ts, audio/engine.ts, panels/AudioSettingsPanel.tsx, packages/sync-protocol/src/schema.ts).
+- Zoom (Ctrl+scroll + zoom buttons + Fit-to-window) now keeps the playhead at the same screen position via `zoomAtPlayhead` (scroll correction applied in a `useLayoutEffect` after the new `minWidth` commits). Ruler ticks are adaptive to zoom level (0.1s/1s/5s/10s/60s with matching `X.Xs`/`Xs`/`Xm`/`Xm Ys` labels).
+- Track header volume + pan sliders no longer fight the user during drag — `isDraggingRef` gates the prop-sync `useEffect` so live `engine.updateTracks` Yjs echoes don't clobber local state mid-drag; both sliders commit to Yjs on pointerup.
+- RotaryKnob drag now uses window-level `pointermove`/`pointerup` listeners (replacing flaky `setPointerCapture`); sensitivity increased to 150px/400px (normal/Shift) for less movement per full-range sweep.
+- Speed and pitch are now separate: `pitch` field added to AudioClip (cents, -1200..+1200, default 0), read by `readAudioClip`, applied via `source.detune` in the engine, and exposed as its own rotary knob (-12..+12 semitones, `+N st` / `N st` format) next to the existing Speed knob.
+- TypeScript clean (only pre-existing env-level type-def errors remain).

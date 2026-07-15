@@ -181,6 +181,25 @@ export class CanvasEngine {
     });
   }
 
+  /** Replace a single stroke with one or more new strokes (used by the eraser
+   *  when it splits a stroke into pieces). Deletes the original and commits
+   *  every new stroke in one Yjs transaction so the change is atomic and
+   *  remote peers see a single update. */
+  splitStroke(id: string, newStrokes: Stroke[]): void {
+    if (this.isDrawMuted()) return;
+    const room = this.opts.room;
+    room.slate.doc.transact(() => {
+      room.slate.strokes().delete(id);
+      for (const s of newStrokes) {
+        const parsed = strokeSchema.safeParse(s);
+        if (!parsed.success) continue;
+        const m = new Y.Map<unknown>();
+        Object.entries(parsed.data).forEach(([k, v]) => m.set(k, v));
+        room.slate.strokes().set(parsed.data.id, m);
+      }
+    });
+  }
+
   /** Z-order derives from createdAt; rewrite timestamps to restack items. */
   reorder(ids: Iterable<string>, dir: 'front' | 'back'): void {
     const room = this.opts.room;

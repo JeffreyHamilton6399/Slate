@@ -318,6 +318,10 @@ export interface AudioClip {
   mute?: boolean;
   /** Playback speed (also shifts pitch), 0.25..4. Default 1. */
   speed?: number;
+  /** Pitch shift in cents (-1200..+1200). 0 = original pitch, +1200 = one
+   *  octave up, -1200 = one octave down. Stored in cents so the Yjs value is
+   *  the same unit the Web Audio `detune` AudioParam expects. Default 0. */
+  pitch?: number;
 }
 
 /** Transport state for the audio editor — synced via awareness (ephemeral). */

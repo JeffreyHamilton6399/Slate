@@ -363,10 +363,11 @@ export function Canvas2DToolbar({
         </label>
       </div>
 
-      {/* On mobile the style strip lives at the bottom, so history stays
-          top-right. On desktop it becomes a centered bottom bar. */}
+      {/* History & zoom stays top-right on every viewport. The bottom is
+          reserved for the Timeline2D overlay (and the mobile style strip),
+          so the two never overlap. */}
       <div
-        className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-bg-2/95 backdrop-blur px-2 py-1 shadow-lg sm:left-1/2 sm:right-auto sm:top-auto sm:bottom-2 sm:-translate-x-1/2"
+        className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-bg-2/95 backdrop-blur px-2 py-1 shadow-lg"
         role="toolbar"
         aria-label="History & zoom"
       >

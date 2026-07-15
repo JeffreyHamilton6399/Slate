@@ -13,6 +13,7 @@ import type { CanvasEngine } from './engine';
 import {
   pointInShape,
   pointNearStroke,
+  pointToSegmentDistance,
   rectIntersects,
   rotatedShapeAABB,
   shapeBounds,
@@ -242,7 +243,8 @@ class ShapeDragTool implements Tool {
   }
 }
 
-// ── Object eraser: deletes strokes/shapes under the pointer while dragging ──
+// ── Stroke eraser: erases the part of each stroke under the cursor (like a
+// pen), splitting the stroke into pieces. Shapes are still deleted whole. ──
 class EraserTool implements Tool {
   readonly id = 'eraser';
   private erasing = false;
@@ -266,17 +268,98 @@ class EraserTool implements Tool {
   private eraseAt(p: BoardPoint): void {
     const snap = this.ctx.engine.snapshot();
     const radius = Math.max(6, this.ctx.strokeWidth * 2);
-    const dead: string[] = [];
+    const deadShapes: string[] = [];
     for (const layer of snap.layers) {
       if (!layer.visible || layer.locked) continue;
+      // Strokes get partial erasure — split into sub-strokes at the erased
+      // segments so only the part under the cursor disappears.
       for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
-        if (pointNearStroke(st, p, radius)) dead.push(st.id);
+        this.eraseStrokePartial(st, p, radius);
       }
+      // Shapes are erased whole (point-in-shape test).
       for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
-        if (pointInShape(sh, p)) dead.push(sh.id);
+        if (pointInShape(sh, p)) deadShapes.push(sh.id);
       }
     }
-    if (dead.length) this.ctx.engine.deleteIds(dead);
+    if (deadShapes.length) this.ctx.engine.deleteIds(deadShapes);
+  }
+
+  /** Erase the portion of `stroke` within `radius` of `p`. Splits the stroke
+   *  at the erased segments and commits the remaining sub-strokes via
+   *  `engine.splitStroke`. No-op if the cursor isn't over any segment. */
+  private eraseStrokePartial(stroke: Stroke, p: BoardPoint, radius: number): void {
+    const points = stroke.points;
+    // Stroke points are interleaved [x, y, pressure?] — most strokes carry
+    // pressure (3 values per point) but older/simpler ones may not.
+    const stride = points.length % 3 === 0 ? 3 : 2;
+    const numPts = points.length / stride;
+    if (numPts < 2) return; // single-point stroke — can't split, leave alone
+
+    // Effective erase radius mirrors pointNearStroke so the partial erasure
+    // matches the visual hit-test: thick strokes get a little extra slack.
+    const effRadius = Math.max(stroke.size / 2 + 2, radius);
+
+    // Mark which segments (between consecutive points) fall under the cursor.
+    const erased = new Array<boolean>(numPts - 1).fill(false);
+    let anyErased = false;
+    for (let i = 0; i < numPts - 1; i++) {
+      const ax = points[i * stride] ?? 0;
+      const ay = points[i * stride + 1] ?? 0;
+      const bx = points[(i + 1) * stride] ?? 0;
+      const by = points[(i + 1) * stride + 1] ?? 0;
+      if (pointToSegmentDistance(p.x, p.y, ax, ay, bx, by) < effRadius) {
+        erased[i] = true;
+        anyErased = true;
+      }
+    }
+    if (!anyErased) return; // cursor not over this stroke — leave it alone
+
+    // Build sub-strokes from contiguous runs of non-erased segments. A point
+    // touched by an erased segment on either side ends the current run; an
+    // isolated point (both neighbours erased) is dropped because a single
+    // point can't form a stroke.
+    const subStrokes: number[][] = [];
+    let current: number[] = [];
+    for (let i = 0; i < numPts; i++) {
+      if (i > 0 && erased[i - 1]) {
+        // Segment before this point was erased — close out the current run.
+        if (current.length >= stride * 2) subStrokes.push(current);
+        current = [];
+      }
+      if (i < numPts - 1 && erased[i]) {
+        // Segment after this point is erased — include this point as the
+        // tail of the current run, then close it out.
+        for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
+        if (current.length >= stride * 2) subStrokes.push(current);
+        current = [];
+      } else {
+        for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
+      }
+    }
+    if (current.length >= stride * 2) subStrokes.push(current);
+
+    // Untouched — the only erased segments were at the very ends, so the
+    // resulting single sub-stroke is identical to the original. Skip the
+    // delete+recommit round-trip.
+    if (subStrokes.length === 1 && subStrokes[0]!.length === points.length) return;
+
+    if (subStrokes.length === 0) {
+      // Entire stroke was under the cursor — delete it outright.
+      this.ctx.engine.deleteIds([stroke.id]);
+      return;
+    }
+
+    // Split into multiple sub-strokes. Reuse the original's createdAt so the
+    // new pieces keep the same z-order slot as the original (the engine sorts
+    // by createdAt with a stable sort, and Yjs Map iteration puts new keys
+    // after existing ones — so visually the pieces stay at the original's
+    // stacking position).
+    const newStrokes: Stroke[] = subStrokes.map((pts) => ({
+      ...stroke,
+      id: makeId('stroke'),
+      points: pts,
+    }));
+    this.ctx.engine.splitStroke(stroke.id, newStrokes);
   }
 }
 

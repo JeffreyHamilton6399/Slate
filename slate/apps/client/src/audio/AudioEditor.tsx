@@ -5,7 +5,7 @@
  * seen or its samples change — not on every version bump.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
@@ -191,6 +191,10 @@ export function AudioEditor() {
   const clipsRef = useRef<AudioClip[]>([]);
   const pxRef = useRef(pxPerSec);
   pxRef.current = pxPerSec;
+  /** Desired scrollLeft to apply after the next pxPerSec commit (used by
+   *  zoomAtPlayhead so the playhead stays at the same screen position when
+   *  zooming). Cleared in the layout effect below once applied. */
+  const pendingScrollRef = useRef<number | null>(null);
 
   // Yjs subscription.
   useEffect(() => {
@@ -231,17 +235,50 @@ export function AudioEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
-  // Ctrl+scroll zoom.
+  // Ctrl+scroll zoom — centred on the playhead so the screen position under
+  // the cursor/playhead stays put instead of zooming toward the left edge.
+  /** Zoom while keeping the playhead at the same screen offset. Records the
+   *  playhead's offset from the left edge of the visible viewport (relative to
+   *  the timeline content), changes `pxPerSec`, then schedules a scroll
+   *  correction so the playhead lands at the same offset in the new zoom.
+   *  The actual `scrollLeft` write happens in the layout effect below (after
+   *  React commits the new `minWidth` on the timeline div — setting it earlier
+   *  would be clamped by the stale `scrollWidth`). */
+  const zoomAtPlayhead = useCallback((newPxPerSec: number) => {
+    const el = scrollRef.current;
+    const oldPxPerSec = pxRef.current;
+    if (!el || oldPxPerSec === newPxPerSec) {
+      setPxPerSec(newPxPerSec);
+      return;
+    }
+    const scrollLeft = el.scrollLeft;
+    const playheadX = positionRef.current * oldPxPerSec;
+    const playheadOffset = playheadX - scrollLeft;
+    const newPlayheadX = positionRef.current * newPxPerSec;
+    const newScrollLeft = newPlayheadX - playheadOffset;
+    pendingScrollRef.current = newScrollLeft;
+    setPxPerSec(newPxPerSec);
+  }, []);
+
+  // Apply any pending scroll correction after pxPerSec commits to the DOM.
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current !== null && scrollRef.current) {
+      scrollRef.current.scrollLeft = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+    }
+  }, [pxPerSec]);
+
   useEffect(() => {
     const el = scrollRef.current; if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setPxPerSec((c) => Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, c * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+      const next = Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, pxRef.current * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+      zoomAtPlayhead(next);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [zoomAtPlayhead]);
 
   // Global pointermove/up — pure DOM, zero React state.
   useEffect(() => {
@@ -364,14 +401,15 @@ export function AudioEditor() {
   /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
    *  currently-visible timeline viewport (scroll container minus the sticky
    *  track-header column). Clamped to [MIN, MAX] so absurdly long or short
-   *  sessions still produce a sane zoom. */
+   *  sessions still produce a sane zoom. Goes through `zoomAtPlayhead` so the
+   *  playhead stays on screen when the fit value would still overflow. */
   const fitToWindow = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const viewportW = Math.max(50, el.clientWidth - TRACK_HEADER_W);
     const fit = viewportW / Math.max(1, timelineDuration);
-    setPxPerSec(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
-  }, [timelineDuration]);
+    zoomAtPlayhead(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
+  }, [timelineDuration, zoomAtPlayhead]);
 
   // ── Transport ─────────────────────────────────────────────────────────────
 
@@ -474,6 +512,25 @@ export function AudioEditor() {
     backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0 1px, transparent 1px ${beatDur * pxPerSec}px), repeating-linear-gradient(to right, rgba(128,128,128,0.2) 0 1px, transparent 1px ${beatDur * 4 * pxPerSec}px)`,
   };
 
+  // Adaptive ruler tick interval — picks a "nice" step (in seconds) whose
+  // pixel spacing stays readable at the current zoom: tight when zoomed in
+  // (so you get millisecond-level ticks), sparse when zoomed out (so a long
+  // mix doesn't turn into a solid wall of labels).
+  const { tickInterval, formatTick } = useMemo(() => {
+    if (pxPerSec >= 400) return { tickInterval: 0.1, formatTick: (t: number) => `${t.toFixed(1)}s` };
+    if (pxPerSec >= 100) return { tickInterval: 1, formatTick: (t: number) => `${t}s` };
+    if (pxPerSec >= 40) return { tickInterval: 5, formatTick: (t: number) => `${t}s` };
+    if (pxPerSec >= 10) return { tickInterval: 10, formatTick: (t: number) => `${t}s` };
+    return {
+      tickInterval: 60,
+      formatTick: (t: number) => {
+        const m = Math.floor(t / 60);
+        const s = Math.round(t - m * 60);
+        return s === 0 ? `${m}m` : `${m}m ${s}s`;
+      },
+    };
+  }, [pxPerSec]);
+
   return (
     <div className="flex h-full flex-col bg-bg overflow-hidden" onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
       {/* Transport */}
@@ -492,9 +549,9 @@ export function AudioEditor() {
         <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-        <button onClick={() => setPxPerSec((c) => Math.max(MIN_PX_PER_SEC, c / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={() => zoomAtPlayhead(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
         <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
-        <button onClick={() => setPxPerSec((c) => Math.min(MAX_PX_PER_SEC, c * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+        <button onClick={() => zoomAtPlayhead(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
         <div className="flex-1" />
         <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
@@ -513,9 +570,12 @@ export function AudioEditor() {
         <div className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
           {/* Ruler + loop handles */}
           <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
-            {Array.from({ length: Math.ceil(timelineDuration / 5) + 1 }, (_, i) => (
-              <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: i * 5 * pxPerSec }}>{i * 5}s</span>
-            ))}
+            {Array.from({ length: Math.ceil(timelineDuration / tickInterval) + 1 }, (_, i) => {
+              const t = i * tickInterval;
+              return (
+                <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: t * pxPerSec }}>{formatTick(t)}</span>
+              );
+            })}
             {looping && (
               <>
                 <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
@@ -565,14 +625,21 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
 }) {
   const [vol, setVol] = useState(track.volume);
   const [pan, setPan] = useState(track.pan);
-  useEffect(() => { setVol(track.volume); }, [track.volume]);
-  useEffect(() => { setPan(track.pan); }, [track.pan]);
+  // While the user is dragging either slider, DON'T let the prop-sync effects
+  // overwrite the local state — otherwise the Yjs observe fired by the engine's
+  // live `updateTracks` would clobber `vol`/`pan` mid-drag, causing the slider
+  // to fight the user (the "big slider does nothing" symptom).
+  const isDraggingRef = useRef(false);
+  useEffect(() => { if (!isDraggingRef.current) setVol(track.volume); }, [track.volume]);
+  useEffect(() => { if (!isDraggingRef.current) setPan(track.pan); }, [track.pan]);
 
   const update = (patch: Partial<AudioTrack>) => { updateAudioTrack(slate, track.id, patch); engineRef.current?.updateTracks(slate); };
+  const onVolDown = () => { isDraggingRef.current = true; };
   const onVol = (v: number) => { setVol(v); engineRef.current?.updateTracks(slate); };
-  const onVolEnd = () => updateAudioTrack(slate, track.id, { volume: vol });
+  const onVolEnd = () => { isDraggingRef.current = false; updateAudioTrack(slate, track.id, { volume: vol }); };
+  const onPanDown = () => { isDraggingRef.current = true; };
   const onPan = (p: number) => { setPan(p); engineRef.current?.updateTracks(slate); };
-  const onPanEnd = () => updateAudioTrack(slate, track.id, { pan: pan });
+  const onPanEnd = () => { isDraggingRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
 
   return (
     <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
@@ -586,8 +653,8 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
       </div>
       <div className="mt-0.5 flex items-center gap-1">
         <Volume2 size={8} className="shrink-0 text-text-dim" />
-        <input type="range" min={0} max={1} step={0.01} value={vol} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-0.5 flex-1 accent-accent" />
-        <input type="range" min={-1} max={1} step={0.01} value={pan} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-0.5 w-8 accent-accent" />
+        <input type="range" min={0} max={1} step={0.01} value={vol} onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-0.5 flex-1 accent-accent" />
+        <input type="range" min={-1} max={1} step={0.01} value={pan} onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-0.5 w-8 accent-accent" />
       </div>
     </div>
   );

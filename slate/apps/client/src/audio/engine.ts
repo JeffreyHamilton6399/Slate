@@ -32,6 +32,10 @@ export class AudioEngine {
   private clickTimer: number | null = null;
   /** Cached AudioBuffers per clip id (decoded from PCM samples). */
   private bufferCache = new Map<string, AudioBuffer>();
+  /** Clip ids currently in a getBuffer retry loop. Prevents multiple concurrent
+   *  retry loops for the same clip when several play()/restartPlayback() calls
+   *  race (e.g. a remote clip arriving while the user is scrubbing). */
+  private retryingClips = new Set<string>();
   /** Active track gain nodes (for live volume/pan changes). */
   private trackGains = new Map<string, GainNode>();
   private trackPanners = new Map<string, StereoPannerNode>();
@@ -55,24 +59,62 @@ export class AudioEngine {
     return this.ctx;
   }
 
-  /** Get or create an AudioBuffer for a clip — loads samples from IndexedDB. */
+  /** Get or create an AudioBuffer for a clip — loads samples from IndexedDB.
+   *  If the samples haven't arrived yet (empty Float32Array, which happens when
+   *  a remote peer's sample-blob is still in flight via the Yjs sync map),
+   *  retries up to 10 times at 300ms intervals (3s total) before giving up and
+   *  returning null. The clip is then skipped on this play() pass, but the
+   *  AudioEditor's restart-on-sample-arrival will re-schedule it once the
+   *  samples land and the cache is populated. */
   private async getBuffer(clip: AudioClip): Promise<AudioBuffer | null> {
     const ctx = this.ctx!;
-    let buf = this.bufferCache.get(clip.id);
-    if (buf) return buf;
-    const samples = await loadSamples(clip.sampleKey);
-    const channels = clip.channels;
-    const length = samples.length / channels;
-    if (length === 0) return null;
-    buf = ctx.createBuffer(channels, length, clip.sampleRate);
-    for (let ch = 0; ch < channels; ch++) {
-      const data = buf.getChannelData(ch);
-      for (let i = 0; i < length; i++) {
-        data[i] = samples[i * channels + ch] ?? 0;
+    const cached = this.bufferCache.get(clip.id);
+    if (cached) return cached;
+
+    // If a retry loop is already running for this clip, bail — another
+    // play()/restartPlayback() call will pick up the cached buffer once it
+    // lands (the AudioEditor restarts on `slate:audio-clip-changed`).
+    if (this.retryingClips.has(clip.id)) return null;
+
+    const buildBuffer = async (): Promise<AudioBuffer | null> => {
+      const samples = await loadSamples(clip.sampleKey);
+      const channels = clip.channels;
+      const length = samples.length / channels;
+      if (length === 0) return null;
+      const buf = ctx.createBuffer(channels, length, clip.sampleRate);
+      for (let ch = 0; ch < channels; ch++) {
+        const data = buf.getChannelData(ch);
+        for (let i = 0; i < length; i++) {
+          data[i] = samples[i * channels + ch] ?? 0;
+        }
       }
+      return buf;
+    };
+
+    // Fast path — samples already present (the overwhelmingly common case).
+    let buf = await buildBuffer();
+    if (buf) {
+      this.bufferCache.set(clip.id, buf);
+      return buf;
     }
-    this.bufferCache.set(clip.id, buf);
-    return buf;
+
+    // Samples not yet arrived — retry for up to 3s (10 × 300ms). This covers
+    // the gap between a remote clip's metadata landing in Yjs and its sample
+    // blob landing in the sync map + being written to local IndexedDB.
+    this.retryingClips.add(clip.id);
+    try {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 300));
+        buf = await buildBuffer();
+        if (buf) {
+          this.bufferCache.set(clip.id, buf);
+          return buf;
+        }
+      }
+    } finally {
+      this.retryingClips.delete(clip.id);
+    }
+    return null;
   }
 
   /** Build per-track gain+panner chain for the current set of tracks. */
@@ -202,6 +244,32 @@ export class AudioEngine {
     }
     this.playingClips = [];
     this.stopMetronome();
+  }
+
+  /** Stop all current sources and immediately re-schedule all clips from
+   *  `offset`, atomically — `playing` stays true throughout so getPosition()
+   *  keeps tracking from the new startTime (no jump back to 0, no UI glitch).
+   *  Used when the clip set changes mid-playback (a remote peer adds a clip,
+   *  or a clip's samples arrive after play started) so the new clip is picked
+   *  up without a full stop+play round-trip from the UI. There's a brief audio
+   *  gap while buffers reload, but the playhead and `playing` state never
+   *  flicker. If the AudioContext hasn't been created yet (no user gesture),
+   *  falls back to a plain play() which creates it. */
+  restartPlayback(slate: SlateDoc, offset: number): void {
+    if (!this.ctx) {
+      void this.play(slate, offset);
+      return;
+    }
+    // Stop + forget current sources, but keep `playing` true so getPosition()
+    // continues to track. play() will reset startTime/startOffset.
+    for (const { source } of this.playingClips) {
+      try { source.stop(); } catch { /* already stopped */ }
+    }
+    this.playingClips = [];
+    this.stopMetronome();
+    // Re-schedule. play() re-reads the doc (so new clips are included),
+    // resets startTime/startOffset, and restarts the metronome if enabled.
+    void this.play(slate, offset);
   }
 
   /** Get the current playhead position (seconds). Loops if a loop region is set. */

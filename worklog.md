@@ -571,3 +571,72 @@ Stage Summary:
 - RotaryKnob drag now uses window-level `pointermove`/`pointerup` listeners (replacing flaky `setPointerCapture`); sensitivity increased to 150px/400px (normal/Shift) for less movement per full-range sweep.
 - Speed and pitch are now separate: `pitch` field added to AudioClip (cents, -1200..+1200, default 0), read by `readAudioClip`, applied via `source.detune` in the engine, and exposed as its own rotary knob (-12..+12 semitones, `+N st` / `N st` format) next to the existing Speed knob.
 - TypeScript clean (only pre-existing env-level type-def errors remain).
+
+---
+Task ID: ROUND5-A
+Agent: Main
+Task: Move basic tools (undo/redo/clear/zoom) to the left bar bottom
+
+Work Log:
+- Read worklog and `slate/apps/client/src/canvas2d/Toolbar.tsx` to understand the three existing regions: left rail (tools), top-center style strip, top-right history & zoom bar.
+- Read `ui/Tooltip.tsx` to confirm Tooltip uses Radix `asChild` trigger (non-interactive span children OK, but kept zoom label as a plain span to avoid focusable-trigger requirement).
+- Edited `Toolbar.tsx`:
+  1. Removed the entire top-right "History & zoom" `<div>` region (formerly lines 366–406) and its surrounding comment.
+  2. Inserted a new bottom-of-rail block inside the `<aside>`, right after the Insert Image button. Wrapped in `<div className="mt-auto flex flex-col items-center gap-0.5">` so `mt-auto` pushes the group to the bottom of the existing `flex flex-col` rail.
+  3. Order: separator → Undo → Redo → Clear → separator → Zoom out → zoom label (`<span>`) → Zoom in → Fit.
+  4. Reused the same button styling as the other rail action buttons (`flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text`) with `size={15}` icons to match existing tools.
+  5. Tooltips switched to `side="right"` to match the rest of the rail.
+  6. Zoom label shrunk from `min-w-[3.5rem] text-xs` to `text-[10px] leading-none text-text-dim` so it fits the 44px-wide rail; added `aria-label={\`Zoom level ${zoomLabel}\`}` for accessibility.
+  7. Kept all existing props (`onUndo`, `onRedo`, `onClear`, `onZoomIn`, `onZoomOut`, `onFit`, `zoomLabel`) — no API change.
+- Ran `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` — passed with zero output. All previously-imported icons (`Undo2`, `Redo2`, `Trash2`, `Minus`, `Plus`, `Maximize2`) and `Button` (still used in Style strip for swap-colors) remain referenced, so no unused-import lint errors.
+
+Stage Summary:
+- The separate top-right History & zoom bar is gone. Undo/Redo/Clear and Zoom out/label/in/Fit now live at the bottom of the left rail, pushed down by `mt-auto`. The rail's existing `overflow-y-auto` still handles overflow when many tools are favorited. Style strip (top-center / bottom on mobile) is untouched.
+- Files modified: `slate/apps/client/src/canvas2d/Toolbar.tsx` (single file, ~75 line delta).
+- No type errors. No new dependencies. No API/prop changes.
+
+---
+Task ID: ROUND5-B
+Agent: main (Z.ai Code)
+Task: Fix audio playback for multiplayer — ensure samples sync and play for all peers (4 issues)
+
+Work Log:
+- Read worklog (latest ROUND4-A) + all 3 target files fully: `audio/sampleStore.ts`, `audio/engine.ts`, `audio/AudioEditor.tsx`. Also read `sync/RoomContext.tsx`, `sync/doc.ts` (to confirm `audioClips(): Y.Map<Y.Map<unknown>>`), and the yjs `.d.ts` exports (to confirm `YMapEvent<T>` / `YMap as Map` are the exported type names).
+
+Issue 1 — SYNC_SIZE_LIMIT too small + O(n²) base64 (sampleStore.ts):
+- Bumped `SYNC_SIZE_LIMIT` from `500_000` → `5_000_000` (~5MB = ~28s mono @ 44.1kHz; old 500KB only allowed ~2.8s and silently dropped most clips).
+- Updated file-header comment (`~500KB` → `~5MB`) + the constant's JSDoc to the accurate "~5MB = ~28s mono @ 44.1kHz".
+- Fixed O(n²) base64 in `publishToSyncMap`: replaced char-by-char `binary += String.fromCharCode(bytes[i])` (rebuilds the whole string on every append; freezes main thread for seconds on a 5MB blob) with a chunked build — `parts.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end))))` in 8192-byte chunks, then `parts.join('')` + `btoa`. 8192 is the safe `Function.prototype.apply` stack limit across engines; `Array.from` wraps the subarray into a true `number[]` to satisfy TS's strict signature without a cast. Now O(n) total.
+
+Issue 2 — getBuffer has no retry for empty samples (engine.ts):
+- Added `private retryingClips = new Set<string>()` to track clips currently retrying (guards against multiple concurrent retry loops for the same clip when several `play()`/`restartPlayback()` calls race).
+- Rewrote `getBuffer`:
+  1. Cache hit → return. Else if `retryingClips.has(clip.id)` → return null (retry already running; AudioEditor's restart-on-sample-arrival picks up the cached buffer once it lands).
+  2. Extracted sample-load + AudioBuffer-build into a local `buildBuffer` async helper.
+  3. First attempt via `buildBuffer()` — if non-null, cache + return (the common case).
+  4. If empty (samples still in flight), enter retry loop: add to `retryingClips`, `for (attempt 0..9): await sleep(300ms); buildBuffer(); if non-null cache+return`. Worst-case 3s (10 × 300ms). `finally` always removes the clip from the set.
+  5. All retries fail → return null (clip skipped this pass). AudioEditor's restart-on-sample-arrival re-schedules once samples eventually arrive.
+- Only caches the buffer after a successful (non-empty) load.
+
+Issue 3 — syncedKeys not cleared on remote delete (sampleStore.ts):
+- Rewrote `syncMap.observe` callback. Old logic: `if (syncedKeys.has(key)) continue; const base64 = syncMap.get(key); if (!base64) continue;` — meant a delete+re-add with the same key was skipped forever (syncedKeys still had it).
+- New logic: for each `key` in `event.keysChanged`, `const base64 = syncMap.get(key);` — if `base64 === undefined` (deleted / never set), `syncedKeys.delete(key)` + `continue` (so a future re-add is processed). If defined but `syncedKeys.has(key)` → skip. Otherwise decode + store + dispatch `slate:audio-clip-changed`.
+
+Issue 4 — mid-playback clip additions not picked up (AudioEditor.tsx + engine.ts):
+- Added `restartPlayback(slate, offset)` to `AudioEngine`: stops all `playingClips` sources (try/catch), clears the array, stops metronome, then `void this.play(slate, offset)`. `playing` stays `true` throughout (unlike `stop()`) so `getPosition()` keeps tracking from the new `startTime` — no playhead jump, no UI flicker. Falls back to plain `play()` if AudioContext not created yet. Brief audio gap while buffers reload, but playhead/`playing` never glitch.
+- In `AudioEditor.tsx`, added 3 refs: `playingRef` (mirrors `playing`), `slateRef` (mirrors `slate` — needed because the `slate:audio-clip-changed` effect has `[]` deps), `restartTimerRef` (holds the debounce timer id).
+- Added `scheduleRestart` `useCallback` (empty deps — reads only refs): no-op if not playing; else clears pending timer and sets a 500ms `setTimeout` calling `engineRef.current.restartPlayback(slateRef.current, positionRef.current)`. 500ms debounce coalesces rapid bursts (peer imports 5 files at once → 1 restart).
+- Wired `scheduleRestart` into two places:
+  1. Yjs subscription effect: added a SEPARATE shallow `clips.observe(onClipsAdded)` (alongside the existing `clips.observeDeep(bump)`). `onClipsAdded` inspects `event.changes.keys` and only calls `scheduleRestart()` if at least one key has `action === 'add'` — so property edits to existing clips (volume nudges, trims) do NOT trigger a restart (would fight the user). Cleanup calls `clips.unobserve(onClipsAdded)`. Picks up clips a remote peer adds mid-playback.
+  2. `slate:audio-clip-changed` window event listener: after the existing `invalidateWaveform` + `clearCache` + `setVersion`, also calls `scheduleRestart()`. Covers the case where clip metadata arrived (triggering a restart that returned null from `getBuffer` because samples were still in flight) and the samples arrive later — the event re-triggers a restart that picks up the now-loadable buffer.
+- Cleanup: the playhead effect clears `restartTimerRef` when `playing` turns false (pending mid-playback restart doesn't fire after pause). The engine-setup effect's cleanup also clears the timer before `dispose()` (doesn't fire on a disposed engine after unmount).
+- Added `import type * as Y from 'yjs'` for the `Y.YMapEvent<Y.Map<unknown>>` type annotation on `onClipsAdded` (`clips.observe` requires the event type to match exactly — `YMapEvent<unknown>` is not assignable to `YMapEvent<Y.Map<unknown>>` because `YMapEvent` is invariant in T).
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → EXIT 0, zero output. Only iteration needed was the YMapEvent generic: first attempt used `YMapEvent<unknown>` which failed TS2345 (incompatibility in `target._eH` / `EventHandler`); fixed by using the exact `Y.YMapEvent<Y.Map<unknown>>` from the `import type * as Y` namespace import.
+
+Stage Summary:
+- 3 files modified: `audio/sampleStore.ts`, `audio/engine.ts`, `audio/AudioEditor.tsx`.
+- Sync limit 500KB → 5MB; base64 encode O(n) chunked instead of O(n²) char-by-char; syncMap.observe handles key deletions so delete+re-add cycles work; `getBuffer` retries 3s on empty samples (with per-clip Set guard against concurrent retry loops); new `engine.restartPlayback` atomically stops + re-schedules all clips without dropping `playing`; AudioEditor debounces (500ms) a `restartPlayback` call when clips are added mid-playback OR when a clip's samples arrive mid-playback, with cleanup on pause/unmount.
+- End-to-end: a remote peer's clip (metadata + sample blob) now reliably plays on this peer whether metadata or samples arrive first, and whether they arrive before or after the user hits Play. The retry in `getBuffer` covers the metadata-first-samples-later race; the restart-on-sample-arrival covers the samples-late case after a failed first `getBuffer`; the restart-on-clip-add covers clips added during active playback.
+- TypeScript clean (exit 0, zero errors).

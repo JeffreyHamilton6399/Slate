@@ -6,6 +6,7 @@
  */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type * as Y from 'yjs';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
@@ -177,6 +178,17 @@ export function AudioEditor() {
   const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
   const rafRef = useRef(0);
   const positionRef = useRef(0);
+  // Refs mirror the latest `playing` and `slate` so the long-lived Yjs / event
+  // listeners (which close over the initial render) can read fresh values
+  // without re-subscribing on every state change.
+  const playingRef = useRef(false);
+  playingRef.current = playing;
+  const slateRef = useRef(slate);
+  slateRef.current = slate;
+  /** Debounce timer for restartPlayback — coalesces rapid clip/sample changes
+   *  so we don't tear down and rebuild the scheduler 5× in a row when a peer
+   *  adds several clips at once. */
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playheadRef = useRef<HTMLDivElement | null>(null);
   const posDisplayRef = useRef<HTMLSpanElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -196,6 +208,22 @@ export function AudioEditor() {
    *  zooming). Cleared in the layout effect below once applied. */
   const pendingScrollRef = useRef<number | null>(null);
 
+  /** Schedule a debounced restartPlayback (500ms). Called when the clip set
+   *  changes mid-playback (remote peer adds a clip) or when a clip's samples
+   *  arrive after play started (remote sample blob landed via the sync map).
+   *  The debounce coalesces rapid bursts so we don't tear down and rebuild
+   *  the scheduler repeatedly. No-op when not playing. Reads only refs, so the
+   *  callback identity is stable for the lifetime of the component. */
+  const scheduleRestart = useCallback(() => {
+    if (!playingRef.current) return;
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = setTimeout(() => {
+      restartTimerRef.current = null;
+      const eng = engineRef.current;
+      if (eng && playingRef.current) eng.restartPlayback(slateRef.current, positionRef.current);
+    }, 500);
+  }, []);
+
   // Yjs subscription.
   useEffect(() => {
     // Register the multiplayer sample sync map so audio clips imported by
@@ -207,20 +235,48 @@ export function AudioEditor() {
     let pending = false;
     const bump = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; setVersion((v) => v + 1); }); };
     tracks.observeDeep(bump); clips.observeDeep(bump); audioMap.observe(bump); bump();
+    // Detect NEW clips being added while playing and schedule a debounced
+    // restartPlayback so the new clip is picked up mid-playback without a
+    // manual stop/play. We watch the shallow clips map (not observeDeep) so
+    // we only react to key additions, not to every property edit on an
+    // existing clip (which would restart playback every time a peer nudged
+    // a clip's volume, fighting the user). The restart is debounced 500ms so
+    // a burst of additions (e.g. a peer imports 5 files) coalesces into one.
+    const onClipsAdded = (event: Y.YMapEvent<Y.Map<unknown>>) => {
+      let hasAddition = false;
+      for (const key of event.keysChanged) {
+        const change = event.changes.keys.get(key);
+        if (change?.action === 'add') { hasAddition = true; break; }
+      }
+      if (hasAddition) scheduleRestart();
+    };
+    clips.observe(onClipsAdded);
     const lateRead = setTimeout(bump, 200);
-    return () => { clearTimeout(lateRead); tracks.unobserveDeep(bump); clips.unobserveDeep(bump); audioMap.unobserve(bump); };
+    return () => { clearTimeout(lateRead); tracks.unobserveDeep(bump); clips.unobserveDeep(bump); audioMap.unobserve(bump); clips.unobserve(onClipsAdded); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slate]);
 
   useEffect(() => {
     engineRef.current = new AudioEngine();
     engineRef.current.setMasterVolume(masterVol);
-    return () => { engineRef.current?.dispose(); engineRef.current = null; };
+    return () => {
+      // Cancel any pending restart so it doesn't fire after dispose().
+      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+      engineRef.current?.dispose();
+      engineRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Playhead — direct DOM.
   useEffect(() => {
-    if (!playing) return;
+    if (!playing) {
+      // Playback just stopped — cancel any pending mid-playback restart so
+      // it doesn't fire and call restartPlayback (which would re-start audio
+      // after the user pressed pause).
+      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+      return;
+    }
     const tick = () => {
       rafRef.current = requestAnimationFrame(tick);
       const eng = engineRef.current; if (!eng) return;
@@ -383,17 +439,24 @@ export function AudioEditor() {
   }, [slate, version]);
   clipsRef.current = clips;
 
-  // When a clip's samples change (normalize/reverse from the settings panel),
-  // drop the cached waveform + decoded buffer so both refresh.
+  // When a clip's samples change (normalize/reverse from the settings panel,
+  // OR a remote peer's sample blob just landed via the Yjs sync map),
+  // drop the cached waveform + decoded buffer so both refresh, AND — if we're
+  // currently playing — schedule a debounced restartPlayback so the clip is
+  // picked up. This covers the case where a clip's metadata arrived but its
+  // samples were still in flight: getBuffer returned null on the first pass,
+  // and this restart re-schedules once the samples are usable.
   useEffect(() => {
     const onChanged = (e: Event) => {
       const id = (e as CustomEvent<string>).detail;
       invalidateWaveform(id);
       engineRef.current?.clearCache(id);
       setVersion((v) => v + 1);
+      scheduleRestart();
     };
     window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
     return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);

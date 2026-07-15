@@ -8,7 +8,7 @@
  *
  * The key is `clipId` — lookups are O(1) via IndexedDB's key path.
  *
- * MULTIPLAYER SYNC: For clips under the SYNC_SIZE_LIMIT (~500KB), samples are
+ * MULTIPLAYER SYNC: For clips under the SYNC_SIZE_LIMIT (~5MB), samples are
  * also published to a Yjs Y.Map (base64-encoded) so other peers in the room
  * receive them automatically. Larger clips stay local-only (would freeze Yjs).
  */
@@ -19,8 +19,8 @@ const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-/** Maximum sample blob size (in bytes) to sync via Yjs. ~500KB = ~11s mono @ 44.1kHz. */
-const SYNC_SIZE_LIMIT = 500_000;
+/** Maximum sample blob size (in bytes) to sync via Yjs. ~5MB = ~28s mono @ 44.1kHz. */
+const SYNC_SIZE_LIMIT = 5_000_000;
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -55,9 +55,16 @@ export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
   // Listen for remote sample additions.
   syncMap.observe((event) => {
     for (const key of event.keysChanged) {
-      if (syncedKeys.has(key)) continue;
       const base64 = syncMap!.get(key);
-      if (!base64) continue;
+      if (base64 === undefined) {
+        // Key was deleted (or never had a value). Drop it from syncedKeys so
+        // a future re-add with the same key is processed, not skipped —
+        // otherwise a delete+re-add cycle would leave peers with stale
+        // (or no) samples for that key forever.
+        syncedKeys.delete(key);
+        continue;
+      }
+      if (syncedKeys.has(key)) continue;
       // Decode base64 → ArrayBuffer → Float32Array → store locally.
       try {
         const binary = atob(base64);
@@ -84,11 +91,19 @@ export function isSampleSynced(sampleKey: string): boolean {
 function publishToSyncMap(key: string, float32: Float32Array): void {
   if (!syncMap || float32.byteLength > SYNC_SIZE_LIMIT) return;
   try {
-    // Float32Array → ArrayBuffer → base64
+    // Float32Array → ArrayBuffer → base64. The naive char-by-char string
+    // concat is O(n²) (every `+=` rebuilds the whole string) and freezes the
+    // main thread for several seconds on a 5MB blob. Build in 8KB chunks via
+    // String.fromCharCode.apply — O(n) total, and 8192 is the safe stack
+    // limit for Function.prototype.apply across JS engines.
     const bytes = new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-    const base64 = btoa(binary);
+    const CHUNK = 8192;
+    const parts: string[] = [];
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      const end = Math.min(bytes.length, i + CHUNK);
+      parts.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end))));
+    }
+    const base64 = btoa(parts.join(''));
     syncMap.set(key, base64);
     syncedKeys.add(key);
   } catch {

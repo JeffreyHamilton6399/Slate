@@ -266,6 +266,80 @@ export function Canvas2DToolbar({
             <ImagePlus size={15} />
           </button>
         </Tooltip>
+
+        {/* History & zoom controls pinned to the bottom of the left rail.
+            mt-auto pushes them down so they stay reachable regardless of how
+            many tools are favorited/pinned above. */}
+        <div className="mt-auto flex flex-col items-center gap-0.5">
+          <div className="my-1 h-px w-6 bg-border" />
+          <Tooltip content="Undo (Ctrl+Z)" side="right">
+            <button
+              type="button"
+              onClick={onUndo}
+              aria-label="Undo"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Undo2 size={15} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Redo (Ctrl+Shift+Z)" side="right">
+            <button
+              type="button"
+              onClick={onRedo}
+              aria-label="Redo"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Redo2 size={15} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Clear board" side="right">
+            <button
+              type="button"
+              onClick={onClear}
+              aria-label="Clear board"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Trash2 size={15} />
+            </button>
+          </Tooltip>
+          <div className="my-1 h-px w-6 bg-border" />
+          <Tooltip content="Zoom out (-)" side="right">
+            <button
+              type="button"
+              onClick={onZoomOut}
+              aria-label="Zoom out"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Minus size={15} />
+            </button>
+          </Tooltip>
+          <span
+            className="py-0.5 text-center font-mono text-[10px] leading-none text-text-dim"
+            aria-label={`Zoom level ${zoomLabel}`}
+          >
+            {zoomLabel}
+          </span>
+          <Tooltip content="Zoom in (+)" side="right">
+            <button
+              type="button"
+              onClick={onZoomIn}
+              aria-label="Zoom in"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Plus size={15} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Fit (Ctrl+0)" side="right">
+            <button
+              type="button"
+              onClick={onFit}
+              aria-label="Fit"
+              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            >
+              <Maximize2 size={15} />
+            </button>
+          </Tooltip>
+        </div>
       </aside>
 
       <div
@@ -363,47 +437,6 @@ export function Canvas2DToolbar({
         </label>
       </div>
 
-      {/* History & zoom stays top-right on every viewport. The bottom is
-          reserved for the Timeline2D overlay (and the mobile style strip),
-          so the two never overlap. */}
-      <div
-        className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-bg-2/95 backdrop-blur px-2 py-1 shadow-lg"
-        role="toolbar"
-        aria-label="History & zoom"
-      >
-        <Tooltip content="Undo (Ctrl+Z)">
-          <Button variant="icon" size="none" onClick={onUndo} aria-label="Undo">
-            <Undo2 size={14} />
-          </Button>
-        </Tooltip>
-        <Tooltip content="Redo (Ctrl+Shift+Z)">
-          <Button variant="icon" size="none" onClick={onRedo} aria-label="Redo">
-            <Redo2 size={14} />
-          </Button>
-        </Tooltip>
-        <Tooltip content="Clear board">
-          <Button variant="icon" size="none" onClick={onClear} aria-label="Clear board">
-            <Trash2 size={14} />
-          </Button>
-        </Tooltip>
-        <div className="mx-1 h-5 w-px bg-border" />
-        <Tooltip content="Zoom out (-)">
-          <Button variant="icon" size="none" onClick={onZoomOut} aria-label="Zoom out">
-            <Minus size={14} />
-          </Button>
-        </Tooltip>
-        <span className="min-w-[3.5rem] text-center font-mono text-xs">{zoomLabel}</span>
-        <Tooltip content="Zoom in (+)">
-          <Button variant="icon" size="none" onClick={onZoomIn} aria-label="Zoom in">
-            <Plus size={14} />
-          </Button>
-        </Tooltip>
-        <Tooltip content="Fit (Ctrl+0)">
-          <Button variant="icon" size="none" onClick={onFit} aria-label="Fit">
-            <Maximize2 size={14} />
-          </Button>
-        </Tooltip>
-      </div>
     </>
   );
 }

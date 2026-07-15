@@ -17,6 +17,7 @@ import { AssetsPanel } from './AssetsPanel';
 import { ToolsPanel } from './ToolsPanel';
 import { AudioEditorPanel } from './AudioEditorPanel';
 import { AudioAssetsPanel } from './AudioAssetsPanel';
+import { AudioSettingsPanel } from './AudioSettingsPanel';
 
 let registered = false;
 
@@ -95,16 +96,16 @@ export function registerBuiltInPanels(): void {
     mode: 'both',
   });
   // Members panel retired — the People widget covers roster + voice + host controls.
-  // Audio settings — left dock panel for audio-mode boards (track/clip properties).
+  // Audio settings — left dock panel (clip/track properties + import).
   registerPanel({
     id: 'audio-settings',
     title: 'Audio Settings',
     defaultSide: 'left',
-    render: AudioAssetsPanel,
+    render: AudioSettingsPanel,
     order: 0,
     mode: 'audio',
   });
-  // Audio assets — right dock panel for audio-mode boards.
+  // Audio assets — right dock panel.
   registerPanel({
     id: 'audio-assets',
     title: 'Audio Assets',

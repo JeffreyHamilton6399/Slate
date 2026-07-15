@@ -464,7 +464,7 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onSelect, 
   const w = Math.max(2, Math.floor(width));
 
   return (
-    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); onDragStart(clip, e, elRef.current); } }}
+    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) { e.stopPropagation(); onSelect(clip.id); window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id })); onDragStart(clip, e, elRef.current); } }}
       className={`group absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
       {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} width={w} color={clip.color} />}
       <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}</span>

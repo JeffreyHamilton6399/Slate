@@ -95,22 +95,22 @@ export function registerBuiltInPanels(): void {
     mode: 'both',
   });
   // Members panel retired — the People widget covers roster + voice + host controls.
-  // Audio editor — BandLab-style DAW for audio-mode boards.
+  // Audio editor — main left panel for audio-mode boards.
   registerPanel({
     id: 'audio-editor',
     title: 'Audio Editor',
-    defaultSide: 'right',
+    defaultSide: 'left',
     render: AudioEditorPanel,
     order: 0,
-    mode: 'both',
+    mode: 'audio',
   });
-  // Audio assets — imported audio library, bottom-left for audio-mode boards.
+  // Audio assets — right panel for audio-mode boards.
   registerPanel({
     id: 'audio-assets',
     title: 'Audio Assets',
-    defaultSide: 'left-bottom',
+    defaultSide: 'right',
     render: AudioAssetsPanel,
-    order: 9,
+    order: 0,
     mode: 'audio',
   });
 }

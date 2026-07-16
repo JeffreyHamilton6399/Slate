@@ -567,8 +567,21 @@ export function AudioEditor() {
       setVersion((v) => v + 1);
       scheduleRestart();
     };
+    // A clip too large for live sync plays fine locally but is silent for
+    // collaborators — say so instead of failing silently.
+    const onSkipped = () => {
+      toast({
+        title: 'Clip too large to share live',
+        description: 'It plays for you, but collaborators won’t receive the audio. Try a shorter clip.',
+        variant: 'error',
+      });
+    };
     window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
-    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+    window.addEventListener('slate:audio-sync-skipped', onSkipped);
+    return () => {
+      window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+      window.removeEventListener('slate:audio-sync-skipped', onSkipped);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

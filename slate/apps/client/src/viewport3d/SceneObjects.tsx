@@ -149,20 +149,37 @@ export function SceneObjects({
 const EMPTY: number[] = [];
 
 /**
- * Blender-style selection outline: the same geometry re-rendered as an
- * inverted hull (back faces only, vertices pushed out along their normals)
- * in Blender's selection orange. One shared material for all outlines.
+ * Blender-style selection outline: the geometry re-rendered as an inverted
+ * hull (back faces only, vertices pushed out along their normals) in
+ * Blender's selection orange.
+ *
+ * Two subtleties that made the outline "weird" before:
+ *  - it must use SMOOTH (indexed, averaged) normals — pushing a flat-shaded
+ *    mesh's per-face normals splits the hull at every edge, leaving gaps and
+ *    spikes around corners (SceneMesh builds a dedicated outlineGeo for this);
+ *  - the push happens in OBJECT space, so it must be divided by the object's
+ *    scale or imported models (often scaled 0.01 or 100×) get an invisible or
+ *    enormous outline. Materials are cached on the quantized push distance so
+ *    a handful of instances cover every scale.
  */
-const OUTLINE_MAT = (() => {
-  const m = new THREE.MeshBasicMaterial({ color: '#ff9d2e', side: THREE.BackSide, toneMapped: false });
-  m.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\n\ttransformed += normal * 0.018;',
-    );
-  };
+const outlineMatCache = new Map<number, THREE.MeshBasicMaterial>();
+function outlineMaterial(objScale: number): THREE.MeshBasicMaterial {
+  const push = 0.018 / Math.max(1e-3, objScale);
+  // Quantize in log space (≈26% steps) so nearby scales share a material.
+  const q = Math.pow(2, Math.round(Math.log2(push) * 3) / 3);
+  let m = outlineMatCache.get(q);
+  if (!m) {
+    m = new THREE.MeshBasicMaterial({ color: '#ff9d2e', side: THREE.BackSide, toneMapped: false });
+    m.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>\n\ttransformed += normal * ${q.toExponential(6)};`,
+      );
+    };
+    outlineMatCache.set(q, m);
+  }
   return m;
-})();
+}
 
 /**
  * Click-vs-drag pick handling shared by meshes, lights, and empties: select
@@ -224,7 +241,10 @@ function SceneMesh({
   // triFace maps each rendered triangle back to its source polygon so a
   // raycast hit (triangle index) resolves to a face selection. wireGeo holds
   // the REAL polygon face edges (not triangulated) for wireframe display.
-  const { geometry, triFace, wireGeo } = useMemo(() => {
+  // outlineGeo is a separate indexed copy with SMOOTH normals — the selection
+  // hull pushes vertices along normals, and flat (per-face) normals split the
+  // hull at every edge into gaps and spikes.
+  const { geometry, triFace, wireGeo, outlineGeo } = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const tris: number[] = [];
     const triFace: number[] = [];
@@ -235,6 +255,10 @@ function SceneMesh({
       }
     });
     const positions = new Float32Array(data.vertices);
+    const outlineGeo = new THREE.BufferGeometry();
+    outlineGeo.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 3));
+    outlineGeo.setIndex(tris.slice());
+    outlineGeo.computeVertexNormals(); // averaged → watertight hull
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     g.setIndex(tris);
     if (obj.smooth) g.computeVertexNormals();
@@ -261,8 +285,15 @@ function SceneMesh({
     }
     const wireGeo = new THREE.BufferGeometry();
     wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
-    return { geometry: g, triFace, wireGeo };
+    return { geometry: g, triFace, wireGeo, outlineGeo };
   }, [data, obj.smooth]);
+
+  // Outline push distance compensates for object scale (see outlineMaterial).
+  const avgScale =
+    (Math.abs(obj.transform.scale.x) +
+      Math.abs(obj.transform.scale.y) +
+      Math.abs(obj.transform.scale.z)) / 3 || 1;
+  const outlineMat = useMemo(() => outlineMaterial(avgScale), [avgScale]);
 
   // Solid shading ignores materials (Blender's neutral studio gray).
   const solid = shading === 'solid';
@@ -346,7 +377,7 @@ function SceneMesh({
       )}
       {/* Selection reads as Blender's silhouette outline, not a tint. */}
       {selected && !editOverlay && shading !== 'wireframe' && (
-        <mesh geometry={geometry} material={OUTLINE_MAT} raycast={NO_RAYCAST} />
+        <mesh geometry={outlineGeo} material={outlineMat} raycast={NO_RAYCAST} />
       )}
       {editOverlay && <EditOverlay data={data} />}
       {editOverlay && selectedFaces.length > 0 && (

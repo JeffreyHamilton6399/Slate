@@ -19,8 +19,13 @@ const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-/** Maximum sample blob size (in bytes) to sync via Yjs. ~5MB = ~28s mono @ 44.1kHz. */
-const SYNC_SIZE_LIMIT = 5_000_000;
+/** Maximum sample blob size (raw Float32 bytes) to sync via Yjs.
+ *  24MB ≈ 2.2min mono / 1.1min stereo @ 44.1kHz — sent over the wire as int16
+ *  (half the bytes) in bounded chunks. The old 5MB cap silently skipped
+ *  anything past ~14s of stereo, which read as "other users can't hear my
+ *  audio" for any real song. Clips beyond the cap still get a visible warning
+ *  (slate:audio-sync-skipped) instead of failing silently. */
+const SYNC_SIZE_LIMIT = 24_000_000;
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -106,14 +111,19 @@ function tryImportEntry(entry: string): void {
   const key = baseKeyOf(entry);
   if (syncedKeys.has(key)) return;
   let base64: string;
+  let encoding: 'f32' | 'i16' = 'f32';
   const plain = syncMap.get(key);
   if (plain !== undefined) {
-    base64 = plain;
+    base64 = plain; // plain entries are always float32 (legacy format)
   } else {
-    // Chunked: need the meta (chunk count) plus every chunk present.
+    // Chunked: need the meta (chunk count) plus every chunk present. Meta is
+    // either "12" (older float32 chunks) or "12:i16" (int16-encoded).
     const metaRaw = syncMap.get(`${key}#meta`);
-    const count = metaRaw === undefined ? NaN : Number(metaRaw);
+    if (metaRaw === undefined) return;
+    const [countStr, enc] = metaRaw.split(':');
+    const count = Number(countStr);
     if (!Number.isInteger(count) || count <= 0) return;
+    if (enc === 'i16') encoding = 'i16';
     const parts: string[] = [];
     for (let i = 0; i < count; i++) {
       const c = syncMap.get(`${key}#${i}`);
@@ -127,10 +137,18 @@ function tryImportEntry(entry: string): void {
   // rebroadcast the full blob back into the doc.
   try {
     const binary = atob(base64);
-    if (binary.length === 0 || binary.length % 4 !== 0) return;
+    const stride = encoding === 'i16' ? 2 : 4;
+    if (binary.length === 0 || binary.length % stride !== 0) return;
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const float32 = new Float32Array(bytes.buffer);
+    let float32: Float32Array;
+    if (encoding === 'i16') {
+      const i16 = new Int16Array(bytes.buffer);
+      float32 = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) float32[i] = i16[i]! / 32767;
+    } else {
+      float32 = new Float32Array(bytes.buffer);
+    }
     syncedKeys.add(key);
     void storeSamplesLocal(key, float32).then(() => {
       // Notify the AudioEditor that samples arrived.
@@ -146,54 +164,75 @@ export function isSampleSynced(sampleKey: string): boolean {
   return syncedKeys.has(sampleKey);
 }
 
+/** Bytes → base64. The naive char-by-char string concat is O(n²) (every `+=`
+ *  rebuilds the whole string) and freezes the main thread for seconds on a
+ *  multi-MB blob. Build in 8KB pieces via String.fromCharCode.apply — O(n)
+ *  total, and 8192 is the safe apply() stack limit across JS engines. */
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const end = Math.min(bytes.length, i + CHUNK);
+    parts.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end))));
+  }
+  return btoa(parts.join(''));
+}
+
 /** Publish samples to the Yjs sync map so other peers receive them. */
 function publishToSyncMap(key: string, float32: Float32Array): void {
-  if (!syncMap || !syncRoom || float32.byteLength > SYNC_SIZE_LIMIT) return;
+  if (!syncMap || !syncRoom) return;
+  if (float32.byteLength > SYNC_SIZE_LIMIT) {
+    // Make the skip VISIBLE — silently not syncing read as "broken for
+    // everyone else". The AudioEditor toasts on this event.
+    window.dispatchEvent(new CustomEvent('slate:audio-sync-skipped', { detail: key }));
+    return;
+  }
   try {
-    // Float32Array → ArrayBuffer → base64. The naive char-by-char string
-    // concat is O(n²) (every `+=` rebuilds the whole string) and freezes the
-    // main thread for several seconds on a 5MB blob. Build in 8KB chunks via
-    // String.fromCharCode.apply — O(n) total, and 8192 is the safe stack
-    // limit for Function.prototype.apply across JS engines.
-    const bytes = new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength);
-    const CHUNK = 8192;
-    const parts: string[] = [];
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      const end = Math.min(bytes.length, i + CHUNK);
-      parts.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end))));
-    }
-    const base64 = btoa(parts.join(''));
     const doc = syncRoom.slate.doc;
     const map = syncMap;
     // Mark synced BEFORE writing: our own sets fire the local observer, and
     // without this it would pointlessly re-decode + re-store our own blob.
     syncedKeys.add(key);
-    if (base64.length <= CHUNK_CHARS) {
-      // Fits in one update — plain legacy entry (older clients read it too).
+    // base64 expands bytes 4/3× — decide the path from the raw size so large
+    // clips never pay for a throwaway float32 encoding.
+    if (float32.byteLength <= (CHUNK_CHARS * 3) / 4) {
+      // Fits in one update — plain legacy float32 entry (older clients read it).
+      const f32base64 = bytesToBase64(
+        new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength),
+      );
       doc.transact(() => {
-        map.set(key, base64);
+        map.set(key, f32base64);
         clearChunks(map, key); // drop stale chunks from a previous larger publish
       });
-    } else {
-      const count = Math.ceil(base64.length / CHUNK_CHARS);
-      // One transaction per chunk = one bounded Yjs update per chunk.
-      for (let i = 0; i < count; i++) {
-        const piece = base64.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
-        doc.transact(() => map.set(`${key}#${i}`, piece));
-      }
-      // Meta last: receivers assemble only once every chunk has landed. Also
-      // drop the plain entry and any stale higher-index chunks from a previous
-      // (larger) publish of this key.
-      doc.transact(() => {
-        map.delete(key);
-        for (const entry of [...map.keys()]) {
-          if (!entry.startsWith(`${key}#`) || entry === `${key}#meta`) continue;
-          const idx = Number(entry.slice(key.length + 1));
-          if (Number.isInteger(idx) && idx >= count) map.delete(entry);
-        }
-        map.set(`${key}#meta`, String(count));
-      });
+      return;
     }
+    // Chunked path: encode as int16 — half the bytes on the wire and in the
+    // doc for no audible difference (16-bit is CD depth). Receivers detect the
+    // encoding via the `:i16` marker on the chunk-count meta entry.
+    const i16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const v = Math.max(-1, Math.min(1, float32[i]!));
+      i16[i] = Math.round(v * 32767);
+    }
+    const base64 = bytesToBase64(new Uint8Array(i16.buffer));
+    const count = Math.ceil(base64.length / CHUNK_CHARS);
+    // One transaction per chunk = one bounded Yjs update per chunk.
+    for (let i = 0; i < count; i++) {
+      const piece = base64.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
+      doc.transact(() => map.set(`${key}#${i}`, piece));
+    }
+    // Meta last: receivers assemble only once every chunk has landed. Also
+    // drop the plain entry and any stale higher-index chunks from a previous
+    // (larger) publish of this key.
+    doc.transact(() => {
+      map.delete(key);
+      for (const entry of [...map.keys()]) {
+        if (!entry.startsWith(`${key}#`) || entry === `${key}#meta`) continue;
+        const idx = Number(entry.slice(key.length + 1));
+        if (Number.isInteger(idx) && idx >= count) map.delete(entry);
+      }
+      map.set(`${key}#meta`, `${count}:i16`);
+    });
   } catch {
     // ignore — large clips just don't sync
   }

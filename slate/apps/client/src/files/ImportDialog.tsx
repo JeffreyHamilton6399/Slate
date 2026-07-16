@@ -12,6 +12,7 @@ import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
 import { importModel } from './import3d';
+import { fileToImageShape } from '../canvas2d/importImage';
 import { useScene3DStore } from '../viewport3d/store';
 
 interface ImportDialogProps {
@@ -46,11 +47,13 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
           }
         } else {
           // 2D: load as background image — saved in meta.paperImage (data URL).
-          // Kept simple: convert to data URL and set on meta.
-          const dataUrl = await fileToDataUrl(file);
+          // Compressed/downscaled to fit inside one Yjs update: a raw photo's
+          // data URL easily exceeds the relay's per-update cap, which kills
+          // the connection and leaves the board unable to sync.
+          const { src } = await fileToImageShape(file);
           room.slate.doc.transact(() => {
             const meta = room.slate.meta();
-            meta.set('paperImage', dataUrl);
+            meta.set('paperImage', src);
           });
           toast({ title: 'Background updated' });
         }
@@ -103,11 +106,3 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
   );
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(r.error ?? new Error('read failed'));
-    r.readAsDataURL(file);
-  });
-}

@@ -1,8 +1,18 @@
 /** Wire-level limits applied by both client and server. */
 export const PROTOCOL_VERSION = 1;
 
-/** Largest single Yjs update we accept (bytes). 1 MB is plenty for normal use. */
-export const MAX_UPDATE_BYTES = 1_000_000;
+/** Largest single Yjs update we accept (bytes).
+ *
+ *  This must comfortably exceed the largest LEGITIMATE single update a client
+ *  can produce, because the relay doesn't just reject oversized updates — it
+ *  drops the connection, and since the data is already committed to the local
+ *  doc the client re-sends it on every reconnect: one oversized update makes
+ *  the board permanently unsyncable for that peer. Real cases that blew the
+ *  old 1 MB cap: a large imported 3D mesh (vertex arrays live in the doc), an
+ *  initial SyncStep2 of a board authored while the server slept, and (before
+ *  chunking) a base64 audio sample blob. 16 MB covers all of these while still
+ *  bounding what a hostile client can make the server buffer per message. */
+export const MAX_UPDATE_BYTES = 16_000_000;
 
 /** Largest single chat message (chars). */
 export const MAX_CHAT_LEN = 2000;

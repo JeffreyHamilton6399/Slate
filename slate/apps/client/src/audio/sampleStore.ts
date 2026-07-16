@@ -42,44 +42,103 @@ function openDB(): Promise<IDBDatabase> {
 // A separate Y.Map on the same doc, keyed by sampleKey, holding base64 strings.
 // Only used for clips under SYNC_SIZE_LIMIT. Listened to by all peers to
 // auto-populate their local IndexedDB.
+//
+// CHUNKED WIRE FORMAT: the relay drops any single Yjs update above
+// MAX_UPDATE_BYTES, and a 5MB sample is ~6.7MB of base64 — publishing it as
+// one Y.Map entry didn't just fail, it KILLED the uploader's connection on
+// every subsequent sync attempt (the doc still contained the giant entry), so
+// audio never reached other peers and the connection flapped forever. Large
+// samples are therefore split into ~512KB base64 chunks, each committed in its
+// OWN transaction (one small update per chunk):
+//   `${key}#${i}`  → base64 chunk i
+//   `${key}#meta`  → chunk count, written LAST — same-client updates arrive in
+//                    order, so when a peer sees the meta every chunk is there.
+// Samples that fit in one chunk keep the legacy plain `key` entry.
+
+/** Base64 chars per chunk entry — keeps each Yjs update far below the relay's
+ *  MAX_UPDATE_BYTES cap even on old servers still enforcing 1MB. */
+const CHUNK_CHARS = 512_000;
 
 let syncMap: Y.Map<string> | null = null;
+let syncObserver: ((event: Y.YMapEvent<string>) => void) | null = null;
 let syncRoom: { slate: { doc: Y.Doc } } | null = null;
 const syncedKeys = new Set<string>();
+
+/** sampleKey for a map entry name: strips the `#meta` / `#<n>` chunk suffix. */
+function baseKeyOf(entry: string): string {
+  const hash = entry.lastIndexOf('#');
+  return hash === -1 ? entry : entry.slice(0, hash);
+}
 
 /** Register the Yjs Y.Map used for sample sync. Call once per room. */
 export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
   if (syncRoom === room) return;
+  // Switching rooms: detach from the previous doc's map and forget its keys —
+  // a lingering observer on a disposed doc and stale syncedKeys entries would
+  // make the new room skip samples it never actually received.
+  if (syncMap && syncObserver) syncMap.unobserve(syncObserver);
+  syncedKeys.clear();
   syncRoom = room;
   syncMap = room.slate.doc.getMap<string>('audioSampleSync');
-  // Listen for remote sample additions.
-  syncMap.observe((event) => {
-    for (const key of event.keysChanged) {
-      const base64 = syncMap!.get(key);
-      if (base64 === undefined) {
-        // Key was deleted (or never had a value). Drop it from syncedKeys so
-        // a future re-add with the same key is processed, not skipped —
-        // otherwise a delete+re-add cycle would leave peers with stale
-        // (or no) samples for that key forever.
-        syncedKeys.delete(key);
+  syncObserver = (event) => {
+    for (const entry of event.keysChanged) {
+      if (syncMap!.get(entry) === undefined) {
+        // Entry deleted — drop the base key from syncedKeys so a future
+        // re-add with the same key is processed, not skipped.
+        syncedKeys.delete(baseKeyOf(entry));
         continue;
       }
-      if (syncedKeys.has(key)) continue;
-      // Decode base64 → ArrayBuffer → Float32Array → store locally.
-      try {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const float32 = new Float32Array(bytes.buffer);
-        syncedKeys.add(key);
-        void storeSamples(key, float32);
-        // Notify the AudioEditor that samples arrived.
-        window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: key }));
-      } catch {
-        // ignore decode errors
-      }
+      tryImportEntry(entry);
     }
-  });
+  };
+  syncMap.observe(syncObserver);
+  // Import anything ALREADY in the map. The AudioEditor (which registers this)
+  // often mounts after the initial doc sync applied the entries, so without
+  // this scan a peer opening the audio panel late would never receive samples
+  // published before it mounted.
+  for (const entry of syncMap.keys()) tryImportEntry(entry);
+}
+
+/** Import the sample a map entry belongs to, if complete and not yet stored.
+ *  Handles both the plain legacy format and the chunked format. */
+function tryImportEntry(entry: string): void {
+  if (!syncMap) return;
+  const key = baseKeyOf(entry);
+  if (syncedKeys.has(key)) return;
+  let base64: string;
+  const plain = syncMap.get(key);
+  if (plain !== undefined) {
+    base64 = plain;
+  } else {
+    // Chunked: need the meta (chunk count) plus every chunk present.
+    const metaRaw = syncMap.get(`${key}#meta`);
+    const count = metaRaw === undefined ? NaN : Number(metaRaw);
+    if (!Number.isInteger(count) || count <= 0) return;
+    const parts: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const c = syncMap.get(`${key}#${i}`);
+      if (c === undefined) return; // still in flight — retry on next change
+      parts.push(c);
+    }
+    base64 = parts.join('');
+  }
+  // Decode base64 → bytes → Float32Array → store locally. Store WITHOUT
+  // publishing: re-publishing what we just received would make every peer
+  // rebroadcast the full blob back into the doc.
+  try {
+    const binary = atob(base64);
+    if (binary.length === 0 || binary.length % 4 !== 0) return;
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const float32 = new Float32Array(bytes.buffer);
+    syncedKeys.add(key);
+    void storeSamplesLocal(key, float32).then(() => {
+      // Notify the AudioEditor that samples arrived.
+      window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: key }));
+    });
+  } catch {
+    // ignore decode errors
+  }
 }
 
 /** Check if a sampleKey has been synced (exists in the Yjs sync map). */
@@ -89,7 +148,7 @@ export function isSampleSynced(sampleKey: string): boolean {
 
 /** Publish samples to the Yjs sync map so other peers receive them. */
 function publishToSyncMap(key: string, float32: Float32Array): void {
-  if (!syncMap || float32.byteLength > SYNC_SIZE_LIMIT) return;
+  if (!syncMap || !syncRoom || float32.byteLength > SYNC_SIZE_LIMIT) return;
   try {
     // Float32Array → ArrayBuffer → base64. The naive char-by-char string
     // concat is O(n²) (every `+=` rebuilds the whole string) and freezes the
@@ -104,25 +163,68 @@ function publishToSyncMap(key: string, float32: Float32Array): void {
       parts.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end))));
     }
     const base64 = btoa(parts.join(''));
-    syncMap.set(key, base64);
+    const doc = syncRoom.slate.doc;
+    const map = syncMap;
+    // Mark synced BEFORE writing: our own sets fire the local observer, and
+    // without this it would pointlessly re-decode + re-store our own blob.
     syncedKeys.add(key);
+    if (base64.length <= CHUNK_CHARS) {
+      // Fits in one update — plain legacy entry (older clients read it too).
+      doc.transact(() => {
+        map.set(key, base64);
+        clearChunks(map, key); // drop stale chunks from a previous larger publish
+      });
+    } else {
+      const count = Math.ceil(base64.length / CHUNK_CHARS);
+      // One transaction per chunk = one bounded Yjs update per chunk.
+      for (let i = 0; i < count; i++) {
+        const piece = base64.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
+        doc.transact(() => map.set(`${key}#${i}`, piece));
+      }
+      // Meta last: receivers assemble only once every chunk has landed. Also
+      // drop the plain entry and any stale higher-index chunks from a previous
+      // (larger) publish of this key.
+      doc.transact(() => {
+        map.delete(key);
+        for (const entry of [...map.keys()]) {
+          if (!entry.startsWith(`${key}#`) || entry === `${key}#meta`) continue;
+          const idx = Number(entry.slice(key.length + 1));
+          if (Number.isInteger(idx) && idx >= count) map.delete(entry);
+        }
+        map.set(`${key}#meta`, String(count));
+      });
+    }
   } catch {
     // ignore — large clips just don't sync
   }
 }
 
-/** Store audio samples in IndexedDB. Accepts number[] or Float32Array. */
-export async function storeSamples(key: string, samples: number[] | Float32Array): Promise<void> {
+/** Delete every chunk entry (+meta) for a key. Caller wraps in a transaction. */
+function clearChunks(map: Y.Map<string>, key: string): void {
+  for (const entry of [...map.keys()]) {
+    if (entry.startsWith(`${key}#`)) map.delete(entry);
+  }
+}
+
+/** Store audio samples in IndexedDB ONLY — used by the sync receive path,
+ *  where re-publishing what we just received would make every peer rebroadcast
+ *  the full blob back into the doc. */
+async function storeSamplesLocal(key: string, samples: number[] | Float32Array): Promise<void> {
   const db = await openDB();
   // Convert to Float32Array for compactness if not already.
   const float32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
-  const promise = new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(float32.buffer, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
-  await promise;
+}
+
+/** Store audio samples in IndexedDB. Accepts number[] or Float32Array. */
+export async function storeSamples(key: string, samples: number[] | Float32Array): Promise<void> {
+  const float32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
+  await storeSamplesLocal(key, float32);
   // After local store succeeds, publish to the Yjs sync map for other peers.
   publishToSyncMap(key, float32);
 }
@@ -152,8 +254,14 @@ export async function deleteSamples(key: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   await promise;
-  // Also remove from the Yjs sync map.
-  if (syncMap && syncMap.has(key)) syncMap.delete(key);
+  // Also remove from the Yjs sync map — the plain entry AND any chunks.
+  if (syncMap && syncRoom) {
+    const map = syncMap;
+    syncRoom.slate.doc.transact(() => {
+      if (map.has(key)) map.delete(key);
+      clearChunks(map, key);
+    });
+  }
   syncedKeys.delete(key);
 }
 

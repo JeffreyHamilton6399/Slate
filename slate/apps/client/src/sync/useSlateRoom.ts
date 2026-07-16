@@ -97,18 +97,23 @@ export function useSlateRoom(roomName: string | null, displayName?: string): Use
     const entry = acquireRoom(roomName, nameRef.current);
 
     // Attach synchronously if the room is already open (reused instance),
-    // otherwise when the open promise resolves.
+    // otherwise when the open promise resolves. Keep the unsubscribers — the
+    // room instance is shared and may outlive this consumer, so listeners left
+    // behind would accumulate across remounts and keep firing setState on an
+    // unmounted component.
+    const unsubs: Array<() => void> = [];
     const attach = (r: SlateRoom) => {
       if (cancelled) return;
       setRoom(r);
-      r.onStatusChange(setStatus);
-      r.onAwarenessChange(setAwareness);
+      unsubs.push(r.onStatusChange(setStatus));
+      unsubs.push(r.onAwarenessChange(setAwareness));
     };
     if (entry.room) attach(entry.room);
     else entry.promise.then(attach).catch((e) => !cancelled && setError(e as Error));
 
     return () => {
       cancelled = true;
+      for (const off of unsubs) off();
       setRoom(null);
       releaseRoom(roomName, entry);
     };

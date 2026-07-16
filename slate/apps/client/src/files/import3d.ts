@@ -150,15 +150,22 @@ export async function importModel(room: SlateRoom, file: File): Promise<string[]
   };
   const materialId = ensureDefaultMaterial(room.slate);
   const newIds: string[] = [];
-  room.slate.doc.transact(() => {
-    group.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) {
-        const mesh = child as THREE.Mesh;
-        const id = commitMesh(room, mesh, materialId, child.name, norm);
-        if (id) newIds.push(id);
-      }
-    });
+  // One transaction PER MESH, not one for the whole file: each transaction is
+  // one Yjs update on the wire, and a multi-mesh model committed atomically
+  // easily exceeds the relay's per-update byte cap — which drops the
+  // connection and stalls the import for every other peer. Per-mesh commits
+  // keep each update bounded. (UndoManager's captureTimeout still merges them
+  // into a single undo step.)
+  const meshes: THREE.Mesh[] = [];
+  group.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh) meshes.push(child as THREE.Mesh);
   });
+  for (const mesh of meshes) {
+    room.slate.doc.transact(() => {
+      const id = commitMesh(room, mesh, materialId, mesh.name, norm);
+      if (id) newIds.push(id);
+    });
+  }
   return newIds;
 }
 

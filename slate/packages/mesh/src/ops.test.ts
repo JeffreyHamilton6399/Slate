@@ -173,6 +173,57 @@ describe('bevelVerts', () => {
     }
     for (const [, n] of edgeCount) expect(n).toBe(2);
   });
+  it('chamfer stays centered on the beveled vertex (high-index corner)', () => {
+    // Vertex 7 of the cube has ONLY lower-index neighbours (3, 4, 6). A past
+    // bug anchored cut positions at the edge's lower-index endpoint, so
+    // beveling a high-index vertex placed the cuts near its NEIGHBOURS —
+    // a huge lopsided chamfer instead of a small one centered on the vertex.
+    const m = cube(); // corner 7 at (-0.5, 0.5, 0.5)
+    const amount = 0.1;
+    const r = bevelVerts(m, [7], amount);
+    const corner = r.faces.find((f) => f.v.length === 3);
+    expect(corner).toBeDefined();
+    // Every cut vertex of the corner face must sit within `amount` of the
+    // original corner — that's what "centered on the vertex" means.
+    for (const vi of corner!.v) {
+      const dx = r.vertices[vi * 3]! - -0.5;
+      const dy = r.vertices[vi * 3 + 1]! - 0.5;
+      const dz = r.vertices[vi * 3 + 2]! - 0.5;
+      expect(Math.hypot(dx, dy, dz)).toBeLessThanOrEqual(amount + 1e-9);
+    }
+    // And it must stay watertight.
+    const edgeCount = new Map<string, number>();
+    for (const f of r.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        const a = f.v[i]!;
+        const b = f.v[(i + 1) % f.v.length]!;
+        const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      }
+    }
+    for (const [, n] of edgeCount) expect(n).toBe(2);
+  });
+  it('adjacent beveled verts (edge bevel) keep distinct cuts per end — watertight', () => {
+    // Both endpoints of edge 0-1 beveled: each end must get its OWN cut on the
+    // shared edge (a past version shared one cut vertex between both corners,
+    // creating a degenerate repeated vertex in the rewritten faces).
+    const r = bevelVerts(cube(), [0, 1], 0.1, 1);
+    for (const f of r.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        expect(f.v[i]).not.toBe(f.v[(i + 1) % f.v.length]); // no repeated verts
+      }
+    }
+    const edgeCount = new Map<string, number>();
+    for (const f of r.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        const a = f.v[i]!;
+        const b = f.v[(i + 1) % f.v.length]!;
+        const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      }
+    }
+    for (const [, n] of edgeCount) expect(n).toBe(2);
+  });
   it('corner face points outward and clipped faces keep a sane winding', () => {
     const r = recalculateNormals(bevelVerts(cube(), [0], 0.1));
     // recalculateNormals must be a no-op if bevel wound everything outward.

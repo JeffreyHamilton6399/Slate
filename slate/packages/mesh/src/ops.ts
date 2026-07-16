@@ -198,39 +198,36 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   // edge — this is Blender's "Segments" bevel setting (a rounded chamfer
   // instead of a single flat cut). Each segment vertex sits at a fractional
   // position along the edge.
-  // KEY INVARIANT: cutVerts(a, b) and cutVerts(b, a) return the SAME vertex ids
-  // (just in reverse order). This is critical when both endpoints of an edge
-  // are beveled — without sharing, each side would create duplicate vertices
-  // at the same positions, breaking the watertight property.
+  //
+  // Cuts are DIRECTED: cutVerts(cur, nb) creates cuts measured outward from
+  // `cur` (the vertex being beveled), so the chamfer is always centered on the
+  // beveled vertex itself. An earlier version anchored cuts at the edge's
+  // lower-INDEX endpoint instead — beveling a vertex with a lower-numbered
+  // neighbour placed the cut near the *neighbour*, eating nearly the whole
+  // edge on that side and producing a visibly lopsided, off-center chamfer.
+  // When BOTH endpoints of an edge are beveled, each end gets its own cuts
+  // (like Blender); the 45% clamp below guarantees the two sides never cross.
   const edgeVerts = new Map<string, number[]>();
   const cutVerts = (cur: number, nb: number): number[] => {
-    // Canonicalise on the edge's (lo,hi) endpoints. CRITICAL: the cached ids
-    // are ALWAYS stored in lo→hi order (computed from the lower-index vertex
-    // outward), independent of which direction this call came from. The old
-    // code computed them from `cur` outward, so whichever call populated the
-    // cache first decided the stored order — if that call had cur>nb the ids
-    // ended up hi→lo, silently violating the lo→hi assumption that both the
-    // return-order logic below AND the corner-fill reconstruction rely on.
-    // That mismatch is exactly what made multi-segment bevels swirl/twist.
-    const lo = Math.min(cur, nb);
-    const hi = Math.max(cur, nb);
-    const key = `${lo}->${hi}`;
+    const key = `${cur}->${nb}`;
     let ids = edgeVerts.get(key);
     if (ids === undefined) {
-      const c = vGet(m, lo);
-      const edge = sub(vGet(m, hi), c);
+      const c = vGet(m, cur);
+      const edge = sub(vGet(m, nb), c);
       // Never step past 45% of the edge so bevels from both ends can't cross.
       const t = Math.min(amount, length(edge) * 0.45);
       ids = [];
       for (let s = 1; s <= seg; s++) {
-        const frac = s / (seg + 1);
+        // Outermost cut (s=seg) lands at exactly the bevel amount, matching
+        // Blender's width semantics; inner cuts shape the rounded profile.
+        const frac = s / seg;
         const pos = add(c, scale(normalize(edge), t * frac));
         ids.push(vAdd(m, pos));
       }
       edgeVerts.set(key, ids);
     }
-    // Cache is lo→hi; hand back a copy in the caller's requested cur→nb order.
-    return cur === lo ? [...ids] : [...ids].reverse();
+    // ids go outward from `cur` (ids[0] closest to cur, last closest to nb).
+    return [...ids];
   };
 
   // Average incident-face normal per beveled vertex (orients its corner face).
@@ -328,14 +325,12 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   // by a small innermost n-gon — this is what produces the smooth round.
   for (const vi of new Set(vertIds)) {
     // Map: neighbourId → cut vertex ids going outward from vi (cuts[0] is
-    // closest to vi). Built from the symmetric edgeVerts cache.
+    // closest to vi). The cache is directed, so vi's cuts are exactly the
+    // entries whose key starts at vi — already in outward order.
     const cutsByNb = new Map<number, number[]>();
     for (const [key, cutIds] of edgeVerts) {
       const [aStr, bStr] = key.split('->');
-      const a = Number(aStr);
-      const b = Number(bStr);
-      if (a === vi) cutsByNb.set(b, [...cutIds]);
-      else if (b === vi) cutsByNb.set(a, [...cutIds].reverse());
+      if (Number(aStr) === vi) cutsByNb.set(Number(bStr), [...cutIds]);
     }
     if (cutsByNb.size < 3) continue;
 

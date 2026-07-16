@@ -42,12 +42,18 @@ export function Timeline2D({ selection }: TimelineProps) {
   const [userToggled, setUserToggled] = useState(false);
   const dragRef = useRef<{ shapeId: string; curT: number; startX: number } | null>(null);
 
-  // Subscribe to Yjs shapes for keyframe changes.
+  // Subscribe to Yjs shapes + strokes so both keyframe and cel-frame changes
+  // refresh the timeline (frame content markers track strokes too).
   useEffect(() => {
     const shapes = slate.shapes();
+    const strokes = slate.strokes();
     const bump = () => setVersion((v) => v + 1);
     shapes.observeDeep(bump);
-    return () => shapes.unobserveDeep(bump);
+    strokes.observeDeep(bump);
+    return () => {
+      shapes.unobserveDeep(bump);
+      strokes.unobserveDeep(bump);
+    };
   }, [slate]);
 
   // Read all shapes from Yjs (lightweight — no samples).
@@ -56,6 +62,15 @@ export function Timeline2D({ selection }: TimelineProps) {
     const candidate: Record<string, unknown> = {};
     m.forEach((v, k) => { candidate[k] = v; });
     if (candidate.id && candidate.kind) allShapes.push(candidate as unknown as Shape);
+  });
+
+  // Frames that hold cel content (any shape or stroke stamped onto that frame).
+  // Drives the "this frame has a drawing" markers on the frame strip.
+  const framesWithContent = new Set<number>();
+  for (const s of allShapes) if (typeof s.frame === 'number') framesWithContent.add(s.frame);
+  slate.strokes().forEach((m) => {
+    const f = m.get('frame');
+    if (typeof f === 'number') framesWithContent.add(f);
   });
 
   const anyAnimated = allShapes.some((s) => (s.anim?.length ?? 0) > 0);
@@ -69,7 +84,8 @@ export function Timeline2D({ selection }: TimelineProps) {
     (s) => selection.has(s.id) && (s.anim?.length ?? 0) > 0,
   );
 
-  // Playback loop.
+  // Playback loop. In frame (cel) mode this steps one frame at a time at the
+  // configured FPS and loops; in keyframe mode it advances continuous time.
   const lastRef = useRef(0);
   useEffect(() => {
     if (!animPlaying) return;
@@ -77,10 +93,19 @@ export function Timeline2D({ selection }: TimelineProps) {
     lastRef.current = performance.now();
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
-      const dt = Math.min((now - lastRef.current) / 1000, 0.1);
-      lastRef.current = now;
       const s = useCanvasStore.getState();
-      s.setAnimTime((s.animTime + dt) % s.animDuration);
+      if (s.animMode) {
+        const fps = Math.max(1, s.animFps);
+        const total = Math.max(1, Math.ceil(s.animDuration * fps));
+        if (now - lastRef.current >= 1000 / fps) {
+          lastRef.current = now;
+          s.setAnimFrame((s.animFrame + 1) % total);
+        }
+      } else {
+        const dt = Math.min((now - lastRef.current) / 1000, 0.1);
+        lastRef.current = now;
+        s.setAnimTime((s.animTime + dt) % s.animDuration);
+      }
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -134,8 +159,9 @@ export function Timeline2D({ selection }: TimelineProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [slate, selection, animTime, animPlaying, anyAnimated, setAnimPlaying]);
 
-  if (!animMode && !anyAnimated && !open) return null;
-
+  // Always render at least the collapsed header bar so the timeline can never
+  // disappear with no way to bring it back — collapsing just shrinks it to the
+  // thin header (the chevron re-expands it).
   const totalFrames = Math.ceil(animDuration * animFps);
 
   return (
@@ -249,7 +275,7 @@ export function Timeline2D({ selection }: TimelineProps) {
               <div className="flex items-center gap-1 overflow-x-auto">
                 {Array.from({ length: Math.min(totalFrames, 120) }, (_, i) => {
                   const isActive = i === animFrame;
-                  const hasKey = animated.some((s) => s.anim?.some((k) => Math.round(k.t * animFps) === i));
+                  const hasKey = framesWithContent.has(i);
                   return (
                     <button
                       key={i}

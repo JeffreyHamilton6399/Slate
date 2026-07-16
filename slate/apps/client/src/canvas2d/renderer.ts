@@ -41,6 +41,11 @@ export interface SceneFrame {
   onionSkin?: boolean;
   /** Frames per second (for onion skin frame stepping). */
   animFps?: number;
+  /** Frame-based (cel) animation mode — only the current frame's content
+   *  (plus any static, frame-less content) is drawn. */
+  animMode?: boolean;
+  /** Current cel frame index (used when animMode is on). */
+  animFrame?: number;
 }
 
 export interface ViewportSize {
@@ -128,6 +133,8 @@ export function renderScene(
 
   drawGrid(ctx, transform, size);
 
+  const celMode = !!scene.animMode;
+  const curFrame = scene.animFrame ?? 0;
   for (const layer of scene.layers) {
     if (!layer.visible) continue;
     ctx.globalAlpha = layer.opacity;
@@ -135,6 +142,35 @@ export function renderScene(
     const strokes = scene.strokesByLayer.get(layer.id) ?? [];
     const animTime = scene.animTime ?? 0;
     const fps = scene.animFps ?? 24;
+
+    if (celMode) {
+      // Frame-based (cel) animation: each frame is its own drawing. Only the
+      // content stamped onto the current frame — plus any static, frame-less
+      // content — is drawn. Empty frames render blank.
+      if (scene.onionSkin) {
+        // Ghost the immediate neighbours: previous frame red, next frame green.
+        const drawGhost = (f: number, tint: string) => {
+          ctx.globalAlpha = layer.opacity * 0.28;
+          for (const sh of shapes) {
+            if (sh.frame === f) { ctx.save(); drawShapeTint(ctx, sh, tint); ctx.restore(); }
+          }
+          for (const st of strokes) {
+            if (st.frame === f) { ctx.save(); drawStrokeTint(ctx, st, tint); ctx.restore(); }
+          }
+          ctx.globalAlpha = layer.opacity;
+        };
+        if (curFrame > 0) drawGhost(curFrame - 1, '#ff4444');
+        drawGhost(curFrame + 1, '#44ff44');
+      }
+      for (const sh of shapes) {
+        if (sh.frame == null || sh.frame === curFrame) drawShape(ctx, sh);
+      }
+      for (const st of strokes) {
+        if (st.frame == null || st.frame === curFrame) drawStroke(ctx, st);
+      }
+      ctx.globalAlpha = 1;
+      continue;
+    }
 
     // Onion skin: draw previous and next frames as ghost overlays.
     if (scene.onionSkin && animTime > 0) {
@@ -180,10 +216,14 @@ export function renderScene(
   ctx.lineWidth = 1 / transform.zoom;
   ctx.strokeStyle = '#7c6aff';
   ctx.setLineDash([6 / transform.zoom, 4 / transform.zoom]);
+  // In cel mode, only outline selected items that are actually on-screen for
+  // the current frame (frame-less/static items are always shown).
+  const visibleOnFrame = (item: { frame?: number }) =>
+    !celMode || item.frame == null || item.frame === curFrame;
   for (const layer of scene.layers) {
     if (!layer.visible) continue;
     for (const sh of scene.shapesByLayer.get(layer.id) ?? []) {
-      if (scene.selection.has(sh.id)) {
+      if (scene.selection.has(sh.id) && visibleOnFrame(sh)) {
         const b = shapeBounds(sh);
         if (sh.rotation) {
           ctx.save();
@@ -198,7 +238,7 @@ export function renderScene(
       }
     }
     for (const st of scene.strokesByLayer.get(layer.id) ?? []) {
-      if (scene.selection.has(st.id)) {
+      if (scene.selection.has(st.id) && visibleOnFrame(st)) {
         const b = strokeBounds(st);
         ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
       }
@@ -296,6 +336,17 @@ function drawShapeWithAnimTint(ctx: CanvasRenderingContext2D, s: Shape, t: Trans
   };
   drawShape(ctx, overridden);
   ctx.restore();
+}
+
+/** Draw a shape at its own position as a flat tinted silhouette — used for
+ *  cel-mode onion skinning (neighbour frames as coloured ghosts). */
+function drawShapeTint(ctx: CanvasRenderingContext2D, s: Shape, tint: string): void {
+  drawShape(ctx, { ...s, stroke: tint, fill: s.fill ? tint : null });
+}
+
+/** Stroke equivalent of drawShapeTint. */
+function drawStrokeTint(ctx: CanvasRenderingContext2D, s: Stroke, tint: string): void {
+  drawStroke(ctx, { ...s, color: tint });
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {

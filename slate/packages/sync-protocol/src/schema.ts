@@ -82,6 +82,10 @@ export interface Shape {
   authorId: string;
   /** 2D animation keyframes (Adobe Animate / After Effects style). */
   anim?: AnimKey2D[];
+  /** Frame-based (cel) animation: the frame index this shape lives on. When
+   *  set, the shape is only drawn on that frame in frame-animation mode.
+   *  Undefined means "static" — shown on every frame. */
+  frame?: number;
 }
 
 export type StrokeKind = 'pen' | 'highlighter' | 'eraser' | 'pencil' | 'marker' | 'calligraphy' | 'airbrush';
@@ -97,6 +101,10 @@ export interface Stroke {
   points: number[];
   createdAt: number;
   authorId: string;
+  /** Frame-based (cel) animation: the frame index this stroke lives on. When
+   *  set, the stroke is only drawn on that frame in frame-animation mode.
+   *  Undefined means "static" — shown on every frame. */
+  frame?: number;
 }
 
 export interface Layer {

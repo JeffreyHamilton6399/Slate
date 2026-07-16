@@ -96,6 +96,7 @@ export const shapeSchema = z.object({
     .array(z.object({ t: z.number().min(0).max(3600), transform: transform2DSchema }))
     .max(500)
     .optional(),
+  frame: z.number().int().min(0).max(100_000).optional(),
 });
 
 export const strokeSchema = z.object({
@@ -108,6 +109,7 @@ export const strokeSchema = z.object({
   points: z.array(z.number().finite()).max(200_000),
   createdAt: z.number().int().nonnegative(),
   authorId: idSchema,
+  frame: z.number().int().min(0).max(100_000).optional(),
 });
 
 export const lightDataSchema = z.object({

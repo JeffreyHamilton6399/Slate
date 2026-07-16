@@ -673,17 +673,19 @@ export function Viewport3D({ room }: Viewport3DProps) {
       setModalLabelText(modalLabel(obj));
     };
     const onDown = (e: PointerEvent) => {
-      if (meshModalRef.current) {
-        if (e.button === 0) onConfirmModal();
-        else if (e.button === 2) onCancelModal();
-        return;
-      }
-      if (!modalRef.current) return;
-      if (e.button === 0) {
-        onConfirmModal();
-      } else if (e.button === 2) {
-        onCancelModal();
-      }
+      const modalActive = !!(meshModalRef.current || modalRef.current);
+      if (!modalActive) return;
+      if (e.button !== 0 && e.button !== 2) return;
+      // This is a capture-phase window listener, so it runs BEFORE the canvas's
+      // OrbitControls pointerdown handler. The click that confirms/cancels a
+      // modal must NOT also reach OrbitControls — otherwise it starts an orbit
+      // drag and the view spins as the user keeps moving the mouse (the "bevel
+      // rotates clockwise" bug). Swallow the event entirely.
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      if (e.button === 0) onConfirmModal();
+      else onCancelModal();
     };
     // Bevel/loop-cut: wheel changes the number of cuts/segments (Blender's
     // scroll-to-add). Both bevel and loop-cut use `cuts` — bevel segments =
@@ -1100,7 +1102,11 @@ export function Viewport3D({ room }: Viewport3DProps) {
           // No maxDistance — let the user zoom out basically forever
           // (Blender-style). minDistance prevents clipping through the scene.
           minDistance={0.1}
-          enabled={!viewingCameraId}
+          // Disable orbit/pan while a modal edit (bevel/grab/rotate/scale/
+          // extrude/inset/loop-cut) owns the pointer — otherwise a drag both
+          // drives the edit AND orbits the camera, so the mesh appears to spin
+          // (the "bevel rotates clockwise" bug).
+          enabled={!viewingCameraId && !modalTool}
           mouseButtons={{
             // Blender-style: MMB orbits, Shift+MMB pans, wheel zooms.
             // Left-drag also orbits (friendlier for mice/trackpads); plain

@@ -40,6 +40,10 @@ interface EngineOpts {
   getAnimPreview: () => boolean;
   getOnionSkin: () => boolean;
   getAnimFps: () => number;
+  /** Frame-based (cel) animation mode is active. */
+  getAnimMode: () => boolean;
+  /** Current cel frame index. */
+  getAnimFrame: () => number;
 }
 
 export class CanvasEngine {
@@ -133,6 +137,11 @@ export class CanvasEngine {
 
   commitStroke(s: Stroke): void {
     if (this.isDrawMuted()) return;
+    // In frame-animation (cel) mode, stamp the new stroke onto the current
+    // frame so it only shows on that frame. Outside cel mode it stays static.
+    if (this.opts.getAnimMode() && s.frame == null) {
+      s = { ...s, frame: this.opts.getAnimFrame() };
+    }
     const parsed = strokeSchema.safeParse(s);
     if (!parsed.success) return;
     const room = this.opts.room;
@@ -145,6 +154,10 @@ export class CanvasEngine {
 
   commitShape(s: Shape): void {
     if (this.isDrawMuted()) return;
+    // See commitStroke — stamp the current cel frame in frame-animation mode.
+    if (this.opts.getAnimMode() && s.frame == null) {
+      s = { ...s, frame: this.opts.getAnimFrame() };
+    }
     const parsed = shapeSchema.safeParse(s);
     if (!parsed.success) return;
     const room = this.opts.room;
@@ -307,6 +320,8 @@ export class CanvasEngine {
       animTime,
       onionSkin: this.opts.getOnionSkin(),
       animFps: this.opts.getAnimFps(),
+      animMode: this.opts.getAnimMode(),
+      animFrame: this.opts.getAnimFrame(),
     };
     renderScene(this.opts.canvas, this.scene, transform, size);
   };
@@ -334,6 +349,7 @@ function readShape(m: Y.Map<unknown>): Shape | null {
     createdAt: m.get('createdAt'),
     authorId: m.get('authorId'),
     anim: m.get('anim'),
+    frame: m.get('frame'),
   };
   const parsed = shapeSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
@@ -350,6 +366,7 @@ function readStroke(m: Y.Map<unknown>): Stroke | null {
     points: m.get('points'),
     createdAt: m.get('createdAt'),
     authorId: m.get('authorId'),
+    frame: m.get('frame'),
   };
   const parsed = strokeSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;

@@ -226,6 +226,8 @@ export function Canvas2D({ room }: Canvas2DProps) {
       getAnimPreview: () => useCanvasStore.getState().animPreview,
       getOnionSkin: () => useCanvasStore.getState().onionSkin,
       getAnimFps: () => useCanvasStore.getState().animFps,
+      getAnimMode: () => useCanvasStore.getState().animMode,
+      getAnimFrame: () => useCanvasStore.getState().animFrame,
     });
     engineRef.current = engine;
     return () => {
@@ -262,9 +264,11 @@ export function Canvas2D({ room }: Canvas2DProps) {
   const animTime = useCanvasStore((s) => s.animTime);
   const animPreview = useCanvasStore((s) => s.animPreview);
   const onionSkin = useCanvasStore((s) => s.onionSkin);
+  const animMode = useCanvasStore((s) => s.animMode);
+  const animFrame = useCanvasStore((s) => s.animFrame);
   useEffect(() => {
     engineRef.current?.markDirty();
-  }, [animTime, animPreview, onionSkin]);
+  }, [animTime, animPreview, onionSkin, animMode, animFrame]);
 
   // Resize observer.
   useEffect(() => {

@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import * as Y from 'yjs';
-import { Plus, Eye, EyeOff, Lock, LockOpen, Trash2 } from 'lucide-react';
+import { Plus, Eye, EyeOff, Lock, LockOpen, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { Button } from '../ui/Button';
 import { makeId } from '../utils/id';
@@ -72,14 +72,24 @@ export function LayersPanel() {
           .map((l, i) => ({ l, i }))
           .reverse()
           .map(({ l, i }) => (
-            <LayerRow key={l.id} layer={l} index={i} active={l.id === activeLayerId} />
+            <LayerRow key={l.id} layer={l} index={i} total={items.length} active={l.id === activeLayerId} />
           ))}
       </ul>
     </div>
   );
 }
 
-function LayerRow({ layer, index, active }: { layer: Layer; index: number; active: boolean }) {
+function LayerRow({
+  layer,
+  index,
+  total,
+  active,
+}: {
+  layer: Layer;
+  index: number;
+  total: number;
+  active: boolean;
+}) {
   const room = useRoom();
   const setActiveLayer = useLayersStore((s) => s.setActiveLayer);
   const yMap = room.slate.layers().get(index);
@@ -93,6 +103,27 @@ function LayerRow({ layer, index, active }: { layer: Layer; index: number; activ
     room.slate.doc.transact(() => room.slate.layers().delete(index, 1));
   };
 
+  // Reorder by swapping this layer with an adjacent one. Yjs won't let the
+  // same Y.Map be re-inserted, so we clone both maps, delete the pair, and
+  // re-insert them in the swapped order in one transaction. `dir` is in visual
+  // terms: the list is drawn top-down (highest array index at the top), so
+  // moving "up" the list means swapping toward the END of the array.
+  const swap = (dir: 'up' | 'down') => {
+    const other = dir === 'up' ? index + 1 : index - 1;
+    if (other < 0 || other >= total) return;
+    const lo = Math.min(index, other);
+    room.slate.doc.transact(() => {
+      const arr = room.slate.layers();
+      const a = cloneLayerMap(arr.get(lo));
+      const b = cloneLayerMap(arr.get(lo + 1));
+      if (!a || !b) return;
+      arr.delete(lo, 2);
+      arr.insert(lo, [b, a]);
+    });
+  };
+  const canUp = index < total - 1; // toward top of the list
+  const canDown = index > 0; // toward bottom of the list
+
   return (
     <li
       onClick={() => setActiveLayer(layer.id)}
@@ -101,8 +132,34 @@ function LayerRow({ layer, index, active }: { layer: Layer; index: number; activ
         (active ? 'bg-bg-4 border-accent/40' : 'bg-bg-3 border-transparent hover:bg-bg-4')
       }
     >
-      {/* Row 1: visibility · lock · name · delete — all fit, no side-scroll. */}
+      {/* Row 1: reorder · visibility · lock · name · delete — all fit, no side-scroll. */}
       <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex shrink-0 flex-col -my-0.5">
+          <button
+            type="button"
+            aria-label="Move layer up"
+            disabled={!canUp}
+            onClick={(e) => {
+              e.stopPropagation();
+              swap('up');
+            }}
+            className="text-text-dim hover:text-text disabled:opacity-20 disabled:hover:text-text-dim"
+          >
+            <ChevronUp size={11} />
+          </button>
+          <button
+            type="button"
+            aria-label="Move layer down"
+            disabled={!canDown}
+            onClick={(e) => {
+              e.stopPropagation();
+              swap('down');
+            }}
+            className="text-text-dim hover:text-text disabled:opacity-20 disabled:hover:text-text-dim"
+          >
+            <ChevronDown size={11} />
+          </button>
+        </div>
         <button
           type="button"
           aria-label={layer.visible ? 'Hide layer' : 'Show layer'}
@@ -167,6 +224,15 @@ function LayerRow({ layer, index, active }: { layer: Layer; index: number; activ
 function yLayer(l: Layer): Y.Map<unknown> {
   const m = new Y.Map<unknown>();
   Object.entries(l).forEach(([k, v]) => m.set(k, v));
+  return m;
+}
+
+/** Deep-copy a layer Y.Map into a fresh one (Yjs forbids re-inserting a live
+ *  Y.Map, so reordering has to clone). Returns null if the source is missing. */
+function cloneLayerMap(src: Y.Map<unknown> | undefined): Y.Map<unknown> | null {
+  if (!src) return null;
+  const m = new Y.Map<unknown>();
+  src.forEach((v, k) => m.set(k, v));
   return m;
 }
 

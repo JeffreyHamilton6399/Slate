@@ -30,7 +30,9 @@ export function BoardsPanel() {
     const cur = recentByBoard.get(r.boardName);
     if (!cur || r.savedAt > cur.savedAt) recentByBoard.set(r.boardName, r);
   }
-  const recentList = [...recentByBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 6);
+  // Boards tab shows only the three most-recent projects (the homepage lists
+  // more). Keeps the panel compact and focused on "jump back in".
+  const recentList = [...recentByBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 3);
 
   return (
     <div className="flex h-full flex-col gap-3">

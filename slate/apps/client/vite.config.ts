@@ -20,7 +20,11 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    sourcemap: true,
+    // No production source maps: they roughly double rollup's memory use
+    // (which can OOM free-tier CI builders), add ~9MB to the artifact, and
+    // publish the readable source. Set to true locally when debugging a
+    // production-only issue.
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks: {

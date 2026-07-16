@@ -1,7 +1,11 @@
 ## Slate v2 — single-image deploy. Builds client + server into one runtime.
 FROM node:22-alpine AS deps
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# Install pnpm via npm, NOT corepack: corepack downloads pnpm at build time and
+# verifies it against baked-in registry signing keys — when npm rotates those
+# keys (it has, repeatedly), every fresh build exits 1 with a signature error
+# even though nothing in the repo changed. npm -g is boring and reliable.
+RUN npm install -g pnpm@10.33.0
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
 COPY apps/client/package.json apps/client/
 COPY apps/server/package.json apps/server/
@@ -13,6 +17,9 @@ RUN pnpm install --frozen-lockfile=false
 
 FROM deps AS build
 COPY . .
+# Cap the JS heap: constrained builders (Render free tier) can OOM-kill the
+# vite build; an explicit limit keeps node within the container's budget.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 RUN pnpm --filter @slate/client build
 RUN pnpm --filter @slate/server build
 # pnpm prune is unsupported in workspaces; re-install prod-only instead.

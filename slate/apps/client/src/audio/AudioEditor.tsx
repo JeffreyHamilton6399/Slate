@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
+import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
 import {
   addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
@@ -22,6 +23,11 @@ import {
 } from './scene';
 import { AudioEngine } from './engine';
 import { loadSamples, registerSampleSyncMap } from './sampleStore';
+
+/** True while the pointer is over the audio editor. Written here, read by the
+ *  2D animation timeline so its Space handler yields to the audio transport
+ *  when both are on screen (docked audio panel on a 2D board). */
+export const audioEditorHovered = { current: false };
 
 const TRACK_H = 60;
 /** px-per-sec zoom limits. The min is intentionally tiny (2) so a long mix
@@ -192,6 +198,7 @@ export function AudioEditor() {
   // without re-subscribing on every state change.
   const playingRef = useRef(false);
   playingRef.current = playing;
+  const hoveredRef = audioEditorHovered;
   const slateRef = useRef(slate);
   slateRef.current = slate;
   /** Debounce timer for restartPlayback — coalesces rapid clip/sample changes
@@ -501,11 +508,16 @@ export function AudioEditor() {
     };
   }, [slate]);
 
-  // Hotkeys.
+  // Hotkeys. Gated: on an audio board the editor always owns them; on a 2D/3D
+  // board (where the editor is one docked panel among many) they only fire
+  // while the pointer is over the editor — otherwise Space fought the 2D
+  // animation timeline (both played), and C/D/R fired while drawing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      const isAudioBoard = useAppStore.getState().currentBoard?.mode === 'audio';
+      if (!isAudioBoard && !hoveredRef.current) return;
       const k = e.key.toLowerCase();
       if (k === ' ') { e.preventDefault(); togglePlay(); }
       else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); void splitAudioClip(slate, selectedRef.current, positionRef.current); }
@@ -696,7 +708,7 @@ export function AudioEditor() {
   }, [pxPerSec]);
 
   return (
-    <div className="flex h-full flex-col bg-bg overflow-hidden" onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
+    <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
       {/* Transport */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
         <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>

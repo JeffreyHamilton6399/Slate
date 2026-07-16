@@ -57,6 +57,13 @@ function syncRoomFromDoc(rooms: RoomRegistry, documentName: string, doc: Y.Doc):
     const m = readMeta();
     if (!m.visibility || !m.mode) return;
     const existing = rooms.get(documentName);
+    // Seed the member count from the LIVE connection count, not 0: on a brand
+    // new board the creator's onConnect fires BEFORE the meta sync registers
+    // the room (setMembers no-ops on an unknown room), so seeding 0 left the
+    // creator invisible in the "live public boards" list (members > 0 filter)
+    // until they left and rejoined.
+    const liveConnections =
+      (doc as unknown as { getConnectionsCount?: () => number }).getConnectionsCount?.() ?? 0;
     rooms.upsert({
       name: documentName,
       visibility: m.visibility,
@@ -64,7 +71,7 @@ function syncRoomFromDoc(rooms: RoomRegistry, documentName: string, doc: Y.Doc):
       topic: m.topic ?? '',
       mode: m.mode,
       createdAt: m.createdAt ?? Date.now(),
-      members: existing?.members ?? 0,
+      members: Math.max(existing?.members ?? 0, liveConnections),
     });
   };
 

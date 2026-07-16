@@ -16,10 +16,13 @@ export function Dialog({ open, onOpenChange, title, description, children, class
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-[300] bg-black/60 backdrop-blur-sm animate-fade-in" />
+        {/* Above the fullscreen gates (Home sign-in / onboarding at z-1000):
+            dialogs opened FROM a gate (e.g. Terms of Service on the sign-up
+            form) must render over it, not invisibly behind it. */}
+        <RadixDialog.Overlay className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur-sm animate-fade-in" />
         <RadixDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[301] -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-md rounded-lg surface shadow-2xl p-6 animate-slide-up',
+            'fixed left-1/2 top-1/2 z-[1101] -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-md rounded-lg surface shadow-2xl p-6 animate-slide-up',
             className,
           )}
         >

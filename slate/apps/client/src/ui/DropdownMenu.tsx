@@ -21,7 +21,7 @@ export function DropdownMenuContent({
         align={align}
         sideOffset={6}
         className={cn(
-          'min-w-[180px] rounded-md surface p-1 shadow-xl animate-fade-in z-[300]',
+          'min-w-[180px] rounded-md surface p-1 shadow-xl animate-fade-in z-[1102]',
           className,
         )}
       >

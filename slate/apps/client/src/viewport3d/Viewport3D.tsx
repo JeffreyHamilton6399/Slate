@@ -587,7 +587,12 @@ export function Viewport3D({ room }: Viewport3DProps) {
           } else {
             const drag = mesh.pixelDelta.x + -mesh.pixelDelta.y;
             // ~half the diagonal at a full-screen drag; clamp to a sane range.
-            mesh.scalar.amount = Math.max(0, Math.min(0.5, drag * 0.0015));
+            // Bevel starts from the 5% baseline set on entry — computing the
+            // amount from raw pixel delta (which starts at 0) collapsed the
+            // bevel flat on the first mouse twitch, so scrolling segments
+            // right after pressing the shortcut looked like it did nothing.
+            const base = mesh.scalar.op === 'bevel' ? 0.05 : 0;
+            mesh.scalar.amount = Math.max(0, Math.min(0.5, base + drag * 0.0015));
           }
           applyMeshScalar(room, mesh);
           setModalLabelText(meshModalLabel(mesh));
@@ -1043,25 +1048,17 @@ export function Viewport3D({ room }: Viewport3DProps) {
           // scene is still visible while you add lights.
           <ambientLight intensity={0.35} />
         ) : (
-          // Studio rig for wireframe/solid/material preview shading:
-          // sky/ground hemisphere fill + shadowed key + cool rim, roughly
-          // Blender's default studio look — boosted so meshes read clearly.
+          // Studio rig for wireframe/solid/material preview shading: full-
+          // bright, even illumination — you should be able to see EVERYTHING
+          // regardless of orientation, with no sun-like shadows (those belong
+          // to 'rendered', where the scene's own lights do the work). A pair
+          // of soft opposing directionals adds just enough face-to-face
+          // gradient that geometry still reads as 3D instead of flat.
           <>
-            <hemisphereLight args={[0xdcdcff, 0x33332e, 1.4]} />
-            <directionalLight
-              position={[6, 8, 5]}
-              intensity={2.0}
-              castShadow
-              shadow-mapSize={[2048, 2048]}
-              shadow-bias={-0.0003}
-              shadow-camera-left={-15}
-              shadow-camera-right={15}
-              shadow-camera-top={15}
-              shadow-camera-bottom={-15}
-              shadow-camera-near={0.5}
-              shadow-camera-far={60}
-            />
-            <directionalLight position={[-4, 3, -3]} intensity={0.6} color="#bcd0ff" />
+            <ambientLight intensity={1.15} />
+            <hemisphereLight args={[0xffffff, 0xd8d8e6, 0.9]} />
+            <directionalLight position={[6, 8, 5]} intensity={0.55} />
+            <directionalLight position={[-6, -4, -5]} intensity={0.45} color="#e8ecff" />
           </>
         )}
         {showGrid && !rendering && (

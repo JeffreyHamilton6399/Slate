@@ -14,6 +14,7 @@ import { useRoom } from '../sync/RoomContext';
 import { useCanvasStore } from './store';
 import { sampleAnim2D } from './animation';
 import { insertKeyframe2D, deleteKeyframe2D, moveKeyframe2D } from './keyframes';
+import { audioEditorHovered } from '../audio/AudioEditor';
 import type { Shape } from '@slate/sync-protocol';
 
 interface TimelineProps {
@@ -41,6 +42,16 @@ export function Timeline2D({ selection }: TimelineProps) {
   const [open, setOpen] = useState(true);
   const [userToggled, setUserToggled] = useState(false);
   const dragRef = useRef<{ shapeId: string; curT: number; startX: number } | null>(null);
+  /** Frame-strip scroll container — keeps the active frame in view. */
+  const stripRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the active frame visible while playing/scrubbing: without this the
+  // playhead runs off the right edge of the strip and playback looks stuck.
+  useEffect(() => {
+    if (!animMode) return;
+    const el = stripRef.current?.querySelector<HTMLElement>(`[data-frame="${animFrame}"]`);
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [animMode, animFrame]);
 
   // Subscribe to Yjs shapes + strokes so both keyframe and cel-frame changes
   // refresh the timeline (frame content markers track strokes too).
@@ -150,8 +161,9 @@ export function Timeline2D({ selection }: TimelineProps) {
       } else if (e.key === ' ') {
         // Space plays if there's keyframe animation OR we're in frame (cel)
         // mode — cel playback doesn't need keyframed shapes (mirrors the Play
-        // button's enabled state).
-        if (anyAnimated || animMode) {
+        // button's enabled state). Yields to the audio transport while the
+        // pointer is over the docked audio editor.
+        if ((anyAnimated || animMode) && !audioEditorHovered.current) {
           e.preventDefault();
           setAnimPlaying(!animPlaying);
         }
@@ -274,14 +286,23 @@ export function Timeline2D({ selection }: TimelineProps) {
           {animMode ? (
             /* Frame mode: Adobe Animate-style frame strip */
             <div className="border-t border-border px-2 py-1">
-              <div className="flex items-center gap-1 overflow-x-auto">
-                {Array.from({ length: Math.min(totalFrames, 120) }, (_, i) => {
+              <div ref={stripRef} className="flex items-center gap-1 overflow-x-auto">
+                {Array.from({ length: Math.min(totalFrames, 240) }, (_, i) => {
                   const isActive = i === animFrame;
                   const hasKey = framesWithContent.has(i);
                   return (
                     <button
                       key={i}
-                      onClick={() => setAnimFrame(i)}
+                      data-frame={i}
+                      onPointerDown={(e) => {
+                        // Scrub: press selects, and dragging across the strip
+                        // (pointerenter with the button held) follows.
+                        e.preventDefault();
+                        setAnimFrame(i);
+                      }}
+                      onPointerEnter={(e) => {
+                        if (e.buttons & 1) setAnimFrame(i);
+                      }}
                       className={`flex h-8 w-6 shrink-0 flex-col items-center justify-center rounded-sm border text-[7px] font-mono ${
                         isActive
                           ? 'border-warn bg-warn/20 text-warn'
@@ -296,8 +317,8 @@ export function Timeline2D({ selection }: TimelineProps) {
                     </button>
                   );
                 })}
-                {totalFrames > 120 && (
-                  <span className="px-1 text-[8px] text-text-dim">…{totalFrames - 120} more</span>
+                {totalFrames > 240 && (
+                  <span className="px-1 text-[8px] text-text-dim">…{totalFrames - 240} more</span>
                 )}
               </div>
               {/* Frame info */}

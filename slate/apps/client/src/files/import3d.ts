@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import type { Object3D as SlateObject3D, MeshData, Material } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { ensureDefaultMaterial } from '../viewport3d/scene';
+import { getCameraFocus } from '../viewport3d/cameraFocus';
 import { makeId } from '../utils/id';
 
 export interface ParsedMesh {
@@ -103,14 +104,18 @@ async function loadModelGroup(file: File): Promise<THREE.Object3D> {
   return group;
 }
 
-/** Target world size (largest dimension) for a freshly imported model, so a
- *  file in mm, cm, or arbitrary units always lands at a visible, workable
- *  size centered on the origin — like dropping an asset into a Unity scene. */
+/** Fallback world size (largest dimension) for a freshly imported model when we
+ *  can't tell where the user is looking (3D viewport not mounted). Files in mm,
+ *  cm, or arbitrary units land at a visible, workable size like dropping an
+ *  asset into a Unity scene. */
 const IMPORT_TARGET_SIZE = 2.5;
 
 interface Normalization {
   scale: number;
   center: THREE.Vector3;
+  /** World point to place the model's center at (the user's orbit target, or
+   *  the origin when we have no camera focus). */
+  placeAt: THREE.Vector3;
 }
 
 /** Import a model file into the current scene. Returns the ids of the newly
@@ -127,9 +132,21 @@ export async function importModel(room: SlateRoom, file: File): Promise<string[]
   box.getSize(size);
   box.getCenter(center);
   const maxDim = Math.max(size.x, size.y, size.z);
+  // Size + place the import relative to the user's current view when we know
+  // it: aim for ~40% of the visible height, centered on the orbit target, so
+  // it appears at a consistent on-screen size right where they're looking.
+  // Falls back to a fixed size at the origin when the 3D viewport isn't up.
+  const focus = getCameraFocus();
+  const targetSize = focus
+    ? Math.max(0.05, Math.min(500, focus.viewSize * 0.4))
+    : IMPORT_TARGET_SIZE;
+  const placeAt = focus
+    ? new THREE.Vector3(focus.center.x, focus.center.y, focus.center.z)
+    : new THREE.Vector3(0, 0, 0);
   const norm: Normalization = {
-    scale: Number.isFinite(maxDim) && maxDim > 1e-6 ? IMPORT_TARGET_SIZE / maxDim : 1,
+    scale: Number.isFinite(maxDim) && maxDim > 1e-6 ? targetSize / maxDim : 1,
     center,
+    placeAt,
   };
   const materialId = ensureDefaultMaterial(room.slate);
   const newIds: string[] = [];
@@ -185,7 +202,9 @@ function commitMesh(
   const wq = new THREE.Quaternion();
   const ws = new THREE.Vector3();
   mesh.matrixWorld.decompose(wp, wq, ws);
-  const npos = wp.clone().sub(norm.center).multiplyScalar(norm.scale);
+  // Recenter about the model's bounding-box center, scale to the target size,
+  // then translate the whole import to the user's view focus (orbit target).
+  const npos = wp.clone().sub(norm.center).multiplyScalar(norm.scale).add(norm.placeAt);
   const nscale = ws.clone().multiplyScalar(norm.scale);
   const euler = new THREE.Euler().setFromQuaternion(wq, 'XYZ');
 

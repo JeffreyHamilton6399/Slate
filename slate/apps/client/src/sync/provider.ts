@@ -22,7 +22,7 @@ import {
 import { ensureIdentity, type Identity } from './identity.js';
 import { ensureServerProbe, useServerStatus } from './serverStatus.js';
 import { wsUrl } from './serverUrl.js';
-import { createSlateDoc, type SlateDoc } from './doc.js';
+import { createSlateDoc, migrateLegacyContainers, type SlateDoc } from './doc.js';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -87,6 +87,7 @@ export class SlateRoom {
     this.provider.on('status', this.onStatus);
     this.provider.on('disconnect', this.onDisconnect);
     this.provider.on('connect', this.onConnect);
+    this.provider.on('synced', this.onSynced);
     this.provider.awareness?.on('change', this.onAwareness);
 
     // Publish initial awareness immediately so other peers see us as joining.
@@ -114,6 +115,9 @@ export class SlateRoom {
     const idb = new IndexeddbPersistence(`slate:${opts.room}`, slate.doc);
     // Wait for IndexedDB hydration so the UI doesn't flash empty on reload.
     await idb.whenSynced;
+    // Lift any data saved under the old nested container layout into the
+    // top-level containers the accessors now read from.
+    migrateLegacyContainers(slate.doc);
 
     const wsUrl = computeWsUrl(opts.room);
     const socket = new HocuspocusProviderWebsocket({
@@ -151,17 +155,27 @@ export class SlateRoom {
     return roomInstance;
   }
 
-  /** Plain-JS snapshot of all visible peer awareness states. */
+  /** Plain-JS snapshot of all visible peer awareness states.
+   *
+   *  Deduped by peer id: a browser refresh or reconnect gives the same person a
+   *  brand-new Yjs clientId while their previous awareness entry lingers until
+   *  it times out, so a single user who reloaded a few times would otherwise be
+   *  counted as many people ("30 people" on an empty board). We keep only the
+   *  most recently-joined entry per peer id and drop the stale duplicates. */
   awarenessStates(): AwarenessState[] {
     if (!this.provider.awareness) return [];
-    const out: AwarenessState[] = [];
+    const byPeer = new Map<string, AwarenessState>();
     for (const [clientId, raw] of this.provider.awareness.getStates()) {
       const state = (raw as { slate?: AwarenessState })?.slate;
       if (!state) continue;
-      // Skip ourselves; UI will overlay local cursor differently.
-      out.push({ ...state, id: state.id || String(clientId) });
+      const normalized: AwarenessState = { ...state, id: state.id || String(clientId) };
+      const existing = byPeer.get(normalized.id);
+      // Keep the freshest entry for this peer (largest joinedAt wins).
+      if (!existing || (normalized.joinedAt ?? 0) >= (existing.joinedAt ?? 0)) {
+        byPeer.set(normalized.id, normalized);
+      }
     }
-    return out;
+    return [...byPeer.values()];
   }
 
   /** Update our local awareness slot (partial merge). */
@@ -202,6 +216,7 @@ export class SlateRoom {
     this.provider.off('status', this.onStatus);
     this.provider.off('disconnect', this.onDisconnect);
     this.provider.off('connect', this.onConnect);
+    this.provider.off('synced', this.onSynced);
     this.provider.awareness?.off('change', this.onAwareness);
     this.statusListeners.clear();
     this.awarenessListeners.clear();
@@ -230,6 +245,11 @@ export class SlateRoom {
   private onDisconnect = (): void => {
     this.status = 'disconnected';
     for (const fn of this.statusListeners) fn('disconnected');
+  };
+  // First server sync can deliver a board still using the old nested container
+  // layout; lift it into the top-level containers so the scene/audio show up.
+  private onSynced = (): void => {
+    migrateLegacyContainers(this.slate.doc);
   };
   private onAwareness = (_change: AwarenessChange): void => {
     const states = this.awarenessStates();

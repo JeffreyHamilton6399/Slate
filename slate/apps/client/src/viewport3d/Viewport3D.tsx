@@ -26,7 +26,7 @@ import type {
 } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { useAppStore } from '../app/store';
-import { useBoardUnits } from '../sync/useBoardSettings';
+import { useBoardUnits, useBoardCadSnap } from '../sync/useBoardSettings';
 import { Toolbar3D } from './Toolbar3D';
 import { AddObjectMenu } from './AddObjectMenu';
 import { FlyMode } from './FlyMode';
@@ -51,6 +51,7 @@ import {
 import { useScene3DStore } from './store';
 import { autoKeyframe, instantiateAsset, readSceneSnapshot, setTransform, type SceneSnapshot } from './scene';
 import { importModel } from '../files/import3d';
+import { setCameraFocus } from './cameraFocus';
 import { toast } from '../ui/Toast';
 import { useViewport3DShortcuts } from './useViewport3DShortcuts';
 import {
@@ -123,6 +124,9 @@ export function Viewport3D({ room }: Viewport3DProps) {
   const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
   const showTransformHud = useAppStore((s) => s.showTransformHud);
   const [units] = useBoardUnits(room);
+  // CAD snapping doubles as "CAD mode": when off (Blender-style) the on-mesh
+  // dimension NUMBERS are hidden — selection highlights still show.
+  const [cadSnap] = useBoardCadSnap(room);
   // Grid lines follow the accent color: section = accent, cell = darkened
   // accent (a faint tint). Recomputed when the accent setting changes.
   const accentColor = accent || readAccentColor();
@@ -1094,6 +1098,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
           viewingCameraId={viewingCameraId}
           hideCameras={rendering}
           unit={units}
+          showMeasurements={cadSnap}
         />
         <OrbitControls
           makeDefault
@@ -1293,6 +1298,14 @@ function CameraTracking({
       },
       pxScale,
     };
+    // Publish "where we're looking" so a model import lands at the orbit target
+    // sized to the current view, not at the world origin at a fixed size.
+    const focusT = target ?? new THREE.Vector3();
+    setCameraFocus({
+      center: { x: focusT.x, y: focusT.y, z: focusT.z },
+      viewSize: pxScale * size.height,
+      ts: performance.now(),
+    });
     // Publish the camera pose so other peers can see where we're looking.
     // Throttled and change-gated — awareness messages count against the
     // server's per-peer rate limit. During fly mode (walk navigation) we

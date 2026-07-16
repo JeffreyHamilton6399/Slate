@@ -54,6 +54,10 @@ interface SceneObjectsProps {
   hideCameras?: boolean;
   /** Board display unit — drives CAD label formatting on selection. */
   unit?: LengthUnit;
+  /** Show the on-mesh CAD measurement NUMBERS (edge lengths / face area) while
+   *  editing. Gated by the board's "CAD snapping" setting — off = Blender-style
+   *  editing with selection highlights but no always-on dimension labels. */
+  showMeasurements?: boolean;
 }
 
 export function SceneObjects({
@@ -72,6 +76,7 @@ export function SceneObjects({
   viewingCameraId,
   hideCameras,
   unit = 'm',
+  showMeasurements = false,
 }: SceneObjectsProps) {
   return (
     <>
@@ -133,6 +138,7 @@ export function SceneObjects({
             shading={shading}
             editOverlay={isEditing}
             unit={unit}
+            showMeasurements={showMeasurements}
           />
         );
       })}
@@ -199,6 +205,7 @@ function SceneMesh({
   shading,
   editOverlay,
   unit,
+  showMeasurements,
 }: {
   obj: Object3D;
   data: MeshData;
@@ -212,6 +219,7 @@ function SceneMesh({
   shading: ShadingMode;
   editOverlay: boolean;
   unit: LengthUnit;
+  showMeasurements: boolean;
 }) {
   // triFace maps each rendered triangle back to its source polygon so a
   // raycast hit (triangle index) resolves to a face selection. wireGeo holds
@@ -342,7 +350,13 @@ function SceneMesh({
       )}
       {editOverlay && <EditOverlay data={data} />}
       {editOverlay && selectedFaces.length > 0 && (
-        <FaceHighlight data={data} faces={selectedFaces} transform={obj.transform} unit={unit} />
+        <FaceHighlight
+          data={data}
+          faces={selectedFaces}
+          transform={obj.transform}
+          unit={unit}
+          showLabels={showMeasurements}
+        />
       )}
       {editOverlay && (selectedVerts.length > 0 || selectedEdges.length > 0) && (
         <ElementHighlight
@@ -351,6 +365,7 @@ function SceneMesh({
           edges={selectedEdges}
           transform={obj.transform}
           unit={unit}
+          showLabels={showMeasurements}
         />
       )}
     </mesh>
@@ -641,12 +656,14 @@ function ElementHighlight({
   edges,
   transform,
   unit,
+  showLabels,
 }: {
   data: MeshData;
   verts: number[];
   edges: number[];
   transform: Transform;
   unit: LengthUnit;
+  showLabels: boolean;
 }) {
   const { vGeo, eGeo, edgeLabels } = useMemo(() => {
     const vPos: number[] = [];
@@ -691,7 +708,7 @@ function ElementHighlight({
         </lineSegments>
       )}
       {/* On-edge length labels (CAD-style, sit on the line itself). */}
-      {edgeLabels.map((lbl, i) => (
+      {showLabels && edgeLabels.map((lbl, i) => (
         <Html key={i} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
           <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-0.5 py-0 font-mono text-[7px] font-medium text-black shadow">
             {lbl.len}
@@ -716,11 +733,13 @@ function FaceHighlight({
   faces,
   transform,
   unit,
+  showLabels,
 }: {
   data: MeshData;
   faces: number[];
   transform: Transform;
   unit: LengthUnit;
+  showLabels: boolean;
 }) {
   const { geo, edgeLabels, areaLabels } = useMemo(() => {
     const pos: number[] = [];
@@ -817,7 +836,7 @@ function FaceHighlight({
         />
       </mesh>
       {/* Perimeter edge length labels (CAD-style, sit on each edge midpoint). */}
-      {edgeLabels.map((lbl, i) => (
+      {showLabels && edgeLabels.map((lbl, i) => (
         <Html key={`e${i}`} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
           <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn/90 px-0.5 py-0 font-mono text-[7px] font-medium text-black shadow">
             {lbl.len}
@@ -825,7 +844,7 @@ function FaceHighlight({
         </Html>
       ))}
       {/* Face area label at the centroid (small pill so it doesn't dominate the callout). */}
-      {areaLabels.map((lbl, i) => (
+      {showLabels && areaLabels.map((lbl, i) => (
         <Html key={`a${i}`} position={lbl.pos} center distanceFactor={6} occlude={false} zIndexRange={[20, 0]}>
           <div className="pointer-events-none select-none whitespace-nowrap rounded-sm bg-warn px-0.5 py-0 font-mono text-[7px] font-semibold text-black shadow">
             {lbl.area}

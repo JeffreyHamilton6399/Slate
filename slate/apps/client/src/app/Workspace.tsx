@@ -9,7 +9,7 @@
  * panel registry; this component owns nothing about specific panel content.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
@@ -37,6 +37,11 @@ import { manualSlotId, persistSave, snapshotDoc } from '../files/snapshot';
 import { useAutosave } from '../files/useAutosave';
 import { VoiceProvider } from '../voice/VoiceProvider';
 import { PeopleWidget } from './PeopleWidget';
+
+/** How long the host may be absent from presence before the live session ends
+ *  for everyone else. Long enough to survive a host reload or brief network
+ *  blip, short enough that a real departure clears the room promptly. */
+const HOST_ABSENT_GRACE_MS = 10_000;
 
 export function Workspace() {
   const board = useAppStore((s) => s.currentBoard)!;
@@ -116,6 +121,62 @@ export function Workspace() {
     meta.observe(apply);
     return () => meta.unobserve(apply);
   }, [room]);
+
+  // Empty-lobby auto-kick: when the host ("the party") leaves the board, end
+  // the live session for everyone still in it and send them home. Guardrails so
+  // this only fires when it should:
+  //   - Only after we've actually seen the host present in this session, so
+  //     opening a board whose host happens to be offline (async collaboration)
+  //     never boots you — only a real present→absent departure does.
+  //   - A grace period absorbs a host reload / brief network blip so a flicker
+  //     in presence doesn't scatter the room.
+  //   - The host themselves is exempt (they leave explicitly via the button),
+  //     and boards with no designated host are left alone.
+  const hostSeenRef = useRef(false);
+  const hostGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!room) return;
+    const meta = room.slate.meta();
+    const clearGrace = () => {
+      if (hostGraceRef.current) {
+        clearTimeout(hostGraceRef.current);
+        hostGraceRef.current = null;
+      }
+    };
+    const hostAbsent = () => {
+      const hostId = meta.get('hostId') as string | undefined;
+      if (!hostId || hostId === room.identity.peerId) return false;
+      return !room.awarenessStates().some((s) => s.id === hostId);
+    };
+    const evaluate = () => {
+      const hostId = meta.get('hostId') as string | undefined;
+      if (!hostId || hostId === room.identity.peerId) return; // no party / I'm host
+      if (!hostAbsent()) {
+        hostSeenRef.current = true; // host is here — remember it for later
+        clearGrace();
+        return;
+      }
+      if (!hostSeenRef.current) return; // never saw the host → don't boot
+      if (hostGraceRef.current) return; // countdown already running
+      hostGraceRef.current = setTimeout(() => {
+        hostGraceRef.current = null;
+        if (!hostAbsent()) return; // host came back during the grace window
+        toast({
+          title: 'Session ended',
+          description: 'The host left the board.',
+          variant: 'error',
+        });
+        leaveBoard();
+      }, HOST_ABSENT_GRACE_MS);
+    };
+    const offAwareness = room.onAwarenessChange(evaluate); // fires immediately too
+    meta.observe(evaluate);
+    return () => {
+      offAwareness();
+      meta.unobserve(evaluate);
+      clearGrace();
+    };
+  }, [room, leaveBoard]);
 
   // Browser back/forward (incl. mouse gestures like RMB-swipe-left in Opera,
   // and mouse thumb buttons) must never yank the user out of an open board —

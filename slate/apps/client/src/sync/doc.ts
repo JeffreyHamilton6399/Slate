@@ -4,16 +4,39 @@
  * The schema in packages/sync-protocol describes the plain-JS shape; this
  * file exposes typed getters for the corresponding Y.Map / Y.Array containers
  * so call sites don't sprinkle string keys everywhere.
+ *
+ * Collections (scene objects/meshes/materials, audio tracks/clips) are stored
+ * as TOP-LEVEL Yjs types (`doc.getMap(name)`), NOT as nested Y.Maps set into a
+ * parent map. This is deliberate: `doc.getMap(name)` is idempotent and keyed by
+ * name globally, so every client resolves the exact same shared container with
+ * no conflict. Nesting a freshly-`new Y.Map()` under a parent key — as an
+ * earlier version did on every doc open — makes each client set a *different*
+ * map object for the same key; when they sync, Yjs keeps one and discards the
+ * other's contents (a clientId coin-flip), so imported models / audio clips
+ * would vanish for other peers until a page refresh re-rolled the dice.
+ * `migrateLegacyContainers` copies any data written under the old nested layout
+ * into the top-level containers so existing boards don't lose their contents.
  */
 
 import * as Y from 'yjs';
 import {
-  AUDIO_KEYS,
   DOC_KEYS,
   SCENE3D_KEYS,
+  AUDIO_KEYS,
   type BoardMeta,
   type DocMode,
 } from '@slate/sync-protocol';
+
+/** Top-level container names. Flat + globally keyed so `doc.getMap` returns the
+ *  same shared type on every client with no create-time conflict. Prefixed to
+ *  stay clear of the other top-level keys (shapes, strokes, notes, …). */
+const CONTAINER_KEYS = {
+  objects: 'scene3d:objects',
+  meshes: 'scene3d:meshes',
+  materials: 'scene3d:materials',
+  audioTracks: 'audio:tracks',
+  audioClips: 'audio:clips',
+} as const;
 
 export interface SlateDoc {
   doc: Y.Doc;
@@ -35,68 +58,17 @@ export interface SlateDoc {
 
 export function createSlateDoc(): SlateDoc {
   const doc = new Y.Doc();
-  const scene3d = doc.getMap<unknown>(DOC_KEYS.scene3d);
-  // Pre-create nested containers so first writes are no-conflicts.
-  scene3d.set(SCENE3D_KEYS.objects, new Y.Map<Y.Map<unknown>>());
-  scene3d.set(SCENE3D_KEYS.meshes, new Y.Map<Y.Map<unknown>>());
-  scene3d.set(SCENE3D_KEYS.materials, new Y.Map<Y.Map<unknown>>());
-  // Pre-create audio containers.
-  const audio = doc.getMap<unknown>(DOC_KEYS.audio);
-  audio.set(AUDIO_KEYS.tracks, new Y.Map<Y.Map<unknown>>());
-  audio.set(AUDIO_KEYS.clips, new Y.Map<Y.Map<unknown>>());
-  audio.set(AUDIO_KEYS.bpm, 120);
-
   return {
     doc,
     meta: () => doc.getMap<unknown>(DOC_KEYS.meta),
     shapes: () => doc.getMap<Y.Map<unknown>>(DOC_KEYS.shapes),
     strokes: () => doc.getMap<Y.Map<unknown>>(DOC_KEYS.strokes),
     layers: () => doc.getArray<Y.Map<unknown>>(DOC_KEYS.layers),
-    scene3dObjects: () => {
-      const s = doc.getMap<unknown>(DOC_KEYS.scene3d);
-      let m = s.get(SCENE3D_KEYS.objects) as Y.Map<Y.Map<unknown>> | undefined;
-      if (!m) {
-        m = new Y.Map<Y.Map<unknown>>();
-        s.set(SCENE3D_KEYS.objects, m);
-      }
-      return m;
-    },
-    scene3dMeshes: () => {
-      const s = doc.getMap<unknown>(DOC_KEYS.scene3d);
-      let m = s.get(SCENE3D_KEYS.meshes) as Y.Map<Y.Map<unknown>> | undefined;
-      if (!m) {
-        m = new Y.Map<Y.Map<unknown>>();
-        s.set(SCENE3D_KEYS.meshes, m);
-      }
-      return m;
-    },
-    scene3dMaterials: () => {
-      const s = doc.getMap<unknown>(DOC_KEYS.scene3d);
-      let m = s.get(SCENE3D_KEYS.materials) as Y.Map<Y.Map<unknown>> | undefined;
-      if (!m) {
-        m = new Y.Map<Y.Map<unknown>>();
-        s.set(SCENE3D_KEYS.materials, m);
-      }
-      return m;
-    },
-    audioTracks: () => {
-      const a = doc.getMap<unknown>(DOC_KEYS.audio);
-      let m = a.get(AUDIO_KEYS.tracks) as Y.Map<Y.Map<unknown>> | undefined;
-      if (!m) {
-        m = new Y.Map<Y.Map<unknown>>();
-        a.set(AUDIO_KEYS.tracks, m);
-      }
-      return m;
-    },
-    audioClips: () => {
-      const a = doc.getMap<unknown>(DOC_KEYS.audio);
-      let m = a.get(AUDIO_KEYS.clips) as Y.Map<Y.Map<unknown>> | undefined;
-      if (!m) {
-        m = new Y.Map<Y.Map<unknown>>();
-        a.set(AUDIO_KEYS.clips, m);
-      }
-      return m;
-    },
+    scene3dObjects: () => doc.getMap<Y.Map<unknown>>(CONTAINER_KEYS.objects),
+    scene3dMeshes: () => doc.getMap<Y.Map<unknown>>(CONTAINER_KEYS.meshes),
+    scene3dMaterials: () => doc.getMap<Y.Map<unknown>>(CONTAINER_KEYS.materials),
+    audioTracks: () => doc.getMap<Y.Map<unknown>>(CONTAINER_KEYS.audioTracks),
+    audioClips: () => doc.getMap<Y.Map<unknown>>(CONTAINER_KEYS.audioClips),
     audioBpm: () => {
       const a = doc.getMap<unknown>(DOC_KEYS.audio);
       return (a.get(AUDIO_KEYS.bpm) as number | undefined) ?? 120;
@@ -105,6 +77,40 @@ export function createSlateDoc(): SlateDoc {
     chat: () => doc.getArray<Y.Map<unknown>>(DOC_KEYS.chat),
     assets: () => doc.getMap<Y.Map<unknown>>('assets'),
   };
+}
+
+/**
+ * Copy any collection data written under the OLD nested layout
+ * (`scene3d.objects`, `audio.tracks`, …) up into the top-level containers.
+ * Idempotent — only copies ids the destination doesn't already have — and safe
+ * to run on every client (concurrent runs write identical id→value pairs). Call
+ * after IndexedDB hydration and again after the first server sync so data from
+ * either source is lifted into the shared containers.
+ */
+export function migrateLegacyContainers(doc: Y.Doc): void {
+  const scene3d = doc.getMap<unknown>(DOC_KEYS.scene3d);
+  const audio = doc.getMap<unknown>(DOC_KEYS.audio);
+  copyLegacy(doc, scene3d, SCENE3D_KEYS.objects, CONTAINER_KEYS.objects);
+  copyLegacy(doc, scene3d, SCENE3D_KEYS.meshes, CONTAINER_KEYS.meshes);
+  copyLegacy(doc, scene3d, SCENE3D_KEYS.materials, CONTAINER_KEYS.materials);
+  copyLegacy(doc, audio, AUDIO_KEYS.tracks, CONTAINER_KEYS.audioTracks);
+  copyLegacy(doc, audio, AUDIO_KEYS.clips, CONTAINER_KEYS.audioClips);
+}
+
+function copyLegacy(doc: Y.Doc, parent: Y.Map<unknown>, oldKey: string, topName: string): void {
+  const old = parent.get(oldKey) as Y.Map<Y.Map<unknown>> | undefined;
+  if (!(old instanceof Y.Map) || old.size === 0) return;
+  const dest = doc.getMap<Y.Map<unknown>>(topName);
+  doc.transact(() => {
+    old.forEach((child, id) => {
+      if (dest.has(id) || !(child instanceof Y.Map)) return;
+      // Entries are plain-JS values (primitives / arrays / plain objects) — a
+      // shallow copy into a fresh Y.Map is enough; there are no nested Y types.
+      const clone = new Y.Map<unknown>();
+      child.forEach((v, k) => clone.set(k, v));
+      dest.set(id, clone);
+    });
+  });
 }
 
 /** Read board meta as a plain JS object (or null if not yet populated). */

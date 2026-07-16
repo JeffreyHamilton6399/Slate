@@ -148,8 +148,10 @@ export function Timeline2D({ selection }: TimelineProps) {
           insertKeyframe2D(slate, [...selection], animTime);
         }
       } else if (e.key === ' ') {
-        // Only handle space if there's animation.
-        if (anyAnimated) {
+        // Space plays if there's keyframe animation OR we're in frame (cel)
+        // mode — cel playback doesn't need keyframed shapes (mirrors the Play
+        // button's enabled state).
+        if (anyAnimated || animMode) {
           e.preventDefault();
           setAnimPlaying(!animPlaying);
         }
@@ -157,7 +159,7 @@ export function Timeline2D({ selection }: TimelineProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [slate, selection, animTime, animPlaying, anyAnimated, setAnimPlaying]);
+  }, [slate, selection, animTime, animPlaying, anyAnimated, animMode, setAnimPlaying]);
 
   // Always render at least the collapsed header bar so the timeline can never
   // disappear with no way to bring it back — collapsing just shrinks it to the

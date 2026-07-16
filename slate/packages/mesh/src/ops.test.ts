@@ -252,6 +252,45 @@ describe('bevelVerts', () => {
     }
     for (const [, n] of edgeCount) expect(n).toBe(2);
   });
+  it('multi-segment bevel curves the corner (round profile, not a flat chamfer)', () => {
+    // With a linear profile every cut vertex sits ON a cube edge — i.e. at
+    // least two of its coordinates equal ±0.5. A rounded (Blender-style)
+    // profile must push the inner cuts OFF the edges, onto the sphere arc.
+    const r = bevelVerts(cube(), [0], 0.3, 3);
+    const offEdge: number[] = [];
+    for (let i = 0; i < vCount(r); i++) {
+      let boundaryCoords = 0;
+      for (let c = 0; c < 3; c++) {
+        if (Math.abs(Math.abs(r.vertices[i * 3 + c]!) - 0.5) < 1e-9) boundaryCoords++;
+      }
+      if (boundaryCoords < 2) offEdge.push(i);
+    }
+    // seg=3 → 2 inner cuts per incident edge × 3 edges = 6 curved vertices.
+    expect(offEdge.length).toBe(6);
+    // All curved vertices lie on the corner's fillet sphere: for a cube corner
+    // with amount t the sphere has center V + b·t√3 and radius t√2 (b = unit
+    // diagonal into the cube). That's the exact sphere-octant round.
+    const t = 0.3;
+    const C = { x: -0.5 + t, y: -0.5 + t, z: -0.5 + t };
+    const radius = t * Math.sqrt(2);
+    for (const vi of offEdge) {
+      const dx = r.vertices[vi * 3]! - C.x;
+      const dy = r.vertices[vi * 3 + 1]! - C.y;
+      const dz = r.vertices[vi * 3 + 2]! - C.z;
+      expect(Math.hypot(dx, dy, dz)).toBeCloseTo(radius, 6);
+    }
+    // Still watertight after repositioning.
+    const edgeCount = new Map<string, number>();
+    for (const f of r.faces) {
+      for (let i = 0; i < f.v.length; i++) {
+        const a = f.v[i]!;
+        const b = f.v[(i + 1) % f.v.length]!;
+        const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      }
+    }
+    for (const [, n] of edgeCount) expect(n).toBe(2);
+  });
   it('multi-segment bevel of an edge (two corners) produces rounded geometry', () => {
     const m = cube();
     // Bevel two adjacent corners (an edge bevel). Multi-segment edge bevels

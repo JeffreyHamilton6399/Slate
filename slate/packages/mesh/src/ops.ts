@@ -24,6 +24,7 @@ import {
   vAdd,
   vCount,
   vGet,
+  vSet,
 } from './types.js';
 import { weld } from './weld.js';
 
@@ -352,6 +353,55 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       if (edges.length !== cutsByNb.size) edges = [...cutsByNb.values()];
     } else {
       edges = [...cutsByNb.values()];
+    }
+
+    // ── Rounded profile (Blender's Shape = 0.5) ─────────────────────────────
+    // The cuts were created by LINEAR interpolation along each edge, which
+    // makes a multi-segment bevel just a subdivided flat chamfer — extra
+    // segments added vertices but no curvature. Blender instead sweeps the
+    // profile along a circular arc, so more segments = a rounder corner.
+    // Reposition each INNER cut (all but the outermost, which must stay on
+    // the original edge where the modified faces reference it) onto a sphere:
+    //   - b = normalized average of the outgoing edge directions (points into
+    //     the solid for a convex corner),
+    //   - per edge, the sphere center C sits along b such that the sphere is
+    //     tangent to the edge at the outermost cut ((outer-C) ⊥ edge), giving
+    //     a fillet that meets the side faces smoothly,
+    //   - inner cuts slerp along the arc from the apex direction (-b, the
+    //     rounded-off corner tip) to the outermost cut.
+    // For a cube corner this reproduces the exact sphere-octant round.
+    if (seg > 1) {
+      const V = vGet(m, vi);
+      const dirs = edges.map((e) => normalize(sub(vGet(m, e[e.length - 1]!), V)));
+      let bs: Vec3 = { x: 0, y: 0, z: 0 };
+      for (const d of dirs) bs = add(bs, d);
+      // Concave/flat corners (directions cancel out) keep the linear profile.
+      if (length(bs) > 1e-4) {
+        const b = normalize(bs);
+        const p = scale(b, -1); // apex direction from the sphere center
+        for (let e = 0; e < edges.length; e++) {
+          const cuts = edges[e]!;
+          const outer = vGet(m, cuts[cuts.length - 1]!);
+          const t = length(sub(outer, V));
+          const dk = dot(dirs[e]!, b);
+          if (t < 1e-9 || dk < 0.15) continue; // near-tangent edge: keep linear
+          const C = add(V, scale(b, t / dk)); // tangency: (outer-C)·dir = 0
+          const rvec = sub(outer, C);
+          const r = length(rvec);
+          if (r < 1e-9) continue;
+          const a = scale(rvec, 1 / r);
+          const omega = Math.acos(Math.max(-1, Math.min(1, dot(a, p))));
+          if (omega < 1e-4) continue;
+          const sinO = Math.sin(omega);
+          for (let j = 0; j < seg - 1; j++) {
+            const f = (j + 1) / seg; // 0 → apex, 1 → outermost cut
+            const w1 = Math.sin((1 - f) * omega) / sinO;
+            const w2 = Math.sin(f * omega) / sinO;
+            const dir = normalize(add(scale(p, w1), scale(a, w2)));
+            vSet(m, cuts[j]!, add(C, scale(dir, r)));
+          }
+        }
+      }
     }
 
     // Winding safety net: check if the outer ring faces inward.

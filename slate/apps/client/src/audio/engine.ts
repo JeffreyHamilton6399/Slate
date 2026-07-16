@@ -45,6 +45,9 @@ export class AudioEngine {
   private masterVolume = 0.9;
   /** Loop region (null = no loop). */
   private loopRegion: { start: number; end: number } | null = null;
+  /** Timer that restarts playback at the loop-region end so the AUDIO wraps
+   *  with the playhead (getPosition only wraps the display). */
+  private loopTimer: number | null = null;
 
   /** Ensure the AudioContext is created (must be after user gesture). */
   private ensureContext(): AudioContext {
@@ -152,6 +155,7 @@ export class AudioEngine {
   /** Play all clips that intersect the current playhead. */
   async play(slate: SlateDoc, offset: number): Promise<void> {
     const ctx = this.ensureContext();
+    if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
     this.playing = true;
     this.startOffset = offset;
     this.startTime = ctx.currentTime;
@@ -170,12 +174,31 @@ export class AudioEngine {
       if (c) clips.push(c);
     });
 
+    // Preload EVERY buffer before scheduling anything. Awaiting each buffer
+    // inside the scheduling loop anchored each clip to a drifting
+    // ctx.currentTime — a clip whose decode (or sample-arrival retry) took
+    // 500ms started 500ms late relative to the playhead AND to clips scheduled
+    // before it, so multi-track projects audibly fell out of sync.
+    const buffers = new Map<string, AudioBuffer>();
+    await Promise.all(
+      clips.map(async (clip) => {
+        if (clip.mute) return;
+        const buffer = await this.getBuffer(clip);
+        if (buffer) buffers.set(clip.id, buffer);
+      }),
+    );
+    if (!this.playing) return; // stopped while buffers were loading
+
+    // Re-anchor NOW that everything is ready: all clips schedule against one
+    // shared clock read, so their relative timing is sample-accurate.
+    this.startTime = ctx.currentTime;
+
     // Schedule each clip that starts after the playhead or is currently playing.
     for (const clip of clips) {
       const track = tracks.find((t) => t.id === clip.trackId);
       if (!track) continue;
       if (clip.mute) continue; // clip muted individually
-      const buffer = await this.getBuffer(clip);
+      const buffer = buffers.get(clip.id);
       if (!buffer) continue;
 
       const clipEnd = clip.start + clip.duration;
@@ -212,7 +235,7 @@ export class AudioEngine {
       // How far the playhead is already into the clip (real seconds), and where
       // that lands in the source buffer (buffer seconds → scaled by speed).
       const skipTo = Math.max(0, offset - clip.start);
-      const whenToStart = ctx.currentTime + Math.max(0, clip.start - offset);
+      const whenToStart = this.startTime + Math.max(0, clip.start - offset);
       const playDuration = clip.duration - skipTo; // real seconds left on the timeline
       const bufStart = clipOffset + skipTo * speed;
       const bufDuration = playDuration * speed;
@@ -232,6 +255,18 @@ export class AudioEngine {
       this.playingClips.push({ source, gain: clipGain, clipId: clip.id });
     }
 
+    // Loop region: getPosition() wraps the PLAYHEAD at the loop end, but the
+    // scheduled sources would happily play straight through it — the display
+    // looped while the audio didn't. Schedule a restart at the boundary so the
+    // audio wraps with the playhead.
+    if (this.loopRegion && this.loopRegion.end > this.loopRegion.start && offset < this.loopRegion.end) {
+      const untilWrap = this.loopRegion.end - offset;
+      this.loopTimer = window.setTimeout(() => {
+        this.loopTimer = null;
+        if (this.playing && this.loopRegion) this.restartPlayback(slate, this.loopRegion.start);
+      }, untilWrap * 1000);
+    }
+
     // Start metronome if enabled.
     if (this.metronomeOn) this.startMetronome();
   }
@@ -239,6 +274,7 @@ export class AudioEngine {
   /** Stop all playback. */
   stop(): void {
     this.playing = false;
+    if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
     for (const { source } of this.playingClips) {
       try { source.stop(); } catch { /* already stopped */ }
     }

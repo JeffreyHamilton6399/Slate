@@ -204,12 +204,21 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   // at the same positions, breaking the watertight property.
   const edgeVerts = new Map<string, number[]>();
   const cutVerts = (cur: number, nb: number): number[] => {
-    const key = cur < nb ? `${cur}->${nb}` : `${nb}->${cur}`;
-    const reversed = cur > nb;
+    // Canonicalise on the edge's (lo,hi) endpoints. CRITICAL: the cached ids
+    // are ALWAYS stored in lo→hi order (computed from the lower-index vertex
+    // outward), independent of which direction this call came from. The old
+    // code computed them from `cur` outward, so whichever call populated the
+    // cache first decided the stored order — if that call had cur>nb the ids
+    // ended up hi→lo, silently violating the lo→hi assumption that both the
+    // return-order logic below AND the corner-fill reconstruction rely on.
+    // That mismatch is exactly what made multi-segment bevels swirl/twist.
+    const lo = Math.min(cur, nb);
+    const hi = Math.max(cur, nb);
+    const key = `${lo}->${hi}`;
     let ids = edgeVerts.get(key);
     if (ids === undefined) {
-      const c = vGet(m, cur);
-      const edge = sub(vGet(m, nb), c);
+      const c = vGet(m, lo);
+      const edge = sub(vGet(m, hi), c);
       // Never step past 45% of the edge so bevels from both ends can't cross.
       const t = Math.min(amount, length(edge) * 0.45);
       ids = [];
@@ -220,9 +229,8 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
       }
       edgeVerts.set(key, ids);
     }
-    // Return a copy so callers can reverse without mutating the cache.
-    // If reversed, the cuts go from nb toward cur (caller wants cur→nb order).
-    return reversed ? [...ids].reverse() : [...ids];
+    // Cache is lo→hi; hand back a copy in the caller's requested cur→nb order.
+    return cur === lo ? [...ids] : [...ids].reverse();
   };
 
   // Average incident-face normal per beveled vertex (orients its corner face).

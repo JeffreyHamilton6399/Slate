@@ -116,13 +116,14 @@ export function registerBuiltInPanels(): void {
     mode: 'audio',
   });
   // Instrument — playable/customizable synth keyboard (piano etc.) that
-  // records takes into audio clips.
+  // records takes into audio clips. Docks in the left zone as a tab next to
+  // Audio Settings (registered just after it so it lands to its right).
   registerPanel({
     id: 'instrument',
     title: 'Instrument',
-    defaultSide: 'right-bottom',
+    defaultSide: 'left',
     render: InstrumentPanel,
-    order: 0,
+    order: 1,
     mode: 'audio',
   });
 }

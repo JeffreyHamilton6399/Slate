@@ -10,7 +10,7 @@ import type * as Y from 'yjs';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
-  ChevronLeft, ChevronRight, Maximize2, Magnet,
+  ChevronLeft, ChevronRight, Maximize2, Magnet, ClipboardCopy, ClipboardPaste,
 } from 'lucide-react';
 import type { AudioClip, AudioTrack, AwarenessState } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -698,6 +698,8 @@ export function AudioEditor() {
       // reach the transport, like a real DAW.
       if (instrumentKeyCapture.current && INSTRUMENT_CAPTURE_KEYS.has(k)) return;
       if (k === ' ') { e.preventDefault(); togglePlay(); }
+      else if (k === 'c' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void copyClips(); }
+      else if (k === 'v' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void pasteClips(); }
       else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
       else if ((k === 'delete' || k === 'backspace') && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }
       else if (k === 'd' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void dupClip(id)); }
@@ -839,6 +841,61 @@ export function AudioEditor() {
 
   const dupClip = useCallback(async (id: string) => {
     await duplicateAudioClip(slate, id);
+  }, [slate]);
+
+  // ── Clipboard (copy / paste) ────────────────────────────────────────────
+  /** Copied clips: a snapshot of each selected clip's props + its decoded
+   *  samples + start offset relative to the earliest selected clip, so paste
+   *  reconstructs the group at the playhead even after the originals are
+   *  deleted or edited. Samples are held so paste doesn't depend on the source
+   *  clip still existing in the doc. */
+  const clipboardRef = useRef<Array<{ src: AudioClip; samples: Float32Array; relStart: number }>>([]);
+  const [hasClipboard, setHasClipboard] = useState(false);
+
+  const copyClips = useCallback(async () => {
+    const sel = clipsRef.current.filter((c) => selectedRef.current.has(c.id));
+    if (sel.length === 0) return;
+    const minStart = Math.min(...sel.map((c) => c.start));
+    const items: Array<{ src: AudioClip; samples: Float32Array; relStart: number }> = [];
+    for (const c of sel) {
+      const samples = await loadSamples(c.sampleKey);
+      if (samples.length === 0) continue; // samples still syncing — skip
+      items.push({ src: c, samples, relStart: c.start - minStart });
+    }
+    if (items.length === 0) {
+      toast({ title: 'Nothing to copy', description: 'Selected clip samples are still syncing.', variant: 'error' });
+      return;
+    }
+    clipboardRef.current = items;
+    setHasClipboard(true);
+    toast({ title: `Copied ${items.length} clip${items.length > 1 ? 's' : ''}` });
+  }, []);
+
+  const pasteClips = useCallback(async () => {
+    const items = clipboardRef.current;
+    if (items.length === 0) return;
+    const base = positionRef.current; // paste the group at the playhead
+    const newIds: string[] = [];
+    for (const it of items) {
+      const id = await addAudioClip(slate, it.src.trackId, {
+        start: base + it.relStart,
+        samples: it.samples, // Float32Array passed straight through
+        sampleRate: it.src.sampleRate,
+        channels: it.src.channels,
+        duration: it.src.duration,
+        name: it.src.name,
+        color: it.src.color,
+      });
+      // Carry over trims + per-clip effects that addAudioClip defaults to 0/1.
+      updateAudioClip(slate, id, {
+        offset: it.src.offset, gain: it.src.gain, pan: it.src.pan,
+        fadeIn: it.src.fadeIn, fadeOut: it.src.fadeOut, speed: it.src.speed,
+        pitch: it.src.pitch, hpCutoff: it.src.hpCutoff, lpCutoff: it.src.lpCutoff,
+      });
+      newIds.push(id);
+    }
+    setSelectedClipIds(new Set(newIds)); // select the paste so it's ready to move
+    toast({ title: `Pasted ${newIds.length} clip${newIds.length > 1 ? 's' : ''}` });
   }, [slate]);
 
   const handleFileImport = useCallback(async (file: File) => {
@@ -1036,6 +1093,8 @@ export function AudioEditor() {
         <div className="mx-1 h-5 w-px bg-border" />
         <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
         <button onClick={() => selectedRef.current.forEach(id => void dupClip(id))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+        <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
+        <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
         <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
@@ -1064,8 +1123,13 @@ export function AudioEditor() {
         }}
         onDrop={handleTimelineDrop}
       >
-        {/* Headers */}
-        <div className="sticky left-0 z-10 w-44 shrink-0 border-r border-border bg-bg-2">
+        {/* Headers. overflow-hidden is load-bearing: the sticky column is z-10
+            (above clips), and a track's volume/pan range inputs won't shrink
+            below their intrinsic min-width, so without clipping they spill ~20px
+            past the column onto the leftmost clips — intercepting the pointer so
+            those clips can't be grabbed (you hit the pan slider instead, and the
+            previously-selected clip stays highlighted). */}
+        <div className="sticky left-0 z-10 w-44 shrink-0 overflow-hidden border-r border-border bg-bg-2">
           <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
           {tracks.length === 0 && <div className="p-3 text-center text-[11px] text-text-dim">No tracks. Import audio or add a track.</div>}
           {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef} />)}
@@ -1168,7 +1232,7 @@ export function AudioEditor() {
         <span>{tracks.length}T · {clips.length}C</span>
         {recording && <span className="text-danger">● Rec</span>}
         {playing && <span className="text-accent">▶ Play</span>}
-        <span className="ml-auto">Space · C=Split · D=Dup · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
+        <span className="ml-auto">Space · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
       </div>
     </div>
   );
@@ -1233,7 +1297,7 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
       </div>
       <div className="mt-0.5 flex items-center gap-1">
         <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
-        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 flex-1 accent-accent" />
+        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
         <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
         <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
         <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>

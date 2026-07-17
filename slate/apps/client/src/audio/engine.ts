@@ -11,12 +11,28 @@ import type { SlateDoc } from '../sync/doc';
 import { readAudioClip, readAudioTrack } from './scene';
 import { loadSamples } from './sampleStore';
 import { toast } from '../ui/Toast';
+import { INSTRUMENT_PRESETS, loadCustomInstruments, startVoice, type InstrumentParams } from './instruments';
+import { SoundfontInstrument } from './soundfont';
 
 interface PlayingClip {
   source: AudioBufferSourceNode;
   gain: GainNode;
   clipId: string;
 }
+
+/** A scheduled MIDI note voice — has a `stop(when)` method (like the
+ *  instrument's VoiceHandle) so the engine can release all live voices when
+ *  playback stops. The clipId is kept so restart/stop can find voices by
+ *  their owning clip. */
+interface PlayingMidiVoice {
+  clipId: string;
+  stop: (when: number) => void;
+}
+
+/** The synthetic instrument ID that selects the SoundfontInstrument (freepats
+ *  acoustic grand piano). Any other instrumentId falls through to the
+ *  oscillator-based LiveInstrument preset lookup. */
+export const SOUNDFONT_PIANO_ID = 'soundfont-piano';
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -27,6 +43,13 @@ export class AudioEngine {
   /** Playhead offset (seconds) — where playback started from. */
   private startOffset = 0;
   private playingClips: PlayingClip[] = [];
+  /** Scheduled MIDI voices — released on stop()/restartPlayback. Kept separate
+   *  from playingClips (which hold BufferSourceNodes) so stop() can iterate
+   *  both without type-narrowing. */
+  private playingMidiVoices: PlayingMidiVoice[] = [];
+  /** One SoundfontInstrument per AudioContext — created lazily on first use
+   *  (the freepats samples are fetched on-demand). Disposed with the engine. */
+  private soundfont: SoundfontInstrument | null = null;
   private metronomeOn = false;
   private bpm = 120;
   private nextClickTime = 0;
@@ -373,15 +396,41 @@ export class AudioEngine {
     // ctx.currentTime — a clip whose decode (or sample-arrival retry) took
     // 500ms started 500ms late relative to the playhead AND to clips scheduled
     // before it, so multi-track projects audibly fell out of sync.
+    //
+    // MIDI clips have no IndexedDB sample blob (their notes are inline in
+    // Yjs), so they're skipped in the audio-buffer preload pass — they get
+    // their own preload pass below (warm the soundfont sample cache for
+    // soundfont-piano clips so the first note doesn't drop).
     const buffers = new Map<string, AudioBuffer>();
     await Promise.all(
       clips.map(async (clip) => {
         if (clip.mute) return;
+        if (clip.kind === 'midi') return; // no PCM samples
         const buffer = await this.getBuffer(clip);
         if (buffer) buffers.set(clip.id, buffer);
       }),
     );
     if (!this.playing) return; // stopped while buffers were loading
+
+    // Pre-warm the soundfont for MIDI clips that use it. Without this the
+    // first note of each clip would silently fetch its sample and miss its
+    // scheduled start time (noteOn returns null while loading). We collect
+    // every distinct midi number across all soundfont-piano clips and ask
+    // the SoundfontInstrument to preload them in parallel — by the time the
+    // scheduling loop runs, every note is cached and noteOn fires instantly.
+    const sfMidis = new Set<number>();
+    for (const clip of clips) {
+      if (clip.mute || clip.kind !== 'midi') continue;
+      const instId = this.resolveInstrumentId(clip, tracks);
+      if (instId === SOUNDFONT_PIANO_ID) {
+        for (const n of clip.notes ?? []) sfMidis.add(n.midi);
+      }
+    }
+    if (sfMidis.size > 0) {
+      const sf = this.ensureSoundfont();
+      if (sf) await sf.preloadNotes(Array.from(sfMidis));
+    }
+    if (!this.playing) return; // stopped during soundfont preload
 
     // Re-anchor NOW that everything is ready: all clips schedule against one
     // shared clock read, so their relative timing is sample-accurate.
@@ -392,11 +441,25 @@ export class AudioEngine {
       const track = tracks.find((t) => t.id === clip.trackId);
       if (!track) continue;
       if (clip.mute) continue; // clip muted individually
-      const buffer = buffers.get(clip.id);
-      if (!buffer) continue;
 
       const clipEnd = clip.start + clip.duration;
       if (clipEnd <= offset) continue; // clip already finished
+
+      // ── MIDI branch ────────────────────────────────────────────────────
+      // For MIDI clips, schedule each note as an instrument voice (soundfont
+      // sample or oscillator synth preset) at startTime + (clip.start +
+      // note.start - offset). Notes whose start has already passed (the
+      // playhead is partway through the clip) are scheduled with a clamped
+      // start time so they fire immediately rather than in the past (Web Audio
+      // throws if source.start(when) is called with when < currentTime).
+      if (clip.kind === 'midi') {
+        const trackGain = this.trackGains.get(track.id) ?? this.masterGain!;
+        this.scheduleMidiClip(ctx, clip, track, offset, trackGain);
+        continue;
+      }
+
+      const buffer = buffers.get(clip.id);
+      if (!buffer) continue;
 
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
       const pitchCents = clip.pitch ?? 0;
@@ -493,6 +556,16 @@ export class AudioEngine {
       try { source.stop(); } catch { /* already stopped */ }
     }
     this.playingClips = [];
+    // Release every live MIDI voice too — without this, oscillator-based
+    // presets would ring past stop() until their natural decay finished, and
+    // soundfont samples would play out their full release tail.
+    if (this.ctx) {
+      const now = this.ctx.currentTime;
+      for (const v of this.playingMidiVoices) {
+        try { v.stop(now); } catch { /* already stopped */ }
+      }
+    }
+    this.playingMidiVoices = [];
     this.stopMetronome();
   }
 
@@ -516,6 +589,14 @@ export class AudioEngine {
       try { source.stop(); } catch { /* already stopped */ }
     }
     this.playingClips = [];
+    // Release live MIDI voices too (see stop()).
+    {
+      const now = this.ctx.currentTime;
+      for (const v of this.playingMidiVoices) {
+        try { v.stop(now); } catch { /* already stopped */ }
+      }
+    }
+    this.playingMidiVoices = [];
     this.stopMetronome();
     // Re-schedule. play() re-reads the doc (so new clips are included),
     // resets startTime/startOffset, and restarts the metronome if enabled.
@@ -713,6 +794,113 @@ export class AudioEngine {
     else this.bufferCache.clear();
   }
 
+  /** Lazily create the shared SoundfontInstrument (one per AudioContext).
+   *  Routes its output through the master gain so it joins the same mix as
+   *  audio clips — but per-track routing for MIDI clips is handled in
+   *  scheduleMidiClip(), which passes the track's gain-chain tail as `dest`
+   *  to a per-call noteOn (the SoundfontInstrument constructor only needs a
+   *  fallback destination; the per-clip routing overrides it).
+   *
+   *  Returns null if the AudioContext doesn't exist yet (no gesture). The
+   *  caller (play()) bails on suspended ctx anyway, so this is mostly a
+   *  belt-and-braces guard. */
+  private ensureSoundfont(): SoundfontInstrument | null {
+    if (!this.ctx || !this.masterGain) return null;
+    if (!this.soundfont) {
+      // The dest here is a fallback only — scheduleMidiClip routes each note
+      // through the track's gain chain. The SoundfontInstrument connects its
+      // per-note gain nodes to whatever `dest` is at noteOn time, so the
+      // constructor's dest is only used if noteOn is called without a dest
+      // override (it isn't, in our usage).
+      this.soundfont = new SoundfontInstrument(this.ctx, this.masterGain);
+    }
+    return this.soundfont;
+  }
+
+  /** Resolve which instrument a MIDI clip should play through. Clip-level
+   *  `instrumentId` wins; otherwise the track's `instrumentId` is used; if
+   *  neither is set, fall back to the grand-piano preset (a sensible default
+   *  for any MIDI clip — it's what a user expects when they create a MIDI
+   *  track and drop notes on it without picking an instrument). */
+  private resolveInstrumentId(clip: AudioClip, tracks: AudioTrack[]): string {
+    if (clip.instrumentId) return clip.instrumentId;
+    const track = tracks.find((t) => t.id === clip.trackId);
+    if (track?.instrumentId) return track.instrumentId;
+    return INSTRUMENT_PRESETS[0]!.id; // 'inst-grand-piano'
+  }
+
+  /** Look up a synth preset by id (factory presets first, then custom
+   *  instruments from localStorage). Falls back to the grand-piano preset
+   *  if the id is unknown — better to play *something* than silently drop
+   *  the clip because the user deleted a custom instrument mid-session. */
+  private resolveSynthParams(id: string): InstrumentParams {
+    const factory = INSTRUMENT_PRESETS.find((p) => p.id === id);
+    if (factory) return factory;
+    // loadCustomInstruments reads localStorage — cheap, but only worth doing
+    // when the id isn't a factory preset. We don't memoize because the set of
+    // custom instruments can change mid-session (user saves/deletes one).
+    const custom = loadCustomInstruments().find((p) => p.id === id);
+    if (custom) return custom;
+    return INSTRUMENT_PRESETS[0]!;
+  }
+
+  /** Schedule every note in a MIDI clip. Each note fires at
+   *  `startTime + (clip.start + note.start - offset)` and releases at the
+   *  note's start + duration. Notes whose start time is already in the past
+   *  (the playhead is partway through the clip) are clamped to fire
+   *  immediately — Web Audio throws if source.start(when) is called with a
+   *  `when` < ctx.currentTime.
+   *
+   *  The instrument is selected by `resolveInstrumentId`:
+   *  - 'soundfont-piano' → SoundfontInstrument (sample-based, freepats)
+   *  - any other id → oscillator-based LiveInstrument preset (startVoice)
+   *
+   *  The voice's output is routed through the track's gain chain (the same
+   *  one audio clips use) so MIDI clips get the same volume/pan/EQ/sends/
+   *  mute/solo treatment as audio clips. */
+  private scheduleMidiClip(
+    ctx: AudioContext,
+    clip: AudioClip,
+    _track: AudioTrack,
+    offset: number,
+    dest: AudioNode,
+  ): void {
+    const notes = clip.notes ?? [];
+    if (notes.length === 0) return;
+    const instId = this.resolveInstrumentId(clip, [_track]);
+    const clipVol = clip.gain ?? 1;
+
+    if (instId === SOUNDFONT_PIANO_ID) {
+      const sf = this.ensureSoundfont();
+      if (!sf) return;
+      for (const n of notes) {
+        const noteAbsStart = clip.start + n.start;
+        if (noteAbsStart + n.duration <= offset) continue; // note already ended
+        // Clamp to currentTime so a note whose scheduled start is in the past
+        // (playhead partway through the clip) fires NOW instead of throwing.
+        const when = Math.max(ctx.currentTime, this.startTime + Math.max(0, noteAbsStart - offset));
+        const voice = sf.noteOn(n.midi, n.velocity * clipVol, when);
+        if (!voice) continue; // sample not loaded (will be on next play)
+        const stopWhen = Math.max(when + 0.01, this.startTime + Math.max(0, noteAbsStart + n.duration - offset));
+        voice.stop(stopWhen);
+        this.playingMidiVoices.push({ clipId: clip.id, stop: voice.stop });
+      }
+      return;
+    }
+
+    // Oscillator-based synth preset.
+    const params = this.resolveSynthParams(instId);
+    for (const n of notes) {
+      const noteAbsStart = clip.start + n.start;
+      if (noteAbsStart + n.duration <= offset) continue; // note already ended
+      const when = Math.max(ctx.currentTime, this.startTime + Math.max(0, noteAbsStart - offset));
+      const voice = startVoice(ctx, dest, params, n.midi, n.velocity * clipVol, when);
+      const stopWhen = Math.max(when + 0.02, this.startTime + Math.max(0, noteAbsStart + n.duration - offset));
+      voice.stop(stopWhen);
+      this.playingMidiVoices.push({ clipId: clip.id, stop: voice.stop });
+    }
+  }
+
   dispose(): void {
     this.stop();
     if (this.gestureHandler) {
@@ -742,6 +930,8 @@ export class AudioEngine {
     this.bufferCache.clear();
     this.retryingClips.clear();
     this.retryAttempts.clear();
+    this.soundfont?.dispose();
+    this.soundfont = null;
     if (this.ctx) {
       void this.ctx.close();
       this.ctx = null;

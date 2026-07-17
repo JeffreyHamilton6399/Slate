@@ -285,8 +285,9 @@ export interface AudioTrack {
   solo: boolean;
   /** Track type — 'audio' = recorded/imported clips, 'midi' = MIDI (future). */
   kind: 'audio' | 'midi';
-  /** Input source for recording: 'mic' | 'none'. */
-  input: 'mic' | 'none';
+  /** Input source for recording: 'mic' | 'midi' | 'none'. 'midi' arms the
+   *  track for instrument-take recording (notes captured to a MIDI clip). */
+  input: 'mic' | 'midi' | 'none';
   /** Whether this track is armed for recording. */
   armed: boolean;
   /** Display order (0 = top). */
@@ -301,6 +302,25 @@ export interface AudioTrack {
   reverbSend?: number;
   /** Delay send level 0..1 (post-EQ, into the shared echo). Default 0. */
   delaySend?: number;
+  /** Instrument preset ID for MIDI tracks (e.g. 'inst-grand-piano' or
+   *  'soundfont-piano'). When set, MIDI clips on this track are rendered with
+   *  the matching instrument — oscillator-based LiveInstrument for synth
+   *  presets, or SoundfontInstrument for sample-backed IDs. */
+  instrumentId?: string;
+}
+
+/** A single MIDI note event inside a MIDI clip. Times are in seconds relative
+ *  to the clip's `start` on the timeline (so a clip placed at t=4 with a note
+ *  whose `start` is 0.5 fires at t=4.5). */
+export interface NoteEvent {
+  /** MIDI note number (0-127). 60 = middle C. */
+  midi: number;
+  /** Note-on velocity, 0..1. */
+  velocity: number;
+  /** Start time in seconds (relative to clip start). */
+  start: number;
+  /** Held duration in seconds. */
+  duration: number;
 }
 
 /** A clip on a track — a segment of audio placed at a specific time. */
@@ -346,6 +366,17 @@ export interface AudioClip {
   /** Low-pass filter cutoff in Hz. 20000 (= top of hearing) means OFF.
    *  Default 20000. */
   lpCutoff?: number;
+  /** Clip type — 'audio' = PCM samples, 'midi' = note events. Defaults to
+   *  'audio' for backward compatibility with clips created before MIDI support
+   *  landed. A MIDI clip carries `notes` + `instrumentId` instead of (or in
+   *  addition to) the sample-buffer fields. */
+  kind?: 'audio' | 'midi';
+  /** MIDI note events (only meaningful when kind === 'midi'). Each note's
+   *  `start` is relative to the clip's `start` on the timeline. */
+  notes?: NoteEvent[];
+  /** Instrument ID for MIDI clips (which synth/soundfont preset to use).
+   *  Falls back to the track's `instrumentId` when unset. */
+  instrumentId?: string;
 }
 
 /** Transport state for the audio editor — synced via awareness (ephemeral). */

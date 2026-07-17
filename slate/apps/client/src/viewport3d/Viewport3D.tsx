@@ -935,6 +935,17 @@ export function Viewport3D({ room }: Viewport3DProps) {
     });
   }, [room, rendering]);
 
+  // Allow the global ExportDialog (which doesn't own the 3D canvas) to kick
+  // off the same render-animation flow the toolbar button triggers. The
+  // dialog dispatches `slate:export-3d-animation`; we forward to the existing
+  // onRenderAnimation callback so all the canvas-capture logic stays in one
+  // place.
+  useEffect(() => {
+    const handler = () => onRenderAnimation();
+    window.addEventListener('slate:export-3d-animation', handler);
+    return () => window.removeEventListener('slate:export-3d-animation', handler);
+  }, [onRenderAnimation]);
+
   return (
     <div
       ref={containerRef}

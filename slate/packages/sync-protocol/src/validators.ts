@@ -219,3 +219,77 @@ export function sanitizeChatText(input: string): string {
     .trimEnd()
     .slice(0, MAX_CHAT_LEN);
 }
+
+// ── Audio editor schema (BandLab-style DAW) ─────────────────────────────────
+
+/** A single MIDI note event inside a MIDI clip. Times are in seconds relative
+ *  to the clip's `start` on the timeline. */
+export const noteEventSchema = z.object({
+  /** MIDI note number (0-127). 60 = middle C. */
+  midi: z.number().int().min(0).max(127),
+  /** Note-on velocity, 0..1. */
+  velocity: z.number().min(0).max(1),
+  /** Start time in seconds (relative to clip start). */
+  start: z.number().min(0).max(3600),
+  /** Held duration in seconds. */
+  duration: z.number().min(0).max(3600),
+});
+
+/** AudioTrack zod validator — matches the AudioTrack interface in schema.ts.
+ *  Optional fields default to undefined; the client (scene.ts readAudioTrack)
+ *  applies runtime defaults when reading from Yjs. */
+export const audioTrackSchema = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(80),
+  color: colorString,
+  volume: z.number().min(0).max(1.5),
+  pan: z.number().min(-1).max(1),
+  muted: z.boolean(),
+  solo: z.boolean(),
+  kind: z.enum(['audio', 'midi']),
+  input: z.enum(['mic', 'midi', 'none']),
+  armed: z.boolean(),
+  order: z.number().int().min(0),
+  eqLow: z.number().min(-12).max(12).optional(),
+  eqMid: z.number().min(-12).max(12).optional(),
+  eqHigh: z.number().min(-12).max(12).optional(),
+  reverbSend: z.number().min(0).max(1).optional(),
+  delaySend: z.number().min(0).max(1).optional(),
+  /** Instrument preset ID for MIDI tracks (e.g. 'inst-grand-piano'). */
+  instrumentId: z.string().min(1).max(120).optional(),
+});
+
+/** AudioClip zod validator — matches the AudioClip interface in schema.ts.
+ *  The `kind` field discriminates PCM-sample clips ('audio') from note-event
+ *  clips ('midi'); the `notes` array is only meaningful when kind === 'midi'.
+ *  Backward compatibility: clips written before MIDI support default to
+ *  'audio' (rendered by readAudioClip). */
+export const audioClipSchema = z.object({
+  id: idSchema,
+  trackId: idSchema,
+  start: z.number().min(0).max(3600),
+  offset: z.number().min(0).max(3600),
+  duration: z.number().min(0).max(3600),
+  sampleKey: z.string().min(0).max(200),
+  sampleRate: z.number().int().min(1).max(192000),
+  channels: z.number().int().min(1).max(2),
+  name: z.string().min(1).max(120),
+  color: colorString,
+  fadeIn: z.number().min(0).max(60),
+  fadeOut: z.number().min(0).max(60),
+  gain: z.number().min(0).max(4).optional(),
+  pan: z.number().min(-1).max(1).optional(),
+  mute: z.boolean().optional(),
+  speed: z.number().min(0.25).max(4).optional(),
+  pitch: z.number().min(-1200).max(1200).optional(),
+  hpCutoff: z.number().min(20).max(20000).optional(),
+  lpCutoff: z.number().min(20).max(20000).optional(),
+  /** Clip type — 'audio' = PCM samples, 'midi' = note events. */
+  kind: z.enum(['audio', 'midi']).optional(),
+  /** MIDI note events (only when kind === 'midi'). Capped at 10k notes/clip
+   *  to keep Yjs updates snappy — that's ~5 minutes of 32nd notes at 120 BPM. */
+  notes: z.array(noteEventSchema).max(10_000).optional(),
+  /** Instrument ID for MIDI clips (which synth preset to use). */
+  instrumentId: z.string().min(1).max(120).optional(),
+});
+

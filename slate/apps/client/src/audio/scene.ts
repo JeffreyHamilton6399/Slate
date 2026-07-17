@@ -53,13 +53,14 @@ export function readAudioTrack(m: Y.Map<unknown>, id: string): AudioTrack | null
     id, name: (m.get('name') as string) ?? 'Track', color: (m.get('color') as string) ?? '#7c6aff',
     volume: (m.get('volume') as number) ?? 0.8, pan: (m.get('pan') as number) ?? 0,
     muted: (m.get('muted') as boolean) ?? false, solo: (m.get('solo') as boolean) ?? false,
-    kind: (m.get('kind') as 'audio' | 'midi') ?? 'audio', input: (m.get('input') as 'mic' | 'none') ?? 'none',
+    kind: (m.get('kind') as 'audio' | 'midi') ?? 'audio', input: (m.get('input') as 'mic' | 'midi' | 'none') ?? 'none',
     armed: (m.get('armed') as boolean) ?? false, order: (m.get('order') as number) ?? 0,
     eqLow: (m.get('eqLow') as number) ?? 0,
     eqMid: (m.get('eqMid') as number) ?? 0,
     eqHigh: (m.get('eqHigh') as number) ?? 0,
     reverbSend: (m.get('reverbSend') as number) ?? 0,
     delaySend: (m.get('delaySend') as number) ?? 0,
+    instrumentId: (m.get('instrumentId') as string | undefined) ?? undefined,
   };
 }
 
@@ -99,6 +100,48 @@ export function updateAudioClip(slate: SlateDoc, id: string, patch: Partial<Audi
   slate.doc.transact(() => { for (const [k, v] of Object.entries(patch)) yo.set(k, v); });
 }
 
+/** Add a MIDI clip — note events are stored directly in the Yjs clip (no
+ *  IndexedDB sample blob). The instrument is taken from the clip's
+ *  `instrumentId` field if set, else from the track's `instrumentId` (read
+ *  at playback time). `duration` defaults to the latest note end so the
+ *  clip box on the timeline just contains its notes. */
+export function addMidiClip(
+  slate: SlateDoc,
+  trackId: string,
+  clip: { start: number; notes: AudioClip['notes']; name?: string; color?: string; duration?: number; instrumentId?: string },
+): string {
+  const id = makeId('clip');
+  const notes = clip.notes ?? [];
+  // Clip duration = last note end (with a tiny tail so the box reads cleanly),
+  // unless the caller supplied an explicit duration.
+  const lastEnd = notes.reduce((m, n) => Math.max(m, (n?.start ?? 0) + (n?.duration ?? 0)), 0);
+  const duration = clip.duration ?? Math.max(0.25, lastEnd + 0.05);
+  const track = slate.audioTracks().get(trackId);
+  const color = clip.color ?? (track ? (track.get('color') as string) : '#7c6aff');
+  const trackInst = track ? (track.get('instrumentId') as string | undefined) : undefined;
+  const full: AudioClip = {
+    id,
+    trackId,
+    start: clip.start,
+    offset: 0,
+    duration,
+    sampleKey: '',
+    sampleRate: 44100,
+    channels: 1,
+    name: clip.name ?? 'MIDI',
+    color,
+    fadeIn: 0,
+    fadeOut: 0,
+    kind: 'midi',
+    notes,
+    instrumentId: clip.instrumentId ?? trackInst,
+  };
+  const m = new Y.Map<unknown>();
+  for (const [k, v] of Object.entries(full)) m.set(k, v);
+  slate.audioClips().set(id, m);
+  return id;
+}
+
 export function deleteAudioClip(slate: SlateDoc, id: string): void {
   const yo = slate.audioClips().get(id);
   const sk = yo?.get('sampleKey') as string | undefined;
@@ -111,6 +154,43 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
   const clip = readAudioClip(yo, id); if (!clip) return;
   const relTime = splitTime - clip.start;
   if (relTime <= 0 || relTime >= clip.duration) return;
+
+  // MIDI clips: split the note list at the boundary. Notes whose start falls
+  // before the split keep their full duration on the LEFT half (a held note
+  // ringing past the split is fine — it just sustains). Notes whose start
+  // falls at-or-after the split move to the RIGHT half with their start times
+  // shifted back by relTime. No sample I/O — MIDI clips have no IndexedDB blob.
+  if (clip.kind === 'midi') {
+    const leftNotes: NonNullable<AudioClip['notes']> = [];
+    const rightNotes: NonNullable<AudioClip['notes']> = [];
+    for (const n of clip.notes ?? []) {
+      if (n.start < relTime) leftNotes.push(n);
+      else rightNotes.push({ ...n, start: n.start - relTime });
+    }
+    slate.doc.transact(() => {
+      yo.set('duration', relTime);
+      yo.set('notes', leftNotes);
+      const newId = makeId('clip');
+      const m = new Y.Map<unknown>();
+      m.set('id', newId);
+      m.set('trackId', clip.trackId);
+      m.set('start', clip.start + relTime);
+      m.set('offset', 0);
+      m.set('duration', clip.duration - relTime);
+      m.set('sampleKey', '');
+      m.set('sampleRate', clip.sampleRate);
+      m.set('channels', clip.channels);
+      m.set('name', clip.name);
+      m.set('color', clip.color);
+      m.set('fadeIn', 0);
+      m.set('fadeOut', 0);
+      m.set('kind', 'midi');
+      m.set('notes', rightNotes);
+      if (clip.instrumentId) m.set('instrumentId', clip.instrumentId);
+      slate.audioClips().set(newId, m);
+    });
+    return;
+  }
 
   const channels = clip.channels;
   const splitSample = Math.floor(relTime * clip.sampleRate) * channels;
@@ -148,10 +228,24 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
 
 /** Duplicate a clip (same track, placed right after the original). Shares the
  *  underlying samples by copying the IndexedDB blob to a new key so the dupe can
- *  be normalized/reversed independently. */
+ *  be normalized/reversed independently. MIDI clips are duplicated without any
+ *  sample I/O — the notes array is copied (deep) to the new clip. */
 export async function duplicateAudioClip(slate: SlateDoc, id: string): Promise<string | null> {
   const yo = slate.audioClips().get(id); if (!yo) return null;
   const clip = readAudioClip(yo, id); if (!clip) return null;
+  if (clip.kind === 'midi') {
+    // Deep-copy the notes so the dupe is fully independent (editing one doesn't
+    // mutate the other through shared object references inside the Yjs array).
+    const notesCopy = (clip.notes ?? []).map((n) => ({ ...n }));
+    return addMidiClip(slate, clip.trackId, {
+      start: clip.start + clip.duration,
+      notes: notesCopy,
+      duration: clip.duration,
+      name: `${clip.name} copy`,
+      color: clip.color,
+      instrumentId: clip.instrumentId,
+    });
+  }
   const samples = await loadSamples(clip.sampleKey);
   return addAudioClip(slate, clip.trackId, {
     start: clip.start + clip.duration,
@@ -166,6 +260,7 @@ export async function duplicateAudioClip(slate: SlateDoc, id: string): Promise<s
 
 export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
   if (!m.has('id')) return null;
+  const notesRaw = m.get('notes');
   return {
     id,
     trackId: (m.get('trackId') as string) ?? '',
@@ -186,6 +281,9 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     pitch: (m.get('pitch') as number) ?? 0,
     hpCutoff: (m.get('hpCutoff') as number) ?? 20,
     lpCutoff: (m.get('lpCutoff') as number) ?? 20000,
+    kind: (m.get('kind') as 'audio' | 'midi' | undefined) ?? undefined,
+    notes: Array.isArray(notesRaw) ? (notesRaw as AudioClip['notes']) : undefined,
+    instrumentId: (m.get('instrumentId') as string | undefined) ?? undefined,
   };
 }
 

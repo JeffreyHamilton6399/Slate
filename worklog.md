@@ -995,3 +995,113 @@ Stage Summary:
 - About + Terms & Privacy are now always reachable from the page footer (no longer hidden behind the avatar menu).
 - The Onboarding guest dropdown follows the same Terms-at-the-bottom convention.
 - TypeScript clean (exit 0); no new dependencies added.
+
+---
+Task ID: ROUND11-A
+Agent: Code (Slate client fixes)
+Task: Three fixes — (1) remove Terms & Privacy from Home footer, (2) show armed-track indicator next to the Record button in the audio transport bar, (3) mode-specific exports (audio WAV/MP4, 2D MP4, 3D MP4).
+
+Work Log:
+- Read worklog and the three target files (Home.tsx, AudioEditor.tsx, ExportDialog.tsx) plus their dependencies (sync/doc.ts, audio/scene.ts, audio/sampleStore.ts, files/export2d.ts, files/export2dVideo.ts, files/export3d.ts, viewport3d/Viewport3D.tsx, canvas2d/Timeline2D.tsx, canvas2d/store.ts, packages/sync-protocol/src/schema.ts).
+
+Task 1 — Home footer:
+- Home.tsx (footer at ~line 547): removed the "Terms & Privacy" button + the "·" separator. Footer now shows only "V1 · Jeffrey Hamilton" + the "About" text link. The `termsOpen` state and `<TermsDialog>` rendering are untouched — they're still driven by the profile dropdown's `onOpenTerms` callback (Home.tsx:398).
+
+Task 2 — Recording button armed-track indicator:
+- AudioEditor.tsx: added `const armedTrack = tracks.find((t) => t.armed) ?? null;` immediately after the `tracks` useMemo (line ~764).
+- Transport bar Record button (line ~1142): kept the button exactly where it was (right next to Play), added a dynamic title (`Record (R) → {armedTrack.name}` when armed), and inserted a small badge right after the button showing the armed track name (or "no armed track" hint) so the user always sees where the next take will land. The toggleRecord logic already routes onto the armed track (AudioEditor.tsx:864 — `tracks.find((t) => t.armed)?.id`), so no behaviour change was needed beyond the visual.
+
+Task 3 — Mode-specific exports:
+- Created `files/exportAudio.ts` with two functions:
+  - `exportAudioWav({ slate, duration, onProgress })`: renders every clip offline via `OfflineAudioContext` (honouring per-track volume/pan/mute/solo and per-clip gain/pan/speed), then encodes the rendered AudioBuffer as 16-bit PCM WAV (44-byte header + interleaved samples) and downloads it. Fast (not realtime), bit-exact.
+  - `exportAudioMp4({ slate, duration, onProgress })`: offline-renders the mix first (same path as WAV), then plays the rendered buffer through a `MediaStreamAudioDestinationNode` on a fresh AudioContext while a `MediaRecorder` captures it. MP4/AAC is preferred (`video/mp4;codecs=mp4a.40.2` → `audio/mp4`); browsers without MP4 encoding fall back to WebM/Opus with the matching extension. Also routes to `ctx.destination` so the user hears the bounce.
+  - Both functions share `collectClips(slate)` (loads PCM from IndexedDB via `loadSamples`, skipping muted/solo-excluded clips) and `scheduleClips(ctx, clips, dest)` (creates a BufferSource → Gain → StereoPanner → dest chain per clip, calls `source.start(clip.start, clip.offset, clip.duration)`).
+- Rewrote `files/ExportDialog.tsx` to handle three modes:
+  - Mode is derived once: `mode = board?.mode ?? '2d'`; `is3d`, `isAudio` booleans.
+  - Format lists: audio → `['wav','mp4']`; 3D → `['glb','gltf','obj','stl','ply','fbx','mp4']`; 2D → `['png','jpg','webp','svg','mp4']`.
+  - Added `wav` and `mp4` entries to `FORMAT_INFO`.
+  - Added a `useEffect` that resets the selected format when the board mode changes (so a stale `glb` from a 3D board doesn't persist into an audio board).
+  - onExport branches by mode:
+    - audio/wav → `exportAudioWav`; audio/mp4 → `exportAudioMp4` (duration computed from the latest clip end via `computeAudioDuration(slate)`).
+    - 3D/mp4 → dispatches a `slate:export-3d-animation` CustomEvent (Viewport3D listens for it and forwards to its existing `onRenderAnimation`, which owns the canvas-capture logic). Other 3D formats keep the existing `export3D` path.
+    - 2D/mp4 → grabs the live 2D canvas (`document.querySelector('canvas:not([aria-label])')`, same trick Timeline2D uses to skip the minimap canvas) and calls `export2dVideo` with `animFps`/`animDuration` from `useCanvasStore`. svg/png/jpg/webp keep the existing paths.
+  - Added a progress bar (0–100 %) that appears while an export with `onProgress` is running, and the Export button label flips to `Exporting {n}%…`.
+- Viewport3D.tsx: added a `useEffect` (right after `onRenderAnimation`'s useCallback) that listens for the `slate:export-3d-animation` window event and calls `onRenderAnimation()`, so the ExportDialog can kick off the 3D animation render without owning the canvas.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0 (no type errors).
+- `npx eslint` on the five touched files → exit 0, 2 pre-existing warnings unrelated to these changes (AudioEditor:1114 pxPerSec useCallback dep, Viewport3D:1544 lookThroughRef useEffect dep).
+
+Stage Summary:
+- All three fixes done. Home footer is now just "V1 · Jeffrey Hamilton" + "About" (Terms moved to profile dropdown only). Audio transport bar shows a live "→ {armedTrackName}" badge next to the Record button (or "no armed track" hint), so recording always lands on a visible target. Export dialog handles audio (WAV mixdown + MP4 timeline capture), 2D (png/jpg/webp/svg + mp4 animation), and 3D (glb/gltf/obj/stl/ply/fbx + mp4 animation render) — audio mode no longer falls through to the 2D branch and produces blank files.
+
+---
+Task ID: ROUND11-B
+Agent: main (Z.ai Code)
+Task: Add MIDI support, soundfonts, quantization, fix remote mute
+
+Work Log:
+- Read worklog (latest ROUND11-A parallel agent) + all target files: schema.ts, validators.ts, scene.ts, engine.ts, AudioEditor.tsx, InstrumentPanel.tsx, instruments.ts.
+
+Task 1 — MIDI support in schema (schema.ts):
+- Added `NoteEvent` interface (midi/velocity/start/duration) — exported from @slate/sync-protocol.
+- Added 3 optional fields to AudioClip: `kind?: 'audio' | 'midi'`, `notes?: NoteEvent[]`, `instrumentId?: string`.
+
+Task 2 — AudioTrack updates (schema.ts):
+- Added `instrumentId?: string` to AudioTrack.
+- Changed `input` to `'mic' | 'midi' | 'none'` so MIDI tracks can arm for instrument-take recording.
+
+Task 3 — Validators (validators.ts):
+- Added `noteEventSchema`, `audioTrackSchema`, `audioClipSchema` zod validators (the audio schemas weren't previously defined).
+- All new fields optional or backward-compatible; existing clips continue to parse.
+
+Task 4 — Soundfont (soundfont.ts — NEW):
+- `SoundfontInstrument` class: lazily fetches individual note WAVs from `https://freepats.zenvoid.org/Piano/acoustic-grand-piano/{name}-{octave}.wav` and caches as AudioBuffers.
+- Filename convention: sharps use `-` instead of `#` (freepats), octave = floor(midi/12) - 1.
+- `ensureNote(midi)` — fetch + decode + cache one note; failed fetches remembered in module-level `failedMidis` set so we don't re-fetch.
+- `noteOn(midi, velocity, when)` — schedules BufferSource → Gain → dest; returns handle with `stop(when)` for short release. Returns null if sample not loaded (lazy-loads in background).
+- `preloadNotes(midis)` — bulk pre-load for warming cache before scheduling.
+
+Task 5 — MIDI playback in engine (engine.ts):
+- New exports: `SOUNDFONT_PIANO_ID = 'soundfont-piano'`.
+- New fields: `playingMidiVoices: PlayingMidiVoice[]`, `soundfont: SoundfontInstrument | null`.
+- New private methods: `ensureSoundfont()`, `resolveInstrumentId()`, `resolveSynthParams()`, `scheduleMidiClip()`.
+- `play()`: audio-buffer preload loop skips MIDI clips; NEW soundfont preload pass collects every distinct midi across all soundfont-piano MIDI clips and preloads in parallel; scheduling loop branches on `clip.kind === 'midi'` → calls `scheduleMidiClip()`.
+- `stop()` and `restartPlayback()` also release all live MIDI voices.
+- `dispose()` calls `soundfont?.dispose()`.
+
+Task 6 — Track kind selector (AudioEditor.tsx TrackHeader):
+- Added Piano icon import; added SOUNDFONT_PIANO_ID, INSTRUMENT_PRESETS, loadCustomInstruments imports.
+- TrackHeader: kind toggle button (Volume2 ↔ Piano icon, highlighted when MIDI), arm button sets `input: 'midi'` on MIDI tracks, instrument picker `<select>` row replaces pan-slider row on MIDI tracks (Soundfont Piano + synth presets + custom instruments optgroups).
+- Audio tracks keep the original volume + pan slider row.
+- Preserved ROUND11-A's armed-track badge in the transport bar.
+
+Task 7 — Remote mute fix (AudioEditor.tsx):
+- Verified the fix is already in place from a prior round: `tracks.observeDeep(applyTracks)` at line 417, where `applyTracks = () => { engineRef.current?.updateTracks(slateRef.current); }`.
+- `updateTracks` calls `setupTrackNodes`, which writes `gain.gain.value = audible ? volume : 0` per track (audible = solo ? track.solo : !track.muted). So remote mute/solo edits land in Yjs and immediately re-apply to the local audio graph.
+- Added a detailed comment explaining WHY this fixes the "can't mute others" bug.
+
+Bonus — MIDI clip helpers (scene.ts):
+- `addMidiClip(slate, trackId, { start, notes, name?, color?, duration?, instrumentId? })` — creates a MIDI clip in Yjs (no IndexedDB blob).
+- `splitAudioClip` now has a MIDI branch: splits the note list at the boundary (notes before keep full duration on left; notes at/after move to right with start times shifted back).
+- `duplicateAudioClip` now has a MIDI branch: deep-copies notes, calls `addMidiClip`. No sample I/O.
+- `readAudioTrack` reads `instrumentId`; `readAudioClip` reads `kind`, `notes`, `instrumentId`.
+
+Bonus — Quantize (InstrumentPanel.tsx):
+- New `QuantizeOption` type + `QUANTIZE_OPTIONS` array ('off', '1/4', '1/8', '1/16', '1/32').
+- New `quantize` state + `quantizeRef` (so long-lived `placeTake` callback reads latest value).
+- `placeTake` quantize pass before renderPerformance: reads BPM from Yjs audio map; step = (60/bpm)/(division/4) seconds; `qNotes = notes.map(n => ({ ...n, start: Math.round(n.start / step) * step }))`. Duration preserved.
+- New compact `<select>` in InstrumentPanel header (next to Record + Keyboard buttons): "Free" for off, else grid value. Highlighted accent when active.
+
+Verification:
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → exit 0, no errors.
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, no errors across all 7 modified/created files plus the rest of the codebase.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx vitest run --passWithNoTests` → 11/11 tests pass.
+- `npx eslint` on 5 touched client files → 0 errors, 2 pre-existing warnings (AudioEditor:1127 useCallback pxPerSec dep; engine:134 unused no-console eslint-disable — both predate this round).
+
+Stage Summary:
+- MIDI clips are first-class: schema + validators + scene helpers (addMidiClip, MIDI-aware split/duplicate) + engine playback (soundfont + synth-preset branching with pre-warm) + TrackHeader UI (kind toggle, instrument picker, MIDI-aware arm).
+- Soundfont: freepats acoustic-grand-piano samples fetched lazily per note, cached, pre-warmed before playback. Failed notes remembered so we don't re-fetch.
+- Quantize: 1/4 to 1/32 grid options in the InstrumentPanel header, applied to recorded takes before offline render.
+- Remote mute: verified the `applyTracks` subscription is in place (re-applies Yjs track values to the audio graph on every track change, local OR remote). Added a comment explaining the fix.
+- TypeScript clean (exit 0). No new dependencies. Backward compatible (all new schema fields optional; existing audio clips continue to work as `kind: 'audio'` by default).

@@ -1,0 +1,1403 @@
+     1→/**
+     2→ * AudioEditor — CapCut/BandLab-style DAW.
+     3→ * Key optimization: waveforms are pre-computed as PNG data URLs cached per
+     4→ * clip id + sample count. The canvas only draws ONCE when a clip is first
+     5→ * seen or its samples change — not on every version bump.
+     6→ */
+     7→
+     8→import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+     9→import type * as Y from 'yjs';
+    10→import {
+    11→  Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
+    12→  Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
+    13→  ChevronLeft, ChevronRight, Maximize2, Magnet, ClipboardCopy, ClipboardPaste,
+    14→} from 'lucide-react';
+    15→import type { AudioClip, AudioTrack, AwarenessState } from '@slate/sync-protocol';
+    16→import { useRoom } from '../sync/RoomContext';
+    17→import { useAppStore } from '../app/store';
+    18→import { toast } from '../ui/Toast';
+    19→import {
+    20→  addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
+    21→  deleteAudioTrack, duplicateAudioClip, readAudioClip, readAudioTrack,
+    22→  setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
+    23→} from './scene';
+    24→import { AudioEngine } from './engine';
+    25→import { loadSamples } from './sampleStore';
+    26→import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE } from './library';
+    27→import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS } from './instruments';
+    28→import { float32ToNumberArray } from './sampleStore';
+    29→import { RemotePlayheads } from './RemotePlayheads';
+    30→
+    31→/** True while the pointer is over the audio editor. Written here, read by the
+    32→ *  2D animation timeline so its Space handler yields to the audio transport
+    33→ *  when both are on screen (docked audio panel on a 2D board). */
+    34→export const audioEditorHovered = { current: false };
+    35→
+    36→/** Latest playhead position (seconds) — mirrored from positionRef so panels
+    37→ *  outside this component (e.g. InstrumentPanel placing a recorded take)
+    38→ *  can read the transport position without a React subscription. */
+    39→export const audioPlayheadPos = { current: 0 };
+    40→
+    41→const TRACK_H = 60;
+    42→/** px-per-sec zoom limits. The min is intentionally tiny (2) so a long mix
+    43→ *  (e.g. a 3-minute song = 180s) still fits in a typical viewport at the
+    44→ *  widest zoom-out — 180s * 2px = 360px, well within a timeline pane. The
+    45→ *  Fit-to-window button uses this as the floor so the computed fit value is
+    46→ *  never silently clamped away. */
+    47→const MIN_PX_PER_SEC = 2;
+    48→const MAX_PX_PER_SEC = 800;
+    49→/** Width of the sticky track-header column (Tailwind w-44 = 11rem = 176px).
+    50→ *  Used by the Fit-to-window calculation to subtract the header from the
+    51→ *  scroll viewport so we fit clips into the visible TIMELINE area only. */
+    52→const TRACK_HEADER_W = 176;
+    53→/** Magnet-snap capture distance in SCREEN px (converted to seconds at the
+    54→ *  current zoom). 8px matches the feel of CapCut/Ableton edge snapping. */
+    55→const SNAP_PX = 8;
+    56→/** Pointer must travel this many px before a clip pointerdown becomes a drag —
+    57→ *  keeps plain select-clicks from nudging the clip by a pixel. */
+    58→const DRAG_DEADZONE_PX = 3;
+    59→
+    60→/** Nearest start position at which a clip of `duration` fits without
+    61→ *  overlapping any blocker. Merges blockers into occupied intervals, then
+    62→ *  picks the gap position closest to `desired`. This replaces the previous
+    63→ *  "slide to the nearest side of the current blocker" iteration, which could
+    64→ *  ping-pong between two adjacent blockers (each resolution landing on the
+    65→ *  other) and exhaust its iteration budget while STILL overlapping —
+    66→ *  committing a clip on top of another one. Scanning gaps directly is
+    67→ *  deterministic: the open-ended gap after the last blocker always fits, so a
+    68→ *  valid position always exists. */
+    69→function nearestFreeStart(desired: number, duration: number, blockersIn: { start: number; end: number }[]): number {
+    70→  const eps = 1e-4;
+    71→  desired = Math.max(0, desired);
+    72→  if (blockersIn.length === 0) return desired;
+    73→  const sorted = [...blockersIn].sort((a, b) => a.start - b.start);
+    74→  const occupied: { start: number; end: number }[] = [];
+    75→  for (const b of sorted) {
+    76→    const last = occupied[occupied.length - 1];
+    77→    if (last && b.start <= last.end + eps) last.end = Math.max(last.end, b.end);
+    78→    else occupied.push({ start: b.start, end: b.end });
+    79→  }
+    80→  let best = desired;
+    81→  let bestDist = Infinity;
+    82→  const consider = (lo: number, hi: number) => {
+    83→    if (hi - lo < duration - eps) return; // gap too small
+    84→    const cand = Math.min(Math.max(desired, lo), hi - duration);
+    85→    const dist = Math.abs(cand - desired);
+    86→    if (dist < bestDist) { bestDist = dist; best = cand; }
+    87→  };
+    88→  let prevEnd = 0;
+    89→  for (const o of occupied) {
+    90→    consider(prevEnd, o.start);
+    91→    prevEnd = Math.max(prevEnd, o.end);
+    92→  }
+    93→  consider(prevEnd, Infinity); // open-ended tail — always fits
+    94→  return Math.max(0, best);
+    95→}
+    96→
+    97→// ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
+    98→// Key: `${clipId}:${sampleCount}:${width}` → data URL
+    99→const waveformPNGCache = new Map<string, string>();
+   100→
+   101→// Draw only the window [startFrame, endFrame) of the sample across `width`
+   102→// pixels. Rendering the *window* (not the whole sample stretched) is what makes
+   103→// trimming look like cutting the audio away rather than squashing it.
+   104→function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number, startFrame: number, endFrame: number): string {
+   105→  const canvas = document.createElement('canvas');
+   106→  const dpr = window.devicePixelRatio || 1;
+   107→  const w = Math.max(2, Math.floor(width));
+   108→  canvas.width = w * dpr;
+   109→  canvas.height = height * dpr;
+   110→  const ctx = canvas.getContext('2d')!;
+   111→  ctx.scale(dpr, dpr);
+   112→  ctx.clearRect(0, 0, w, height);
+   113→  const totalFrames = samples.length / channels;
+   114→  const s = Math.max(0, Math.min(totalFrames, Math.floor(startFrame)));
+   115→  const e = Math.max(s, Math.min(totalFrames, Math.floor(endFrame)));
+   116→  const span = e - s;
+   117→  if (span <= 0) return canvas.toDataURL();
+   118→  const mid = height / 2;
+   119→  ctx.fillStyle = color;
+   120→  for (let x = 0; x < w; x++) {
+   121→    const f0 = s + Math.floor((x / w) * span);
+   122→    const f1 = Math.min(e, s + Math.floor(((x + 1) / w) * span) + 1);
+   123→    let peak = 0;
+   124→    for (let i = f0; i < f1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
+   125→    const bh = Math.max(1, peak * mid * 0.85);
+   126→    ctx.fillRect(x, mid - bh, 1, bh * 2);
+   127→  }
+   128→  return canvas.toDataURL();
+   129→}
+   130→
+   131→/** Waveform image for the buffer window the clip actually plays. With speed s,
+   132→ *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds.
+   133→ *
+   134→ *  Two robustness fixes:
+   135→ *  1. If `loadSamples` returns an EMPTY Float32Array (length 0) — which happens
+   136→ *     when a freshly-split/created clip's IndexedDB write hasn't landed yet —
+   137→ *     we DON'T cache the resulting blank PNG. Instead we show the `···`
+   138→ *     placeholder and retry a few times (500ms apart) so the real waveform
+   139→ *     appears once the samples are available.
+   140→ *  2. We listen for `slate:audio-clip-changed` (fired by Normalize/Reverse/split)
+   141→ *     and invalidate our cache entry for the current clipId, then force a
+   142→ *     recompute via a `bust` counter — otherwise the memoised component would
+   143→ *     keep showing the stale PNG even after the cache was cleared. */
+   144→const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color }: {
+   145→  clipId: string; sampleKey: string; channels: number; sampleRate: number;
+   146→  offset: number; duration: number; speed: number; width: number; color: string;
+   147→}) {
+   148→  const height = TRACK_H - 6;
+   149→  const [imgUrl, setImgUrl] = useState<string>('');
+   150→  const [bust, setBust] = useState(0);
+   151→  const retryRef = useRef(0);
+   152→
+   153→  // Invalidate cached PNGs for this clip when its samples change (normalize /
+   154→  // reverse / split). The parent AudioEditor also invalidates + bumps version,
+   155→  // but the memoised WaveformImg wouldn't otherwise recompute (its primitive
+   156→  // props are unchanged) — the `bust` counter forces the load effect to re-run.
+   157→  useEffect(() => {
+   158→    const onChanged = (e: Event) => {
+   159→      const detail = (e as CustomEvent<string>).detail;
+   160→      // Match by clipId (normalize/reverse/split events) OR by sampleKey
+   161→      // (multiplayer sample-arrival events from registerSampleSyncMap).
+   162→      if (detail !== clipId && detail !== sampleKey) return;
+   163→      for (const key of waveformPNGCache.keys()) {
+   164→        if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+   165→      }
+   166→      retryRef.current = 0;
+   167→      setBust((n) => n + 1);
+   168→    };
+   169→    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   170→    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   171→  }, [clipId, sampleKey]);
+   172→
+   173→  useEffect(() => {
+   174→    const startFrame = Math.round(offset * sampleRate);
+   175→    const endFrame = Math.round((offset + duration * speed) * sampleRate);
+   176→    const cacheKey = `${clipId}:${sampleKey}:${startFrame}:${endFrame}:${Math.floor(width)}`;
+   177→    const cached = waveformPNGCache.get(cacheKey);
+   178→    if (cached) { setImgUrl(cached); return; }
+   179→    let cancelled = false;
+   180→    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+   181→
+   182→    const attempt = () => {
+   183→      if (cancelled) return;
+   184→      void loadSamples(sampleKey).then((samples) => {
+   185→        if (cancelled) return;
+   186→        // Empty samples = the IndexedDB write for this sampleKey hasn't landed
+   187→        // yet (e.g. brand-new clip from a split, OR a remote peer's clip whose
+   188→        // sample blob is still in flight via the Yjs sync map). DON'T cache a
+   189→        // blank PNG — retry for up to 10s (20 × 500ms) so the real waveform
+   190→        // appears once the samples arrive. The previous 5-retry / 2.5s budget
+   191→        // was too short for cross-peer sample sync, which can take several
+   192→        // seconds for a 5MB blob over a slow link. The `slate:audio-clip-changed`
+   193→        // event (dispatched by onClipsAdded when a remote clip is added, and by
+   194→        // registerSampleSyncMap when samples arrive) resets `retryRef` to 0 so
+   195→        // the WaveformImg re-tries immediately on the signal — this retry
+   196→        // budget is the safety net for the case where the event fires before
+   197→        // the WaveformImg mounts, or doesn't fire at all.
+   198→        if (samples.length === 0) {
+   199→          if (retryRef.current < 20) {
+   200→            retryRef.current += 1;
+   201→            retryTimer = setTimeout(attempt, 500);
+   202→          }
+   203→          return;
+   204→        }
+   205→        retryRef.current = 0;
+   206→        const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
+   207→        waveformPNGCache.set(cacheKey, url);
+   208→        setImgUrl(url);
+   209→      });
+   210→    };
+   211→    attempt();
+   212→
+   213→    return () => {
+   214→      cancelled = true;
+   215→      if (retryTimer) clearTimeout(retryTimer);
+   216→    };
+   217→  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height, bust]);
+   218→
+   219→  if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
+   220→  return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
+   221→});
+   222→
+   223→/** Drop cached waveform PNGs for a clip (call when its samples change). */
+   224→function invalidateWaveform(clipId: string): void {
+   225→  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+   226→}
+   227→
+   228→// ── Main ────────────────────────────────────────────────────────────────────
+   229→
+   230→export function AudioEditor() {
+   231→  const room = useRoom();
+   232→  const slate = room.slate;
+   233→  const [version, setVersion] = useState(0);
+   234→  const [playing, setPlaying] = useState(false);
+   235→  const [bpm, setBpmState] = useState(slate.audioBpm());
+   236→  const [metronome, setMetronome] = useState(false);
+   237→  const [recording, setRecording] = useState(false);
+   238→  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+   239→  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+   240→  const [masterVol, setMasterVol] = useState(0.85);
+   241→  const [looping, setLooping] = useState(false);
+   242→  const [loopStart, setLoopStart] = useState(0);
+   243→  const [loopEnd, setLoopEnd] = useState(8);
+   244→  const [pxPerSec, setPxPerSec] = useState(80);
+   245→  /** Magnet snapping (beat grid + clip edges + playhead) for drags/trims.
+   246→   *  On by default like every DAW; hold Alt for free movement. */
+   247→  const [snapOn, setSnapOn] = useState(true);
+   248→  const snapRef = useRef(true);
+   249→  snapRef.current = snapOn;
+   250→  const engineRef = useRef<AudioEngine | null>(null);
+   251→  const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
+   252→  const rafRef = useRef(0);
+   253→  const positionRef = useRef(0);
+   254→  // Refs mirror the latest `playing` and `slate` so the long-lived Yjs / event
+   255→  // listeners (which close over the initial render) can read fresh values
+   256→  // without re-subscribing on every state change.
+   257→  const playingRef = useRef(false);
+   258→  playingRef.current = playing;
+   259→  const hoveredRef = audioEditorHovered;
+   260→  const slateRef = useRef(slate);
+   261→  slateRef.current = slate;
+   262→  /** Debounce timer for restartPlayback — coalesces rapid clip/sample changes
+   263→   *  so we don't tear down and rebuild the scheduler 5× in a row when a peer
+   264→   *  adds several clips at once. */
+   265→  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   266→  const playheadRef = useRef<HTMLDivElement | null>(null);
+   267→  const posDisplayRef = useRef<HTMLSpanElement | null>(null);
+   268→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   269→  const dragRef = useRef<{
+   270→    clipId: string; el: HTMLElement; waveEl: HTMLElement | null;
+   271→    os: number; od: number; oo: number; speed: number; sx: number; sy: number;
+   272→    leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
+   273→    /** Same-track clip bounds per track id (dragged clip excluded) — overlap
+   274→     *  resolution consults the CURRENT target track, not just the origin. */
+   275→    byTrack: Map<string, { start: number; end: number }[]>;
+   276→    /** Track ids in display order + the dragged clip's origin index — used to
+   277→     *  map vertical pointer travel to a target track. */
+   278→    trackIds: string[]; trackIndex: number;
+   279→    /** Current vertical row offset (0 = origin track). Written by applyMove,
+   280→     *  committed on pointerup. */
+   281→    rowDelta: number;
+   282→    /** Magnet candidates: every other clip's start/end + playhead + 0. Beat
+   283→     *  grid is handled analytically (round to the nearest beat). */
+   284→    snapTimes: number[];
+   285→    /** True once the pointer left the dead zone — a plain click never mutates
+   286→     *  the clip. */
+   287→    moved: boolean;
+   288→  } | null>(null);
+   289→  /** Latest pointer `clientX` during an active drag — written by every
+   290→   *  `pointermove` and read inside a `requestAnimationFrame` callback. Decouples
+   291→   *  the high-frequency pointermove stream (~60-120Hz on modern pointers) from
+   292→   *  the actual DOM-mutation work, so multiple moves within the same frame
+   293→   *  coalesce into a single `style.left`/`style.width` write. Null when no
+   294→   *  drag is in progress. */
+   295→  const moveXRef = useRef<number | null>(null);
+   296→  /** Latest pointer `clientY` (cross-track dragging) + Alt state (snap bypass)
+   297→   *  — same rAF-coalescing pattern as moveXRef. */
+   298→  const moveYRef = useRef<number>(0);
+   299→  const moveAltRef = useRef(false);
+   300→  /** Pending rAF id for processing the next drag move. Zero when no frame is
+   301→   *  scheduled. Lets `onMove` bail out cheaply (one ref read + one rAF check)
+   302→   *  when a frame is already queued. */
+   303→  const moveRafRef = useRef(0);
+   304→  const marqueeRef = useRef<{ startX: number; startY: number; origin: Set<string> } | null>(null);
+   305→  const selectedRef = useRef<Set<string>>(new Set());
+   306→  selectedRef.current = selectedClipIds;
+   307→  const clipsRef = useRef<AudioClip[]>([]);
+   308→  const tracksRef = useRef<AudioTrack[]>([]);
+   309→  const pxRef = useRef(pxPerSec);
+   310→  pxRef.current = pxPerSec;
+   311→  const bpmRef = useRef(bpm);
+   312→  bpmRef.current = bpm;
+   313→  /** Desired scrollLeft to apply after the next pxPerSec commit (used by
+   314→   *  zoomAtPlayhead so the playhead stays at the same screen position when
+   315→   *  zooming). Cleared in the layout effect below once applied. */
+   316→  const pendingScrollRef = useRef<number | null>(null);
+   317→  /** Timestamp (performance.now ms) of the last awareness publish of our audio
+   318→   *  playhead position. The tick rAF loop throttles publishes to ~7 Hz (150ms)
+   319→   *  so a long play session doesn't saturate the awareness broadcast — peers
+   320→   *  render at display rate via their own rAF, so 7 Hz is plenty for smooth
+   321→   *  remote-playhead motion. */
+   322→  const lastAudioPublishRef = useRef(0);
+   323→  /** Snapshot of remote peer awareness states — passed to RemotePlayheads.
+   324→   *  The diffing setPeerStates below skips updates that only change high-
+   325→   *  frequency fields (audio.pos), so we don't re-render AudioEditor at 7 Hz. */
+   326→  const [peerStates, setPeerStates] = useState<AwarenessState[]>([]);
+   327→
+   328→  /** Schedule a debounced restartPlayback (500ms). Called when the clip set
+   329→   *  changes mid-playback (remote peer adds a clip) or when a clip's samples
+   330→   *  arrive after play started (remote sample blob landed via the sync map).
+   331→   *  The debounce coalesces rapid bursts so we don't tear down and rebuild
+   332→   *  the scheduler repeatedly. No-op when not playing. Reads only refs, so the
+   333→   *  callback identity is stable for the lifetime of the component. */
+   334→  const scheduleRestart = useCallback(() => {
+   335→    if (!playingRef.current) return;
+   336→    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+   337→    restartTimerRef.current = setTimeout(() => {
+   338→      restartTimerRef.current = null;
+   339→      const eng = engineRef.current;
+   340→      if (eng && playingRef.current) eng.restartPlayback(slateRef.current, positionRef.current);
+   341→    }, 500);
+   342→  }, []);
+   343→
+   344→  // Subscribe to awareness changes. Diffing skips updates that only change
+   345→  // high-frequency fields (audio.pos) so the parent doesn't re-render at the
+   346→  // 7 Hz publish rate — RemotePlayheads subscribes itself for live positions.
+   347→  useEffect(
+   348→    () =>
+   349→      room.onAwarenessChange((states) => {
+   350→        setPeerStates((prev) => {
+   351→          if (prev.length !== states.length) return states;
+   352→          // Stable peer-set key — id + name + color + audio-presence.
+   353→          // Position/playing/cursor/cam/voiceLevel changes are intentionally
+   354→          // excluded so they don't trigger a re-render.
+   355→          const key = (s: AwarenessState) =>
+   356→            `${s.id}|${s.name}|${s.color}|${s.audio ? 1 : 0}`;
+   357→          const prevKey = prev.map(key).sort().join(';');
+   358→          const nextKey = states.map(key).sort().join(';');
+   359→          return prevKey === nextKey ? prev : states;
+   360→        });
+   361→      }),
+   362→    [room],
+   363→  );
+   364→
+   365→  // Publish our audio playhead state whenever transport play/pause changes.
+   366→  // Reads positionRef.current at effect-run time so the published position is
+   367→  // always the latest. Also resets the throttle stamp so the rAF loop doesn't
+   368→  // immediately re-publish.
+   369→  useEffect(() => {
+   370→    room.setLocalAwareness({ audio: { pos: positionRef.current, playing } });
+   371→    lastAudioPublishRef.current = performance.now();
+   372→  }, [playing, room]);
+   373→
+   374→  // Clear our audio playhead on unmount so other peers stop seeing us in the
+   375→  // audio editor. (audio: null = "not in the audio editor".)
+   376→  useEffect(() => {
+   377→    return () => {
+   378→      room.setLocalAwareness({ audio: null });
+   379→    };
+   380→  }, [room]);
+   381→
+   382→  // Yjs subscription.
+   383→  useEffect(() => {
+   384→    // NOTE: registerSampleSyncMap(room) is now called from useSlateRoom's
+   385→    // attach() — registering here only on AudioEditor mount meant a peer on
+   386→    // a 2D/3D board (audio panel closed) never registered the sync map and
+   387→    // never received remote sample blobs. See useSlateRoom.ts.
+   388→    const tracks = slate.audioTracks();
+   389→    const clips = slate.audioClips();
+   390→    const audioMap = slate.doc.getMap('audio');
+   391→    let pending = false;
+   392→    const bump = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; setVersion((v) => v + 1); }); };
+   393→    // Any track edit (volume, pan, EQ, sends, mute/solo — local knob or remote
+   394→    // peer) re-applies the Yjs values to the live audio graph, so the settings
+   395→    // panel is audible mid-playback without a restart.
+   396→    const applyTracks = () => { engineRef.current?.updateTracks(slateRef.current); };
+   397→    // Clip edits (position, trim, gain, pan, filters, speed/pitch — ours or a
+   398→    // peer's) reschedule playback so they're audible mid-play. Debounced 500ms
+   399→    // in scheduleRestart and a no-op while paused, so knob drags coalesce into
+   400→    // one restart instead of stuttering. Track edits deliberately DON'T
+   401→    // restart — applyTracks adjusts their nodes live.
+   402→    const restartOnClipEdit = () => { scheduleRestart(); };
+   403→    tracks.observeDeep(bump); clips.observeDeep(bump); audioMap.observe(bump); bump();
+   404→    tracks.observeDeep(applyTracks);
+   405→    clips.observeDeep(restartOnClipEdit);
+   406→    // Detect NEW clips being added while playing and schedule a debounced
+   407→    // restartPlayback so the new clip is picked up mid-playback without a
+   408→    // manual stop/play. We watch the shallow clips map (not observeDeep) so
+   409→    // we only react to key additions, not to every property edit on an
+   410→    // existing clip (which would restart playback every time a peer nudged
+   411→    // a clip's volume, fighting the user). The restart is debounced 500ms so
+   412→    // a burst of additions (e.g. a peer imports 5 files) coalesces into one.
+   413→    //
+   414→    // LIVE WAVEFORM REFRESH: when a remote peer adds a clip, its metadata
+   415→    // arrives via Yjs immediately but the sample blob travels separately via
+   416→    // the audioSampleSync Y.Map (see sampleStore.ts). If we don't ping the
+   417→    // WaveformImg, it might have already exhausted its empty-samples retry
+   418→    // budget (now 10s, but a slow link can still exceed that) and given up
+   419→    // showing a blank "···" placeholder until the user refreshes. So for
+   420→    // each newly-added clip we:
+   421→    //   1. clearCache(clipId) on the engine so the next play re-loads samples
+   422→    //      (the cache might hold a null/empty entry from a prior failed getBuffer)
+   423→    //   2. dispatch `slate:audio-clip-changed` with the clipId — the
+   424→    //      AudioEditor's listener (below) re-invalidates the waveform cache +
+   425→    //      clears the engine cache + bumps version, AND the WaveformImg's own
+   426→    //      listener resets its retryRef to 0 and bumps `bust` to immediately
+   427→    //      re-attempt loadSamples (which will now find the synced blob once
+   428→    //      it lands).
+   429→    //   3. scheduleRestart() so if we're currently playing, the new clip is
+   430→    //      picked up atomically (debounced 500ms to coalesce bursts).
+   431→    const onClipsAdded = (event: Y.YMapEvent<Y.Map<unknown>>) => {
+   432→      const addedIds: string[] = [];
+   433→      for (const key of event.keysChanged) {
+   434→        const change = event.changes.keys.get(key);
+   435→        if (change?.action === 'add') addedIds.push(key);
+   436→      }
+   437→      if (addedIds.length === 0) return;
+   438→      for (const id of addedIds) {
+   439→        engineRef.current?.clearCache(id);
+   440→        window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: id }));
+   441→      }
+   442→      scheduleRestart();
+   443→    };
+   444→    clips.observe(onClipsAdded);
+   445→    const lateRead = setTimeout(bump, 200);
+   446→    return () => { clearTimeout(lateRead); tracks.unobserveDeep(bump); tracks.unobserveDeep(applyTracks); clips.unobserveDeep(bump); clips.unobserveDeep(restartOnClipEdit); audioMap.unobserve(bump); clips.unobserve(onClipsAdded); };
+   447→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   448→  }, [slate]);
+   449→
+   450→  useEffect(() => {
+   451→    engineRef.current = new AudioEngine();
+   452→    engineRef.current.setMasterVolume(masterVol);
+   453→    return () => {
+   454→      // Cancel any pending restart so it doesn't fire after dispose().
+   455→      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+   456→      engineRef.current?.dispose();
+   457→      engineRef.current = null;
+   458→    };
+   459→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   460→  }, []);
+   461→
+   462→  // Playhead — direct DOM.
+   463→  useEffect(() => {
+   464→    if (!playing) {
+   465→      // Playback just stopped — cancel any pending mid-playback restart so
+   466→      // it doesn't fire and call restartPlayback (which would re-start audio
+   467→      // after the user pressed pause).
+   468→      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+   469→      return;
+   470→    }
+   471→    const tick = () => {
+   472→      rafRef.current = requestAnimationFrame(tick);
+   473→      const eng = engineRef.current; if (!eng) return;
+   474→      const pos = eng.getPosition();
+   475→      positionRef.current = pos;
+   476→      audioPlayheadPos.current = pos;
+   477→      if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
+   478→      if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+   479→      // Throttled awareness publish at ~7 Hz (150ms) — peers render at display
+   480→      // rate via their own rAF, so 7 Hz is plenty for smooth remote playhead
+   481→      // motion while keeping the awareness broadcast off the hot path.
+   482→      const now = performance.now();
+   483→      if (now - lastAudioPublishRef.current >= 150) {
+   484→        lastAudioPublishRef.current = now;
+   485→        room.setLocalAwareness({ audio: { pos, playing: true } });
+   486→      }
+   487→      if (pos > timelineDuration + 2) { eng.stop(); setPlaying(false); }
+   488→    };
+   489→    rafRef.current = requestAnimationFrame(tick);
+   490→    return () => cancelAnimationFrame(rafRef.current);
+   491→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   492→  }, [playing]);
+   493→
+   494→  // Ctrl+scroll zoom — centred on the playhead so the screen position under
+   495→  // the cursor/playhead stays put instead of zooming toward the left edge.
+   496→  /** Zoom while keeping one timeline point at the same screen offset.
+   497→   *  The anchor is the time under `anchorClientX` (mouse-wheel zoom: the spot
+   498→   *  under the cursor stays put — how every DAW/map zoom feels), or the
+   499→   *  playhead when no anchor is given (toolbar buttons, fit-to-window).
+   500→   *  Keeping time t fixed on screen means newScroll = oldScroll + t·Δpps,
+   501→   *  since screenX(t) = timelineLeft − scrollLeft + t·pps. The `scrollLeft`
+   502→   *  write happens in the layout effect below (after React commits the new
+   503→   *  `minWidth` on the timeline div — setting it earlier would be clamped by
+   504→   *  the stale `scrollWidth`). */
+   505→  const zoomAnchored = useCallback((newPxPerSec: number, anchorClientX?: number) => {
+   506→    const el = scrollRef.current;
+   507→    const oldPxPerSec = pxRef.current;
+   508→    if (!el || oldPxPerSec === newPxPerSec) {
+   509→      setPxPerSec(newPxPerSec);
+   510→      return;
+   511→    }
+   512→    let t = positionRef.current; // default anchor: the playhead
+   513→    if (anchorClientX !== undefined) {
+   514→      const tl = el.querySelector('[data-timeline]') as HTMLElement | null;
+   515→      if (tl) t = Math.max(0, (anchorClientX - tl.getBoundingClientRect().left) / oldPxPerSec);
+   516→    }
+   517→    pendingScrollRef.current = Math.max(0, el.scrollLeft + t * (newPxPerSec - oldPxPerSec));
+   518→    setPxPerSec(newPxPerSec);
+   519→  }, []);
+   520→
+   521→  // Apply any pending scroll correction after pxPerSec commits to the DOM.
+   522→  useLayoutEffect(() => {
+   523→    if (pendingScrollRef.current !== null && scrollRef.current) {
+   524→      scrollRef.current.scrollLeft = pendingScrollRef.current;
+   525→      pendingScrollRef.current = null;
+   526→    }
+   527→  }, [pxPerSec]);
+   528→
+   529→  useEffect(() => {
+   530→    const el = scrollRef.current; if (!el) return;
+   531→    const onWheel = (e: WheelEvent) => {
+   532→      if (!e.ctrlKey && !e.metaKey) return;
+   533→      e.preventDefault();
+   534→      const next = Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, pxRef.current * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+   535→      zoomAnchored(next, e.clientX); // zoom toward the cursor
+   536→    };
+   537→    el.addEventListener('wheel', onWheel, { passive: false });
+   538→    return () => el.removeEventListener('wheel', onWheel);
+   539→  }, [zoomAnchored]);
+   540→
+   541→  // Global pointermove/up — pure DOM, zero React state.
+   542→  // rAF-throttled: pointermove fires at the hardware's report rate (often
+   543→  // 60-120Hz), and the move handler does a neighbours-overlap scan on every
+   544→  // event. Coalescing multiple moves into a single rAF callback caps the work
+   545→  // at the display refresh rate (~60fps) so a fast pointer drag never stalls
+   546→  // the main thread. A no-op skip (cursor hasn't moved since the last
+   547→  // processed frame) avoids redundant DOM writes for stationary pointers.
+   548→  useEffect(() => {
+   549→    /** Last pointer position we actually applied to the DOM. Lets us skip
+   550→     *  work when pointermove fires without real movement (e.g. a touchpad
+   551→     *  reporting pressure changes, or sub-pixel jitter). */
+   552→    let lastProcessedX: number | null = null;
+   553→    let lastProcessedY: number | null = null;
+   554→
+   555→    /** Magnet: pull `t` (a clip START time) to the nearest beat line, other
+   556→     *  clip edge, or the playhead — considering BOTH the clip's start and end
+   557→     *  edges — if one is within SNAP_PX at the current zoom. `dur` null =
+   558→     *  only the start edge matters (trims). Returns the adjusted start. */
+   559→    const snapStart = (t: number, dur: number | null, snapTimes: number[]): number => {
+   560→      const pps = pxRef.current;
+   561→      const thr = SNAP_PX / pps;
+   562→      const beat = 60 / bpmRef.current;
+   563→      let best = t;
+   564→      let bestDist = thr;
+   565→      const consider = (target: number, edgeOffset: number) => {
+   566→        const dist = Math.abs(t + edgeOffset - target);
+   567→        if (dist < bestDist) { bestDist = dist; best = target - edgeOffset; }
+   568→      };
+   569→      consider(Math.round(t / beat) * beat, 0);
+   570→      if (dur !== null) consider(Math.round((t + dur) / beat) * beat, dur);
+   571→      for (const st of snapTimes) {
+   572→        consider(st, 0);
+   573→        if (dur !== null) consider(st, dur);
+   574→      }
+   575→      return best;
+   576→    };
+   577→
+   578→    const applyMove = () => {
+   579→      moveRafRef.current = 0;
+   580→      const d = dragRef.current;
+   581→      if (!d) return;
+   582→      const clientX = moveXRef.current;
+   583→      if (clientX === null) return;
+   584→      const clientY = moveYRef.current;
+   585→      // Skip no-op moves — cursor hasn't moved to a new pixel since the last
+   586→      // frame we processed. Saves an overlap scan + 1-2 style writes.
+   587→      if (lastProcessedX === clientX && lastProcessedY === clientY) return;
+   588→      lastProcessedX = clientX;
+   589→      lastProcessedY = clientY;
+   590→
+   591→      // Dead zone: a plain click (pointer never leaves a 3px box) must not
+   592→      // nudge the clip. Once exceeded, the drag is live for good.
+   593→      if (!d.moved) {
+   594→        if (Math.abs(clientX - d.sx) < DRAG_DEADZONE_PX && Math.abs(clientY - d.sy) < DRAG_DEADZONE_PX) return;
+   595→        d.moved = true;
+   596→        if (d.mode === 'drag') d.el.style.zIndex = '40'; // ride above other rows while crossing tracks
+   597→      }
+   598→
+   599→      const pps = pxRef.current;
+   600→      const dt = (clientX - d.sx) / pps;
+   601→      const oldEnd = d.os + d.od;
+   602→      const wantSnap = snapRef.current && !moveAltRef.current;
+   603→      if (d.mode === 'drag') {
+   604→        // The clip follows the mouse 1:1 (snapped to the magnet grid). It's
+   605→        // allowed to ride OVER other clips while the drag is live — it's
+   606→        // elevated to z-40 so the overlap reads as "in transit", and the
+   607→        // no-overlap invariant is enforced once, on drop (see onUp). The
+   608→        // previous mid-drag resolution parked the clip flush against a
+   609→        // blocker and then teleported it across when the cursor passed the
+   610→        // blocker's midpoint, which made dragging feel sticky and jumpy.
+   611→        const duration = d.od;
+   612→        // Vertical: whole-row steps move the clip across tracks.
+   613→        const rowDelta = Math.max(
+   614→          -d.trackIndex,
+   615→          Math.min(d.trackIds.length - 1 - d.trackIndex, Math.round((clientY - d.sy) / TRACK_H)),
+   616→        );
+   617→        d.rowDelta = rowDelta;
+   618→        d.el.style.transform = rowDelta === 0 ? '' : `translateY(${rowDelta * TRACK_H}px)`;
+   619→
+   620→        const desired = wantSnap ? snapStart(d.os + dt, duration, d.snapTimes) : d.os + dt;
+   621→        d.el.style.left = `${Math.max(0, desired) * pps}px`;
+   622→      } else if (d.mode === 'trimL') {
+   623→        // Cut from the left: never past the left neighbour, the source start
+   624→        // (offset ≥ 0 → limited by the trimmed head in timeline seconds), or a
+   625→        // minimum width.
+   626→        const minStart = Math.max(d.leftLimit, d.os - d.oo / d.speed);
+   627→        const desired = wantSnap ? snapStart(d.os + dt, null, d.snapTimes) : d.os + dt;
+   628→        const start = Math.min(oldEnd - 0.1, Math.max(minStart, desired));
+   629→        d.el.style.left = `${start * pps}px`;
+   630→        d.el.style.width = `${(oldEnd - start) * pps}px`;
+   631→        // Shift the (fixed-width) waveform the opposite way so the audio stays
+   632→        // anchored — the newly-trimmed head is clipped, not squashed.
+   633→        if (d.waveEl) d.waveEl.style.left = `${-(start - d.os) * pps}px`;
+   634→      } else if (d.mode === 'trimR') {
+   635→        // Cut from the right: never past the right neighbour or a min width.
+   636→        const desired = wantSnap ? snapStart(oldEnd + dt, null, d.snapTimes) : oldEnd + dt;
+   637→        const end = Math.min(d.rightLimit, Math.max(d.os + 0.1, desired));
+   638→        d.el.style.width = `${(end - d.os) * pps}px`;
+   639→      }
+   640→    };
+   641→
+   642→    const onMove = (ev: PointerEvent) => {
+   643→      const d = dragRef.current; if (!d) return;
+   644→      // Stash the latest pointer state — the rAF callback reads it. Cheap
+   645→      // (ref writes) so even 120Hz pointermove streams don't pile up work.
+   646→      moveXRef.current = ev.clientX;
+   647→      moveYRef.current = ev.clientY;
+   648→      moveAltRef.current = ev.altKey;
+   649→      // Schedule a frame if one isn't already pending. The guard is what
+   650→      // coalesces multiple moves within the same frame into one DOM write.
+   651→      if (!moveRafRef.current) {
+   652→        moveRafRef.current = requestAnimationFrame(applyMove);
+   653→      }
+   654→    };
+   655→    const onUp = () => {
+   656→      const d = dragRef.current; if (!d) return;
+   657→      // Cancel any pending rAF — we'll process the final position
+   658→      // SYNCHRONOUSLY here so the committed Yjs value reflects the exact
+   659→      // pointer-up location (otherwise the last pointermove before pointerup
+   660→      // could be dropped, leaving the committed position ~1 frame behind the
+   661→      // cursor). lastProcessed is reset to bypass the no-op skip in case the
+   662→      // final pointermove matched the prior processed frame but we still need
+   663→      // to read the just-written style to commit to Yjs.
+   664→      if (moveRafRef.current) {
+   665→        cancelAnimationFrame(moveRafRef.current);
+   666→        moveRafRef.current = 0;
+   667→      }
+   668→      if (moveXRef.current !== null) {
+   669→        lastProcessedX = null; // bypass the no-op skip on the final flush
+   670→        lastProcessedY = null;
+   671→        applyMove();
+   672→      }
+   673→      // Undo the drag-only visual state React doesn't manage.
+   674→      d.el.style.zIndex = '';
+   675→      d.el.style.transform = '';
+   676→      // A click that never left the dead zone selects but must not write —
+   677→      // committing a parseFloat round-trip of the style would drift the clip.
+   678→      if (d.moved) {
+   679→        const pps = pxRef.current;
+   680→        const left = parseFloat(d.el.style.left) / pps;
+   681→        const width = parseFloat(d.el.style.width) / pps;
+   682→        if (d.mode === 'drag') {
+   683→          const targetTrackId = d.trackIds[d.trackIndex + d.rowDelta] ?? d.trackIds[d.trackIndex]!;
+   684→          const originTrackId = d.trackIds[d.trackIndex]!;
+   685→          // Enforce the no-overlap invariant HERE (the drag itself follows
+   686→          // the mouse freely): place the clip in the free gap nearest to the
+   687→          // dropped position.
+   688→          const start = nearestFreeStart(left, d.od, d.byTrack.get(targetTrackId) ?? []);
+   689→          // Write the resolved position to the DOM too so there's no flicker
+   690→          // between pointer-up and the Yjs-driven re-render.
+   691→          d.el.style.left = `${start * pps}px`;
+   692→          updateAudioClip(slate, d.clipId, {
+   693→            start,
+   694→            ...(targetTrackId !== originTrackId ? { trackId: targetTrackId } : {}),
+   695→          });
+   696→        }
+   697→        else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
+   698→        else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
+   699→      }
+   700→      moveXRef.current = null;
+   701→      lastProcessedX = null;
+   702→      lastProcessedY = null;
+   703→      dragRef.current = null;
+   704→    };
+   705→    window.addEventListener('pointermove', onMove);
+   706→    window.addEventListener('pointerup', onUp);
+   707→    return () => {
+   708→      window.removeEventListener('pointermove', onMove);
+   709→      window.removeEventListener('pointerup', onUp);
+   710→      // Don't leak a pending rAF if the component unmounts mid-drag.
+   711→      if (moveRafRef.current) {
+   712→        cancelAnimationFrame(moveRafRef.current);
+   713→        moveRafRef.current = 0;
+   714→      }
+   715→    };
+   716→  }, [slate]);
+   717→
+   718→  // Hotkeys. Gated: on an audio board the editor always owns them; on a 2D/3D
+   719→  // board (where the editor is one docked panel among many) they only fire
+   720→  // while the pointer is over the editor — otherwise Space fought the 2D
+   721→  // animation timeline (both played), and C/D/R fired while drawing.
+   722→  useEffect(() => {
+   723→    const onKey = (e: KeyboardEvent) => {
+   724→      const t = e.target as HTMLElement;
+   725→      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+   726→      const isAudioBoard = useAppStore.getState().currentBoard?.mode === 'audio';
+   727→      if (!isAudioBoard && !hoveredRef.current) return;
+   728→      const k = e.key.toLowerCase();
+   729→      // The InstrumentPanel owns the note keys while its keyboard capture is
+   730→      // on (D/F/G/… play notes, Z/X shift octave) — Space/arrows/Delete still
+   731→      // reach the transport, like a real DAW.
+   732→      if (instrumentKeyCapture.current && INSTRUMENT_CAPTURE_KEYS.has(k)) return;
+   733→      if (k === ' ') { e.preventDefault(); togglePlay(); }
+   734→      else if (k === 'c' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void copyClips(); }
+   735→      else if (k === 'v' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void pasteClips(); }
+   736→      else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
+   737→      else if ((k === 'delete' || k === 'backspace') && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }
+   738→      else if (k === 'd' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void dupClip(id)); }
+   739→      else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
+   740→      else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
+   741→      else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
+   742→      else if (k === 'arrowleft') { e.preventDefault(); seek(positionRef.current - 2); }
+   743→      else if (k === 'arrowright') { e.preventDefault(); seek(positionRef.current + 2); }
+   744→      else if (k === 'home') { e.preventDefault(); seek(0); }
+   745→    };
+   746→    window.addEventListener('keydown', onKey);
+   747→    return () => window.removeEventListener('keydown', onKey);
+   748→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   749→  }, [playing, recording]);
+   750→
+   751→  // Read from Yjs — lightweight (no samples copied).
+   752→  const tracks: AudioTrack[] = useMemo(() => {
+   753→    const list: AudioTrack[] = [];
+   754→    slate.audioTracks().forEach((m, id) => { const t = readAudioTrack(m, id); if (t) list.push(t); });
+   755→    list.sort((a, b) => a.order - b.order);
+   756→    return list;
+   757→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   758→  }, [slate, version]);
+   759→
+   760→  const clips: AudioClip[] = useMemo(() => {
+   761→    const list: AudioClip[] = [];
+   762→    slate.audioClips().forEach((m, id) => { const c = readAudioClip(m, id); if (c) list.push(c); });
+   763→    return list;
+   764→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   765→  }, [slate, version]);
+   766→  clipsRef.current = clips;
+   767→  tracksRef.current = tracks;
+   768→
+   769→  // When a clip's samples change (normalize/reverse from the settings panel,
+   770→  // OR a remote peer's sample blob just landed via the Yjs sync map),
+   771→  // drop the cached waveform + decoded buffer so both refresh, AND — if we're
+   772→  // currently playing — schedule a debounced restartPlayback so the clip is
+   773→  // picked up. This covers the case where a clip's metadata arrived but its
+   774→  // samples were still in flight: getBuffer returned null on the first pass,
+   775→  // and this restart re-schedules once the samples are usable.
+   776→  useEffect(() => {
+   777→    const onChanged = (e: Event) => {
+   778→      const id = (e as CustomEvent<string>).detail;
+   779→      invalidateWaveform(id);
+   780→      engineRef.current?.clearCache(id);
+   781→      // Pre-warm the engine's AudioBuffer cache even when not playing —
+   782→      // otherwise a remote peer who's paused when samples land goes through
+   783→      // the full getBuffer retry loop on their next play(), adding audible
+   784→      // latency to the first playback. scheduleRestart() is a no-op when
+   785→      // paused, so without this the cache stays cold until play. Safe to
+   786→      // call when the engine has no AudioContext yet (preloadBuffer no-ops).
+   787→      void engineRef.current?.preloadBuffer(slateRef.current, id);
+   788→      setVersion((v) => v + 1);
+   789→      scheduleRestart();
+   790→    };
+   791→    // A clip that can't be shared live (too long, or the board's shared-audio
+   792→    // budget is spent) plays fine locally but is silent for collaborators —
+   793→    // say so instead of failing silently.
+   794→    const onSkipped = () => {
+   795→      toast({
+   796→        title: 'Clip won’t sync to collaborators',
+   797→        description: 'It plays for you, but this clip is too long or the board’s shared audio space is full. Collaborators won’t hear it.',
+   798→        variant: 'error',
+   799→      });
+   800→    };
+   801→    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   802→    window.addEventListener('slate:audio-sync-skipped', onSkipped);
+   803→    return () => {
+   804→      window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   805→      window.removeEventListener('slate:audio-sync-skipped', onSkipped);
+   806→    };
+   807→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   808→  }, []);
+   809→
+   810→  const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
+   811→
+   812→  /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
+   813→   *  currently-visible timeline viewport (scroll container minus the sticky
+   814→   *  track-header column). Clamped to [MIN, MAX] so absurdly long or short
+   815→   *  sessions still produce a sane zoom. Goes through `zoomAnchored` so the
+   816→   *  playhead stays on screen when the fit value would still overflow. */
+   817→  const fitToWindow = useCallback(() => {
+   818→    const el = scrollRef.current;
+   819→    if (!el) return;
+   820→    const viewportW = Math.max(50, el.clientWidth - TRACK_HEADER_W);
+   821→    const fit = viewportW / Math.max(1, timelineDuration);
+   822→    zoomAnchored(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
+   823→  }, [timelineDuration, zoomAnchored]);
+   824→
+   825→  // ── Transport ─────────────────────────────────────────────────────────────
+   826→
+   827→  const togglePlay = useCallback(() => {
+   828→    const eng = engineRef.current; if (!eng) return;
+   829→    if (playing) { eng.stop(); setPlaying(false); }
+   830→    else {
+   831→      if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null);
+   832→      // Best-effort: if the AudioContext is suspended (autoplay policy /
+   833→      // backgrounded tab), this click IS a user gesture — kick off resume()
+   834→      // right now so the next play attempt (this one if resume resolves in
+   835→      // time, otherwise the user's next click) sees a running context.
+   836→      eng.resumeOnGesture();
+   837→      void eng.play(slate, positionRef.current);
+   838→      // Only flip the UI to "playing" if the engine actually started. play()
+   839→      // bails with a toast when the AudioContext is still suspended, leaving
+   840→      // this.playing false — without this guard the Play button would flip
+   841→      // to Pause while no audio plays.
+   842→      if (eng.isPlaying()) setPlaying(true);
+   843→    }
+   844→  }, [playing, slate, looping, loopStart, loopEnd]);
+   845→
+   846→  const seek = useCallback((t: number) => {
+   847→    const pos = Math.max(0, t);
+   848→    positionRef.current = pos;
+   849→    audioPlayheadPos.current = pos;
+   850→    if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
+   851→    if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+   852→    // Publish the new playhead position immediately so peers see the seek
+   853→    // without waiting for the next throttled tick (which only fires while
+   854→    // playing). Resets the throttle stamp so the rAF loop doesn't double-publish.
+   855→    room.setLocalAwareness({ audio: { pos, playing: playingRef.current } });
+   856→    lastAudioPublishRef.current = performance.now();
+   857→  }, [room]);
+   858→
+   859→  const toggleRecord = useCallback(async () => {
+   860→    if (recording) {
+   861→      const stopFn = stopRecRef.current;
+   862→      if (stopFn) {
+   863→        const r = await stopFn(); stopRecRef.current = null; setRecording(false);
+   864→        let tid = tracks.find((t) => t.armed)?.id;
+   865→        if (!tid) tid = addAudioTrack(slate, { name: 'Recording' });
+   866→        addAudioClip(slate, tid, { start: positionRef.current, samples: r.samples, sampleRate: r.sampleRate, channels: r.channels, duration: r.duration, name: `Rec ${new Date().toLocaleTimeString()}` });
+   867→        toast({ title: 'Recording added' });
+   868→      }
+   869→    } else {
+   870→      try { const sf = await engineRef.current?.startRecording(); stopRecRef.current = sf ?? null; setRecording(true); }
+   871→      catch { toast({ title: 'Mic denied', variant: 'error' }); }
+   872→    }
+   873→  }, [recording, tracks, slate]);
+   874→
+   875→  const dupClip = useCallback(async (id: string) => {
+   876→    await duplicateAudioClip(slate, id);
+   877→  }, [slate]);
+   878→
+   879→  // ── Clipboard (copy / paste) ────────────────────────────────────────────
+   880→  /** Copied clips: a snapshot of each selected clip's props + its decoded
+   881→   *  samples + start offset relative to the earliest selected clip, so paste
+   882→   *  reconstructs the group at the playhead even after the originals are
+   883→   *  deleted or edited. Samples are held so paste doesn't depend on the source
+   884→   *  clip still existing in the doc. */
+   885→  const clipboardRef = useRef<Array<{ src: AudioClip; samples: Float32Array; relStart: number }>>([]);
+   886→  const [hasClipboard, setHasClipboard] = useState(false);
+   887→
+   888→  const copyClips = useCallback(async () => {
+   889→    const sel = clipsRef.current.filter((c) => selectedRef.current.has(c.id));
+   890→    if (sel.length === 0) return;
+   891→    const minStart = Math.min(...sel.map((c) => c.start));
+   892→    const items: Array<{ src: AudioClip; samples: Float32Array; relStart: number }> = [];
+   893→    for (const c of sel) {
+   894→      const samples = await loadSamples(c.sampleKey);
+   895→      if (samples.length === 0) continue; // samples still syncing — skip
+   896→      items.push({ src: c, samples, relStart: c.start - minStart });
+   897→    }
+   898→    if (items.length === 0) {
+   899→      toast({ title: 'Nothing to copy', description: 'Selected clip samples are still syncing.', variant: 'error' });
+   900→      return;
+   901→    }
+   902→    clipboardRef.current = items;
+   903→    setHasClipboard(true);
+   904→    toast({ title: `Copied ${items.length} clip${items.length > 1 ? 's' : ''}` });
+   905→  }, []);
+   906→
+   907→  const pasteClips = useCallback(async () => {
+   908→    const items = clipboardRef.current;
+   909→    if (items.length === 0) return;
+   910→    const base = positionRef.current; // paste the group at the playhead
+   911→    const newIds: string[] = [];
+   912→    // Blockers per track: existing clips + clips already placed by THIS paste
+   913→    // (clipsRef won't include them until React re-renders), so pasted clips
+   914→    // never land on top of anything.
+   915→    const placedByTrack = new Map<string, { start: number; end: number }[]>();
+   916→    for (const c of clipsRef.current) {
+   917→      let list = placedByTrack.get(c.trackId);
+   918→      if (!list) { list = []; placedByTrack.set(c.trackId, list); }
+   919→      list.push({ start: c.start, end: c.start + c.duration });
+   920→    }
+   921→    for (const it of items) {
+   922→      const blockers = placedByTrack.get(it.src.trackId) ?? [];
+   923→      const start = nearestFreeStart(base + it.relStart, it.src.duration, blockers);
+   924→      blockers.push({ start, end: start + it.src.duration });
+   925→      placedByTrack.set(it.src.trackId, blockers);
+   926→      const id = await addAudioClip(slate, it.src.trackId, {
+   927→        start,
+   928→        samples: it.samples, // Float32Array passed straight through
+   929→        sampleRate: it.src.sampleRate,
+   930→        channels: it.src.channels,
+   931→        duration: it.src.duration,
+   932→        name: it.src.name,
+   933→        color: it.src.color,
+   934→      });
+   935→      // Carry over trims + per-clip effects that addAudioClip defaults to 0/1.
+   936→      updateAudioClip(slate, id, {
+   937→        offset: it.src.offset, gain: it.src.gain, pan: it.src.pan,
+   938→        fadeIn: it.src.fadeIn, fadeOut: it.src.fadeOut, speed: it.src.speed,
+   939→        pitch: it.src.pitch, hpCutoff: it.src.hpCutoff, lpCutoff: it.src.lpCutoff,
+   940→      });
+   941→      newIds.push(id);
+   942→    }
+   943→    setSelectedClipIds(new Set(newIds)); // select the paste so it's ready to move
+   944→    toast({ title: `Pasted ${newIds.length} clip${newIds.length > 1 ? 's' : ''}` });
+   945→  }, [slate]);
+   946→
+   947→  const handleFileImport = useCallback(async (file: File) => {
+   948→    try {
+   949→      const d = await decodeAudioFile(file);
+   950→      const tid = addAudioTrack(slate, { name: file.name.replace(/\.[^.]+$/, '') });
+   951→      addAudioClip(slate, tid, { start: positionRef.current, samples: d.samples, sampleRate: d.sampleRate, channels: d.channels, duration: d.duration, name: file.name });
+   952→      toast({ title: 'Imported', description: file.name });
+   953→    } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
+   954→  }, [slate]);
+   955→
+   956→  // ── Drag-drop from AudioAssetsPanel ────────────────────────────────────────
+   957→
+   958→  /** Add an imported asset (by clip id) to a specific track at a specific time. */
+   959→  const addAssetToTrack = useCallback(async (assetId: string, trackId: string, start: number) => {
+   960→    const yo = slate.audioClips().get(assetId);
+   961→    const clip = yo ? readAudioClip(yo, assetId) : null;
+   962→    if (!clip) return;
+   963→    const samples = await loadSamples(clip.sampleKey);
+   964→    if (samples.length === 0) {
+   965→      toast({ title: 'Samples still syncing', variant: 'error' });
+   966→      return;
+   967→    }
+   968→    await addAudioClip(slate, trackId, {
+   969→      start, samples: float32ToNumberArray(samples),
+   970→      sampleRate: clip.sampleRate, channels: clip.channels,
+   971→      duration: clip.duration, name: clip.name,
+   972→    });
+   973→    toast({ title: 'Added to track' });
+   974→  }, [slate]);
+   975→
+   976→  /** Add a library sample to a specific track at a specific time. */
+   977→  const addLibraryToTrack = useCallback(async (libId: string, trackId: string, start: number) => {
+   978→    const sample = AUDIO_LIBRARY.find((s) => s.id === libId);
+   979→    if (!sample) return;
+   980→    const pcm = sample.generate();
+   981→    await addAudioClip(slate, trackId, {
+   982→      start, samples: pcm, sampleRate: LIBRARY_SAMPLE_RATE,
+   983→      channels: 1, duration: pcm.length / LIBRARY_SAMPLE_RATE, name: sample.name,
+   984→    });
+   985→    toast({ title: 'Added to track', description: sample.name });
+   986→  }, [slate]);
+   987→
+   988→  /** Handle a drop on the timeline area — hit-tests the track row and computes the time. */
+   989→  const handleTimelineDrop = useCallback((e: React.DragEvent) => {
+   990→    const assetId = e.dataTransfer.getData('application/x-slate-audio-asset');
+   991→    const libId = e.dataTransfer.getData('application/x-slate-audio-library');
+   992→    if (!assetId && !libId) return; // not an asset drag — let file drop bubble
+   993→    e.preventDefault();
+   994→    // Hit-test track rows by clientY
+   995→    const rows = scrollRef.current?.querySelectorAll('[data-track-id]') ?? [];
+   996→    let trackId: string | null = null;
+   997→    for (const r of rows) {
+   998→      const rect = r.getBoundingClientRect();
+   999→      if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+  1000→        trackId = r.getAttribute('data-track-id');
+  1001→        break;
+  1002→      }
+  1003→    }
+  1004→    if (!trackId) return;
+  1005→    // Compute time from clientX relative to the timeline content
+  1006→    const tlEl = scrollRef.current?.querySelector('[data-timeline]') as HTMLElement | null;
+  1007→    if (!tlEl) return;
+  1008→    const tlRect = tlEl.getBoundingClientRect();
+  1009→    const t = Math.max(0, (e.clientX - tlRect.left) / pxRef.current);
+  1010→    if (assetId) void addAssetToTrack(assetId, trackId, t);
+  1011→    else if (libId) void addLibraryToTrack(libId, trackId, t);
+  1012→  }, [addAssetToTrack, addLibraryToTrack]);
+  1013→
+  1014→  // ── Drag start ────────────────────────────────────────────────────────────
+  1015→
+  1016→  // Everything the pointermove handler needs, computed once per drag:
+  1017→  //  - [leftLimit, rightLimit]: the free interval on the ORIGIN track (trims).
+  1018→  //  - byTrack: clip bounds per track (dragged clip excluded) for overlap
+  1019→  //    resolution on whichever track the pointer is over.
+  1020→  //  - snapTimes: magnet candidates — every other clip's edges + playhead + 0.
+  1021→  const dragGeometry = useCallback((clip: AudioClip): {
+  1022→    leftLimit: number; rightLimit: number;
+  1023→    byTrack: Map<string, { start: number; end: number }[]>;
+  1024→    snapTimes: number[];
+  1025→  } => {
+  1026→    let leftLimit = 0;
+  1027→    let rightLimit = Infinity;
+  1028→    const byTrack = new Map<string, { start: number; end: number }[]>();
+  1029→    const snapTimes: number[] = [0, positionRef.current];
+  1030→    const clipEnd = clip.start + clip.duration;
+  1031→    for (const o of clipsRef.current) {
+  1032→      if (o.id === clip.id) continue;
+  1033→      const oEnd = o.start + o.duration;
+  1034→      snapTimes.push(o.start, oEnd);
+  1035→      let list = byTrack.get(o.trackId);
+  1036→      if (!list) { list = []; byTrack.set(o.trackId, list); }
+  1037→      list.push({ start: o.start, end: oEnd });
+  1038→      if (o.trackId !== clip.trackId) continue;
+  1039→      if (oEnd <= clip.start + 1e-4) leftLimit = Math.max(leftLimit, oEnd);
+  1040→      else if (o.start >= clipEnd - 1e-4) rightLimit = Math.min(rightLimit, o.start);
+  1041→    }
+  1042→    return { leftLimit, rightLimit, byTrack, snapTimes };
+  1043→  }, []);
+  1044→
+  1045→  const selectClip = useCallback((id: string, additive: boolean) => {
+  1046→    setSelectedClipIds((prev) => {
+  1047→      if (additive) {
+  1048→        const next = new Set(prev);
+  1049→        if (next.has(id)) next.delete(id); else next.add(id);
+  1050→        return next;
+  1051→      }
+  1052→      // Plain click: if already in a multi-selection, keep it; else single-select.
+  1053→      if (prev.has(id) && prev.size > 1) return prev;
+  1054→      return new Set([id]);
+  1055→    });
+  1056→  }, []);
+  1057→
+  1058→  const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+  1059→    e.stopPropagation();
+  1060→    // Without this, the browser starts a native text/image selection on the
+  1061→    // mouse-drag: the waveform <img>s and labels of every clip the pointer
+  1062→    // sweeps across get painted with the blue ::selection overlay.
+  1063→    e.preventDefault();
+  1064→    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+  1065→    selectClip(clip.id, additive);
+  1066→    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
+  1067→    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
+  1068→    const trackIds = tracksRef.current.map((t) => t.id);
+  1069→    const trackIndex = Math.max(0, trackIds.indexOf(clip.trackId));
+  1070→    dragRef.current = {
+  1071→      clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset,
+  1072→      speed: clip.speed ?? 1, sx: e.clientX, sy: e.clientY, leftLimit, rightLimit,
+  1073→      byTrack, snapTimes, trackIds, trackIndex, rowDelta: 0, moved: false, mode: 'drag',
+  1074→    };
+  1075→  }, [dragGeometry, selectClip]);
+  1076→
+  1077→  const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+  1078→    e.stopPropagation();
+  1079→    e.preventDefault(); // block native selection (see startDrag)
+  1080→    selectClip(clip.id, e.shiftKey || e.metaKey || e.ctrlKey);
+  1081→    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
+  1082→    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
+  1083→    const trackIds = tracksRef.current.map((t) => t.id);
+  1084→    const trackIndex = Math.max(0, trackIds.indexOf(clip.trackId));
+  1085→    dragRef.current = {
+  1086→      clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset,
+  1087→      speed: clip.speed ?? 1, sx: e.clientX, sy: e.clientY, leftLimit, rightLimit,
+  1088→      byTrack, snapTimes, trackIds, trackIndex, rowDelta: 0, moved: false,
+  1089→      mode: side === 'left' ? 'trimL' : 'trimR',
+  1090→    };
+  1091→  }, [dragGeometry, selectClip]);
+  1092→
+  1093→  // ── Loop region drag ──────────────────────────────────────────────────────
+  1094→
+  1095→  const loopDragRef = useRef<{ mode: 'start' | 'end' | 'move'; sx: number; os: number; oe: number } | null>(null);
+  1096→  const startLoopDrag = useCallback((mode: 'start' | 'end' | 'move', e: React.PointerEvent) => {
+  1097→    e.stopPropagation();
+  1098→    loopDragRef.current = { mode, sx: e.clientX, os: loopStart, oe: loopEnd };
+  1099→    const onMove = (ev: PointerEvent) => {
+  1100→      const d = loopDragRef.current; if (!d) return;
+  1101→      const dt = (ev.clientX - d.sx) / pxRef.current;
+  1102→      if (d.mode === 'start') { setLoopStart(Math.max(0, Math.min(d.oe - 0.5, d.os + dt))); }
+  1103→      else if (d.mode === 'end') { setLoopEnd(Math.max(d.os + 0.5, d.oe + dt)); }
+  1104→      else if (d.mode === 'move') { setLoopStart(Math.max(0, d.os + dt)); setLoopEnd(Math.max(0.5, d.oe + dt)); }
+  1105→    };
+  1106→    const onUp = () => { loopDragRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+  1107→    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  1108→  }, [loopStart, loopEnd, pxPerSec]);
+  1109→
+  1110→  // ── Render ────────────────────────────────────────────────────────────────
+  1111→
+  1112→  const beatDur = 60 / bpm; // seconds per beat
+  1113→  const gridStyle = {
+  1114→    backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0 1px, transparent 1px ${beatDur * pxPerSec}px), repeating-linear-gradient(to right, rgba(128,128,128,0.2) 0 1px, transparent 1px ${beatDur * 4 * pxPerSec}px)`,
+  1115→  };
+  1116→
+  1117→  // Adaptive ruler tick interval — picks a "nice" step (in seconds) whose
+  1118→  // pixel spacing stays readable at the current zoom: tight when zoomed in
+  1119→  // (so you get millisecond-level ticks), sparse when zoomed out (so a long
+  1120→  // mix doesn't turn into a solid wall of labels).
+  1121→  const { tickInterval, formatTick } = useMemo(() => {
+  1122→    if (pxPerSec >= 400) return { tickInterval: 0.1, formatTick: (t: number) => `${t.toFixed(1)}s` };
+  1123→    if (pxPerSec >= 100) return { tickInterval: 1, formatTick: (t: number) => `${t}s` };
+  1124→    if (pxPerSec >= 40) return { tickInterval: 5, formatTick: (t: number) => `${t}s` };
+  1125→    if (pxPerSec >= 10) return { tickInterval: 10, formatTick: (t: number) => `${t}s` };
+  1126→    return {
+  1127→      tickInterval: 60,
+  1128→      formatTick: (t: number) => {
+  1129→        const m = Math.floor(t / 60);
+  1130→        const s = Math.round(t - m * 60);
+  1131→        return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  1132→      },
+  1133→    };
+  1134→  }, [pxPerSec]);
+  1135→
+  1136→  return (
+  1137→    <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
+  1138→      {/* Transport */}
+  1139→      <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
+  1140→        <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
+  1141→        <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
+  1142→        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Record (R)"><Mic size={15} /></button>
+  1143→        <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
+  1144→        <div className="mx-1 h-5 w-px bg-border" />
+  1145→        <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
+  1146→        <button onClick={() => selectedRef.current.forEach(id => void dupClip(id))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+  1147→        <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
+  1148→        <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
+  1149→        <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
+  1150→        <div className="mx-1 h-5 w-px bg-border" />
+  1151→        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+  1152→        <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
+  1153→        <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
+  1154→        <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
+  1155→        <div className="mx-1 h-5 w-px bg-border" />
+  1156→        <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
+  1157→        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+  1158→        <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
+  1159→        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+  1160→        <div className="flex-1" />
+  1161→        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
+  1162→        <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
+  1163→      </div>
+  1164→
+  1165→      {/* Track area */}
+  1166→      <div
+  1167→        ref={scrollRef}
+  1168→        className="flex flex-1 min-h-0 overflow-auto"
+  1169→        onDragOver={(e) => {
+  1170→          if (e.dataTransfer.types.includes('application/x-slate-audio-asset') ||
+  1171→              e.dataTransfer.types.includes('application/x-slate-audio-library') ||
+  1172→              e.dataTransfer.types.includes('Files'))
+  1173→            e.preventDefault();
+  1174→        }}
+  1175→        onDrop={handleTimelineDrop}
+  1176→      >
+  1177→        {/* Headers. overflow-hidden is load-bearing: the sticky column is z-10
+  1178→            (above clips), and a track's volume/pan range inputs won't shrink
+  1179→            below their intrinsic min-width, so without clipping they spill ~20px
+  1180→            past the column onto the leftmost clips — intercepting the pointer so
+  1181→            those clips can't be grabbed (you hit the pan slider instead, and the
+  1182→            previously-selected clip stays highlighted). */}
+  1183→        <div className="sticky left-0 z-10 w-44 shrink-0 overflow-hidden border-r border-border bg-bg-2">
+  1184→          <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
+  1185→          {tracks.length === 0 && <div className="p-3 text-center text-[11px] text-text-dim">No tracks. Import audio or add a track.</div>}
+  1186→          {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef} />)}
+  1187→        </div>
+  1188→
+  1189→        {/* Timeline */}
+  1190→        <div data-timeline className="relative flex-1 select-none" style={{ minWidth: timelineDuration * pxPerSec }}>
+  1191→          {/* Ruler + loop handles */}
+  1192→          <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
+  1193→            {Array.from({ length: Math.ceil(timelineDuration / tickInterval) + 1 }, (_, i) => {
+  1194→              const t = i * tickInterval;
+  1195→              return (
+  1196→                <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: t * pxPerSec }}>{formatTick(t)}</span>
+  1197→              );
+  1198→            })}
+  1199→            {looping && (
+  1200→              <>
+  1201→                <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
+  1202→                <div onPointerDown={(e) => startLoopDrag('end', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopEnd * pxPerSec, width: 8 }} title="Drag loop end"><ChevronRight size={10} className="text-white" /></div>
+  1203→              </>
+  1204→            )}
+  1205→          </div>
+  1206→          {/* Seek + marquee layer — background click catcher (behind clips).
+  1207→           *  Plain click = seek. Shift/Cmd+drag = marquee multi-select. */}
+  1208→          <div
+  1209→            className="absolute inset-0 top-7"
+  1210→            onPointerDown={(e) => {
+  1211→              if (e.shiftKey || e.metaKey || e.ctrlKey) {
+  1212→                // Begin marquee selection
+  1213→                const r = e.currentTarget.getBoundingClientRect();
+  1214→                const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  1215→                marqueeRef.current = { startX: sx, startY: sy, origin: new Set(e.shiftKey ? selectedRef.current : []) };
+  1216→                setMarquee({ x1: sx, y1: sy, x2: sx, y2: sy });
+  1217→                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  1218→              } else {
+  1219→                // Plain click = seek + clear selection
+  1220→                const r = e.currentTarget.getBoundingClientRect();
+  1221→                seek((e.clientX - r.left) / pxRef.current);
+  1222→                setSelectedClipIds(new Set());
+  1223→              }
+  1224→            }}
+  1225→            onPointerMove={(e) => {
+  1226→              if (!marqueeRef.current) return;
+  1227→              const r = e.currentTarget.getBoundingClientRect();
+  1228→              const ex = e.clientX - r.left, ey = e.clientY - r.top;
+  1229→              setMarquee({ x1: marqueeRef.current.startX, y1: marqueeRef.current.startY, x2: ex, y2: ey });
+  1230→              // Hit-test clips against the marquee rect
+  1231→              const x1 = Math.min(marqueeRef.current.startX, ex);
+  1232→              const x2 = Math.max(marqueeRef.current.startX, ex);
+  1233→              const y1 = Math.min(marqueeRef.current.startY, ey);
+  1234→              const y2 = Math.max(marqueeRef.current.startY, ey);
+  1235→              const t1 = x1 / pxRef.current, t2 = x2 / pxRef.current;
+  1236→              const startRowIdx = Math.floor(y1 / TRACK_H);
+  1237→              const endRowIdx = Math.floor(y2 / TRACK_H);
+  1238→              const next = new Set(marqueeRef.current.origin);
+  1239→              clips.forEach((c) => {
+  1240→                const ti = tracks.findIndex((t) => t.id === c.trackId);
+  1241→                if (ti < startRowIdx || ti > endRowIdx) return;
+  1242→                const cEnd = c.start + c.duration;
+  1243→                if (cEnd >= t1 && c.start <= t2) next.add(c.id);
+  1244→              });
+  1245→              setSelectedClipIds(next);
+  1246→            }}
+  1247→            onPointerUp={() => { marqueeRef.current = null; setMarquee(null); }}
+  1248→          />
+  1249→          {/* Marquee rect overlay */}
+  1250→          {marquee && (
+  1251→            <div className="pointer-events-none absolute z-30 border border-accent/70 bg-accent/15" style={{
+  1252→              left: Math.min(marquee.x1, marquee.x2),
+  1253→              top: 28 + Math.min(marquee.y1, marquee.y2),
+  1254→              width: Math.abs(marquee.x2 - marquee.x1),
+  1255→              height: Math.abs(marquee.y2 - marquee.y1),
+  1256→            }} />
+  1257→          )}
+  1258→          {/* Grid background */}
+  1259→          <div className="pointer-events-none absolute inset-0 top-7" style={gridStyle}>
+  1260→            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="pointer-events-auto absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
+  1261→          </div>
+  1262→          {/* Playhead */}
+  1263→          <div ref={playheadRef} className="absolute top-0 bottom-0 z-20 w-0.5 bg-warn pointer-events-none" style={{ transform: 'translateX(0px)' }}>
+  1264→            <div className="absolute top-0 -left-1 h-2 w-2 rounded-full bg-warn" />
+  1265→          </div>
+  1266→          {/* Clips */}
+  1267→          {tracks.map((t) => (
+  1268→            <div key={t.id} data-track-id={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
+  1269→              {clips.filter((c) => c.trackId === t.id).map((c) => (
+  1270→                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipIds.has(c.id)}
+  1271→                  onDragStart={startDrag} onTrimStart={startTrim} />
+  1272→              ))}
+  1273→            </div>
+  1274→          ))}
+  1275→          {/* Remote playheads — overlay on top of clips, mirroring each peer's
+  1276→           *  audio transport position. Rendered after clips so z-20 wins. */}
+  1277→          <RemotePlayheads room={room} peerStates={peerStates} pxRef={pxRef} selfId={room.identity.peerId} />
+  1278→        </div>
+  1279→      </div>
+  1280→
+  1281→      {/* Status */}
+  1282→      <div className="flex shrink-0 items-center gap-2 border-t border-border px-2 py-0.5 text-[8px] font-mono uppercase text-text-dim">
+  1283→        <span>{tracks.length}T · {clips.length}C</span>
+  1284→        {recording && <span className="text-danger">● Rec</span>}
+  1285→        {playing && <span className="text-accent">▶ Play</span>}
+  1286→        <span className="ml-auto">Space · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
+  1287→      </div>
+  1288→    </div>
+  1289→  );
+  1290→}
+  1291→
+  1292→// ── Track header ────────────────────────────────────────────────────────────
+  1293→
+  1294→const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef }: {
+  1295→  track: AudioTrack; hasSolo: boolean;
+  1296→  slate: ReturnType<typeof useRoom>['slate'];
+  1297→  engineRef: React.RefObject<AudioEngine | null>;
+  1298→}) {
+  1299→  const [vol, setVol] = useState(track.volume);
+  1300→  const [pan, setPan] = useState(track.pan);
+  1301→  // Separate drag flags per slider — the previous single shared `isDraggingRef`
+  1302→  // meant starting a volume drag also blocked the pan prop-sync effect (and
+  1303→  // vice versa), which could cause one slider's committed Yjs value to be
+  1304→  // momentarily ignored by the other's gating. Per-slider flags keep each
+  1305→  // slider's prop-sync independent.
+  1306→  const isDraggingVolRef = useRef(false);
+  1307→  const isDraggingPanRef = useRef(false);
+  1308→  useEffect(() => { if (!isDraggingVolRef.current) setVol(track.volume); }, [track.volume]);
+  1309→  useEffect(() => { if (!isDraggingPanRef.current) setPan(track.pan); }, [track.pan]);
+  1310→
+  1311→  // Audibility — mirrors engine.setupTrackNodes so the live gain we write
+  1312→  // during a volume drag respects mute/solo (don't briefly un-mute a muted
+  1313→  // track just because the user is dragging its volume slider).
+  1314→  const audible = hasSolo ? track.solo : !track.muted;
+  1315→
+  1316→  // `update` is for non-slider track edits (name/mute/solo/arm) — these DO
+  1317→  // need a full updateTracks so the audio graph reflects the new state
+  1318→  // (e.g. toggling solo rebalances every track's gain).
+  1319→  const update = (patch: Partial<AudioTrack>) => { updateAudioTrack(slate, track.id, patch); engineRef.current?.updateTracks(slate); };
+  1320→
+  1321→  // Volume slider: update local state + the engine's gain node DIRECTLY for
+  1322→  // immediate audio feedback. Do NOT call updateTracks (which re-reads every
+  1323→  // track from Yjs and rebuilds the audio graph — far too expensive per
+  1324→  // onChange event, and the source of the reported lag). Commit to Yjs once
+  1325→  // on pointerup.
+  1326→  const onVolDown = () => { isDraggingVolRef.current = true; };
+  1327→  const onVol = (v: number) => { setVol(v); engineRef.current?.setTrackVolume(track.id, v, audible); };
+  1328→  const onVolEnd = () => { isDraggingVolRef.current = false; updateAudioTrack(slate, track.id, { volume: vol }); };
+  1329→
+  1330→  // Pan slider: same pattern — set the panner node directly, commit on
+  1331→  // pointerup. The pan slider is smaller than the volume slider (secondary
+  1332→  // control) but still usable, with L/R labels so its function is obvious
+  1333→  // (the user complaint was "two sliders, only one works" — partly because
+  1334→  // neither slider was labelled, so it wasn't clear what each did).
+  1335→  const onPanDown = () => { isDraggingPanRef.current = true; };
+  1336→  const onPan = (p: number) => { setPan(p); engineRef.current?.setTrackPan(track.id, p); };
+  1337→  const onPanEnd = () => { isDraggingPanRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
+  1338→
+  1339→  return (
+  1340→    <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
+  1341→      <div className="flex items-center gap-0.5">
+  1342→        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: track.color }} />
+  1343→        <input type="text" value={track.name} onChange={(e) => update({ name: e.target.value })} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-text outline-none" />
+  1344→        <button onClick={() => update({ muted: !track.muted })} className={`flex h-4 w-4 items-center justify-center rounded ${track.muted && !hasSolo ? 'bg-warn/30 text-warn' : 'text-text-mid hover:bg-bg-3'}`} title="M">{track.muted ? <VolumeX size={9} /> : <Volume2 size={9} />}</button>
+  1345→        <button onClick={() => update({ solo: !track.solo })} className={`flex h-4 w-4 items-center justify-center rounded ${track.solo ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="S"><Headphones size={9} /></button>
+  1346→        <button onClick={() => update({ armed: !track.armed, input: !track.armed ? 'mic' : 'none' })} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title="Arm"><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
+  1347→        <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
+  1348→      </div>
+  1349→      <div className="mt-0.5 flex items-center gap-1">
+  1350→        <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
+  1351→        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
+  1352→        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
+  1353→        <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
+  1354→        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
+  1355→      </div>
+  1356→    </div>
+  1357→  );
+  1358→});
+  1359→
+  1360→// ── Clip block ──────────────────────────────────────────────────────────────
+  1361→
+  1362→const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onDragStart, onTrimStart }: {
+  1363→  clip: AudioClip; pxPerSec: number; selected: boolean;
+  1364→  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+  1365→  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+  1366→}) {
+  1367→  const left = clip.start * pxPerSec;
+  1368→  const width = Math.max(4, clip.duration * pxPerSec);
+  1369→  const elRef = useRef<HTMLDivElement | null>(null);
+  1370→  const waveRef = useRef<HTMLDivElement | null>(null);
+  1371→  const w = Math.max(2, Math.floor(width));
+  1372→  // Fade overlay widths (clamped to the clip box so a too-long fade doesn't
+  1373→  // spill past the opposite edge).
+  1374→  const fadeInW = clip.fadeIn > 0 ? Math.min(width, clip.fadeIn * pxPerSec) : 0;
+  1375→  const fadeOutW = clip.fadeOut > 0 ? Math.min(width, clip.fadeOut * pxPerSec) : 0;
+  1376→
+  1377→  // onDragStart handles selection (incl. Shift/Cmd additive) + the
+  1378→  // clip-select event — selecting here too would clobber multi-select.
+  1379→  return (
+  1380→    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) onDragStart(clip, e, elRef.current, waveRef.current); }}
+  1381→      className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
+  1382→      {/* Fixed-width waveform layer — clipped by the box so trimming cuts the
+  1383→          audio rather than squashing the whole wave into a smaller space. */}
+  1384→      <div ref={waveRef} className="pointer-events-none absolute top-0 bottom-0 left-0" style={{ width }}>
+  1385→        {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} sampleRate={clip.sampleRate} offset={clip.offset} duration={clip.duration} speed={clip.speed ?? 1} width={w} color={clip.color} />}
+  1386→      </div>
+  1387→      {/* Fade-in overlay: triangle from full height at the outer (left) edge
+  1388→          tapering to 0 at the inner edge — the dark wedge represents the
+  1389→          portion of the clip still under the fade. */}
+  1390→      {fadeInW > 0 && (
+  1391→        <div className="pointer-events-none absolute top-0 bottom-0 left-0 bg-black/30" style={{ width: fadeInW, clipPath: 'polygon(0% 0%, 0% 100%, 100% 50%)' }} />
+  1392→      )}
+  1393→      {/* Fade-out overlay: mirrored on the right side. */}
+  1394→      {fadeOutW > 0 && (
+  1395→        <div className="pointer-events-none absolute top-0 bottom-0 right-0 bg-black/30" style={{ width: fadeOutW, clipPath: 'polygon(100% 0%, 100% 100%, 0% 50%)' }} />
+  1396→      )}
+  1397→      <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}{clip.mute ? ' (muted)' : ''}</span>
+  1398→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current, waveRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+  1399→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current, waveRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+  1400→    </div>
+  1401→  );
+  1402→});
+  1403→

@@ -11,6 +11,7 @@ import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
   ChevronLeft, ChevronRight, Maximize2, Magnet, ClipboardCopy, ClipboardPaste,
+  Piano,
 } from 'lucide-react';
 import type { AudioClip, AudioTrack, AwarenessState } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -21,10 +22,10 @@ import {
   deleteAudioTrack, duplicateAudioClip, readAudioClip, readAudioTrack,
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
-import { AudioEngine } from './engine';
+import { AudioEngine, SOUNDFONT_PIANO_ID } from './engine';
 import { loadSamples } from './sampleStore';
 import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE } from './library';
-import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS } from './instruments';
+import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS, INSTRUMENT_PRESETS, loadCustomInstruments } from './instruments';
 import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
 
@@ -393,6 +394,18 @@ export function AudioEditor() {
     // Any track edit (volume, pan, EQ, sends, mute/solo — local knob or remote
     // peer) re-applies the Yjs values to the live audio graph, so the settings
     // panel is audible mid-playback without a restart.
+    //
+    // REMOTE MUTE/SOLO FIX: this subscription is what makes "user A mutes a
+    // track → user B hears the mute" work. The mute state IS in Yjs (it's a
+    // field on the track Y.Map), so it syncs to every peer. But sync alone
+    // doesn't affect the audio graph — the local engine's per-track gain
+    // nodes still hold the old value until something re-applies them.
+    // `applyTracks` is that "something": it reads the fresh Yjs tracks and
+    // calls `setupTrackNodes`, which writes `gain.gain.value = audible ?
+    // volume : 0` per track (audible = solo ? track.solo : !track.muted).
+    // Without this subscription, remote mute/solo edits would land in Yjs
+    // (visible in the TrackHeader) but never reach the audio graph until the
+    // user pressed stop/play (which re-runs setupTrackNodes via play()).
     const applyTracks = () => { engineRef.current?.updateTracks(slateRef.current); };
     // Clip edits (position, trim, gain, pan, filters, speed/pitch — ours or a
     // peer's) reschedule playback so they're audible mid-play. Debounced 500ms
@@ -756,6 +769,12 @@ export function AudioEditor() {
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slate, version]);
+
+  // The currently armed track — the one the transport bar Record button
+  // records onto (mic for audio tracks, MIDI capture for instrument tracks).
+  // Shown as a small label next to the Record button so the user always
+  // knows where the next take will land.
+  const armedTrack = tracks.find((t) => t.armed) ?? null;
 
   const clips: AudioClip[] = useMemo(() => {
     const list: AudioClip[] = [];
@@ -1139,7 +1158,15 @@ export function AudioEditor() {
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
         <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
         <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
-        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Record (R)"><Mic size={15} /></button>
+        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title={armedTrack ? `Record (R) → ${armedTrack.name}` : 'Record (R)'}><Mic size={15} /></button>
+        {armedTrack ? (
+          <span className="flex items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 text-[10px] text-text-dim" title={`Recording onto: ${armedTrack.name}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
+            <span className="max-w-[8rem] truncate">→ {armedTrack.name}</span>
+          </span>
+        ) : (
+          <span className="text-[10px] text-text-dim/70">no armed track</span>
+        )}
         <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
         <div className="mx-1 h-5 w-px bg-border" />
         <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
@@ -1336,23 +1363,88 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
   const onPan = (p: number) => { setPan(p); engineRef.current?.setTrackPan(track.id, p); };
   const onPanEnd = () => { isDraggingPanRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
 
+  // ── Track kind: Audio ↔ MIDI ─────────────────────────────────────────────
+  // A single icon button toggles the kind. On a MIDI track, an instrument
+  // picker (compact <select>) sits next to the name so the user can choose
+  // which synth preset or soundfont the track's MIDI clips play through.
+  // Toggling kind to 'midi' defaults the instrument to the soundfont piano
+  // (a sensible starting point for a fresh MIDI track); toggling back to
+  // 'audio' leaves the instrumentId in place (harmless — it's only consulted
+  // for MIDI clips).
+  const isMidi = track.kind === 'midi';
+  const toggleKind = () => {
+    const nextKind: AudioTrack['kind'] = isMidi ? 'audio' : 'midi';
+    // Switching to MIDI defaults the instrument to the soundfont piano if the
+    // track doesn't already have one set; switching to audio clears the input
+    // back to 'none' (a MIDI-armed audio track makes no sense).
+    const patch: Partial<AudioTrack> = { kind: nextKind };
+    if (nextKind === 'midi') {
+      if (!track.instrumentId) patch.instrumentId = SOUNDFONT_PIANO_ID;
+      // If the track was armed for mic, drop the arm — MIDI tracks arm for
+      // instrument-take recording, not mic input.
+      if (track.armed) { patch.armed = false; patch.input = 'none'; }
+    } else if (track.input === 'midi') {
+      patch.input = 'none';
+      patch.armed = false;
+    }
+    update(patch);
+  };
+
+  // Arm button: on an audio track → 'mic' input; on a MIDI track → 'midi'
+  // input. The arm state still toggles; only the input source differs.
+  const toggleArm = () => {
+    if (track.armed) update({ armed: false, input: 'none' });
+    else update({ armed: true, input: isMidi ? 'midi' : 'mic' });
+  };
+
   return (
     <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
       <div className="flex items-center gap-0.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: track.color }} />
         <input type="text" value={track.name} onChange={(e) => update({ name: e.target.value })} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-text outline-none" />
+        {/* Kind toggle: Audio (Volume2 icon) ↔ MIDI (Piano icon). Highlighted
+            when MIDI so the kind is visually distinct at a glance. */}
+        <button onClick={toggleKind} className={`flex h-4 w-4 items-center justify-center rounded ${isMidi ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title={isMidi ? 'MIDI track (click for Audio)' : 'Audio track (click for MIDI)'}>{isMidi ? <Piano size={9} /> : <Volume2 size={9} />}</button>
         <button onClick={() => update({ muted: !track.muted })} className={`flex h-4 w-4 items-center justify-center rounded ${track.muted && !hasSolo ? 'bg-warn/30 text-warn' : 'text-text-mid hover:bg-bg-3'}`} title="M">{track.muted ? <VolumeX size={9} /> : <Volume2 size={9} />}</button>
         <button onClick={() => update({ solo: !track.solo })} className={`flex h-4 w-4 items-center justify-center rounded ${track.solo ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="S"><Headphones size={9} /></button>
-        <button onClick={() => update({ armed: !track.armed, input: !track.armed ? 'mic' : 'none' })} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title="Arm"><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
+        <button onClick={toggleArm} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title={isMidi ? 'Arm for MIDI take' : 'Arm'}><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
         <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
       </div>
-      <div className="mt-0.5 flex items-center gap-1">
-        <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
-        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
-        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
-        <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
-        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
-      </div>
+      {/* MIDI tracks: instrument picker row replaces the pan slider row.
+          Audio tracks keep the original volume + pan slider row. */}
+      {isMidi ? (
+        <div className="mt-0.5 flex items-center gap-1">
+          <Piano size={9} className="shrink-0 text-accent" aria-hidden />
+          <select
+            value={track.instrumentId ?? SOUNDFONT_PIANO_ID}
+            onChange={(e) => update({ instrumentId: e.target.value })}
+            className="min-w-0 flex-1 rounded-sm border border-border bg-bg-3 px-1 py-0.5 text-[9px] text-text outline-none focus:border-accent"
+            aria-label="Instrument"
+            title="Which instrument plays this track's MIDI clips"
+          >
+            <option value={SOUNDFONT_PIANO_ID}>Soundfont Piano</option>
+            <optgroup label="Synth presets">
+              {INSTRUMENT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </optgroup>
+            {(() => {
+              const customs = loadCustomInstruments();
+              return customs.length > 0 ? (
+                <optgroup label="My instruments">
+                  {customs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </optgroup>
+              ) : null;
+            })()}
+          </select>
+        </div>
+      ) : (
+        <div className="mt-0.5 flex items-center gap-1">
+          <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
+          <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
+          <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
+          <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
+          <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
+        </div>
+      )}
     </div>
   );
 });

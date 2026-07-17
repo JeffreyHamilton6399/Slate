@@ -1,0 +1,505 @@
+   900→      return;
+   901→    }
+   902→    clipboardRef.current = items;
+   903→    setHasClipboard(true);
+   904→    toast({ title: `Copied ${items.length} clip${items.length > 1 ? 's' : ''}` });
+   905→  }, []);
+   906→
+   907→  const pasteClips = useCallback(async () => {
+   908→    const items = clipboardRef.current;
+   909→    if (items.length === 0) return;
+   910→    const base = positionRef.current; // paste the group at the playhead
+   911→    const newIds: string[] = [];
+   912→    // Blockers per track: existing clips + clips already placed by THIS paste
+   913→    // (clipsRef won't include them until React re-renders), so pasted clips
+   914→    // never land on top of anything.
+   915→    const placedByTrack = new Map<string, { start: number; end: number }[]>();
+   916→    for (const c of clipsRef.current) {
+   917→      let list = placedByTrack.get(c.trackId);
+   918→      if (!list) { list = []; placedByTrack.set(c.trackId, list); }
+   919→      list.push({ start: c.start, end: c.start + c.duration });
+   920→    }
+   921→    for (const it of items) {
+   922→      const blockers = placedByTrack.get(it.src.trackId) ?? [];
+   923→      const start = nearestFreeStart(base + it.relStart, it.src.duration, blockers);
+   924→      blockers.push({ start, end: start + it.src.duration });
+   925→      placedByTrack.set(it.src.trackId, blockers);
+   926→      const id = await addAudioClip(slate, it.src.trackId, {
+   927→        start,
+   928→        samples: it.samples, // Float32Array passed straight through
+   929→        sampleRate: it.src.sampleRate,
+   930→        channels: it.src.channels,
+   931→        duration: it.src.duration,
+   932→        name: it.src.name,
+   933→        color: it.src.color,
+   934→      });
+   935→      // Carry over trims + per-clip effects that addAudioClip defaults to 0/1.
+   936→      updateAudioClip(slate, id, {
+   937→        offset: it.src.offset, gain: it.src.gain, pan: it.src.pan,
+   938→        fadeIn: it.src.fadeIn, fadeOut: it.src.fadeOut, speed: it.src.speed,
+   939→        pitch: it.src.pitch, hpCutoff: it.src.hpCutoff, lpCutoff: it.src.lpCutoff,
+   940→      });
+   941→      newIds.push(id);
+   942→    }
+   943→    setSelectedClipIds(new Set(newIds)); // select the paste so it's ready to move
+   944→    toast({ title: `Pasted ${newIds.length} clip${newIds.length > 1 ? 's' : ''}` });
+   945→  }, [slate]);
+   946→
+   947→  const handleFileImport = useCallback(async (file: File) => {
+   948→    try {
+   949→      const d = await decodeAudioFile(file);
+   950→      const tid = addAudioTrack(slate, { name: file.name.replace(/\.[^.]+$/, '') });
+   951→      addAudioClip(slate, tid, { start: positionRef.current, samples: d.samples, sampleRate: d.sampleRate, channels: d.channels, duration: d.duration, name: file.name });
+   952→      toast({ title: 'Imported', description: file.name });
+   953→    } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
+   954→  }, [slate]);
+   955→
+   956→  // ── Drag-drop from AudioAssetsPanel ────────────────────────────────────────
+   957→
+   958→  /** Add an imported asset (by clip id) to a specific track at a specific time. */
+   959→  const addAssetToTrack = useCallback(async (assetId: string, trackId: string, start: number) => {
+   960→    const yo = slate.audioClips().get(assetId);
+   961→    const clip = yo ? readAudioClip(yo, assetId) : null;
+   962→    if (!clip) return;
+   963→    const samples = await loadSamples(clip.sampleKey);
+   964→    if (samples.length === 0) {
+   965→      toast({ title: 'Samples still syncing', variant: 'error' });
+   966→      return;
+   967→    }
+   968→    await addAudioClip(slate, trackId, {
+   969→      start, samples: float32ToNumberArray(samples),
+   970→      sampleRate: clip.sampleRate, channels: clip.channels,
+   971→      duration: clip.duration, name: clip.name,
+   972→    });
+   973→    toast({ title: 'Added to track' });
+   974→  }, [slate]);
+   975→
+   976→  /** Add a library sample to a specific track at a specific time. */
+   977→  const addLibraryToTrack = useCallback(async (libId: string, trackId: string, start: number) => {
+   978→    const sample = AUDIO_LIBRARY.find((s) => s.id === libId);
+   979→    if (!sample) return;
+   980→    const pcm = sample.generate();
+   981→    await addAudioClip(slate, trackId, {
+   982→      start, samples: pcm, sampleRate: LIBRARY_SAMPLE_RATE,
+   983→      channels: 1, duration: pcm.length / LIBRARY_SAMPLE_RATE, name: sample.name,
+   984→    });
+   985→    toast({ title: 'Added to track', description: sample.name });
+   986→  }, [slate]);
+   987→
+   988→  /** Handle a drop on the timeline area — hit-tests the track row and computes the time. */
+   989→  const handleTimelineDrop = useCallback((e: React.DragEvent) => {
+   990→    const assetId = e.dataTransfer.getData('application/x-slate-audio-asset');
+   991→    const libId = e.dataTransfer.getData('application/x-slate-audio-library');
+   992→    if (!assetId && !libId) return; // not an asset drag — let file drop bubble
+   993→    e.preventDefault();
+   994→    // Hit-test track rows by clientY
+   995→    const rows = scrollRef.current?.querySelectorAll('[data-track-id]') ?? [];
+   996→    let trackId: string | null = null;
+   997→    for (const r of rows) {
+   998→      const rect = r.getBoundingClientRect();
+   999→      if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+  1000→        trackId = r.getAttribute('data-track-id');
+  1001→        break;
+  1002→      }
+  1003→    }
+  1004→    if (!trackId) return;
+  1005→    // Compute time from clientX relative to the timeline content
+  1006→    const tlEl = scrollRef.current?.querySelector('[data-timeline]') as HTMLElement | null;
+  1007→    if (!tlEl) return;
+  1008→    const tlRect = tlEl.getBoundingClientRect();
+  1009→    const t = Math.max(0, (e.clientX - tlRect.left) / pxRef.current);
+  1010→    if (assetId) void addAssetToTrack(assetId, trackId, t);
+  1011→    else if (libId) void addLibraryToTrack(libId, trackId, t);
+  1012→  }, [addAssetToTrack, addLibraryToTrack]);
+  1013→
+  1014→  // ── Drag start ────────────────────────────────────────────────────────────
+  1015→
+  1016→  // Everything the pointermove handler needs, computed once per drag:
+  1017→  //  - [leftLimit, rightLimit]: the free interval on the ORIGIN track (trims).
+  1018→  //  - byTrack: clip bounds per track (dragged clip excluded) for overlap
+  1019→  //    resolution on whichever track the pointer is over.
+  1020→  //  - snapTimes: magnet candidates — every other clip's edges + playhead + 0.
+  1021→  const dragGeometry = useCallback((clip: AudioClip): {
+  1022→    leftLimit: number; rightLimit: number;
+  1023→    byTrack: Map<string, { start: number; end: number }[]>;
+  1024→    snapTimes: number[];
+  1025→  } => {
+  1026→    let leftLimit = 0;
+  1027→    let rightLimit = Infinity;
+  1028→    const byTrack = new Map<string, { start: number; end: number }[]>();
+  1029→    const snapTimes: number[] = [0, positionRef.current];
+  1030→    const clipEnd = clip.start + clip.duration;
+  1031→    for (const o of clipsRef.current) {
+  1032→      if (o.id === clip.id) continue;
+  1033→      const oEnd = o.start + o.duration;
+  1034→      snapTimes.push(o.start, oEnd);
+  1035→      let list = byTrack.get(o.trackId);
+  1036→      if (!list) { list = []; byTrack.set(o.trackId, list); }
+  1037→      list.push({ start: o.start, end: oEnd });
+  1038→      if (o.trackId !== clip.trackId) continue;
+  1039→      if (oEnd <= clip.start + 1e-4) leftLimit = Math.max(leftLimit, oEnd);
+  1040→      else if (o.start >= clipEnd - 1e-4) rightLimit = Math.min(rightLimit, o.start);
+  1041→    }
+  1042→    return { leftLimit, rightLimit, byTrack, snapTimes };
+  1043→  }, []);
+  1044→
+  1045→  const selectClip = useCallback((id: string, additive: boolean) => {
+  1046→    setSelectedClipIds((prev) => {
+  1047→      if (additive) {
+  1048→        const next = new Set(prev);
+  1049→        if (next.has(id)) next.delete(id); else next.add(id);
+  1050→        return next;
+  1051→      }
+  1052→      // Plain click: if already in a multi-selection, keep it; else single-select.
+  1053→      if (prev.has(id) && prev.size > 1) return prev;
+  1054→      return new Set([id]);
+  1055→    });
+  1056→  }, []);
+  1057→
+  1058→  const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+  1059→    e.stopPropagation();
+  1060→    // Without this, the browser starts a native text/image selection on the
+  1061→    // mouse-drag: the waveform <img>s and labels of every clip the pointer
+  1062→    // sweeps across get painted with the blue ::selection overlay.
+  1063→    e.preventDefault();
+  1064→    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+  1065→    selectClip(clip.id, additive);
+  1066→    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
+  1067→    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
+  1068→    const trackIds = tracksRef.current.map((t) => t.id);
+  1069→    const trackIndex = Math.max(0, trackIds.indexOf(clip.trackId));
+  1070→    dragRef.current = {
+  1071→      clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset,
+  1072→      speed: clip.speed ?? 1, sx: e.clientX, sy: e.clientY, leftLimit, rightLimit,
+  1073→      byTrack, snapTimes, trackIds, trackIndex, rowDelta: 0, moved: false, mode: 'drag',
+  1074→    };
+  1075→  }, [dragGeometry, selectClip]);
+  1076→
+  1077→  const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
+  1078→    e.stopPropagation();
+  1079→    e.preventDefault(); // block native selection (see startDrag)
+  1080→    selectClip(clip.id, e.shiftKey || e.metaKey || e.ctrlKey);
+  1081→    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
+  1082→    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
+  1083→    const trackIds = tracksRef.current.map((t) => t.id);
+  1084→    const trackIndex = Math.max(0, trackIds.indexOf(clip.trackId));
+  1085→    dragRef.current = {
+  1086→      clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset,
+  1087→      speed: clip.speed ?? 1, sx: e.clientX, sy: e.clientY, leftLimit, rightLimit,
+  1088→      byTrack, snapTimes, trackIds, trackIndex, rowDelta: 0, moved: false,
+  1089→      mode: side === 'left' ? 'trimL' : 'trimR',
+  1090→    };
+  1091→  }, [dragGeometry, selectClip]);
+  1092→
+  1093→  // ── Loop region drag ──────────────────────────────────────────────────────
+  1094→
+  1095→  const loopDragRef = useRef<{ mode: 'start' | 'end' | 'move'; sx: number; os: number; oe: number } | null>(null);
+  1096→  const startLoopDrag = useCallback((mode: 'start' | 'end' | 'move', e: React.PointerEvent) => {
+  1097→    e.stopPropagation();
+  1098→    loopDragRef.current = { mode, sx: e.clientX, os: loopStart, oe: loopEnd };
+  1099→    const onMove = (ev: PointerEvent) => {
+  1100→      const d = loopDragRef.current; if (!d) return;
+  1101→      const dt = (ev.clientX - d.sx) / pxRef.current;
+  1102→      if (d.mode === 'start') { setLoopStart(Math.max(0, Math.min(d.oe - 0.5, d.os + dt))); }
+  1103→      else if (d.mode === 'end') { setLoopEnd(Math.max(d.os + 0.5, d.oe + dt)); }
+  1104→      else if (d.mode === 'move') { setLoopStart(Math.max(0, d.os + dt)); setLoopEnd(Math.max(0.5, d.oe + dt)); }
+  1105→    };
+  1106→    const onUp = () => { loopDragRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+  1107→    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  1108→  }, [loopStart, loopEnd, pxPerSec]);
+  1109→
+  1110→  // ── Render ────────────────────────────────────────────────────────────────
+  1111→
+  1112→  const beatDur = 60 / bpm; // seconds per beat
+  1113→  const gridStyle = {
+  1114→    backgroundImage: `repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0 1px, transparent 1px ${beatDur * pxPerSec}px), repeating-linear-gradient(to right, rgba(128,128,128,0.2) 0 1px, transparent 1px ${beatDur * 4 * pxPerSec}px)`,
+  1115→  };
+  1116→
+  1117→  // Adaptive ruler tick interval — picks a "nice" step (in seconds) whose
+  1118→  // pixel spacing stays readable at the current zoom: tight when zoomed in
+  1119→  // (so you get millisecond-level ticks), sparse when zoomed out (so a long
+  1120→  // mix doesn't turn into a solid wall of labels).
+  1121→  const { tickInterval, formatTick } = useMemo(() => {
+  1122→    if (pxPerSec >= 400) return { tickInterval: 0.1, formatTick: (t: number) => `${t.toFixed(1)}s` };
+  1123→    if (pxPerSec >= 100) return { tickInterval: 1, formatTick: (t: number) => `${t}s` };
+  1124→    if (pxPerSec >= 40) return { tickInterval: 5, formatTick: (t: number) => `${t}s` };
+  1125→    if (pxPerSec >= 10) return { tickInterval: 10, formatTick: (t: number) => `${t}s` };
+  1126→    return {
+  1127→      tickInterval: 60,
+  1128→      formatTick: (t: number) => {
+  1129→        const m = Math.floor(t / 60);
+  1130→        const s = Math.round(t - m * 60);
+  1131→        return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  1132→      },
+  1133→    };
+  1134→  }, [pxPerSec]);
+  1135→
+  1136→  return (
+  1137→    <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
+  1138→      {/* Transport */}
+  1139→      <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
+  1140→        <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
+  1141→        <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
+  1142→        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Record (R)"><Mic size={15} /></button>
+  1143→        <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
+  1144→        <div className="mx-1 h-5 w-px bg-border" />
+  1145→        <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
+  1146→        <button onClick={() => selectedRef.current.forEach(id => void dupClip(id))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+  1147→        <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
+  1148→        <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
+  1149→        <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
+  1150→        <div className="mx-1 h-5 w-px bg-border" />
+  1151→        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+  1152→        <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
+  1153→        <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
+  1154→        <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
+  1155→        <div className="mx-1 h-5 w-px bg-border" />
+  1156→        <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
+  1157→        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+  1158→        <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
+  1159→        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+  1160→        <div className="flex-1" />
+  1161→        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
+  1162→        <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
+  1163→      </div>
+  1164→
+  1165→      {/* Track area */}
+  1166→      <div
+  1167→        ref={scrollRef}
+  1168→        className="flex flex-1 min-h-0 overflow-auto"
+  1169→        onDragOver={(e) => {
+  1170→          if (e.dataTransfer.types.includes('application/x-slate-audio-asset') ||
+  1171→              e.dataTransfer.types.includes('application/x-slate-audio-library') ||
+  1172→              e.dataTransfer.types.includes('Files'))
+  1173→            e.preventDefault();
+  1174→        }}
+  1175→        onDrop={handleTimelineDrop}
+  1176→      >
+  1177→        {/* Headers. overflow-hidden is load-bearing: the sticky column is z-10
+  1178→            (above clips), and a track's volume/pan range inputs won't shrink
+  1179→            below their intrinsic min-width, so without clipping they spill ~20px
+  1180→            past the column onto the leftmost clips — intercepting the pointer so
+  1181→            those clips can't be grabbed (you hit the pan slider instead, and the
+  1182→            previously-selected clip stays highlighted). */}
+  1183→        <div className="sticky left-0 z-10 w-44 shrink-0 overflow-hidden border-r border-border bg-bg-2">
+  1184→          <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
+  1185→          {tracks.length === 0 && <div className="p-3 text-center text-[11px] text-text-dim">No tracks. Import audio or add a track.</div>}
+  1186→          {tracks.map((t) => <TrackHeader key={t.id} track={t} hasSolo={tracks.some((x) => x.solo)} slate={slate} engineRef={engineRef} />)}
+  1187→        </div>
+  1188→
+  1189→        {/* Timeline */}
+  1190→        <div data-timeline className="relative flex-1 select-none" style={{ minWidth: timelineDuration * pxPerSec }}>
+  1191→          {/* Ruler + loop handles */}
+  1192→          <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
+  1193→            {Array.from({ length: Math.ceil(timelineDuration / tickInterval) + 1 }, (_, i) => {
+  1194→              const t = i * tickInterval;
+  1195→              return (
+  1196→                <span key={i} className="absolute top-1 pl-1 text-[8px] font-mono text-text-dim" style={{ left: t * pxPerSec }}>{formatTick(t)}</span>
+  1197→              );
+  1198→            })}
+  1199→            {looping && (
+  1200→              <>
+  1201→                <div onPointerDown={(e) => startLoopDrag('start', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopStart * pxPerSec - 8, width: 8 }} title="Drag loop start"><ChevronLeft size={10} className="text-white" /></div>
+  1202→                <div onPointerDown={(e) => startLoopDrag('end', e)} className="absolute top-0 z-20 flex h-7 cursor-ew-resize items-center justify-center bg-accent/40 hover:bg-accent/60" style={{ left: loopEnd * pxPerSec, width: 8 }} title="Drag loop end"><ChevronRight size={10} className="text-white" /></div>
+  1203→              </>
+  1204→            )}
+  1205→          </div>
+  1206→          {/* Seek + marquee layer — background click catcher (behind clips).
+  1207→           *  Plain click = seek. Shift/Cmd+drag = marquee multi-select. */}
+  1208→          <div
+  1209→            className="absolute inset-0 top-7"
+  1210→            onPointerDown={(e) => {
+  1211→              if (e.shiftKey || e.metaKey || e.ctrlKey) {
+  1212→                // Begin marquee selection
+  1213→                const r = e.currentTarget.getBoundingClientRect();
+  1214→                const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  1215→                marqueeRef.current = { startX: sx, startY: sy, origin: new Set(e.shiftKey ? selectedRef.current : []) };
+  1216→                setMarquee({ x1: sx, y1: sy, x2: sx, y2: sy });
+  1217→                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  1218→              } else {
+  1219→                // Plain click = seek + clear selection
+  1220→                const r = e.currentTarget.getBoundingClientRect();
+  1221→                seek((e.clientX - r.left) / pxRef.current);
+  1222→                setSelectedClipIds(new Set());
+  1223→              }
+  1224→            }}
+  1225→            onPointerMove={(e) => {
+  1226→              if (!marqueeRef.current) return;
+  1227→              const r = e.currentTarget.getBoundingClientRect();
+  1228→              const ex = e.clientX - r.left, ey = e.clientY - r.top;
+  1229→              setMarquee({ x1: marqueeRef.current.startX, y1: marqueeRef.current.startY, x2: ex, y2: ey });
+  1230→              // Hit-test clips against the marquee rect
+  1231→              const x1 = Math.min(marqueeRef.current.startX, ex);
+  1232→              const x2 = Math.max(marqueeRef.current.startX, ex);
+  1233→              const y1 = Math.min(marqueeRef.current.startY, ey);
+  1234→              const y2 = Math.max(marqueeRef.current.startY, ey);
+  1235→              const t1 = x1 / pxRef.current, t2 = x2 / pxRef.current;
+  1236→              const startRowIdx = Math.floor(y1 / TRACK_H);
+  1237→              const endRowIdx = Math.floor(y2 / TRACK_H);
+  1238→              const next = new Set(marqueeRef.current.origin);
+  1239→              clips.forEach((c) => {
+  1240→                const ti = tracks.findIndex((t) => t.id === c.trackId);
+  1241→                if (ti < startRowIdx || ti > endRowIdx) return;
+  1242→                const cEnd = c.start + c.duration;
+  1243→                if (cEnd >= t1 && c.start <= t2) next.add(c.id);
+  1244→              });
+  1245→              setSelectedClipIds(next);
+  1246→            }}
+  1247→            onPointerUp={() => { marqueeRef.current = null; setMarquee(null); }}
+  1248→          />
+  1249→          {/* Marquee rect overlay */}
+  1250→          {marquee && (
+  1251→            <div className="pointer-events-none absolute z-30 border border-accent/70 bg-accent/15" style={{
+  1252→              left: Math.min(marquee.x1, marquee.x2),
+  1253→              top: 28 + Math.min(marquee.y1, marquee.y2),
+  1254→              width: Math.abs(marquee.x2 - marquee.x1),
+  1255→              height: Math.abs(marquee.y2 - marquee.y1),
+  1256→            }} />
+  1257→          )}
+  1258→          {/* Grid background */}
+  1259→          <div className="pointer-events-none absolute inset-0 top-7" style={gridStyle}>
+  1260→            {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="pointer-events-auto absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
+  1261→          </div>
+  1262→          {/* Playhead */}
+  1263→          <div ref={playheadRef} className="absolute top-0 bottom-0 z-20 w-0.5 bg-warn pointer-events-none" style={{ transform: 'translateX(0px)' }}>
+  1264→            <div className="absolute top-0 -left-1 h-2 w-2 rounded-full bg-warn" />
+  1265→          </div>
+  1266→          {/* Clips */}
+  1267→          {tracks.map((t) => (
+  1268→            <div key={t.id} data-track-id={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
+  1269→              {clips.filter((c) => c.trackId === t.id).map((c) => (
+  1270→                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipIds.has(c.id)}
+  1271→                  onDragStart={startDrag} onTrimStart={startTrim} />
+  1272→              ))}
+  1273→            </div>
+  1274→          ))}
+  1275→          {/* Remote playheads — overlay on top of clips, mirroring each peer's
+  1276→           *  audio transport position. Rendered after clips so z-20 wins. */}
+  1277→          <RemotePlayheads room={room} peerStates={peerStates} pxRef={pxRef} selfId={room.identity.peerId} />
+  1278→        </div>
+  1279→      </div>
+  1280→
+  1281→      {/* Status */}
+  1282→      <div className="flex shrink-0 items-center gap-2 border-t border-border px-2 py-0.5 text-[8px] font-mono uppercase text-text-dim">
+  1283→        <span>{tracks.length}T · {clips.length}C</span>
+  1284→        {recording && <span className="text-danger">● Rec</span>}
+  1285→        {playing && <span className="text-accent">▶ Play</span>}
+  1286→        <span className="ml-auto">Space · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
+  1287→      </div>
+  1288→    </div>
+  1289→  );
+  1290→}
+  1291→
+  1292→// ── Track header ────────────────────────────────────────────────────────────
+  1293→
+  1294→const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef }: {
+  1295→  track: AudioTrack; hasSolo: boolean;
+  1296→  slate: ReturnType<typeof useRoom>['slate'];
+  1297→  engineRef: React.RefObject<AudioEngine | null>;
+  1298→}) {
+  1299→  const [vol, setVol] = useState(track.volume);
+  1300→  const [pan, setPan] = useState(track.pan);
+  1301→  // Separate drag flags per slider — the previous single shared `isDraggingRef`
+  1302→  // meant starting a volume drag also blocked the pan prop-sync effect (and
+  1303→  // vice versa), which could cause one slider's committed Yjs value to be
+  1304→  // momentarily ignored by the other's gating. Per-slider flags keep each
+  1305→  // slider's prop-sync independent.
+  1306→  const isDraggingVolRef = useRef(false);
+  1307→  const isDraggingPanRef = useRef(false);
+  1308→  useEffect(() => { if (!isDraggingVolRef.current) setVol(track.volume); }, [track.volume]);
+  1309→  useEffect(() => { if (!isDraggingPanRef.current) setPan(track.pan); }, [track.pan]);
+  1310→
+  1311→  // Audibility — mirrors engine.setupTrackNodes so the live gain we write
+  1312→  // during a volume drag respects mute/solo (don't briefly un-mute a muted
+  1313→  // track just because the user is dragging its volume slider).
+  1314→  const audible = hasSolo ? track.solo : !track.muted;
+  1315→
+  1316→  // `update` is for non-slider track edits (name/mute/solo/arm) — these DO
+  1317→  // need a full updateTracks so the audio graph reflects the new state
+  1318→  // (e.g. toggling solo rebalances every track's gain).
+  1319→  const update = (patch: Partial<AudioTrack>) => { updateAudioTrack(slate, track.id, patch); engineRef.current?.updateTracks(slate); };
+  1320→
+  1321→  // Volume slider: update local state + the engine's gain node DIRECTLY for
+  1322→  // immediate audio feedback. Do NOT call updateTracks (which re-reads every
+  1323→  // track from Yjs and rebuilds the audio graph — far too expensive per
+  1324→  // onChange event, and the source of the reported lag). Commit to Yjs once
+  1325→  // on pointerup.
+  1326→  const onVolDown = () => { isDraggingVolRef.current = true; };
+  1327→  const onVol = (v: number) => { setVol(v); engineRef.current?.setTrackVolume(track.id, v, audible); };
+  1328→  const onVolEnd = () => { isDraggingVolRef.current = false; updateAudioTrack(slate, track.id, { volume: vol }); };
+  1329→
+  1330→  // Pan slider: same pattern — set the panner node directly, commit on
+  1331→  // pointerup. The pan slider is smaller than the volume slider (secondary
+  1332→  // control) but still usable, with L/R labels so its function is obvious
+  1333→  // (the user complaint was "two sliders, only one works" — partly because
+  1334→  // neither slider was labelled, so it wasn't clear what each did).
+  1335→  const onPanDown = () => { isDraggingPanRef.current = true; };
+  1336→  const onPan = (p: number) => { setPan(p); engineRef.current?.setTrackPan(track.id, p); };
+  1337→  const onPanEnd = () => { isDraggingPanRef.current = false; updateAudioTrack(slate, track.id, { pan: pan }); };
+  1338→
+  1339→  return (
+  1340→    <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
+  1341→      <div className="flex items-center gap-0.5">
+  1342→        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: track.color }} />
+  1343→        <input type="text" value={track.name} onChange={(e) => update({ name: e.target.value })} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-text outline-none" />
+  1344→        <button onClick={() => update({ muted: !track.muted })} className={`flex h-4 w-4 items-center justify-center rounded ${track.muted && !hasSolo ? 'bg-warn/30 text-warn' : 'text-text-mid hover:bg-bg-3'}`} title="M">{track.muted ? <VolumeX size={9} /> : <Volume2 size={9} />}</button>
+  1345→        <button onClick={() => update({ solo: !track.solo })} className={`flex h-4 w-4 items-center justify-center rounded ${track.solo ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="S"><Headphones size={9} /></button>
+  1346→        <button onClick={() => update({ armed: !track.armed, input: !track.armed ? 'mic' : 'none' })} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title="Arm"><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
+  1347→        <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
+  1348→      </div>
+  1349→      <div className="mt-0.5 flex items-center gap-1">
+  1350→        <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
+  1351→        <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
+  1352→        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
+  1353→        <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
+  1354→        <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
+  1355→      </div>
+  1356→    </div>
+  1357→  );
+  1358→});
+  1359→
+  1360→// ── Clip block ──────────────────────────────────────────────────────────────
+  1361→
+  1362→const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onDragStart, onTrimStart }: {
+  1363→  clip: AudioClip; pxPerSec: number; selected: boolean;
+  1364→  onDragStart: (clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+  1365→  onTrimStart: (clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => void;
+  1366→}) {
+  1367→  const left = clip.start * pxPerSec;
+  1368→  const width = Math.max(4, clip.duration * pxPerSec);
+  1369→  const elRef = useRef<HTMLDivElement | null>(null);
+  1370→  const waveRef = useRef<HTMLDivElement | null>(null);
+  1371→  const w = Math.max(2, Math.floor(width));
+  1372→  // Fade overlay widths (clamped to the clip box so a too-long fade doesn't
+  1373→  // spill past the opposite edge).
+  1374→  const fadeInW = clip.fadeIn > 0 ? Math.min(width, clip.fadeIn * pxPerSec) : 0;
+  1375→  const fadeOutW = clip.fadeOut > 0 ? Math.min(width, clip.fadeOut * pxPerSec) : 0;
+  1376→
+  1377→  // onDragStart handles selection (incl. Shift/Cmd additive) + the
+  1378→  // clip-select event — selecting here too would clobber multi-select.
+  1379→  return (
+  1380→    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) onDragStart(clip, e, elRef.current, waveRef.current); }}
+  1381→      className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
+  1382→      {/* Fixed-width waveform layer — clipped by the box so trimming cuts the
+  1383→          audio rather than squashing the whole wave into a smaller space. */}
+  1384→      <div ref={waveRef} className="pointer-events-none absolute top-0 bottom-0 left-0" style={{ width }}>
+  1385→        {clip.sampleKey && <WaveformImg clipId={clip.id} sampleKey={clip.sampleKey} channels={clip.channels} sampleRate={clip.sampleRate} offset={clip.offset} duration={clip.duration} speed={clip.speed ?? 1} width={w} color={clip.color} />}
+  1386→      </div>
+  1387→      {/* Fade-in overlay: triangle from full height at the outer (left) edge
+  1388→          tapering to 0 at the inner edge — the dark wedge represents the
+  1389→          portion of the clip still under the fade. */}
+  1390→      {fadeInW > 0 && (
+  1391→        <div className="pointer-events-none absolute top-0 bottom-0 left-0 bg-black/30" style={{ width: fadeInW, clipPath: 'polygon(0% 0%, 0% 100%, 100% 50%)' }} />
+  1392→      )}
+  1393→      {/* Fade-out overlay: mirrored on the right side. */}
+  1394→      {fadeOutW > 0 && (
+  1395→        <div className="pointer-events-none absolute top-0 bottom-0 right-0 bg-black/30" style={{ width: fadeOutW, clipPath: 'polygon(100% 0%, 100% 100%, 0% 50%)' }} />
+  1396→      )}
+  1397→      <span className="absolute left-1 top-0 truncate text-[7px] font-medium text-text-mid/70 pointer-events-none">{clip.name}{clip.mute ? ' (muted)' : ''}</span>
+  1398→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'left', e, elRef.current, waveRef.current); }} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+  1399→      <div onPointerDown={(e) => { if (elRef.current) onTrimStart(clip, 'right', e, elRef.current, waveRef.current); }} className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/40 opacity-0 group-hover:opacity-100" />
+  1400→    </div>
+  1401→  );
+  1402→});
+
+[showing lines 900-1402 of 1403; use offset=1403 with limit to continue reading]

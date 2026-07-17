@@ -27,6 +27,13 @@ import {
 const WAVES: WaveType[] = ['sine', 'triangle', 'sawtooth', 'square'];
 const WAVE_LABEL: Record<WaveType, string> = { sine: 'Sin', triangle: 'Tri', sawtooth: 'Saw', square: 'Sqr' };
 
+/** Quantize grid options. 'off' = no quantization (free timing); the others
+ *  snap each note's start to the nearest 1/N beat division at the project's
+ *  BPM (read from the AudioEditor transport state). '1/4' = quarter note,
+ *  '1/8' = eighth, '1/16' = sixteenth, '1/32' = thirty-second. */
+type QuantizeOption = 'off' | '1/4' | '1/8' | '1/16' | '1/32';
+const QUANTIZE_OPTIONS: QuantizeOption[] = ['off', '1/4', '1/8', '1/16', '1/32'];
+
 /** Semitone offsets of black keys within an octave, keyed by the white-key
  *  index they sit after (C#=after C, D#=after D, F#=after F, …). */
 const BLACK_AFTER_WHITE: [number, number][] = [[0, 1], [1, 3], [3, 6], [4, 8], [5, 10]];
@@ -49,6 +56,12 @@ export function InstrumentPanel() {
   const [saveName, setSaveName] = useState('');
   const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
   const [recInfo, setRecInfo] = useState<{ seconds: number; notes: number } | null>(null);
+  /** Quantize grid applied to recorded takes BEFORE rendering. 'off' preserves
+   *  the player's exact timing; any other value snaps each note's `start` to
+   *  the nearest 1/N beat division at the project's current BPM. */
+  const [quantize, setQuantize] = useState<QuantizeOption>('off');
+  const quantizeRef = useRef(quantize);
+  quantizeRef.current = quantize;
 
   const synthRef = useRef<LiveInstrument | null>(null);
   const paramsRef = useRef(params);
@@ -189,7 +202,28 @@ export function InstrumentPanel() {
    *  region is free there, otherwise create a new track. */
   const placeTake = useCallback(async (notes: NoteEvent[], startPos: number) => {
     const p = paramsRef.current;
-    const rendered = await renderPerformance(notes, p);
+
+    // ── Quantize pass ──────────────────────────────────────────────────────
+    // Snap each note's `start` to the nearest 1/N beat division at the
+    // project's current BPM. The grid step is `(60/bpm) / (division/4)`
+    // seconds — e.g. at 120 BPM, 1/16 = (60/120)/(16/4) = 0.5/4 = 0.125s
+    // (a sixteenth note). We read the BPM from the doc's audio map so we
+    // match the timeline the user actually sees, not a stale local value.
+    //
+    // Notes that quantize to the same start as another (a chord played
+    // slightly off) collapse onto the same grid line — that's the desired
+    // effect (chords become perfectly aligned). Duration is preserved
+    // (we don't quantize note ends — a held note stays held).
+    const q = quantizeRef.current;
+    let qNotes = notes;
+    if (q !== 'off') {
+      const bpm = (slate.doc.getMap('audio').get('bpm') as number | undefined) ?? 120;
+      const division = parseInt(q.split('/')[1]!, 10);
+      const step = (60 / bpm) / (division / 4);
+      qNotes = notes.map((n) => ({ ...n, start: Math.round(n.start / step) * step }));
+    }
+
+    const rendered = await renderPerformance(qNotes, p);
     if (!rendered) return;
     let trackId: string | null = null;
     slate.audioTracks().forEach((m, id) => {
@@ -212,7 +246,7 @@ export function InstrumentPanel() {
       duration: rendered.duration,
       name: `${p.name} take`,
     });
-    toast({ title: 'Take added', description: `${notes.length} notes → ${p.name}` });
+    toast({ title: 'Take added', description: `${qNotes.length} notes → ${p.name}${q !== 'off' ? ` · quantized ${q}` : ''}` });
   }, [slate]);
 
   const toggleRecord = useCallback(() => {
@@ -357,6 +391,16 @@ export function InstrumentPanel() {
         >
           <Keyboard size={13} />
         </button>
+        {/* Quantize dropdown — applied to recorded takes before render. */}
+        <select
+          value={quantize}
+          onChange={(e) => setQuantize(e.target.value as QuantizeOption)}
+          className={`shrink-0 rounded-sm border px-1 py-1 text-[10px] outline-none ${quantize !== 'off' ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-bg-3 text-text-mid hover:bg-bg-4'}`}
+          title="Quantize recorded takes to this grid (applied before rendering)"
+          aria-label="Quantize grid"
+        >
+          {QUANTIZE_OPTIONS.map((q) => <option key={q} value={q}>{q === 'off' ? 'Free' : q}</option>)}
+        </select>
       </div>
 
       {recInfo && (

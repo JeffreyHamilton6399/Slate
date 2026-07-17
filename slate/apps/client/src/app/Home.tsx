@@ -544,9 +544,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
           </section>
         )}
 
-        {/* Footer — version, author, About + Terms links. Always at the
-            bottom of the page so legal/info links are reachable without
-            opening the profile menu. */}
+        {/* Footer — version, author, About link. Terms & Privacy moved to the
+            profile dropdown so the home screen stays clean. */}
         <footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">
           <p>
             V1 · Jeffrey Hamilton
@@ -558,14 +557,6 @@ function Home({ email, userId }: { email: string; userId: string }) {
               className="text-text-dim underline-offset-2 hover:text-accent hover:underline"
             >
               About
-            </button>
-            <span aria-hidden>·</span>
-            <button
-              type="button"
-              onClick={() => setTermsOpen(true)}
-              className="text-text-dim underline-offset-2 hover:text-accent hover:underline"
-            >
-              Terms &amp; Privacy
             </button>
           </div>
         </footer>

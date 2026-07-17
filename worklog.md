@@ -920,3 +920,78 @@ Stage Summary:
 - Terms dialog is a single shared component used by: SignIn (sign-up ToS link), Home profile menu, Onboarding profile menu, and About dialog. Three sections: Terms of Service, Privacy Policy, Data Retention.
 - All z-index stacking preserved (Radix Dialog z-1100/1101 > entry gates z-1000; DropdownMenu z-1102 > Dialog content).
 - No new dependencies added; only reused existing Radix primitives + lucide icons already in package.json.
+
+---
+Task ID: ROUND10-A
+Agent: Main (Z.ai Code)
+Task: Add friending system + reorganize profile (Supabase friends schema, friends API client + hook, ProfileDialog merging Settings + Friends, ProfileMenu dropdown reorganization, footer with About + Terms, Onboarding guest dropdown reorder)
+
+Work Log:
+- Read worklog (latest ROUND9-A) and all relevant existing files: supabase/schema.sql, account/{supabase,useAccount,cloudSaves}.ts, app/{Settings,Home,Onboarding,AboutDialog,TermsDialog,store}.tsx, ui/{Dialog,DropdownMenu,Button,Input,Toast}.{tsx,ts}, workspace/dockStore.ts, voice/useVoiceOptional.tsx.
+- Confirmed SettingsDialog was still imported by Workspace.tsx (in-board header entry point) — left it untouched so that path still works; only Home's profile dropdown switched to ProfileDialog.
+
+Files Created (3):
+1. `slate/apps/client/src/account/friends.ts` — Friends API client.
+   - Exports `Friend`, `FriendStatus`, `getFriends`, `sendFriendRequest`, `acceptFriendRequest`, `removeFriend`, `upsertMyProfile`.
+   - `getFriends(userId)`: queries `friends` where `user_id=uid OR friend_id=uid`, then a single batched `profiles.in('user_id', otherIds)` lookup; de-duplicates by other-user-id (accepted friendships have 2 rows; picks the row where we are `user_id` so the incoming flag is consistent); returns `Friend[]` (excludes blocked from UI automatically since the hook filters by status).
+   - `sendFriendRequest(userId, friendEmail)`: lowercases+trims email; blocks self-friending (compares against `supabase.auth.getUser()`); looks up `profiles` by email with `.maybeSingle()`; checks existing rows in both directions and short-circuits with a clear error ('already friends' / 'request already sent'); if the OTHER side already sent us a pending request, auto-accepts it instead of duplicating. Returns `{ ok, error? }`.
+   - `acceptFriendRequest(userId, friendId)`: updates the (friend→me) row to `accepted` AND upserts the reverse (me→friend, accepted) so both sides see it with one query. `onConflict: 'user_id,friend_id'` guards against races.
+   - `removeFriend(userId, friendId)`: deletes BOTH rows (self→friend AND friend→self); ignores errors silently (logs to console.warn).
+   - `upsertMyProfile(userId, displayName, email)`: bonus helper so display-name changes in ProfileDialog mirror to the cloud profile, making the user findable by email + showing the new name to friends.
+   - All functions early-return `[]` / `{ ok:false, error:'Accounts are not configured.' }` / `void` when `supabase === null`.
+
+2. `slate/apps/client/src/account/useFriends.ts` — `useFriends(userId)` hook.
+   - State: `all` (combined list), `loading`; `reqIdRef` guards against out-of-order responses (drops stale results when a newer refresh fired).
+   - `refresh()` re-fetches; bails to empty when userId is undefined or supabase is null.
+   - `sendRequest/accept/remove` call the API client, then `refresh()` + appropriate toast (success/error).
+   - Returns `{ friends: accepted[], pending: pending[], loading, refresh, sendRequest, accept, remove }` — splits `all` into accepted + pending on every render (cheap, N small).
+
+3. `slate/apps/client/src/app/ProfileDialog.tsx` — `ProfileDialog({ open, onOpenChange, focusFriends? })`.
+   - Title "Profile", description "Manage your identity, friends, and device preferences." — `className="max-w-lg"` overrides Dialog's default `max-w-md` so the friends list has room.
+   - Section 1 — Profile header: 48px circular avatar (initial or '?') + display name + email, in a bordered card.
+   - Section 2 — Display name: Input + Save button. Save writes to the store AND mirrors to the cloud profile via `upsertMyProfile` (so friends see the new name).
+   - Section 3 — Friends (NEW): `FriendsSection` sub-component using `useFriends(userId)`.
+     • Add-by-email form (Input + Send button with UserPlus icon).
+     • Pending requests list: shows display name + email; for incoming requests shows Accept (Check icon) + Decline (X icon); for outgoing shows a "Sent" badge.
+     • Accepted friends list: avatar (initial circle) + name + email + Remove (UserMinus icon). `max-h-48 overflow-y-auto` for long lists.
+     • Empty-state hints: "Sign in to add friends" when not signed in; "Accounts are not configured" hint with the env var names when Supabase is null; "No friends yet" when both lists empty.
+   - Section 4 — Appearance: theme toggle (Dark/Light) + paper-follows-theme checkbox + accent color picker with 6 preset swatches (verbatim from Settings.tsx).
+   - Section 5 — Voice: output volume slider 0–1 + percentage readout (verbatim from Settings.tsx).
+   - Section 6 — 3D viewport: show transform HUD hints checkbox (verbatim from Settings.tsx).
+   - Section 7 — Layout: Reset dock layout button (verbatim from Settings.tsx).
+   - Section 8 — Account: `AccountSection` sub-component — Supabase backup/restore/sign-out buttons + status note (verbatim from Settings.tsx).
+   - `focusFriends` prop: when true, scrolls the Friends section into view ~80ms after open (lets the dropdown's "Friends" item land the user on the right section).
+
+Files Modified (3):
+4. `slate/supabase/schema.sql` — appended `public.profiles` + `public.friends` tables and RLS policies per the task spec (verbatim block). Profiles: PK `user_id` FK→auth.users, public read, owner insert/update. Friends: PK `(user_id, friend_id)` both FK→auth.users on-delete cascade; either side can read/update/delete; only the sender can insert (so request forgery is impossible). Comments explain the bidirectional-on-accepted pattern.
+
+5. `slate/apps/client/src/app/Home.tsx`:
+   - Imports: removed `Settings as SettingsIcon` + `Info` from lucide-react (no longer used); added `UserCircle`; replaced `SettingsDialog` import with `ProfileDialog`.
+   - Home component state: replaced `settingsOpen` with `profileOpen` + `profileFocusFriends` (boolean). About/terms state unchanged.
+   - ProfileMenu call site: now passes `onOpenProfile` (sets focusFriends=false), `onOpenFriends` (sets focusFriends=true), `onOpenTerms`. Both open ProfileDialog (Friends item just lands you on the friends section).
+   - Dialog mount: replaced `<SettingsDialog>` with `<ProfileDialog open={profileOpen} focusFriends={profileFocusFriends} ...>`.
+   - Added a `<footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">` after the Live public boards section, containing "V1 · Jeffrey Hamilton" centered + "About" + "·" + "Terms & Privacy" text links. The outer div is already `min-h-full flex flex-col`, so `mt-auto` on the footer sticks it to the bottom when content is short and pushes it down naturally when content overflows.
+   - ProfileMenu component: avatar button now `h-9 w-9` (was `h-8 w-8`) — perfectly circular via `rounded-full`. Dropdown reorganized to: account-info block → separator → **Profile** (UserCircle icon) → **Friends** (Users icon) → **Donate** (Coffee icon, external link) → separator → **Terms & Privacy** (FileText icon, at the BOTTOM) → **Sign out** (LogOut icon, destructive). Removed the **Settings** and **About** items from the dropdown — Settings is now merged into Profile, and About moved to the footer.
+
+6. `slate/apps/client/src/app/Onboarding.tsx`:
+   - Guest dropdown reordered per task spec: account-info block → separator → **About** (Info) → **Donate** (Coffee, external link) → separator → **Terms & Privacy** (FileText, at the bottom). No Profile/Friends items (guest mode). The separate "Donate" text link in the header (next to the dropdown) is kept — task didn't ask to remove it and it's a useful always-visible affordance.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, zero errors across all files (changed + unchanged).
+- `npx eslint src/app/Home.tsx src/app/ProfileDialog.tsx src/app/Onboarding.tsx src/account/friends.ts src/account/useFriends.ts` → 0 errors, only 2 pre-existing unused-eslint-disable warnings in Onboarding.tsx (lines 51 + 63 — both predate this round).
+- Checked Home.tsx for leftover Settings refs via `grep -n 'settingsOpen\|SettingsDialog\|SettingsIcon\|Info'` → no matches (clean).
+
+Design notes:
+- The friends schema deliberately stores accepted friendships as TWO rows so a single `.or('user_id.eq.X,friend_id.eq.X')` query returns the full list (incoming + outgoing + accepted) without a union. Pending requests have ONE row (sender→recipient), and `incoming` is computed as `r.user_id !== userId && r.status === 'pending'`.
+- `getFriends` does ONE batched `profiles.in('user_id', otherIds)` lookup rather than N per-friend queries — important since the hook re-fetches after every mutation.
+- The `useFriends` hook's `reqIdRef` prevents a slow `getFriends` from overwriting the result of a faster refresh that fired later (e.g. user spams the Accept button).
+- `ProfileDialog.focusFriends` lets the dropdown's "Friends" item behave like a deep link — opens the dialog and scrolls the friends section into view — without needing a separate dialog or route.
+- The AccountSection in ProfileDialog is a copy of the one in Settings.tsx (not a shared import) to keep the two dialogs independently evolvable; if Settings.tsx is later removed entirely, ProfileDialog's copy stands on its own.
+- Workspace.tsx still imports SettingsDialog (the in-board header entry point opens it via the `settingsOpen` global store flag). The task scope was only the Home profile dropdown, so I left that path intact rather than rip out a working entry point and risk breaking the in-board settings shortcut.
+
+Stage Summary:
+- Friends system end-to-end: schema + RLS → API client → React hook → UI section. Adding a friend by email sends a pending request; the recipient sees it in their ProfileDialog with Accept/Decline; accepting flips both rows to `accepted` and inserts the reverse so both sides see it; removing deletes both rows.
+- The Home profile dropdown is now leaner — Profile (all settings + friends), Friends (deep-link), Donate, Terms & Privacy, Sign out. The avatar is a true 9×9 circle.
+- About + Terms & Privacy are now always reachable from the page footer (no longer hidden behind the avatar menu).
+- The Onboarding guest dropdown follows the same Terms-at-the-bottom convention.
+- TypeScript clean (exit 0); no new dependencies added.

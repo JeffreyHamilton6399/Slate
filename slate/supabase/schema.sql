@@ -39,3 +39,65 @@ create policy "users update own saves"
 create policy "users delete own saves"
   on public.board_saves for delete
   using (auth.uid() = user_id);
+
+-- ============================================================================
+-- Friends system
+-- ============================================================================
+-- User profiles (public display info, since auth.users is not client-readable).
+-- One row per auth user; created on first sign-in (or on demand from the
+-- Profile dialog). The display_name mirrors the local onboarding name so
+-- collaborators can recognize each other.
+create table if not exists public.profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default 'Anonymous',
+  email text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+
+-- Anyone signed in can read profiles (needed to look up friends by email +
+-- to render display names in the friends list).
+create policy "Users can read all profiles"
+  on public.profiles for select
+  using (true);
+
+create policy "Users can insert own profile"
+  on public.profiles for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own profile"
+  on public.profiles for update
+  using (auth.uid() = user_id);
+
+-- Friend relationships. Bidirectional once accepted: an accepted friendship
+-- has TWO rows (user_id → friend_id AND friend_id → user_id) so both sides
+-- see it in their list with one query. A pending request has ONE row from
+-- the sender → recipient.
+create table if not exists public.friends (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  friend_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'pending', -- 'pending' | 'accepted' | 'blocked'
+  created_at timestamptz not null default now(),
+  primary key (user_id, friend_id)
+);
+
+alter table public.friends enable row level security;
+
+-- Either side of a relationship can read it (so the recipient sees the
+-- incoming request and the sender sees the outgoing one).
+create policy "Users can read own friends"
+  on public.friends for select
+  using (auth.uid() = user_id or auth.uid() = friend_id);
+
+create policy "Users can insert own friends"
+  on public.friends for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own friends"
+  on public.friends for update
+  using (auth.uid() = user_id or auth.uid() = friend_id);
+
+create policy "Users can delete own friends"
+  on public.friends for delete
+  using (auth.uid() = user_id or auth.uid() = friend_id);

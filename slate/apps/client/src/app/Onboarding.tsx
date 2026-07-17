@@ -168,13 +168,14 @@ export function Onboarding() {
               <DropdownMenuItem onSelect={() => setAboutOpen(true)}>
                 <Info size={14} /> About
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setTermsOpen(true)}>
-                <FileText size={14} /> Terms &amp; Privacy
-              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
               >
                 <Coffee size={14} /> Donate
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setTermsOpen(true)}>
+                <FileText size={14} /> Terms &amp; Privacy
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

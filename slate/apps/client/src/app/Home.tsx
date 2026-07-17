@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, Info, FileText, User } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, FileText, User, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -23,7 +23,7 @@ import { cn } from '../utils/cn';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
-import { SettingsDialog } from './Settings';
+import { ProfileDialog } from './ProfileDialog';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
@@ -303,7 +303,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const [board, setBoard] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [createMode, setCreateMode] = useState<'2d' | '3d' | 'audio'>('2d');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileFocusFriends, setProfileFocusFriends] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
   const [cloudNote, setCloudNote] = useState('Syncing projects…');
@@ -392,8 +393,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
           <div className="flex-1" />
           <ProfileMenu
             email={email}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onOpenAbout={() => setAboutOpen(true)}
+            onOpenProfile={() => { setProfileFocusFriends(false); setProfileOpen(true); }}
+            onOpenFriends={() => { setProfileFocusFriends(true); setProfileOpen(true); }}
             onOpenTerms={() => setTermsOpen(true)}
           />
         </header>
@@ -542,8 +543,38 @@ function Home({ email, userId }: { email: string; userId: string }) {
             </ul>
           </section>
         )}
+
+        {/* Footer — version, author, About + Terms links. Always at the
+            bottom of the page so legal/info links are reachable without
+            opening the profile menu. */}
+        <footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">
+          <p>
+            V1 · Jeffrey Hamilton
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setAboutOpen(true)}
+              className="text-text-dim underline-offset-2 hover:text-accent hover:underline"
+            >
+              About
+            </button>
+            <span aria-hidden>·</span>
+            <button
+              type="button"
+              onClick={() => setTermsOpen(true)}
+              className="text-text-dim underline-offset-2 hover:text-accent hover:underline"
+            >
+              Terms &amp; Privacy
+            </button>
+          </div>
+        </footer>
       </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ProfileDialog
+        open={profileOpen}
+        onOpenChange={setProfileOpen}
+        focusFriends={profileFocusFriends}
+      />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
       <AllProjectsDialog
@@ -701,18 +732,20 @@ function timeAgo(t: number): string {
 
 /**
  * Circular avatar button in the top-right of the Home header. Opens a dropdown
- * with account info + quick links (Settings, About, Terms, Donate, Sign out).
- * Closes on outside-click / item-select / Esc — handled by Radix.
+ * with quick links (Profile, Friends, Donate, Terms, Sign out). Settings +
+ * About are no longer in the dropdown — Settings is merged into Profile, and
+ * About moved to the page footer. Closes on outside-click / item-select / Esc
+ * — handled by Radix.
  */
 function ProfileMenu({
   email,
-  onOpenSettings,
-  onOpenAbout,
+  onOpenProfile,
+  onOpenFriends,
   onOpenTerms,
 }: {
   email: string;
-  onOpenSettings: () => void;
-  onOpenAbout: () => void;
+  onOpenProfile: () => void;
+  onOpenFriends: () => void;
   onOpenTerms: () => void;
 }) {
   const initial = email ? email[0]?.toUpperCase() ?? '?' : null;
@@ -722,12 +755,12 @@ function ProfileMenu({
         <button
           type="button"
           aria-label="Account menu"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-accent transition-colors hover:bg-accent/25 hover:border-accent/70"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-accent transition-colors hover:bg-accent/25 hover:border-accent/70"
         >
           {initial ? (
-            <span className="text-xs font-semibold">{initial}</span>
+            <span className="text-sm font-semibold">{initial}</span>
           ) : (
-            <User size={14} />
+            <User size={15} />
           )}
         </button>
       </DropdownMenuTrigger>
@@ -741,14 +774,11 @@ function ProfileMenu({
           </p>
         </div>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onOpenSettings}>
-          <SettingsIcon size={14} /> Settings
+        <DropdownMenuItem onSelect={onOpenProfile}>
+          <UserCircle size={14} /> Profile
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onOpenAbout}>
-          <Info size={14} /> About
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onOpenTerms}>
-          <FileText size={14} /> Terms &amp; Privacy
+        <DropdownMenuItem onSelect={onOpenFriends}>
+          <Users size={14} /> Friends
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
@@ -756,6 +786,9 @@ function ProfileMenu({
           <Coffee size={14} /> Donate
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onOpenTerms}>
+          <FileText size={14} /> Terms &amp; Privacy
+        </DropdownMenuItem>
         <DropdownMenuItem
           destructive
           onSelect={() => void supabase?.auth.signOut()}

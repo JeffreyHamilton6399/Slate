@@ -1,0 +1,9 @@
+# Root build context is only used by the shim Dockerfile, which needs nothing
+# but slate/. Whitelist it and drop the heavyweight junk inside it.
+*
+!slate
+slate/node_modules
+slate/apps/*/node_modules
+slate/apps/*/dist
+slate/packages/*/node_modules
+slate/apps/server/data

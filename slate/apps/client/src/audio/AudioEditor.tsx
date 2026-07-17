@@ -18,9 +18,9 @@ import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
 import {
-  addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
-  deleteAudioTrack, duplicateAudioClip, readAudioClip, readAudioTrack,
-  setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
+  addAudioClip, addAudioTrack, addMidiClip, decodeAudioFile, decodeMidiFile,
+  deleteAudioClip, deleteAudioTrack, duplicateAudioClip, readAudioClip,
+  readAudioTrack, setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine, SOUNDFONT_PIANO_ID } from './engine';
 import { loadSamples } from './sampleStore';
@@ -93,6 +93,42 @@ function nearestFreeStart(desired: number, duration: number, blockersIn: { start
   }
   consider(prevEnd, Infinity); // open-ended tail — always fits
   return Math.max(0, best);
+}
+
+/** Clamp a multi-clip drag delta so the WHOLE group stays overlap-free.
+ *  Each selected clip moves by the same `dt`; for each clip we collect the
+ *  range of `dt` values that keep it off its non-selected neighbours on the
+ *  same track, then intersect those ranges across all clips. If the desired
+ *  `dt` falls outside the intersection, we clamp to the nearest bound — so a
+ *  group dragged into a wall stops flush against it instead of teleporting
+ *  past. The origin track per clip is used (multi-drag is horizontal-only —
+ *  no cross-track reshuffle, which would be ambiguous for a group). */
+function clampGroupDt(
+  dt: number,
+  origins: Map<string, { os: number; od: number; trackId: string }>,
+  byTrack: Map<string, { start: number; end: number }[]>,
+): number {
+  let minRight = Infinity; // upper bound on dt (blocker to the right of a clip)
+  let maxLeft = -Infinity; // lower bound on dt (blocker to the left of a clip)
+  for (const o of origins.values()) {
+    const blockers = byTrack.get(o.trackId) ?? [];
+    for (const b of blockers) {
+      // Blocker entirely to the LEFT of the clip's origin → moving LEFT past
+      // it would overlap. Constraint: dt >= b.end - o.os.
+      if (b.end <= o.os + 1e-4) {
+        maxLeft = Math.max(maxLeft, b.end - o.os);
+      }
+      // Blocker entirely to the RIGHT of the clip's origin → moving RIGHT past
+      // it would overlap. Constraint: dt <= b.start - o.os - o.od.
+      else if (b.start >= o.os + o.od - 1e-4) {
+        minRight = Math.min(minRight, b.start - o.os - o.od);
+      }
+      // A blocker that straddles the clip's original interval would mean the
+      // clip was ALREADY overlapping before the drag — ignore (shouldn't happen).
+    }
+  }
+  if (maxLeft > minRight) return 0; // conflicting constraints — no movement
+  return Math.max(maxLeft, Math.min(minRight, dt));
 }
 
 // ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
@@ -286,6 +322,15 @@ export function AudioEditor() {
     /** True once the pointer left the dead zone — a plain click never mutates
      *  the clip. */
     moved: boolean;
+    /** MULTI-SELECT DRAG: when the user drags a clip that's part of a
+     *  multi-selection, every selected clip moves together by the same delta.
+     *  `origins` stores the original position + DOM element of EACH selected
+     *  clip so applyMove can update them all and onUp can commit them all to
+     *  Yjs. Undefined (or empty) for single-clip drags + all trims. */
+    origins?: Map<string, {
+      el: HTMLElement; waveEl: HTMLElement | null;
+      os: number; od: number; oo: number; trackId: string;
+    }>;
   } | null>(null);
   /** Latest pointer `clientX` during an active drag — written by every
    *  `pointermove` and read inside a `requestAnimationFrame` callback. Decouples
@@ -302,7 +347,7 @@ export function AudioEditor() {
    *  scheduled. Lets `onMove` bail out cheaply (one ref read + one rAF check)
    *  when a frame is already queued. */
   const moveRafRef = useRef(0);
-  const marqueeRef = useRef<{ startX: number; startY: number; origin: Set<string> } | null>(null);
+  const marqueeRef = useRef<{ startX: number; startY: number; seekTime: number; origin: Set<string>; additive: boolean; moved: boolean } | null>(null);
   const selectedRef = useRef<Set<string>>(new Set());
   selectedRef.current = selectedClipIds;
   const clipsRef = useRef<AudioClip[]>([]);
@@ -606,7 +651,12 @@ export function AudioEditor() {
       if (!d.moved) {
         if (Math.abs(clientX - d.sx) < DRAG_DEADZONE_PX && Math.abs(clientY - d.sy) < DRAG_DEADZONE_PX) return;
         d.moved = true;
-        if (d.mode === 'drag') d.el.style.zIndex = '40'; // ride above other rows while crossing tracks
+        if (d.mode === 'drag') {
+          d.el.style.zIndex = '40'; // ride above other rows while crossing tracks
+          // Elevate the whole group too so the user sees the multi-clip
+          // selection ride above non-selected neighbours while in transit.
+          if (d.origins) for (const o of d.origins.values()) if (o.el !== d.el) o.el.style.zIndex = '40';
+        }
       }
 
       const pps = pxRef.current;
@@ -614,6 +664,25 @@ export function AudioEditor() {
       const oldEnd = d.os + d.od;
       const wantSnap = snapRef.current && !moveAltRef.current;
       if (d.mode === 'drag') {
+        // MULTI-SELECT DRAG: when `origins` is populated, every selected clip
+        // moves by the same horizontal delta. Vertical track-switching is
+        // disabled for the group (each clip stays on its origin track) since
+        // reshuffling every selected clip onto one target track would be
+        // ambiguous and likely overlap-prone. The dragged clip's snap result
+        // is applied to the whole group so the magnet still feels right.
+        if (d.origins && d.origins.size > 0) {
+          const dragged = d.origins.get(d.clipId);
+          let snappedDt = dt;
+          if (wantSnap && dragged) {
+            const snappedStart = snapStart(dragged.os + dt, dragged.od, d.snapTimes);
+            snappedDt = snappedStart - dragged.os;
+          }
+          for (const o of d.origins.values()) {
+            const newStart = Math.max(0, o.os + snappedDt);
+            o.el.style.left = `${newStart * pps}px`;
+          }
+          return;
+        }
         // The clip follows the mouse 1:1 (snapped to the magnet grid). It's
         // allowed to ride OVER other clips while the drag is live — it's
         // elevated to z-40 so the overlap reads as "in transit", and the
@@ -683,7 +752,9 @@ export function AudioEditor() {
         lastProcessedY = null;
         applyMove();
       }
-      // Undo the drag-only visual state React doesn't manage.
+      // Undo the drag-only visual state React doesn't manage. For a multi-clip
+      // drag, also clear the elevated z-index on every selected clip's element.
+      if (d.origins) for (const o of d.origins.values()) { o.el.style.zIndex = ''; o.el.style.transform = ''; }
       d.el.style.zIndex = '';
       d.el.style.transform = '';
       // A click that never left the dead zone selects but must not write —
@@ -693,19 +764,46 @@ export function AudioEditor() {
         const left = parseFloat(d.el.style.left) / pps;
         const width = parseFloat(d.el.style.width) / pps;
         if (d.mode === 'drag') {
-          const targetTrackId = d.trackIds[d.trackIndex + d.rowDelta] ?? d.trackIds[d.trackIndex]!;
-          const originTrackId = d.trackIds[d.trackIndex]!;
-          // Enforce the no-overlap invariant HERE (the drag itself follows
-          // the mouse freely): place the clip in the free gap nearest to the
-          // dropped position.
-          const start = nearestFreeStart(left, d.od, d.byTrack.get(targetTrackId) ?? []);
-          // Write the resolved position to the DOM too so there's no flicker
-          // between pointer-up and the Yjs-driven re-render.
-          d.el.style.left = `${start * pps}px`;
-          updateAudioClip(slate, d.clipId, {
-            start,
-            ...(targetTrackId !== originTrackId ? { trackId: targetTrackId } : {}),
-          });
+          // MULTI-SELECT COMMIT: every selected clip moves by the same delta,
+          // clamped so the group stays overlap-free against non-selected
+          // neighbours on each clip's origin track. The delta is recomputed
+          // from the dragged clip's pointer-up position (so the snapped /
+          // clamped value the user sees is what gets committed), then applied
+          // to every clip in the group via updateAudioClip inside a single
+          // Yjs transaction.
+          if (d.origins && d.origins.size > 0) {
+            const dragged = d.origins.get(d.clipId);
+            const dt = dragged ? left - dragged.os : 0;
+            const clampedDt = clampGroupDt(dt, d.origins, d.byTrack);
+            // Write the resolved positions to the DOM too so there's no
+            // flicker between pointer-up and the Yjs-driven re-render.
+            for (const o of d.origins.values()) {
+              const newStart = Math.max(0, o.os + clampedDt);
+              o.el.style.left = `${newStart * pps}px`;
+            }
+            // Single transaction so the whole group commits atomically to the
+            // Yjs doc — peers see one update, not N interleaved with their
+            // own edits.
+            slate.doc.transact(() => {
+              for (const [cid, o] of d.origins!) {
+                updateAudioClip(slate, cid, { start: Math.max(0, o.os + clampedDt) });
+              }
+            });
+          } else {
+            const targetTrackId = d.trackIds[d.trackIndex + d.rowDelta] ?? d.trackIds[d.trackIndex]!;
+            const originTrackId = d.trackIds[d.trackIndex]!;
+            // Enforce the no-overlap invariant HERE (the drag itself follows
+            // the mouse freely): place the clip in the free gap nearest to the
+            // dropped position.
+            const start = nearestFreeStart(left, d.od, d.byTrack.get(targetTrackId) ?? []);
+            // Write the resolved position to the DOM too so there's no flicker
+            // between pointer-up and the Yjs-driven re-render.
+            d.el.style.left = `${start * pps}px`;
+            updateAudioClip(slate, d.clipId, {
+              start,
+              ...(targetTrackId !== originTrackId ? { trackId: targetTrackId } : {}),
+            });
+          }
         }
         else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
         else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
@@ -965,6 +1063,37 @@ export function AudioEditor() {
 
   const handleFileImport = useCallback(async (file: File) => {
     try {
+      // MIDI files branch: parse with @tonejs/midi and create a MIDI track +
+      // clip (no PCM samples — note events live in the Yjs clip directly).
+      // Other audio files go through the existing decodeAudioFile → audio
+      // track + audio clip path.
+      if (/\.midi?$/i.test(file.name)) {
+        const d = await decodeMidiFile(file);
+        if (d.notes.length === 0) {
+          toast({ title: 'MIDI file empty', description: 'No notes found.', variant: 'error' });
+          return;
+        }
+        const tid = addAudioTrack(slate, {
+          kind: 'midi',
+          instrumentId: SOUNDFONT_PIANO_ID,
+          name: file.name.replace(/\.[^.]+$/, ''),
+        });
+        addMidiClip(slate, tid, {
+          start: positionRef.current,
+          notes: d.notes,
+          duration: d.duration,
+          name: file.name,
+        });
+        // If the doc has no BPM set yet (fresh board) adopt the MIDI file's
+        // tempo so the beat grid + metronome line up with the imported notes.
+        if (d.tempo && d.tempo >= 20 && d.tempo <= 300) {
+          setAudioBpm(slate, d.tempo);
+          setBpmState(d.tempo);
+          engineRef.current?.setBpm(d.tempo);
+        }
+        toast({ title: 'MIDI imported', description: `${file.name} (${d.notes.length} notes)` });
+        return;
+      }
       const d = await decodeAudioFile(file);
       const tid = addAudioTrack(slate, { name: file.name.replace(/\.[^.]+$/, '') });
       addAudioClip(slate, tid, { start: positionRef.current, samples: d.samples, sampleRate: d.sampleRate, channels: d.channels, duration: d.duration, name: file.name });
@@ -1037,18 +1166,23 @@ export function AudioEditor() {
   //  - byTrack: clip bounds per track (dragged clip excluded) for overlap
   //    resolution on whichever track the pointer is over.
   //  - snapTimes: magnet candidates — every other clip's edges + playhead + 0.
-  const dragGeometry = useCallback((clip: AudioClip): {
+  // `excludeIds` is the set of clip ids to skip when building the neighbour
+  //  bounds — for a multi-select drag it's EVERY selected clip (so the group
+  //  can move freely without its own members blocking it); for a single-clip
+  //  drag it's just { clip.id }.
+  const dragGeometry = useCallback((clip: AudioClip, excludeIds?: Set<string>): {
     leftLimit: number; rightLimit: number;
     byTrack: Map<string, { start: number; end: number }[]>;
     snapTimes: number[];
   } => {
+    const exclude = excludeIds ?? new Set([clip.id]);
     let leftLimit = 0;
     let rightLimit = Infinity;
     const byTrack = new Map<string, { start: number; end: number }[]>();
     const snapTimes: number[] = [0, positionRef.current];
     const clipEnd = clip.start + clip.duration;
     for (const o of clipsRef.current) {
-      if (o.id === clip.id) continue;
+      if (exclude.has(o.id)) continue;
       const oEnd = o.start + o.duration;
       snapTimes.push(o.start, oEnd);
       let list = byTrack.get(o.trackId);
@@ -1081,15 +1215,47 @@ export function AudioEditor() {
     // sweeps across get painted with the blue ::selection overlay.
     e.preventDefault();
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    // MULTI-SELECT DRAG: if this clip is ALREADY part of a multi-selection
+    // (and the user is plain-clicking, not additive-shift-clicking to extend
+    // the selection), every selected clip moves together by the same delta.
+    // We check the CURRENT selection (before the selectClip call below) so a
+    // plain click on an already-multi-selected clip preserves the group.
+    const multiDrag = !additive && selectedRef.current.has(clip.id) && selectedRef.current.size > 1;
     selectClip(clip.id, additive);
     window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
-    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
+    const excludeIds = multiDrag ? new Set(selectedRef.current) : undefined;
+    const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip, excludeIds);
     const trackIds = tracksRef.current.map((t) => t.id);
     const trackIndex = Math.max(0, trackIds.indexOf(clip.trackId));
+
+    let origins: Map<string, { el: HTMLElement; waveEl: HTMLElement | null; os: number; od: number; oo: number; trackId: string }> | undefined;
+    if (multiDrag) {
+      origins = new Map();
+      // Always include the dragged clip first using the element we were
+      // handed (it's already known, no DOM lookup needed).
+      origins.set(clip.id, { el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, trackId: clip.trackId });
+      for (const selId of selectedRef.current) {
+        if (origins.has(selId)) continue;
+        const otherClip = clipsRef.current.find((c) => c.id === selId);
+        if (!otherClip) continue;
+        // DOM lookup by data-clip-id (added to ClipBlock's root div for this
+        // purpose). querySelector with an attribute selector is fine here —
+        // it runs ONCE per drag start, not per pointermove.
+        const otherEl = document.querySelector<HTMLElement>(`[data-clip-id="${CSS.escape(selId)}"]`);
+        if (!otherEl) continue;
+        // The waveform layer is the first child div of the clip block — grab
+        // it so a future drag-then-trim on the same gesture would have it,
+        // though multi-drag only ever moves left (no trim path).
+        const otherWaveEl = otherEl.querySelector<HTMLElement>(':scope > div');
+        origins.set(selId, { el: otherEl, waveEl: otherWaveEl, os: otherClip.start, od: otherClip.duration, oo: otherClip.offset, trackId: otherClip.trackId });
+      }
+    }
+
     dragRef.current = {
       clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset,
       speed: clip.speed ?? 1, sx: e.clientX, sy: e.clientY, leftLimit, rightLimit,
       byTrack, snapTimes, trackIds, trackIndex, rowDelta: 0, moved: false, mode: 'drag',
+      origins,
     };
   }, [dragGeometry, selectClip]);
 
@@ -1153,7 +1319,7 @@ export function AudioEditor() {
   }, [pxPerSec]);
 
   return (
-    <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name))) void handleFileImport(f); }}>
+    <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac|mid|midi)$/i.test(f.name))) void handleFileImport(f); }}>
       {/* Transport */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1.5">
         <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
@@ -1185,8 +1351,9 @@ export function AudioEditor() {
         <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
         <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
         <div className="flex-1" />
-        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
+        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*,.mid,.midi" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
+        <button onClick={() => addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add MIDI track"><Piano size={12} />MIDI</button>
       </div>
 
       {/* Track area */}
@@ -1231,38 +1398,51 @@ export function AudioEditor() {
             )}
           </div>
           {/* Seek + marquee layer — background click catcher (behind clips).
-           *  Plain click = seek. Shift/Cmd+drag = marquee multi-select. */}
+           *  Click (pointerdown + pointerup without moving > 3px) = seek to the
+           *  pointerdown position. Drag (pointerdown + move > 3px) = marquee
+           *  multi-select — no modifier key needed. Shift/Cmd+drag = ADDITIVE
+           *  marquee that adds to the existing selection instead of replacing
+           *  it. Plain click on an empty area also clears the selection (same
+           *  as before) so a click elsewhere dismisses a multi-select. */}
           <div
             className="absolute inset-0 top-7"
             onPointerDown={(e) => {
-              if (e.shiftKey || e.metaKey || e.ctrlKey) {
-                // Begin marquee selection
-                const r = e.currentTarget.getBoundingClientRect();
-                const sx = e.clientX - r.left, sy = e.clientY - r.top;
-                marqueeRef.current = { startX: sx, startY: sy, origin: new Set(e.shiftKey ? selectedRef.current : []) };
-                setMarquee({ x1: sx, y1: sy, x2: sx, y2: sy });
-                (e.target as HTMLElement).setPointerCapture(e.pointerId);
-              } else {
-                // Plain click = seek + clear selection
-                const r = e.currentTarget.getBoundingClientRect();
-                seek((e.clientX - r.left) / pxRef.current);
-                setSelectedClipIds(new Set());
-              }
+              const r = e.currentTarget.getBoundingClientRect();
+              const sx = e.clientX - r.left, sy = e.clientY - r.top;
+              const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+              // ALWAYS start a potential marquee — we won't know whether it's
+              // a click (seek) or a drag (marquee) until the pointer moves.
+              // The pointerup handler decides: if `moved` is still false, it
+              // was a click → seek to `seekTime`; otherwise finalise the
+              // marquee selection (already built incrementally in pointermove).
+              marqueeRef.current = {
+                startX: sx, startY: sy,
+                seekTime: sx / pxRef.current,
+                origin: new Set(additive ? selectedRef.current : []),
+                additive, moved: false,
+              };
+              (e.target as HTMLElement).setPointerCapture(e.pointerId);
             }}
             onPointerMove={(e) => {
-              if (!marqueeRef.current) return;
+              const s = marqueeRef.current; if (!s) return;
               const r = e.currentTarget.getBoundingClientRect();
               const ex = e.clientX - r.left, ey = e.clientY - r.top;
-              setMarquee({ x1: marqueeRef.current.startX, y1: marqueeRef.current.startY, x2: ex, y2: ey });
+              // Dead zone — a click that hasn't left a 3px box is still a
+              // click (seek on pointerup), not a marquee.
+              if (!s.moved) {
+                if (Math.abs(ex - s.startX) < DRAG_DEADZONE_PX && Math.abs(ey - s.startY) < DRAG_DEADZONE_PX) return;
+                s.moved = true;
+              }
+              setMarquee({ x1: s.startX, y1: s.startY, x2: ex, y2: ey });
               // Hit-test clips against the marquee rect
-              const x1 = Math.min(marqueeRef.current.startX, ex);
-              const x2 = Math.max(marqueeRef.current.startX, ex);
-              const y1 = Math.min(marqueeRef.current.startY, ey);
-              const y2 = Math.max(marqueeRef.current.startY, ey);
+              const x1 = Math.min(s.startX, ex);
+              const x2 = Math.max(s.startX, ex);
+              const y1 = Math.min(s.startY, ey);
+              const y2 = Math.max(s.startY, ey);
               const t1 = x1 / pxRef.current, t2 = x2 / pxRef.current;
               const startRowIdx = Math.floor(y1 / TRACK_H);
               const endRowIdx = Math.floor(y2 / TRACK_H);
-              const next = new Set(marqueeRef.current.origin);
+              const next = new Set(s.origin);
               clips.forEach((c) => {
                 const ti = tracks.findIndex((t) => t.id === c.trackId);
                 if (ti < startRowIdx || ti > endRowIdx) return;
@@ -1271,7 +1451,22 @@ export function AudioEditor() {
               });
               setSelectedClipIds(next);
             }}
-            onPointerUp={() => { marqueeRef.current = null; setMarquee(null); }}
+            onPointerUp={() => {
+              const s = marqueeRef.current;
+              marqueeRef.current = null;
+              setMarquee(null);
+              if (!s) return;
+              if (!s.moved) {
+                // Plain click → seek to the pointerdown position. Non-additive
+                // clicks also clear the selection (clicking empty space
+                // dismisses a multi-select); additive clicks (shift/cmd on
+                // empty space) leave the selection alone.
+                seek(s.seekTime);
+                if (!s.additive) setSelectedClipIds(new Set());
+              }
+              // If `s.moved` is true the marquee selection was already
+              // finalised incrementally in pointermove — nothing to do here.
+            }}
           />
           {/* Marquee rect overlay */}
           {marquee && (
@@ -1468,8 +1663,11 @@ const ClipBlock = memo(function ClipBlock({ clip, pxPerSec, selected, onDragStar
 
   // onDragStart handles selection (incl. Shift/Cmd additive) + the
   // clip-select event — selecting here too would clobber multi-select.
+  // `data-clip-id` is set so the multi-drag startDrag can look up every
+  // selected clip's DOM element via document.querySelector when assembling
+  // the `origins` map (see startDrag's multiDrag branch).
   return (
-    <div ref={elRef} onPointerDown={(e) => { if (elRef.current) onDragStart(clip, e, elRef.current, waveRef.current); }}
+    <div ref={elRef} data-clip-id={clip.id} onPointerDown={(e) => { if (elRef.current) onDragStart(clip, e, elRef.current, waveRef.current); }}
       className={`group pointer-events-auto absolute top-0.5 bottom-0.5 cursor-grab overflow-hidden rounded border ${selected ? 'border-warn' : 'border-black/30'} active:cursor-grabbing`} style={{ left, width, backgroundColor: `${clip.color}20` }}>
       {/* Fixed-width waveform layer — clipped by the box so trimming cuts the
           audio rather than squashing the whole wave into a smaller space. */}

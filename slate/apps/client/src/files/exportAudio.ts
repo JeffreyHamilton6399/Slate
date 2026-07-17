@@ -4,17 +4,16 @@
  *   WAV  → offline mixdown (OfflineAudioContext renders every clip as it
  *          would play live, then the rendered AudioBuffer is encoded as
  *          16-bit PCM WAV). Fast — not realtime — and bit-exact.
- *   MP4  → "video of the timeline playback". Browsers can't encode MP4 from
- *          a raw AudioBuffer directly, so we play the offline-rendered mix
- *          through a MediaStreamAudioDestinationNode and capture it with
- *          MediaRecorder. MP4/AAC is preferred (plays everywhere); browsers
- *          without MP4 encoding (Firefox) fall back to WebM/Opus.
+ *   MP3  → same offline mixdown, then encoded with lamejs (pure-JS MP3
+ *          encoder). 192 kbps stereo. Plays anywhere MP3 is supported
+ *          (which is everywhere). Much smaller than WAV for sharing.
  *
  * Both functions honour per-track volume/pan/mute/solo and per-clip
  * gain/pan/mute/speed. EQ, sends, fades, HP/LP filters and pitch shift are
  * omitted — a deliberate MVP for a "share my mix" export.
  */
 
+import { Mp3Encoder } from 'lamejs';
 import type { SlateDoc } from '../sync/doc';
 import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import { readAudioClip, readAudioTrack } from '../audio/scene';
@@ -167,90 +166,73 @@ export async function exportAudioWav(opts: {
   opts.onProgress?.(1);
 }
 
-/** Capture the mix as a media file (MP4/AAC if supported, else WebM/Opus) by
- *  playing the offline-rendered mix through a MediaStreamAudioDestinationNode
- *  and recording it with MediaRecorder. Realtime — captures exactly what
- *  would play through the speakers. */
-export async function exportAudioMp4(opts: {
+/** Encode an AudioBuffer as an MP3 ArrayBuffer using lamejs (pure-JS MP3
+ *  encoder). 192 kbps stereo (or mono if the source is mono). lamejs
+ *  consumes 1152-sample blocks; we feed it consecutive subarrays per channel
+ *  and accumulate the resulting MP3 bytes. */
+function encodeMp3(buffer: AudioBuffer): ArrayBuffer {
+  const numChannels = Math.min(2, buffer.numberOfChannels);
+  const sampleRate = buffer.sampleRate;
+  const kbps = 192;
+  const encoder = new Mp3Encoder(numChannels, sampleRate, kbps);
+
+  // Convert Float32 [-1, 1] per channel to Int16 PCM.
+  const channels: Int16Array[] = [];
+  for (let c = 0; c < numChannels; c++) {
+    const f32 = buffer.getChannelData(c);
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const v = Math.max(-1, Math.min(1, f32[i] ?? 0));
+      i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    channels.push(i16);
+  }
+
+  // lamejs internally processes 1152-sample granules — feed it consecutive
+  // blocks of that size. subarray() is a no-copy view, so this is cheap.
+  const blockSize = 1152;
+  const mp3Chunks: Uint8Array[] = [];
+  const length = channels[0]!.length;
+  for (let i = 0; i < length; i += blockSize) {
+    const end = Math.min(i + blockSize, length);
+    const left = channels[0]!.subarray(i, end);
+    const chunk = numChannels === 2
+      ? encoder.encodeBuffer(left, channels[1]!.subarray(i, end))
+      : encoder.encodeBuffer(left);
+    if (chunk.length > 0) mp3Chunks.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.length));
+  }
+  const flushed = encoder.flush();
+  if (flushed.length > 0) mp3Chunks.push(new Uint8Array(flushed.buffer, flushed.byteOffset, flushed.length));
+
+  // Concatenate all MP3 chunks into one buffer.
+  const total = mp3Chunks.reduce((sum, c) => sum + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of mp3Chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out.buffer;
+}
+
+/** Render the mix offline and download as an MP3 file (192 kbps). Fast (not
+ *  realtime) — the encoder runs on the rendered AudioBuffer directly, no
+ *  MediaRecorder capture pass needed. */
+export async function exportAudioMp3(opts: {
   slate: SlateDoc;
   duration: number;
   onProgress?: (pct: number) => void;
 }): Promise<void> {
-  if (typeof MediaRecorder === 'undefined') {
-    throw new Error('This browser can’t record audio.');
-  }
   const sampleRate = 44100;
   const length = Math.max(1, Math.ceil(opts.duration * sampleRate));
-  const offline = new OfflineAudioContext(2, length, sampleRate);
+  const ctx = new OfflineAudioContext(2, length, sampleRate);
   const clips = await collectClips(opts.slate);
-  scheduleClips(offline, clips, offline.destination);
-  opts.onProgress?.(0.2);
-  const rendered = await offline.startRendering();
-  opts.onProgress?.(0.4);
-
-  const AudioCtx =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const ctx = new AudioCtx({ sampleRate });
-  const dest = ctx.createMediaStreamDestination();
-  const src = ctx.createBufferSource();
-  src.buffer = rendered;
-  src.connect(dest);
-  // Also send to the speakers so the user hears the playback while it
-  // captures — feels like a normal "bounce" pass.
-  src.connect(ctx.destination);
-
-  const mime = [
-    'video/mp4;codecs=mp4a.40.2',
-    'video/mp4',
-    'audio/mp4',
-    'video/webm;codecs=opus',
-    'audio/webm',
-  ].find((m) => MediaRecorder.isTypeSupported(m));
-  if (!mime) throw new Error('No supported audio MIME type for MediaRecorder.');
-  const isMp4 = mime.startsWith('video/mp4') || mime.startsWith('audio/mp4');
-  const ext = isMp4 ? 'mp4' : 'webm';
-
-  const recorder = new MediaRecorder(dest.stream, {
-    mimeType: mime,
-    audioBitsPerSecond: 192_000,
-  });
-  const chunks: BlobPart[] = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data.size) chunks.push(e.data);
-  };
-  const done = new Promise<void>((resolve) => {
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: isMp4 ? 'audio/mp4' : 'audio/webm' });
-      downloadBlob(blob, `slate-mix.${ext}`);
-      resolve();
-    };
-  });
-
-  await ctx.resume();
-  recorder.start();
-  src.start();
-  const start = performance.now();
-  const totalMs = opts.duration * 1000;
-  await new Promise<void>((resolve) => {
-    const tick = () => {
-      const elapsed = performance.now() - start;
-      opts.onProgress?.(0.4 + 0.6 * Math.min(1, elapsed / totalMs));
-      if (elapsed >= totalMs) {
-        resolve();
-        return;
-      }
-      setTimeout(tick, 100);
-    };
-    tick();
-  });
-  recorder.stop();
-  try {
-    src.stop();
-  } catch {
-    // source may have already finished — ignore
-  }
-  await done;
-  await ctx.close();
+  scheduleClips(ctx, clips, ctx.destination);
+  opts.onProgress?.(0.15);
+  const rendered = await ctx.startRendering();
+  opts.onProgress?.(0.6);
+  const mp3 = encodeMp3(rendered);
+  opts.onProgress?.(0.95);
+  downloadBlob(new Blob([mp3], { type: 'audio/mpeg' }), 'slate-mix.mp3');
   opts.onProgress?.(1);
 }

@@ -1105,3 +1105,69 @@ Stage Summary:
 - Quantize: 1/4 to 1/32 grid options in the InstrumentPanel header, applied to recorded takes before offline render.
 - Remote mute: verified the `applyTracks` subscription is in place (re-applies Yjs track values to the audio graph on every track change, local OR remote). Added a comment explaining the fix.
 - TypeScript clean (exit 0). No new dependencies. Backward compatible (all new schema fields optional; existing audio clips continue to work as `kind: 'audio'` by default).
+
+---
+Task ID: ROUND12-A
+Agent: Code (Slate client fixes, 5 tasks)
+Task: (1) Multi-select clip drag moves ALL selected clips together, (2) plain drag on empty timeline = marquee select (no modifier needed), (3) export MP3 instead of MP4 for audio, (4) MIDI file import via @tonejs/midi, (5) "MIDI Track" button in transport bar.
+
+Work Log:
+- Read worklog (latest ROUND11-B) + all target files: AudioEditor.tsx (1494→1661 lines), scene.ts, exportAudio.ts, ExportDialog.tsx, sync-protocol schema.ts (NoteEvent, AudioClip, AudioTrack).
+- Installed packages via `npx pnpm add lamejs @tonejs/midi --filter @slate/client` (lamejs@1.2.1, @tonejs/midi@2.0.28). lamejs ships no types; @tonejs/midi ships types but `notes` lives on Track, not Midi — flatten in decodeMidiFile.
+
+Files Created (1):
+1. `slate/apps/client/src/lamejs.d.ts` — ambient module declaration for lamejs. Declares the `Mp3Encoder` class with `constructor(channels, sampleRate, kbps)`, `encodeBuffer(left: Int16Array, right?: Int16Array): Int8Array`, `flush(): Int8Array`. Minimal — only the symbols we use.
+
+Files Modified (4):
+2. `slate/apps/client/src/audio/AudioEditor.tsx` (Tasks 1, 2, 4, 5):
+   - dragRef type extended with optional `origins?: Map<string, {el, waveEl, os, od, oo, trackId}>`.
+   - New module-level helper `clampGroupDt(dt, origins, byTrack)` near `nearestFreeStart`: per-clip × blocker constraints (lower/upper bounds on dt) intersected into one clamp range. Returns 0 if constraints conflict.
+   - `dragGeometry(clip, excludeIds?)` now optionally takes a Set of ids to skip when building neighbour bounds (multi-drag passes the full selection so the group's own members don't block it).
+   - `startDrag`: detects `multiDrag = !additive && selectedRef.current.has(clip.id) && selectedRef.current.size > 1` BEFORE calling selectClip (so plain-clicking an already-multi-selected clip preserves the group). Populates `origins` for every selected clip via `document.querySelector('[data-clip-id="..."]')`. The dragged clip's own element is reused directly (no DOM lookup).
+   - Added `data-clip-id={clip.id}` to ClipBlock's root div for the DOM lookup.
+   - `applyMove` (rAF callback): when `d.origins` is populated, snaps based on the dragged clip's edges then moves EVERY selected clip's `el.style.left` by the same delta. Vertical rowDelta is bypassed for the group (each clip stays on its origin track). Group's elements are elevated to z-40 while in transit, same as the dragged clip.
+   - `onUp`: when committing a multi-drag, computes `dt = left - draggedOrigin.os`, clamps it via `clampGroupDt`, writes resolved positions to all group elements' DOM, then commits each clip's `start` to Yjs inside a single `slate.doc.transact()` (atomic for peers).
+   - `marqueeRef` type extended with `seekTime`, `additive`, `moved`.
+   - Seek layer's `onPointerDown` now ALWAYS starts a potential marquee — no modifier-key gate. Stashes `seekTime = sx / pxRef.current` for the click fallback.
+   - `onPointerMove` keeps a 3px dead zone; once exceeded, sets `moved = true` and starts updating the marquee rect + hit-testing clips. Before the dead zone, the pointer is still treated as a potential click.
+   - `onPointerUp`: if `!moved` → seek to `seekTime` and (if non-additive) clear the selection. If `moved` → marquee selection was already finalised incrementally in pointermove, nothing to do.
+   - Shift/Cmd+drag stays additive (origin = current selection). Plain drag now starts a fresh marquee with no modifier needed.
+   - Imported `addMidiClip, decodeMidiFile` from `./scene`.
+   - `handleFileImport` branches on file extension: `/\.midi?$/i` → MIDI path (creates a MIDI track with `instrumentId: SOUNDFONT_PIANO_ID` + a MIDI clip via `addMidiClip`; also adopts the file's tempo as the board BPM if in [20, 300]); other audio files keep the existing `decodeAudioFile` → audio track + audio clip path.
+   - Drag-drop regex updated to `/\.(mp3|wav|ogg|m4a|flac|aac|mid|midi)$/i`.
+   - Import button's `accept` attribute: `"audio/*,.mid,.midi"`.
+   - Added a "MIDI" track button next to the existing "+Track" button in the transport bar: `addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })`. `Piano` was already imported from lucide-react; `SOUNDFONT_PIANO_ID` was already imported from `./engine`.
+
+3. `slate/apps/client/src/audio/scene.ts` (Task 4):
+   - Imports: added `import { Midi } from '@tonejs/midi'` and `NoteEvent` to the `@slate/sync-protocol` type import.
+   - Added `decodeMidiFile(file: File)` — reads file as ArrayBuffer, parses with `new Midi(arrayBuffer)`, flattens `midi.tracks[].notes` into one `NoteEvent[]` (each note's `start` is the absolute time in seconds from the start of the file). Returns `{notes, duration, tempo}` where tempo comes from `midi.header.tempos[0]?.bpm ?? 120`.
+   - Note: the @tonejs/midi TypeScript definitions put `notes` on `Track`, not `Midi` (even though some docs use `midi.notes`). The implementation correctly iterates `midi.tracks[].notes` to flatten across all tracks.
+
+4. `slate/apps/client/src/files/exportAudio.ts` (Task 3):
+   - Imports: added `import { Mp3Encoder } from 'lamejs'`.
+   - Updated module doc-comment to describe WAV + MP3 (removed MP4 description).
+   - Removed the old `exportAudioMp4` (MediaRecorder realtime capture).
+   - Added `encodeMp3(buffer: AudioBuffer): ArrayBuffer` helper — converts Float32 channels → Int16 PCM, feeds lamejs 1152-sample blocks via `encodeBuffer(left, right?)`, drains with `flush()`, concatenates chunks into one ArrayBuffer. 192 kbps stereo (or mono if the source is mono).
+   - Added `exportAudioMp3({slate, duration, onProgress})` — same offline mixdown path as WAV (collectClips → scheduleClips → OfflineAudioContext.startRendering), then `encodeMp3(rendered)`, downloads `slate-mix.mp3` (MIME `audio/mpeg`). Fast (not realtime).
+
+5. `slate/apps/client/src/files/ExportDialog.tsx` (Task 3):
+   - Import switched from `exportAudioMp4` to `exportAudioMp3`.
+   - FORMAT_INFO: added `mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.'`.
+   - `ExportFormat` union: added `'mp3'`.
+   - onExport audio branch: `format === 'mp3'` calls `exportAudioMp3` (was `mp4` → `exportAudioMp4`).
+   - `formats` array: audio mode now `['wav', 'mp3']` (was `['wav', 'mp4']`).
+   - Audio-mode description text updated to mention lamejs 192 kbps MP3 (was MediaRecorder realtime capture).
+   - Dialog header comment updated.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, 0 errors across all 5 modified/created files plus the rest of the codebase.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → exit 0 (no schema changes needed; NoteEvent + AudioClip.notes already added in ROUND11-B).
+- `npx eslint src/audio/AudioEditor.tsx src/audio/scene.ts src/files/exportAudio.ts src/files/ExportDialog.tsx src/lamejs.d.ts` → 0 errors, 1 pre-existing warning (AudioEditor line 1293 useCallback pxPerSec dep — line number shifted due to added helpers/comments, was line 1127 before this round).
+
+Stage Summary:
+- Multi-select clip drag: a plain click-and-drag on any clip in a multi-selection moves the WHOLE group together, with per-track overlap resolution (clampGroupDt intersects every clip's non-overlap range to find a single dt that keeps the whole group free of non-selected neighbours). Committed atomically via one Yjs transaction.
+- Plain drag on empty timeline = marquee select (no modifier needed). Plain click on empty timeline = seek (preserved behaviour). Shift/Cmd+drag = additive marquee (adds to existing selection).
+- Audio export is now WAV (lossless 16-bit PCM) or MP3 (192 kbps lamejs-encoded) — MP4 (MediaRecorder realtime capture) removed. Both modes render the mix offline via OfflineAudioContext, so MP3 export is fast and not realtime.
+- MIDI files (.mid / .midi) can be imported via the Import button or drag-drop. Each imported MIDI file creates a new MIDI track (with the soundfont piano as default instrument) and a MIDI clip containing the flattened note list. The file's tempo is adopted as the board BPM if the board is fresh.
+- Transport bar has a dedicated "MIDI" button next to "+Track" — adds a pre-configured MIDI track (kind=midi, instrumentId=SOUNDFONT_PIANO_ID, name='MIDI Track') in one click.
+- TypeScript clean (exit 0). New deps: lamejs + @tonejs/midi (both pure-JS, no native bindings). Backward compatible — all schema fields used were already optional from ROUND11-B.

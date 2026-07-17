@@ -6,7 +6,8 @@
  */
 
 import * as Y from 'yjs';
-import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
+import { Midi } from '@tonejs/midi';
+import type { AudioClip, AudioTrack, NoteEvent } from '@slate/sync-protocol';
 import type { SlateDoc } from '../sync/doc';
 import { makeId } from '../utils/id';
 import { storeSamples, loadSamples, deleteSamples } from './sampleStore';
@@ -319,4 +320,37 @@ export async function decodeAudioFile(file: File): Promise<{
   const samples: number[] = new Array(interleaved.length);
   for (let i = 0; i < interleaved.length; i++) samples[i] = interleaved[i]!;
   return { samples, sampleRate: audioBuffer.sampleRate, channels, duration: audioBuffer.duration };
+}
+
+/** Decode a Standard MIDI File (.mid / .midi) into a flat note list + tempo.
+ *  Uses @tonejs/midi which handles the SMPTE-to-seconds conversion (with
+ *  tempo changes). Notes from every track are flattened into one list (the
+ *  MIDI clip model is a single instrument voice, not multi-track). The
+ *  returned notes' `start` times are relative to the start of the file
+ *  (which becomes the start of the clip we create). */
+export async function decodeMidiFile(file: File): Promise<{
+  notes: NoteEvent[];
+  duration: number;
+  tempo: number;
+}> {
+  const arrayBuffer = await file.arrayBuffer();
+  const midi = new Midi(arrayBuffer);
+  // @tonejs/midi keeps notes per Track; flatten into one list, preserving
+  // each note's absolute time (seconds from the start of the file).
+  const notes: NoteEvent[] = [];
+  for (const track of midi.tracks) {
+    for (const n of track.notes) {
+      notes.push({
+        midi: n.midi,
+        velocity: n.velocity,
+        start: n.time,
+        duration: n.duration,
+      });
+    }
+  }
+  return {
+    notes,
+    duration: midi.duration,
+    tempo: midi.header.tempos[0]?.bpm ?? 120,
+  };
 }

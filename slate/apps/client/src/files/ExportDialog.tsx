@@ -4,11 +4,11 @@
  *
  *   2D    → png / jpg / webp / svg / mp4 (canvas animation)
  *   3D    → glb / gltf / obj / stl / ply / fbx / mp4 (animation render)
- *   Audio → wav (offline mixdown) / mp4 (timeline playback capture)
+ *   Audio → wav (offline mixdown) / mp3 (192 kbps MP3, offline encode)
  *
  * Audio mode previously fell through to the 2D branch and produced blank
- * PNGs — it now renders the mix via OfflineAudioContext (WAV) or captures
- * the live playback via MediaRecorder (MP4).
+ * PNGs — it now renders the mix via OfflineAudioContext (WAV) or encodes
+ * an MP3 with lamejs from the same offline-rendered buffer.
  */
 
 import { useEffect, useState } from 'react';
@@ -20,7 +20,7 @@ import { useAppStore } from '../app/store';
 import { exportRaster, exportSvg, type RasterFormat } from './export2d';
 import { export3D, type ThreeDFormat } from './export3d';
 import { export2dVideo } from './export2dVideo';
-import { exportAudioWav, exportAudioMp4 } from './exportAudio';
+import { exportAudioWav, exportAudioMp3 } from './exportAudio';
 import { readSceneSnapshot } from '../viewport3d/scene';
 import { useScene3DStore } from '../viewport3d/store';
 import { useCanvasStore } from '../canvas2d/store';
@@ -55,9 +55,10 @@ const FORMAT_INFO: Record<string, string> = {
   ply: 'Point/mesh research format — geometry only.',
   fbx: 'Autodesk FBX — DCC interchange (Blender, Maya, Unity).',
   wav: 'Audio mixdown — lossless 16-bit PCM, plays anywhere.',
+  mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.',
 };
 
-type ExportFormat = RasterFormat | 'svg' | 'mp4' | 'wav' | ThreeDFormat;
+type ExportFormat = RasterFormat | 'svg' | 'mp4' | 'wav' | 'mp3' | ThreeDFormat;
 
 /** Default format per board mode — used when the dialog opens or the mode
  *  changes so a stale format from another mode is never selected. */
@@ -95,13 +96,13 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     setProgress(0);
     try {
       if (isAudio) {
-        // Audio mode — WAV mixdown or MP4 timeline capture.
+        // Audio mode — WAV mixdown or MP3 (lamejs) encode, both offline.
         const duration = computeAudioDuration(room.slate);
         if (duration <= 0) throw new Error('Nothing to export — add some audio clips first.');
         if (format === 'wav') {
           await exportAudioWav({ slate: room.slate, duration, onProgress: setProgress });
-        } else if (format === 'mp4') {
-          await exportAudioMp4({ slate: room.slate, duration, onProgress: setProgress });
+        } else if (format === 'mp3') {
+          await exportAudioMp3({ slate: room.slate, duration, onProgress: setProgress });
         } else {
           throw new Error(`Unsupported audio format: ${format}`);
         }
@@ -181,7 +182,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   };
 
   const formats: readonly ExportFormat[] = isAudio
-    ? (['wav', 'mp4'] as const)
+    ? (['wav', 'mp3'] as const)
     : is3d
       ? (['glb', 'gltf', 'obj', 'stl', 'ply', 'fbx', 'mp4'] as const)
       : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
@@ -306,7 +307,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             <p className="text-[11px] text-text-dim">
               {format === 'wav'
                 ? 'Renders every clip offline (fast) and encodes a 16-bit stereo WAV — bit-exact, no realtime wait.'
-                : 'Plays the mix through a media stream destination and captures it with MediaRecorder — realtime, MP4/AAC if supported, WebM/Opus otherwise.'}
+                : 'Renders every clip offline (fast) and encodes a 192 kbps MP3 with lamejs — tiny files, plays everywhere.'}
               {' '}
               Per-track volume/pan/mute/solo and per-clip gain/pan/speed are honoured.
             </p>

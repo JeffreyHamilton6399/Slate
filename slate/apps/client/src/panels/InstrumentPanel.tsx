@@ -372,7 +372,7 @@ export function InstrumentPanel() {
         <button type="button" onClick={() => setBaseMidi((m) => Math.min(84, m + 12))} className="flex h-5 w-5 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Octave up (X)"><Plus size={11} /></button>
       </div>
 
-      <div className="relative h-24 w-full touch-none select-none" role="group" aria-label="Piano keyboard">
+      <div className="relative h-24 w-full touch-none select-none" role="group" aria-label="Piano keyboard" title="Click to play — lower on the key = louder. Drag across keys for glissando.">
         {/* White keys */}
         <div className="flex h-full w-full">
           {whites.map((midi) => (
@@ -499,12 +499,6 @@ export function InstrumentPanel() {
         </div>
       )}
 
-      <div className="mt-auto rounded-md border border-border bg-bg-3 p-2 text-[10px] text-text-dim">
-        <p className="mb-1 font-medium text-text-mid">Tips</p>
-        <p>• Click keys to play — lower on the key = louder</p>
-        <p>• ⌨ toggle: play with A W S E D F… · Z/X = octave</p>
-        <p>• ⏺ records your playing into a clip at the playhead</p>
-      </div>
     </div>
   );
 }

@@ -57,6 +57,43 @@ const SNAP_PX = 8;
  *  keeps plain select-clicks from nudging the clip by a pixel. */
 const DRAG_DEADZONE_PX = 3;
 
+/** Nearest start position at which a clip of `duration` fits without
+ *  overlapping any blocker. Merges blockers into occupied intervals, then
+ *  picks the gap position closest to `desired`. This replaces the previous
+ *  "slide to the nearest side of the current blocker" iteration, which could
+ *  ping-pong between two adjacent blockers (each resolution landing on the
+ *  other) and exhaust its iteration budget while STILL overlapping —
+ *  committing a clip on top of another one. Scanning gaps directly is
+ *  deterministic: the open-ended gap after the last blocker always fits, so a
+ *  valid position always exists. */
+function nearestFreeStart(desired: number, duration: number, blockersIn: { start: number; end: number }[]): number {
+  const eps = 1e-4;
+  desired = Math.max(0, desired);
+  if (blockersIn.length === 0) return desired;
+  const sorted = [...blockersIn].sort((a, b) => a.start - b.start);
+  const occupied: { start: number; end: number }[] = [];
+  for (const b of sorted) {
+    const last = occupied[occupied.length - 1];
+    if (last && b.start <= last.end + eps) last.end = Math.max(last.end, b.end);
+    else occupied.push({ start: b.start, end: b.end });
+  }
+  let best = desired;
+  let bestDist = Infinity;
+  const consider = (lo: number, hi: number) => {
+    if (hi - lo < duration - eps) return; // gap too small
+    const cand = Math.min(Math.max(desired, lo), hi - duration);
+    const dist = Math.abs(cand - desired);
+    if (dist < bestDist) { bestDist = dist; best = cand; }
+  };
+  let prevEnd = 0;
+  for (const o of occupied) {
+    consider(prevEnd, o.start);
+    prevEnd = Math.max(prevEnd, o.end);
+  }
+  consider(prevEnd, Infinity); // open-ended tail — always fits
+  return Math.max(0, best);
+}
+
 // ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
 // Key: `${clipId}:${sampleCount}:${width}` → data URL
 const waveformPNGCache = new Map<string, string>();
@@ -646,23 +683,9 @@ export function AudioEditor() {
           const targetTrackId = d.trackIds[d.trackIndex + d.rowDelta] ?? d.trackIds[d.trackIndex]!;
           const originTrackId = d.trackIds[d.trackIndex]!;
           // Enforce the no-overlap invariant HERE (the drag itself follows
-          // the mouse freely): if the dropped position overlaps a clip on the
-          // target track, slide to the nearest free side of the blocker,
-          // iterating so chains of clips resolve to the nearest actual gap.
-          const duration = d.od;
-          const blockers = d.byTrack.get(targetTrackId) ?? [];
-          const eps = 1e-4;
-          let start = Math.max(0, left);
-          for (let iter = 0; iter < blockers.length + 1; iter++) {
-            const blocker = blockers.find((n) => start + duration > n.start + eps && start < n.end - eps);
-            if (!blocker) break;
-            const leftPos = blocker.start - duration;
-            const rightPos = blocker.end;
-            // Nearest free side of the blocker; the left slot is invalid if
-            // it would push the clip before t=0.
-            start = leftPos >= 0 && Math.abs(left - leftPos) <= Math.abs(left - rightPos) ? leftPos : rightPos;
-          }
-          start = Math.max(0, start);
+          // the mouse freely): place the clip in the free gap nearest to the
+          // dropped position.
+          const start = nearestFreeStart(left, d.od, d.byTrack.get(targetTrackId) ?? []);
           // Write the resolved position to the DOM too so there's no flicker
           // between pointer-up and the Yjs-driven re-render.
           d.el.style.left = `${start * pps}px`;
@@ -886,9 +909,22 @@ export function AudioEditor() {
     if (items.length === 0) return;
     const base = positionRef.current; // paste the group at the playhead
     const newIds: string[] = [];
+    // Blockers per track: existing clips + clips already placed by THIS paste
+    // (clipsRef won't include them until React re-renders), so pasted clips
+    // never land on top of anything.
+    const placedByTrack = new Map<string, { start: number; end: number }[]>();
+    for (const c of clipsRef.current) {
+      let list = placedByTrack.get(c.trackId);
+      if (!list) { list = []; placedByTrack.set(c.trackId, list); }
+      list.push({ start: c.start, end: c.start + c.duration });
+    }
     for (const it of items) {
+      const blockers = placedByTrack.get(it.src.trackId) ?? [];
+      const start = nearestFreeStart(base + it.relStart, it.src.duration, blockers);
+      blockers.push({ start, end: start + it.src.duration });
+      placedByTrack.set(it.src.trackId, blockers);
       const id = await addAudioClip(slate, it.src.trackId, {
-        start: base + it.relStart,
+        start,
         samples: it.samples, // Float32Array passed straight through
         sampleRate: it.src.sampleRate,
         channels: it.src.channels,
@@ -1021,6 +1057,10 @@ export function AudioEditor() {
 
   const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
     e.stopPropagation();
+    // Without this, the browser starts a native text/image selection on the
+    // mouse-drag: the waveform <img>s and labels of every clip the pointer
+    // sweeps across get painted with the blue ::selection overlay.
+    e.preventDefault();
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     selectClip(clip.id, additive);
     window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
@@ -1036,6 +1076,7 @@ export function AudioEditor() {
 
   const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
     e.stopPropagation();
+    e.preventDefault(); // block native selection (see startDrag)
     selectClip(clip.id, e.shiftKey || e.metaKey || e.ctrlKey);
     window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
     const { leftLimit, rightLimit, byTrack, snapTimes } = dragGeometry(clip);
@@ -1146,7 +1187,7 @@ export function AudioEditor() {
         </div>
 
         {/* Timeline */}
-        <div data-timeline className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
+        <div data-timeline className="relative flex-1 select-none" style={{ minWidth: timelineDuration * pxPerSec }}>
           {/* Ruler + loop handles */}
           <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
             {Array.from({ length: Math.ceil(timelineDuration / tickInterval) + 1 }, (_, i) => {

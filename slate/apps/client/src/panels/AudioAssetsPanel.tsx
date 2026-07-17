@@ -111,6 +111,7 @@ export function AudioAssetsPanel() {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
+          title="Import audio files — or drag & drop them onto this panel or the timeline"
           className="flex items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[10px] text-text-mid hover:bg-bg-3"
         >
           <Upload size={10} />
@@ -205,6 +206,7 @@ export function AudioAssetsPanel() {
                 e.dataTransfer.setData('application/x-slate-audio-asset', asset.id);
                 e.dataTransfer.effectAllowed = 'copy';
               }}
+              title="Drag onto a timeline track, or + to add to a new track"
               className="group flex items-center gap-2 rounded-sm border border-border bg-bg-3 p-2 hover:border-accent/40 cursor-grab active:cursor-grabbing"
             >
               <FileAudio size={14} className="shrink-0 text-accent" />
@@ -251,13 +253,6 @@ export function AudioAssetsPanel() {
         </div>
       )}
 
-      {/* Quick tips */}
-      <div className="mt-auto rounded-md border border-border bg-bg-3 p-2 text-[10px] text-text-dim">
-        <p className="mb-1 font-medium text-text-mid">Tips</p>
-        <p>• Drag audio files here or onto the timeline</p>
-        <p>• Space = Play · R = Record · L = Loop</p>
-        <p>• Drag clip edges to trim · Click to select</p>
-      </div>
     </div>
   );
 }

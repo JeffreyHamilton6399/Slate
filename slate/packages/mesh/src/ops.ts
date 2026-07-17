@@ -552,6 +552,14 @@ export function bevelEdges(
   // vertex chosen for each (edge, endpoint, face) — the strips and corner
   // patches share those exact vertices, keeping the result watertight.
   const sideCorner = new Map<string, number>(); // `${edgeKey}:${vert}:${face}` → vert id
+  // Slid corners are SHARED per (vertex, unbeveled edge): the two faces
+  // flanking an unbeveled edge both slide this corner along that same edge.
+  // Creating one vertex per face left two coincident-but-distinct ids, so
+  // the corner-patch loop below couldn't chain through them and fell back
+  // to fanning through the ORIGINAL vertex — a spike sticking out of every
+  // corner where a beveled region met an unbeveled edge (e.g. beveling the
+  // four edges of a cube's top face left all four top corners as spikes).
+  const slidCorner = new Map<string, number>(); // `${vert}|${unbeveledEdgeKey}` → vert id
   m.faces.forEach((f, fi) => {
     const n = f.v.length;
     let touches = false;
@@ -571,19 +579,23 @@ export function bevelEdges(
         continue;
       }
       const V = vGet(m, cur);
-      let X: Vec3;
+      let id: number;
       if (ePrev && eNext) {
         // Corner between two beveled edges: offset-line intersection.
         const t1 = inFacePerp(fi, prev, cur);
         const t2 = inFacePerp(fi, cur, next);
         const c = dot(t1, t2);
         const w = Math.min(ePrev.w, eNext.w);
-        X = c > -0.99
+        const X = c > -0.99
           ? add(V, scale(add(t1, t2), w / (1 + c)))
           : add(V, scale(t1, w)); // degenerate fold-back — arbitrary but stable
+        id = vAdd(m, X);
       } else {
         // One beveled edge: slide the corner along the UNBEVELED loop edge to
-        // where the beveled edge's offset line crosses it.
+        // where the beveled edge's offset line crosses it. The slid vertex is
+        // shared with the face on the other side of that unbeveled edge (see
+        // slidCorner above); when both faces want it, keep the FARTHER slide
+        // so the wider strip's offset is honored.
         const bev = (eNext ?? ePrev)!;
         const tperp = eNext ? inFacePerp(fi, cur, next) : inFacePerp(fi, prev, cur);
         const other = eNext ? prev : next; // the unbeveled edge's far endpoint
@@ -591,10 +603,20 @@ export function bevelEdges(
         const ul = length(u);
         const ud = ul > 1e-9 ? scale(u, 1 / ul) : tperp;
         const k = dot(ud, tperp);
-        const s = k > 0.05 ? Math.min(bev.w / k, ul * 0.9) : bev.w;
-        X = add(V, k > 0.05 ? scale(ud, s) : scale(tperp, bev.w));
+        const onEdge = k > 0.05;
+        const s = onEdge ? Math.min(bev.w / k, ul * 0.9) : bev.w;
+        const X = add(V, onEdge ? scale(ud, s) : scale(tperp, bev.w));
+        const slideKey = `${cur}|${ekey(cur, other)}`;
+        const existing = slidCorner.get(slideKey);
+        if (existing !== undefined) {
+          id = existing;
+          // Only points ON the unbeveled edge can be merged meaningfully.
+          if (onEdge && length(sub(X, V)) > length(sub(vGet(m, id), V))) vSet(m, id, X);
+        } else {
+          id = vAdd(m, X);
+          if (onEdge) slidCorner.set(slideKey, id);
+        }
       }
-      const id = vAdd(m, X);
       newV.push(id);
       if (ePrev) sideCorner.set(`${ePrev.key}:${cur}:${fi}`, id);
       if (eNext) sideCorner.set(`${eNext.key}:${cur}:${fi}`, id);

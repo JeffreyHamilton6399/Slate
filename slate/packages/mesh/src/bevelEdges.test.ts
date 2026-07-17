@@ -111,6 +111,35 @@ describe('bevelEdges', () => {
     expect(cornerVerts).toBeGreaterThan(0);
   });
 
+  it('face bevel (top 4 edges): shared slid corners — no spike at the original corners', () => {
+    const c = cube(1);
+    // The four edges of the top face (y = +0.5), skipping diagonals.
+    const tops: number[] = [];
+    for (let i = 0; i < vCount(c); i++) if (Math.abs(vGet(c, i).y - 0.5) < 1e-9) tops.push(i);
+    const pairs: number[] = [];
+    for (const a of tops) for (const b of tops) {
+      if (a >= b) continue;
+      const va = vGet(c, a), vb = vGet(c, b);
+      if ((Math.abs(va.x - vb.x) < 1e-9 || Math.abs(va.z - vb.z) < 1e-9) && Math.hypot(va.x - vb.x, va.z - vb.z) < 1.5) {
+        pairs.push(a, b);
+      }
+    }
+    expect(pairs.length).toBe(8);
+    const out = bevelEdges(c, pairs, 0.2, 2);
+    // REGRESSION: the two side faces flanking each vertical edge used to
+    // create separate coincident slid corners, breaking the corner-patch
+    // loop — the fill then fanned through the ORIGINAL corner vertex,
+    // leaving a triangle spike at every top corner.
+    for (let i = 0; i < vCount(out); i++) {
+      const p = vGet(out, i);
+      const atTopCorner =
+        Math.abs(p.y - 0.5) < 1e-6 &&
+        Math.abs(Math.abs(p.x) - 0.5) < 1e-6 &&
+        Math.abs(Math.abs(p.z) - 0.5) < 1e-6;
+      expect(atTopCorner).toBe(false);
+    }
+  });
+
   it('returns the input unchanged for zero amount or empty selection', () => {
     const c = cube(1);
     expect(bevelEdges(c, [], 0.2, 2).faces.length).toBe(c.faces.length);

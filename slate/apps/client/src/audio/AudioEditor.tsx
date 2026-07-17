@@ -6,7 +6,7 @@
  */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import {
   Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
@@ -505,6 +505,23 @@ export function AudioEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slate]);
 
+  /** Undo/redo for audio edits (move/trim/add/delete of tracks + clips).
+   *  Y.UndoManager only captures LOCAL transactions (origin null), so a
+   *  peer's edits are never undone from this client. Sample blobs stay in
+   *  IndexedDB when a clip is deleted (see scene.ts) so an undone delete
+   *  comes back playable. */
+  const undoRef = useRef<Y.UndoManager | null>(null);
+  useEffect(() => {
+    const um = new Y.UndoManager([slate.audioTracks(), slate.audioClips()], {
+      captureTimeout: 300,
+    });
+    undoRef.current = um;
+    return () => {
+      um.destroy();
+      undoRef.current = null;
+    };
+  }, [slate]);
+
   useEffect(() => {
     engineRef.current = new AudioEngine();
     engineRef.current.setMasterVolume(masterVol);
@@ -839,9 +856,12 @@ export function AudioEditor() {
       const k = e.key.toLowerCase();
       // The InstrumentPanel owns the note keys while its keyboard capture is
       // on (D/F/G/… play notes, Z/X shift octave) — Space/arrows/Delete still
-      // reach the transport, like a real DAW.
-      if (instrumentKeyCapture.current && INSTRUMENT_CAPTURE_KEYS.has(k)) return;
+      // reach the transport, like a real DAW. Modifier chords (Ctrl+Z undo,
+      // Ctrl+C copy) pass through: the instrument ignores them too.
+      if (instrumentKeyCapture.current && !e.ctrlKey && !e.metaKey && INSTRUMENT_CAPTURE_KEYS.has(k)) return;
       if (k === ' ') { e.preventDefault(); togglePlay(); }
+      else if (k === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); undoRef.current?.undo(); }
+      else if ((k === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) || (k === 'y' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); undoRef.current?.redo(); }
       else if (k === 'c' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void copyClips(); }
       else if (k === 'v' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void pasteClips(); }
       else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
@@ -1505,7 +1525,7 @@ export function AudioEditor() {
         <span>{tracks.length}T · {clips.length}C</span>
         {recording && <span className="text-danger">● Rec</span>}
         {playing && <span className="text-accent">▶ Play</span>}
-        <span className="ml-auto">Space · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
+        <span className="ml-auto">Space · Ctrl+Z=Undo · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
       </div>
     </div>
   );

@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Circle, Keyboard, Minus, Plus, Save, Square, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, Keyboard, Minus, Plus, Save, Square, Trash2, Usb } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import { addAudioClip, addAudioTrack, readAudioClip } from '../audio/scene';
@@ -184,6 +184,56 @@ export function InstrumentPanel() {
     return () => window.removeEventListener('pointerup', up);
   }, [noteOff]);
 
+  // ── Web MIDI (hardware keyboards) ─────────────────────────────────────────
+
+  const [midiOn, setMidiOn] = useState(false);
+  const midiAccessRef = useRef<MIDIAccess | null>(null);
+
+  const onMidiMessage = useCallback((e: MIDIMessageEvent) => {
+    const d = e.data;
+    if (!d || d.length < 3) return;
+    const status = d[0]! & 0xf0;
+    const note = d[1]!;
+    const vel = d[2]!;
+    if (status === 0x90 && vel > 0) noteOn(note, vel / 127);
+    else if (status === 0x80 || (status === 0x90 && vel === 0)) noteOff(note);
+  }, [noteOn, noteOff]);
+
+  const toggleMidi = useCallback(async () => {
+    if (midiAccessRef.current) {
+      midiAccessRef.current.inputs.forEach((inp) => { inp.onmidimessage = null; });
+      midiAccessRef.current.onstatechange = null;
+      midiAccessRef.current = null;
+      setMidiOn(false);
+      return;
+    }
+    if (!('requestMIDIAccess' in navigator)) {
+      toast({ title: 'MIDI not supported', description: 'This browser has no Web MIDI support (try Chrome/Edge).', variant: 'error' });
+      return;
+    }
+    try {
+      const access = await navigator.requestMIDIAccess();
+      midiAccessRef.current = access;
+      const attach = () => access.inputs.forEach((inp) => { inp.onmidimessage = onMidiMessage; });
+      attach();
+      access.onstatechange = attach; // hot-plugged keyboards attach too
+      setMidiOn(true);
+      const n = access.inputs.size;
+      toast({ title: 'MIDI connected', description: n > 0 ? `${n} input device${n > 1 ? 's' : ''} listening` : 'Plug in a MIDI keyboard and play' });
+    } catch {
+      toast({ title: 'MIDI access denied', variant: 'error' });
+    }
+  }, [onMidiMessage]);
+
+  // Detach MIDI handlers on unmount.
+  useEffect(() => () => {
+    if (midiAccessRef.current) {
+      midiAccessRef.current.inputs.forEach((inp) => { inp.onmidimessage = null; });
+      midiAccessRef.current.onstatechange = null;
+      midiAccessRef.current = null;
+    }
+  }, []);
+
   // ── Recording ─────────────────────────────────────────────────────────────
 
   // Live "REC 3.2s · 5 notes" readout.
@@ -199,8 +249,9 @@ export function InstrumentPanel() {
   }, [recInfo !== null]);
 
   /** Place a rendered take: reuse a track named after the instrument if the
-   *  region is free there, otherwise create a new track. */
-  const placeTake = useCallback(async (notes: NoteEvent[], startPos: number) => {
+   *  region is free there, otherwise create a new track. `clipName` overrides
+   *  the default "<instrument> take" (single notes use their note name). */
+  const placeTake = useCallback(async (notes: NoteEvent[], startPos: number, clipName?: string) => {
     const p = paramsRef.current;
 
     // ── Quantize pass ──────────────────────────────────────────────────────
@@ -244,10 +295,22 @@ export function InstrumentPanel() {
       sampleRate: RENDER_SAMPLE_RATE,
       channels: 1,
       duration: rendered.duration,
-      name: `${p.name} take`,
+      name: clipName ?? `${p.name} take`,
     });
-    toast({ title: 'Take added', description: `${qNotes.length} notes → ${p.name}${q !== 'off' ? ` · quantized ${q}` : ''}` });
+    toast({
+      title: clipName ? 'Note added' : 'Take added',
+      description: clipName ?? `${qNotes.length} notes → ${p.name}${q !== 'off' ? ` · quantized ${q}` : ''}`,
+    });
   }, [slate]);
+
+  /** Shift+click on a key: drop that single note as a clip at the playhead
+   *  (one beat long at the project tempo) — quick way to build melodies
+   *  note-by-note without recording. */
+  const addSingleNote = useCallback((midi: number, velocity: number) => {
+    const bpm = Math.max(20, Math.min(300, slate.audioBpm()));
+    const note: NoteEvent = { midi, velocity, start: 0, duration: 60 / bpm };
+    void placeTake([note], audioPlayheadPos.current, `${midiToName(midi)} · ${paramsRef.current.name}`);
+  }, [slate, placeTake]);
 
   const toggleRecord = useCallback(() => {
     const rec = recRef.current;
@@ -346,8 +409,17 @@ export function InstrumentPanel() {
 
   const keyDown = (midi: number) => (e: React.PointerEvent) => {
     e.preventDefault();
+    const vel = velocityFromEvent(e);
+    if (e.shiftKey) {
+      // Shift+click = drop this note as a clip at the playhead (with a short
+      // audible confirmation), instead of just playing it.
+      synthRef.current?.noteOn(midi, vel);
+      window.setTimeout(() => synthRef.current?.noteOff(midi), 250);
+      addSingleNote(midi, vel);
+      return;
+    }
     pointerNoteRef.current = midi;
-    noteOn(midi, velocityFromEvent(e));
+    noteOn(midi, vel);
   };
   const keyEnter = (midi: number) => (e: React.PointerEvent) => {
     if (e.buttons !== 1 || pointerNoteRef.current === midi) return;
@@ -391,6 +463,14 @@ export function InstrumentPanel() {
         >
           <Keyboard size={13} />
         </button>
+        <button
+          type="button"
+          onClick={() => void toggleMidi()}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${midiOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`}
+          title="Connect a MIDI keyboard (Web MIDI — plays and records like the on-screen keys)"
+        >
+          <Usb size={13} />
+        </button>
         {/* Quantize dropdown — applied to recorded takes before render. */}
         <select
           value={quantize}
@@ -416,7 +496,7 @@ export function InstrumentPanel() {
         <button type="button" onClick={() => setBaseMidi((m) => Math.min(84, m + 12))} className="flex h-5 w-5 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Octave up (X)"><Plus size={11} /></button>
       </div>
 
-      <div className="relative h-24 w-full touch-none select-none" role="group" aria-label="Piano keyboard" title="Click to play — lower on the key = louder. Drag across keys for glissando.">
+      <div className="relative h-24 w-full touch-none select-none" role="group" aria-label="Piano keyboard" title="Click to play — lower on the key = louder. Drag across keys for glissando. Shift+click drops the note as a clip at the playhead.">
         {/* White keys */}
         <div className="flex h-full w-full">
           {whites.map((midi) => (

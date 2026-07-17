@@ -10,7 +10,7 @@ import { Midi } from '@tonejs/midi';
 import type { AudioClip, AudioTrack, NoteEvent } from '@slate/sync-protocol';
 import type { SlateDoc } from '../sync/doc';
 import { makeId } from '../utils/id';
-import { storeSamples, loadSamples, deleteSamples } from './sampleStore';
+import { storeSamples, loadSamples } from './sampleStore';
 
 const TRACK_COLORS = ['#7c6aff', '#22d3a5', '#fbbf24', '#f87171', '#60a5fa', '#f472b6', '#34d399', '#fb923c'];
 
@@ -44,7 +44,9 @@ export function deleteAudioTrack(slate: SlateDoc, id: string): void {
     const clips = slate.audioClips();
     const toDelete: string[] = [];
     clips.forEach((c, cid) => { if (c.get('trackId') === id) toDelete.push(cid); });
-    for (const cid of toDelete) { const sk = clips.get(cid)?.get('sampleKey') as string | undefined; if (sk) void deleteSamples(sk); clips.delete(cid); }
+    // Sample blobs deliberately stay in IndexedDB (see deleteAudioClip) so
+    // Ctrl+Z can restore the track's clips playable.
+    for (const cid of toDelete) clips.delete(cid);
   });
 }
 
@@ -144,9 +146,10 @@ export function addMidiClip(
 }
 
 export function deleteAudioClip(slate: SlateDoc, id: string): void {
-  const yo = slate.audioClips().get(id);
-  const sk = yo?.get('sampleKey') as string | undefined;
-  if (sk) void deleteSamples(sk);
+  // The sample blob deliberately STAYS in IndexedDB: the AudioEditor's
+  // Y.UndoManager can restore the clip's Yjs entry on Ctrl+Z, and the
+  // restored clip must find its samples again. Orphaned blobs cost some
+  // local storage but keep undo trustworthy.
   slate.audioClips().delete(id);
 }
 

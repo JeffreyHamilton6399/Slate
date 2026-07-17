@@ -432,6 +432,62 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.5, vibratoDepth: 7, gain: 0.6,
   },
   {
+    id: 'inst-brass', name: 'Brass', builtIn: true,
+    oscs: [
+      { type: 'sawtooth', octave: 0, detune: -5, level: 0.8 },
+      { type: 'sawtooth', octave: 0, detune: 5, level: 0.8 },
+    ],
+    noise: 0, noiseDecay: 0.05,
+    attack: 0.07, decay: 0.25, sustain: 0.8, release: 0.2,
+    filterCutoff: 1500, filterQ: 1, filterEnv: 1600, keyTrack: 0.5,
+    vibratoRate: 5, vibratoDepth: 6, gain: 0.7,
+  },
+  {
+    id: 'inst-marimba', name: 'Marimba', builtIn: true,
+    oscs: [
+      { type: 'sine', octave: 0, detune: 0, level: 1 },
+      { type: 'sine', octave: 2, detune: 0, level: 0.25 }, // 4x bar partial
+    ],
+    noise: 0.06, noiseDecay: 0.01,
+    attack: 0.002, decay: 0.5, sustain: 0, release: 0.25,
+    filterCutoff: 2600, filterQ: 0.5, filterEnv: 900, keyTrack: 0.7,
+    vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
+  },
+  {
+    id: 'inst-kalimba', name: 'Kalimba', builtIn: true,
+    oscs: [
+      { type: 'sine', octave: 0, detune: 0, level: 1 },
+      { type: 'sine', octave: 2, detune: 30, level: 0.2 },
+    ],
+    noise: 0.12, noiseDecay: 0.008,
+    attack: 0.002, decay: 0.9, sustain: 0, release: 0.4,
+    filterCutoff: 4200, filterQ: 0.4, filterEnv: 500, keyTrack: 0.6,
+    vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
+  },
+  {
+    id: 'inst-choir', name: 'Choir', builtIn: true,
+    oscs: [
+      { type: 'triangle', octave: 0, detune: -8, level: 0.8 },
+      { type: 'sine', octave: 0, detune: 8, level: 0.8 },
+      { type: 'sine', octave: 1, detune: 0, level: 0.3 },
+    ],
+    noise: 0.02, noiseDecay: 10, // sustained breathiness
+    attack: 0.4, decay: 0.5, sustain: 0.9, release: 1,
+    filterCutoff: 1400, filterQ: 0.8, filterEnv: 250, keyTrack: 0.4,
+    vibratoRate: 4.8, vibratoDepth: 8, gain: 0.6,
+  },
+  {
+    id: 'inst-acid', name: 'Acid Lead', builtIn: true,
+    oscs: [
+      { type: 'sawtooth', octave: 0, detune: 0, level: 1 },
+      { type: 'square', octave: 0, detune: 4, level: 0.4 },
+    ],
+    noise: 0, noiseDecay: 0.05,
+    attack: 0.005, decay: 0.22, sustain: 0.4, release: 0.15,
+    filterCutoff: 320, filterQ: 8, filterEnv: 3400, keyTrack: 0.4,
+    vibratoRate: 0, vibratoDepth: 0, gain: 0.7,
+  },
+  {
     id: 'inst-flute', name: 'Flute', builtIn: true,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },

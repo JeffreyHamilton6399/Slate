@@ -331,7 +331,8 @@ export class CanvasEngine {
 }
 
 // ── Yjs → plain-JS readers ───────────────────────────────────────────────────
-function readShape(m: Y.Map<unknown>): Shape | null {
+// Exported for the video exporter, which reads the same doc outside the engine.
+export function readShape(m: Y.Map<unknown>): Shape | null {
   const candidate = {
     id: m.get('id'),
     kind: m.get('kind'),
@@ -358,7 +359,7 @@ function readShape(m: Y.Map<unknown>): Shape | null {
   return parsed.success ? parsed.data : null;
 }
 
-function readStroke(m: Y.Map<unknown>): Stroke | null {
+export function readStroke(m: Y.Map<unknown>): Stroke | null {
   const candidate = {
     id: m.get('id'),
     kind: m.get('kind'),
@@ -375,7 +376,7 @@ function readStroke(m: Y.Map<unknown>): Stroke | null {
   return parsed.success ? parsed.data : null;
 }
 
-function readLayers(arr: Y.Array<Y.Map<unknown>>): Layer[] {
+export function readLayers(arr: Y.Array<Y.Map<unknown>>): Layer[] {
   const out: Layer[] = [];
   arr.forEach((m) => {
     const candidate = {

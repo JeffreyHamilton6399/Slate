@@ -48,6 +48,8 @@ export interface SceneFrame {
   animMode?: boolean;
   /** Current cel frame index (used when animMode is on). */
   animFrame?: number;
+  /** Skip the background grid (video export renders on plain paper). */
+  hideGrid?: boolean;
 }
 
 export interface ViewportSize {
@@ -133,7 +135,7 @@ export function renderScene(
   ctx.save();
   applyTransformWithDpr(ctx, transform, size.dpr);
 
-  drawGrid(ctx, transform, size);
+  if (!scene.hideGrid) drawGrid(ctx, transform, size);
 
   const celMode = !!scene.animMode;
   const curFrame = scene.animFrame ?? 0;

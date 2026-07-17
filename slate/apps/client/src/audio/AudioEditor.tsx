@@ -456,26 +456,28 @@ export function AudioEditor() {
 
   // Ctrl+scroll zoom — centred on the playhead so the screen position under
   // the cursor/playhead stays put instead of zooming toward the left edge.
-  /** Zoom while keeping the playhead at the same screen offset. Records the
-   *  playhead's offset from the left edge of the visible viewport (relative to
-   *  the timeline content), changes `pxPerSec`, then schedules a scroll
-   *  correction so the playhead lands at the same offset in the new zoom.
-   *  The actual `scrollLeft` write happens in the layout effect below (after
-   *  React commits the new `minWidth` on the timeline div — setting it earlier
-   *  would be clamped by the stale `scrollWidth`). */
-  const zoomAtPlayhead = useCallback((newPxPerSec: number) => {
+  /** Zoom while keeping one timeline point at the same screen offset.
+   *  The anchor is the time under `anchorClientX` (mouse-wheel zoom: the spot
+   *  under the cursor stays put — how every DAW/map zoom feels), or the
+   *  playhead when no anchor is given (toolbar buttons, fit-to-window).
+   *  Keeping time t fixed on screen means newScroll = oldScroll + t·Δpps,
+   *  since screenX(t) = timelineLeft − scrollLeft + t·pps. The `scrollLeft`
+   *  write happens in the layout effect below (after React commits the new
+   *  `minWidth` on the timeline div — setting it earlier would be clamped by
+   *  the stale `scrollWidth`). */
+  const zoomAnchored = useCallback((newPxPerSec: number, anchorClientX?: number) => {
     const el = scrollRef.current;
     const oldPxPerSec = pxRef.current;
     if (!el || oldPxPerSec === newPxPerSec) {
       setPxPerSec(newPxPerSec);
       return;
     }
-    const scrollLeft = el.scrollLeft;
-    const playheadX = positionRef.current * oldPxPerSec;
-    const playheadOffset = playheadX - scrollLeft;
-    const newPlayheadX = positionRef.current * newPxPerSec;
-    const newScrollLeft = newPlayheadX - playheadOffset;
-    pendingScrollRef.current = newScrollLeft;
+    let t = positionRef.current; // default anchor: the playhead
+    if (anchorClientX !== undefined) {
+      const tl = el.querySelector('[data-timeline]') as HTMLElement | null;
+      if (tl) t = Math.max(0, (anchorClientX - tl.getBoundingClientRect().left) / oldPxPerSec);
+    }
+    pendingScrollRef.current = Math.max(0, el.scrollLeft + t * (newPxPerSec - oldPxPerSec));
     setPxPerSec(newPxPerSec);
   }, []);
 
@@ -493,11 +495,11 @@ export function AudioEditor() {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const next = Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, pxRef.current * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
-      zoomAtPlayhead(next);
+      zoomAnchored(next, e.clientX); // zoom toward the cursor
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [zoomAtPlayhead]);
+  }, [zoomAnchored]);
 
   // Global pointermove/up — pure DOM, zero React state.
   // rAF-throttled: pointermove fires at the hardware's report rate (often
@@ -562,12 +564,13 @@ export function AudioEditor() {
       const oldEnd = d.os + d.od;
       const wantSnap = snapRef.current && !moveAltRef.current;
       if (d.mode === 'drag') {
-        // The clip follows the mouse 1:1. Magnet snapping first, then overlap
-        // resolution against the TARGET track: an overlapping position is
-        // resolved to the nearest free side of the blocking clip (flush
-        // against its edge — no teleporting past it until the cursor itself
-        // crosses the blocker's midpoint). Iterates so chains of clips
-        // resolve to the nearest actual gap.
+        // The clip follows the mouse 1:1 (snapped to the magnet grid). It's
+        // allowed to ride OVER other clips while the drag is live — it's
+        // elevated to z-40 so the overlap reads as "in transit", and the
+        // no-overlap invariant is enforced once, on drop (see onUp). The
+        // previous mid-drag resolution parked the clip flush against a
+        // blocker and then teleported it across when the cursor passed the
+        // blocker's midpoint, which made dragging feel sticky and jumpy.
         const duration = d.od;
         // Vertical: whole-row steps move the clip across tracks.
         const rowDelta = Math.max(
@@ -576,23 +579,9 @@ export function AudioEditor() {
         );
         d.rowDelta = rowDelta;
         d.el.style.transform = rowDelta === 0 ? '' : `translateY(${rowDelta * TRACK_H}px)`;
-        const targetTrackId = d.trackIds[d.trackIndex + rowDelta] ?? d.trackIds[d.trackIndex]!;
 
         const desired = wantSnap ? snapStart(d.os + dt, duration, d.snapTimes) : d.os + dt;
-        let start = desired;
-        const blockers = d.byTrack.get(targetTrackId) ?? [];
-        const eps = 1e-4;
-        for (let iter = 0; iter < blockers.length + 1; iter++) {
-          const blocker = blockers.find((n) => start + duration > n.start + eps && start < n.end - eps);
-          if (!blocker) break;
-          const leftPos = blocker.start - duration;
-          const rightPos = blocker.end;
-          // Nearest free side of the blocker; the left slot is invalid if it
-          // would push the clip before t=0.
-          start = leftPos >= 0 && Math.abs(desired - leftPos) <= Math.abs(desired - rightPos) ? leftPos : rightPos;
-        }
-        start = Math.max(0, start);
-        d.el.style.left = `${start * pps}px`;
+        d.el.style.left = `${Math.max(0, desired) * pps}px`;
       } else if (d.mode === 'trimL') {
         // Cut from the left: never past the left neighbour, the source start
         // (offset ≥ 0 → limited by the trimmed head in timeline seconds), or a
@@ -656,8 +645,29 @@ export function AudioEditor() {
         if (d.mode === 'drag') {
           const targetTrackId = d.trackIds[d.trackIndex + d.rowDelta] ?? d.trackIds[d.trackIndex]!;
           const originTrackId = d.trackIds[d.trackIndex]!;
+          // Enforce the no-overlap invariant HERE (the drag itself follows
+          // the mouse freely): if the dropped position overlaps a clip on the
+          // target track, slide to the nearest free side of the blocker,
+          // iterating so chains of clips resolve to the nearest actual gap.
+          const duration = d.od;
+          const blockers = d.byTrack.get(targetTrackId) ?? [];
+          const eps = 1e-4;
+          let start = Math.max(0, left);
+          for (let iter = 0; iter < blockers.length + 1; iter++) {
+            const blocker = blockers.find((n) => start + duration > n.start + eps && start < n.end - eps);
+            if (!blocker) break;
+            const leftPos = blocker.start - duration;
+            const rightPos = blocker.end;
+            // Nearest free side of the blocker; the left slot is invalid if
+            // it would push the clip before t=0.
+            start = leftPos >= 0 && Math.abs(left - leftPos) <= Math.abs(left - rightPos) ? leftPos : rightPos;
+          }
+          start = Math.max(0, start);
+          // Write the resolved position to the DOM too so there's no flicker
+          // between pointer-up and the Yjs-driven re-render.
+          d.el.style.left = `${start * pps}px`;
           updateAudioClip(slate, d.clipId, {
-            start: Math.max(0, left),
+            start,
             ...(targetTrackId !== originTrackId ? { trackId: targetTrackId } : {}),
           });
         }
@@ -779,15 +789,15 @@ export function AudioEditor() {
   /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
    *  currently-visible timeline viewport (scroll container minus the sticky
    *  track-header column). Clamped to [MIN, MAX] so absurdly long or short
-   *  sessions still produce a sane zoom. Goes through `zoomAtPlayhead` so the
+   *  sessions still produce a sane zoom. Goes through `zoomAnchored` so the
    *  playhead stays on screen when the fit value would still overflow. */
   const fitToWindow = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const viewportW = Math.max(50, el.clientWidth - TRACK_HEADER_W);
     const fit = viewportW / Math.max(1, timelineDuration);
-    zoomAtPlayhead(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
-  }, [timelineDuration, zoomAtPlayhead]);
+    zoomAnchored(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
+  }, [timelineDuration, zoomAnchored]);
 
   // ── Transport ─────────────────────────────────────────────────────────────
 
@@ -1103,9 +1113,9 @@ export function AudioEditor() {
         <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-        <button onClick={() => zoomAtPlayhead(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
         <button onClick={fitToWindow} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
-        <button onClick={() => zoomAtPlayhead(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-6 w-6 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
         <div className="flex-1" />
         <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>

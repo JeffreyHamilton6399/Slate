@@ -912,16 +912,37 @@ export function AudioEditor() {
   // and this restart re-schedules once the samples are usable.
   useEffect(() => {
     const onChanged = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail;
-      invalidateWaveform(id);
-      engineRef.current?.clearCache(id);
-      // Pre-warm the engine's AudioBuffer cache even when not playing —
-      // otherwise a remote peer who's paused when samples land goes through
-      // the full getBuffer retry loop on their next play(), adding audible
-      // latency to the first playback. scheduleRestart() is a no-op when
-      // paused, so without this the cache stays cold until play. Safe to
-      // call when the engine has no AudioContext yet (preloadBuffer no-ops).
-      void engineRef.current?.preloadBuffer(slateRef.current, id);
+      const detail = (e as CustomEvent<string>).detail;
+      // The event's detail is a CLIP id for local edits, but a SAMPLE KEY for
+      // sample-sync arrivals (registerSampleSyncMap only knows the key).
+      // The engine's buffer cache and the waveform PNG cache are keyed by
+      // clip id — clearing them with a sampleKey was a silent no-op, so a
+      // peer whose clip was normalized/reversed/split by someone else got a
+      // fresh waveform but kept PLAYING the stale audio. Resolve the detail
+      // to every matching clip id (usually exactly one).
+      const clipIds: string[] = [];
+      const clipsMap = slateRef.current.audioClips();
+      if (clipsMap.get(detail)) clipIds.push(detail);
+      else clipsMap.forEach((m, cid) => { if (m.get('sampleKey') === detail) clipIds.push(cid); });
+      if (clipIds.length === 0) clipIds.push(detail); // unknown — invalidate as-is
+      for (const id of clipIds) {
+        invalidateWaveform(id);
+        engineRef.current?.clearCache(id);
+        // Pre-warm the engine's AudioBuffer cache even when not playing —
+        // otherwise a remote peer who's paused when samples land goes through
+        // the full getBuffer retry loop on their next play(), adding audible
+        // latency to the first playback. scheduleRestart() is a no-op when
+        // paused, so without this the cache stays cold until play. Safe to
+        // call when the engine has no AudioContext yet (preloadBuffer no-ops).
+        void engineRef.current?.preloadBuffer(slateRef.current, id);
+      }
+      // Re-announce under the resolved clip id when the event carried a
+      // sampleKey — the engine's in-flight sample-retry loops key their
+      // budget reset on clip ids. Terminates: the re-dispatched event's
+      // detail IS a clip id, so this branch won't fire again.
+      for (const id of clipIds) {
+        if (id !== detail) window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: id }));
+      }
       setVersion((v) => v + 1);
       scheduleRestart();
     };

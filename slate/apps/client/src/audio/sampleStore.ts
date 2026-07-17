@@ -151,12 +151,27 @@ export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
   syncRoom = room;
   syncMap = room.slate.doc.getMap<string>('audioSampleSync');
   syncObserver = (event) => {
+    // Our own publishes: the samples are already in local IndexedDB —
+    // re-decoding megabytes of our own base64 would be pure waste.
+    if (event.transaction.local) return;
     for (const entry of event.keysChanged) {
+      const base = baseKeyOf(entry);
       if (syncMap!.get(entry) === undefined) {
         // Entry deleted — drop the base key from syncedKeys so a future
         // re-add with the same key is processed, not skipped.
-        syncedKeys.delete(baseKeyOf(entry));
+        syncedKeys.delete(base);
         continue;
+      }
+      // RE-PUBLISH detection: edits that rewrite samples under the SAME key
+      // (Normalize / Reverse / split's first half) re-set the plain entry or
+      // the `#meta` entry. Without dropping syncedKeys here, receivers kept
+      // the ORIGINAL audio + waveform forever ("edited clips never update
+      // for everyone else"). Only the plain/meta entries trigger the drop:
+      // meta is written LAST in a chunked publish, so re-importing on a
+      // CHUNK update could assemble a mix of old and new chunks.
+      const isPlainOrMeta = entry === base || entry.endsWith('#meta');
+      if (isPlainOrMeta && event.changes.keys.get(entry)?.action === 'update') {
+        syncedKeys.delete(base);
       }
       tryImportEntry(entry);
     }
@@ -348,10 +363,17 @@ function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncI
     //   `${count}:i16:${syncRate}:${syncCh}:${origRate}:${origCh}`
     // Unreduced payloads keep the compact `${count}:i16` form. Also drop the
     // plain entry and stale higher-index chunks from a previous publish.
+    //
+    // A revision suffix (`:r<t>`) makes every RE-publish of the same key a
+    // guaranteed-distinct meta value — receivers key their "re-import" on the
+    // meta entry changing, and an unchanged chunk count would otherwise
+    // produce a byte-identical meta. Old clients ignore the extra part
+    // (positions 0-5 are unchanged).
+    const rev = `r${Date.now().toString(36)}`;
     const meta =
       reduced && info
-        ? `${count}:i16:${syncRate}:${syncCh}:${info.sampleRate}:${info.channels}`
-        : `${count}:i16`;
+        ? `${count}:i16:${syncRate}:${syncCh}:${info.sampleRate}:${info.channels}:${rev}`
+        : `${count}:i16:${rev}`;
     doc.transact(() => {
       map.delete(key);
       for (const entry of [...map.keys()]) {

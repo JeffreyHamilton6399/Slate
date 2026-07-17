@@ -18,6 +18,7 @@ import { ToolsPanel } from './ToolsPanel';
 import { AudioEditorPanel } from './AudioEditorPanel';
 import { AudioAssetsPanel } from './AudioAssetsPanel';
 import { AudioSettingsPanel } from './AudioSettingsPanel';
+import { InstrumentPanel } from './InstrumentPanel';
 
 let registered = false;
 
@@ -111,6 +112,16 @@ export function registerBuiltInPanels(): void {
     title: 'Audio Assets',
     defaultSide: 'right',
     render: AudioAssetsPanel,
+    order: 0,
+    mode: 'audio',
+  });
+  // Instrument — playable/customizable synth keyboard (piano etc.) that
+  // records takes into audio clips.
+  registerPanel({
+    id: 'instrument',
+    title: 'Instrument',
+    defaultSide: 'right-bottom',
+    render: InstrumentPanel,
     order: 0,
     mode: 'audio',
   });

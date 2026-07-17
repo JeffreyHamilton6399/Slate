@@ -24,6 +24,7 @@ import {
 import { AudioEngine } from './engine';
 import { loadSamples } from './sampleStore';
 import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE } from './library';
+import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS } from './instruments';
 import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
 
@@ -31,6 +32,11 @@ import { RemotePlayheads } from './RemotePlayheads';
  *  2D animation timeline so its Space handler yields to the audio transport
  *  when both are on screen (docked audio panel on a 2D board). */
 export const audioEditorHovered = { current: false };
+
+/** Latest playhead position (seconds) — mirrored from positionRef so panels
+ *  outside this component (e.g. InstrumentPanel placing a recorded take)
+ *  can read the transport position without a React subscription. */
+export const audioPlayheadPos = { current: 0 };
 
 const TRACK_H = 60;
 /** px-per-sec zoom limits. The min is intentionally tiny (2) so a long mix
@@ -430,6 +436,7 @@ export function AudioEditor() {
       const eng = engineRef.current; if (!eng) return;
       const pos = eng.getPosition();
       positionRef.current = pos;
+      audioPlayheadPos.current = pos;
       if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
       if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
       // Throttled awareness publish at ~7 Hz (150ms) — peers render at display
@@ -686,6 +693,10 @@ export function AudioEditor() {
       const isAudioBoard = useAppStore.getState().currentBoard?.mode === 'audio';
       if (!isAudioBoard && !hoveredRef.current) return;
       const k = e.key.toLowerCase();
+      // The InstrumentPanel owns the note keys while its keyboard capture is
+      // on (D/F/G/… play notes, Z/X shift octave) — Space/arrows/Delete still
+      // reach the transport, like a real DAW.
+      if (instrumentKeyCapture.current && INSTRUMENT_CAPTURE_KEYS.has(k)) return;
       if (k === ' ') { e.preventDefault(); togglePlay(); }
       else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
       else if ((k === 'delete' || k === 'backspace') && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }
@@ -800,6 +811,7 @@ export function AudioEditor() {
   const seek = useCallback((t: number) => {
     const pos = Math.max(0, t);
     positionRef.current = pos;
+    audioPlayheadPos.current = pos;
     if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
     if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
     // Publish the new playhead position immediately so peers see the seek

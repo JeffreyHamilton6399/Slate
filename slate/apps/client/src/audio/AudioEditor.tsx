@@ -23,6 +23,8 @@ import {
 } from './scene';
 import { AudioEngine } from './engine';
 import { loadSamples } from './sampleStore';
+import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE } from './library';
+import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
 
 /** True while the pointer is over the audio editor. Written here, read by the
@@ -184,7 +186,8 @@ export function AudioEditor() {
   const [bpm, setBpmState] = useState(slate.audioBpm());
   const [metronome, setMetronome] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [masterVol, setMasterVol] = useState(0.85);
   const [looping, setLooping] = useState(false);
   const [loopStart, setLoopStart] = useState(0);
@@ -226,8 +229,9 @@ export function AudioEditor() {
    *  scheduled. Lets `onMove` bail out cheaply (one ref read + one rAF check)
    *  when a frame is already queued. */
   const moveRafRef = useRef(0);
-  const selectedRef = useRef<string | null>(null);
-  selectedRef.current = selectedClipId;
+  const marqueeRef = useRef<{ startX: number; startY: number; origin: Set<string> } | null>(null);
+  const selectedRef = useRef<Set<string>>(new Set());
+  selectedRef.current = selectedClipIds;
   const clipsRef = useRef<AudioClip[]>([]);
   const pxRef = useRef(pxPerSec);
   pxRef.current = pxPerSec;
@@ -578,9 +582,9 @@ export function AudioEditor() {
       if (!isAudioBoard && !hoveredRef.current) return;
       const k = e.key.toLowerCase();
       if (k === ' ') { e.preventDefault(); togglePlay(); }
-      else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); void splitAudioClip(slate, selectedRef.current, positionRef.current); }
-      else if ((k === 'delete' || k === 'backspace') && selectedRef.current) { e.preventDefault(); deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); }
-      else if (k === 'd' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); dupClip(selectedRef.current); }
+      else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
+      else if ((k === 'delete' || k === 'backspace') && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }
+      else if (k === 'd' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void dupClip(id)); }
       else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
       else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
       else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
@@ -727,6 +731,64 @@ export function AudioEditor() {
     } catch (err) { toast({ title: 'Import failed', description: (err as Error).message, variant: 'error' }); }
   }, [slate]);
 
+  // ── Drag-drop from AudioAssetsPanel ────────────────────────────────────────
+
+  /** Add an imported asset (by clip id) to a specific track at a specific time. */
+  const addAssetToTrack = useCallback(async (assetId: string, trackId: string, start: number) => {
+    const yo = slate.audioClips().get(assetId);
+    const clip = yo ? readAudioClip(yo, assetId) : null;
+    if (!clip) return;
+    const samples = await loadSamples(clip.sampleKey);
+    if (samples.length === 0) {
+      toast({ title: 'Samples still syncing', variant: 'error' });
+      return;
+    }
+    await addAudioClip(slate, trackId, {
+      start, samples: float32ToNumberArray(samples),
+      sampleRate: clip.sampleRate, channels: clip.channels,
+      duration: clip.duration, name: clip.name,
+    });
+    toast({ title: 'Added to track' });
+  }, [slate]);
+
+  /** Add a library sample to a specific track at a specific time. */
+  const addLibraryToTrack = useCallback(async (libId: string, trackId: string, start: number) => {
+    const sample = AUDIO_LIBRARY.find((s) => s.id === libId);
+    if (!sample) return;
+    const pcm = sample.generate();
+    await addAudioClip(slate, trackId, {
+      start, samples: pcm, sampleRate: LIBRARY_SAMPLE_RATE,
+      channels: 1, duration: pcm.length / LIBRARY_SAMPLE_RATE, name: sample.name,
+    });
+    toast({ title: 'Added to track', description: sample.name });
+  }, [slate]);
+
+  /** Handle a drop on the timeline area — hit-tests the track row and computes the time. */
+  const handleTimelineDrop = useCallback((e: React.DragEvent) => {
+    const assetId = e.dataTransfer.getData('application/x-slate-audio-asset');
+    const libId = e.dataTransfer.getData('application/x-slate-audio-library');
+    if (!assetId && !libId) return; // not an asset drag — let file drop bubble
+    e.preventDefault();
+    // Hit-test track rows by clientY
+    const rows = scrollRef.current?.querySelectorAll('[data-track-id]') ?? [];
+    let trackId: string | null = null;
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect();
+      if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        trackId = r.getAttribute('data-track-id');
+        break;
+      }
+    }
+    if (!trackId) return;
+    // Compute time from clientX relative to the timeline content
+    const tlEl = scrollRef.current?.querySelector('[data-timeline]') as HTMLElement | null;
+    if (!tlEl) return;
+    const tlRect = tlEl.getBoundingClientRect();
+    const t = Math.max(0, (e.clientX - tlRect.left) / pxRef.current);
+    if (assetId) void addAssetToTrack(assetId, trackId, t);
+    else if (libId) void addLibraryToTrack(libId, trackId, t);
+  }, [addAssetToTrack, addLibraryToTrack]);
+
   // ── Drag start ────────────────────────────────────────────────────────────
 
   // The free interval [leftLimit, rightLimit] the clip may occupy without
@@ -748,17 +810,35 @@ export function AudioEditor() {
     return { leftLimit, rightLimit, neighbours };
   }, []);
 
+  const selectClip = useCallback((id: string, additive: boolean) => {
+    setSelectedClipIds((prev) => {
+      if (additive) {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      }
+      // Plain click: if already in a multi-selection, keep it; else single-select.
+      if (prev.has(id) && prev.size > 1) return prev;
+      return new Set([id]);
+    });
+  }, []);
+
   const startDrag = useCallback((clip: AudioClip, e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
-    e.stopPropagation(); setSelectedClipId(clip.id);
+    e.stopPropagation();
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    selectClip(clip.id, additive);
+    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
     const { leftLimit, rightLimit, neighbours } = neighbourBounds(clip);
     dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, neighbours, mode: 'drag' };
-  }, [neighbourBounds]);
+  }, [neighbourBounds, selectClip]);
 
   const startTrim = useCallback((clip: AudioClip, side: 'left' | 'right', e: React.PointerEvent, el: HTMLElement, waveEl: HTMLElement | null) => {
-    e.stopPropagation(); setSelectedClipId(clip.id);
+    e.stopPropagation();
+    selectClip(clip.id, e.shiftKey || e.metaKey || e.ctrlKey);
+    window.dispatchEvent(new CustomEvent('slate:audio-clip-select', { detail: clip.id }));
     const { leftLimit, rightLimit, neighbours } = neighbourBounds(clip);
     dragRef.current = { clipId: clip.id, el, waveEl, os: clip.start, od: clip.duration, oo: clip.offset, speed: clip.speed ?? 1, sx: e.clientX, leftLimit, rightLimit, neighbours, mode: side === 'left' ? 'trimL' : 'trimR' };
-  }, [neighbourBounds]);
+  }, [neighbourBounds, selectClip]);
 
   // ── Loop region drag ──────────────────────────────────────────────────────
 
@@ -812,9 +892,9 @@ export function AudioEditor() {
         <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Record (R)"><Mic size={15} /></button>
         <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
         <div className="mx-1 h-5 w-px bg-border" />
-        <button onClick={() => selectedRef.current && splitAudioClip(slate, selectedRef.current, positionRef.current)} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
-        <button onClick={() => selectedRef.current && dupClip(selectedRef.current)} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
-        <button onClick={() => { if (selectedRef.current) { deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); } }} disabled={!selectedClipId} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
+        <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
+        <button onClick={() => selectedRef.current.forEach(id => void dupClip(id))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+        <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
         <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
         <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
@@ -830,7 +910,17 @@ export function AudioEditor() {
       </div>
 
       {/* Track area */}
-      <div ref={scrollRef} className="flex flex-1 min-h-0 overflow-auto">
+      <div
+        ref={scrollRef}
+        className="flex flex-1 min-h-0 overflow-auto"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('application/x-slate-audio-asset') ||
+              e.dataTransfer.types.includes('application/x-slate-audio-library') ||
+              e.dataTransfer.types.includes('Files'))
+            e.preventDefault();
+        }}
+        onDrop={handleTimelineDrop}
+      >
         {/* Headers */}
         <div className="sticky left-0 z-10 w-44 shrink-0 border-r border-border bg-bg-2">
           <div className="flex items-center border-b border-border px-2 text-[9px] font-mono uppercase text-text-dim" style={{ height: 28 }}>Tracks</div>
@@ -839,7 +929,7 @@ export function AudioEditor() {
         </div>
 
         {/* Timeline */}
-        <div className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
+        <div data-timeline className="relative flex-1" style={{ minWidth: timelineDuration * pxPerSec }}>
           {/* Ruler + loop handles */}
           <div className="sticky top-0 z-10 border-b border-border bg-bg-2/95" style={{ height: 28 }}>
             {Array.from({ length: Math.ceil(timelineDuration / tickInterval) + 1 }, (_, i) => {
@@ -855,8 +945,58 @@ export function AudioEditor() {
               </>
             )}
           </div>
-          {/* Seek layer — background click catcher (behind clips) */}
-          <div className="absolute inset-0 top-7" onPointerDown={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / pxRef.current); }} />
+          {/* Seek + marquee layer — background click catcher (behind clips).
+           *  Plain click = seek. Shift/Cmd+drag = marquee multi-select. */}
+          <div
+            className="absolute inset-0 top-7"
+            onPointerDown={(e) => {
+              if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                // Begin marquee selection
+                const r = e.currentTarget.getBoundingClientRect();
+                const sx = e.clientX - r.left, sy = e.clientY - r.top;
+                marqueeRef.current = { startX: sx, startY: sy, origin: new Set(e.shiftKey ? selectedRef.current : []) };
+                setMarquee({ x1: sx, y1: sy, x2: sx, y2: sy });
+                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+              } else {
+                // Plain click = seek + clear selection
+                const r = e.currentTarget.getBoundingClientRect();
+                seek((e.clientX - r.left) / pxRef.current);
+                setSelectedClipIds(new Set());
+              }
+            }}
+            onPointerMove={(e) => {
+              if (!marqueeRef.current) return;
+              const r = e.currentTarget.getBoundingClientRect();
+              const ex = e.clientX - r.left, ey = e.clientY - r.top;
+              setMarquee({ x1: marqueeRef.current.startX, y1: marqueeRef.current.startY, x2: ex, y2: ey });
+              // Hit-test clips against the marquee rect
+              const x1 = Math.min(marqueeRef.current.startX, ex);
+              const x2 = Math.max(marqueeRef.current.startX, ex);
+              const y1 = Math.min(marqueeRef.current.startY, ey);
+              const y2 = Math.max(marqueeRef.current.startY, ey);
+              const t1 = x1 / pxRef.current, t2 = x2 / pxRef.current;
+              const startRowIdx = Math.floor(y1 / TRACK_H);
+              const endRowIdx = Math.floor(y2 / TRACK_H);
+              const next = new Set(marqueeRef.current.origin);
+              clips.forEach((c) => {
+                const ti = tracks.findIndex((t) => t.id === c.trackId);
+                if (ti < startRowIdx || ti > endRowIdx) return;
+                const cEnd = c.start + c.duration;
+                if (cEnd >= t1 && c.start <= t2) next.add(c.id);
+              });
+              setSelectedClipIds(next);
+            }}
+            onPointerUp={() => { marqueeRef.current = null; setMarquee(null); }}
+          />
+          {/* Marquee rect overlay */}
+          {marquee && (
+            <div className="pointer-events-none absolute z-30 border border-accent/70 bg-accent/15" style={{
+              left: Math.min(marquee.x1, marquee.x2),
+              top: 28 + Math.min(marquee.y1, marquee.y2),
+              width: Math.abs(marquee.x2 - marquee.x1),
+              height: Math.abs(marquee.y2 - marquee.y1),
+            }} />
+          )}
           {/* Grid background */}
           <div className="pointer-events-none absolute inset-0 top-7" style={gridStyle}>
             {looping && <div onPointerDown={(e) => startLoopDrag('move', e)} className="pointer-events-auto absolute top-0 bottom-0 cursor-grab bg-accent/8 border-x-2 border-accent/40" style={{ left: loopStart * pxPerSec, width: (loopEnd - loopStart) * pxPerSec }} />}
@@ -867,10 +1007,10 @@ export function AudioEditor() {
           </div>
           {/* Clips */}
           {tracks.map((t) => (
-            <div key={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
+            <div key={t.id} data-track-id={t.id} className="pointer-events-none relative border-b border-border/15" style={{ height: TRACK_H }}>
               {clips.filter((c) => c.trackId === t.id).map((c) => (
-                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipId === c.id}
-                  onSelect={setSelectedClipId} onDragStart={startDrag} onTrimStart={startTrim} />
+                <ClipBlock key={c.id} clip={c} pxPerSec={pxPerSec} selected={selectedClipIds.has(c.id)}
+                  onSelect={(id) => selectClip(id, false)} onDragStart={startDrag} onTrimStart={startTrim} />
               ))}
             </div>
           ))}

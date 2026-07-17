@@ -142,7 +142,12 @@ export function AudioAssetsPanel() {
                   {items.map((s) => (
                     <div
                       key={s.id}
-                      className="group flex items-center gap-1 rounded-sm border border-border bg-bg-3 px-1.5 py-1 hover:border-accent/40"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/x-slate-audio-library', s.id);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      className="group flex items-center gap-1 rounded-sm border border-border bg-bg-3 px-1.5 py-1 hover:border-accent/40 cursor-grab active:cursor-grabbing"
                     >
                       <button
                         type="button"
@@ -180,7 +185,12 @@ export function AudioAssetsPanel() {
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="group flex items-center gap-2 rounded-sm border border-border bg-bg-3 p-2 hover:border-accent/40"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/x-slate-audio-asset', asset.id);
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
+              className="group flex items-center gap-2 rounded-sm border border-border bg-bg-3 p-2 hover:border-accent/40 cursor-grab active:cursor-grabbing"
             >
               <FileAudio size={14} className="shrink-0 text-accent" />
               <div className="min-w-0 flex-1">

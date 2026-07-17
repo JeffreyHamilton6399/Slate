@@ -230,36 +230,52 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
   });
 }
 
-/** Duplicate a clip (same track, placed right after the original). Shares the
- *  underlying samples by copying the IndexedDB blob to a new key so the dupe can
- *  be normalized/reversed independently. MIDI clips are duplicated without any
- *  sample I/O — the notes array is copied (deep) to the new clip. */
-export async function duplicateAudioClip(slate: SlateDoc, id: string): Promise<string | null> {
+/** Duplicate a clip on the same track. `startAt` places the copy at that
+ *  timeline position (the editor passes the playhead); omitted, it lands
+ *  right after the original. Shares the underlying samples by copying the
+ *  IndexedDB blob to a new key so the dupe can be normalized/reversed
+ *  independently. MIDI clips are duplicated without any sample I/O — the
+ *  notes array is copied (deep) to the new clip. Per-clip settings (trim,
+ *  gain, pan, fades, speed, pitch, filters) carry over to the copy. */
+export async function duplicateAudioClip(slate: SlateDoc, id: string, startAt?: number): Promise<string | null> {
   const yo = slate.audioClips().get(id); if (!yo) return null;
   const clip = readAudioClip(yo, id); if (!clip) return null;
+  const start = startAt ?? clip.start + clip.duration;
+  let newId: string | null = null;
   if (clip.kind === 'midi') {
     // Deep-copy the notes so the dupe is fully independent (editing one doesn't
     // mutate the other through shared object references inside the Yjs array).
     const notesCopy = (clip.notes ?? []).map((n) => ({ ...n }));
-    return addMidiClip(slate, clip.trackId, {
-      start: clip.start + clip.duration,
+    newId = addMidiClip(slate, clip.trackId, {
+      start,
       notes: notesCopy,
       duration: clip.duration,
       name: `${clip.name} copy`,
       color: clip.color,
       instrumentId: clip.instrumentId,
     });
+  } else {
+    const samples = await loadSamples(clip.sampleKey);
+    newId = await addAudioClip(slate, clip.trackId, {
+      start,
+      samples, // Float32Array passed directly — no number[] copy.
+      sampleRate: clip.sampleRate,
+      channels: clip.channels,
+      duration: clip.duration,
+      name: `${clip.name} copy`,
+      color: clip.color,
+    });
   }
-  const samples = await loadSamples(clip.sampleKey);
-  return addAudioClip(slate, clip.trackId, {
-    start: clip.start + clip.duration,
-    samples, // Float32Array passed directly — no number[] copy.
-    sampleRate: clip.sampleRate,
-    channels: clip.channels,
-    duration: clip.duration,
-    name: `${clip.name} copy`,
-    color: clip.color,
-  });
+  // Carry over per-clip settings that addAudioClip/addMidiClip default away —
+  // a duplicate should sound identical to its source.
+  if (newId) {
+    updateAudioClip(slate, newId, {
+      offset: clip.offset, gain: clip.gain, pan: clip.pan, mute: clip.mute,
+      fadeIn: clip.fadeIn, fadeOut: clip.fadeOut, speed: clip.speed,
+      pitch: clip.pitch, hpCutoff: clip.hpCutoff, lpCutoff: clip.lpCutoff,
+    });
+  }
+  return newId;
 }
 
 export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {

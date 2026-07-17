@@ -23,6 +23,7 @@ import {
   updateAudioTrack, splitAudioClip, deleteAudioTrack,
 } from '../audio/scene';
 import { loadSamples, storeSamples } from '../audio/sampleStore';
+import { audioPlayheadPos, nearestFreeStart } from '../audio/AudioEditor';
 
 /** Linear amplitude → decibels for display (0 → -∞). */
 function fmtDb(v: number): string {
@@ -222,7 +223,17 @@ export function AudioSettingsPanel() {
           {/* Quick actions — Split + Duplicate first (matching the D hotkey), then the sample-processing ops. */}
           <div className="grid grid-cols-2 gap-1">
             <button onClick={() => splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><Scissors size={10} />Split</button>
-            <button onClick={() => { void duplicateAudioClip(slate, clip.id).then(() => toast({ title: 'Duplicated' })); }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><Copy size={10} />Duplicate</button>
+            <button onClick={() => {
+              // Duplicate AT THE PLAYHEAD (matching the timeline's D key),
+              // resolved to the nearest free gap on the clip's track.
+              const blockers: { start: number; end: number }[] = [];
+              slate.audioClips().forEach((m, cid) => {
+                const c = readAudioClip(m, cid);
+                if (c && c.trackId === clip.trackId) blockers.push({ start: c.start, end: c.start + c.duration });
+              });
+              const start = nearestFreeStart(audioPlayheadPos.current, clip.duration, blockers);
+              void duplicateAudioClip(slate, clip.id, start).then(() => toast({ title: 'Duplicated at playhead' }));
+            }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent" title="Duplicate this clip at the playhead"><Copy size={10} />Duplicate</button>
             <button onClick={async () => {
               const samples = await loadSamples(clip.sampleKey);
               let max = 0;

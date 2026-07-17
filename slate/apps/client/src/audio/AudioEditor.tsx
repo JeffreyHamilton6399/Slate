@@ -67,7 +67,7 @@ const DRAG_DEADZONE_PX = 3;
  *  committing a clip on top of another one. Scanning gaps directly is
  *  deterministic: the open-ended gap after the last blocker always fits, so a
  *  valid position always exists. */
-function nearestFreeStart(desired: number, duration: number, blockersIn: { start: number; end: number }[]): number {
+export function nearestFreeStart(desired: number, duration: number, blockersIn: { start: number; end: number }[]): number {
   const eps = 1e-4;
   desired = Math.max(0, desired);
   if (blockersIn.length === 0) return desired;
@@ -866,7 +866,7 @@ export function AudioEditor() {
       else if (k === 'v' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void pasteClips(); }
       else if (k === 'c' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current)); }
       else if ((k === 'delete' || k === 'backspace') && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }
-      else if (k === 'd' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); selectedRef.current.forEach(id => void dupClip(id)); }
+      else if (k === 'd' && !e.ctrlKey && selectedRef.current.size > 0) { e.preventDefault(); void duplicateSelection(); }
       else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
       else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
       else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
@@ -1030,8 +1030,33 @@ export function AudioEditor() {
     }
   }, [recording, tracks, slate]);
 
-  const dupClip = useCallback(async (id: string) => {
-    await duplicateAudioClip(slate, id);
+  /** Duplicate the selected clip(s) AT THE PLAYHEAD (not tacked after the
+   *  originals): the earliest selected clip lands on the playhead line and
+   *  the rest keep their relative spacing (like paste). Each copy resolves
+   *  to the nearest free gap on its own track, counting copies already
+   *  placed in this batch, and the new copies become the selection so
+   *  they're ready to drag. */
+  const duplicateSelection = useCallback(async () => {
+    const sel = clipsRef.current.filter((c) => selectedRef.current.has(c.id));
+    if (sel.length === 0) return;
+    const minStart = Math.min(...sel.map((c) => c.start));
+    const base = positionRef.current;
+    const placedByTrack = new Map<string, { start: number; end: number }[]>();
+    for (const c of clipsRef.current) {
+      let list = placedByTrack.get(c.trackId);
+      if (!list) { list = []; placedByTrack.set(c.trackId, list); }
+      list.push({ start: c.start, end: c.start + c.duration });
+    }
+    const newIds: string[] = [];
+    for (const c of sel) {
+      const blockers = placedByTrack.get(c.trackId) ?? [];
+      const start = nearestFreeStart(base + (c.start - minStart), c.duration, blockers);
+      blockers.push({ start, end: start + c.duration });
+      placedByTrack.set(c.trackId, blockers);
+      const id = await duplicateAudioClip(slate, c.id, start);
+      if (id) newIds.push(id);
+    }
+    if (newIds.length > 0) setSelectedClipIds(new Set(newIds));
   }, [slate]);
 
   // ── Clipboard (copy / paste) ────────────────────────────────────────────
@@ -1377,7 +1402,7 @@ export function AudioEditor() {
         <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
         <div className="mx-1 h-5 w-px bg-border" />
         <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
-        <button onClick={() => selectedRef.current.forEach(id => void dupClip(id))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate (D)"><Copy size={14} /></button>
+        <button onClick={() => void duplicateSelection()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate at playhead (D)"><Copy size={14} /></button>
         <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
         <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
         <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>

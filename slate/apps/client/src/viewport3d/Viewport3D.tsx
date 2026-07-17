@@ -433,7 +433,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
       const sel = store.editSelection;
       let state: MeshModalState | null = null;
       if (kind === 'bevel' || kind === 'inset' || kind === 'loop-cut') {
-        state = startMeshScalar(room, objectId, kind, sel.faces, sel.verts);
+        state = startMeshScalar(room, objectId, kind, sel.faces, sel.verts, sel.edges);
       } else if (kind === 'extrude') {
         state = startMeshExtrude(room, objectId, sel.faces);
       } else {

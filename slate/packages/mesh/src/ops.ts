@@ -447,6 +447,286 @@ export function bevelVerts(mesh: Mesh, vertIds: number[], amount: number, segmen
   return compact(m);
 }
 
+/** All unique manifold edges (shared by exactly 2 faces) as a flat pair list
+ *  [a0,b0, a1,b1, …] — the "bevel everything" default when nothing is selected
+ *  (Blender: Ctrl+B with the whole mesh selected bevels every edge). */
+export function allManifoldEdges(mesh: Mesh): number[] {
+  const count = new Map<string, [number, number, number]>(); // key → [a, b, faceCount]
+  for (const f of mesh.faces) {
+    for (let i = 0; i < f.v.length; i++) {
+      const a = f.v[i]!;
+      const b = f.v[(i + 1) % f.v.length]!;
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      const e = count.get(key);
+      if (e) e[2] += 1;
+      else count.set(key, [a, b, 1]);
+    }
+  }
+  const out: number[] = [];
+  for (const [, [a, b, n]] of count) if (n === 2) out.push(a, b);
+  return out;
+}
+
+/**
+ * Bevel selected EDGES by `amount` — Blender's Ctrl+B edge bevel. Each edge
+ * is replaced by a strip of `segments` quads whose cross-section is a
+ * CIRCULAR ARC tangent to both adjacent faces (Blender's Shape = 0.5 rounded
+ * profile), so more segments = a rounder edge, not just a subdivided flat
+ * chamfer.
+ *
+ * `edgePairsFlat` is a flat [a0,b0, a1,b1, …] vertex-pair list (the editor's
+ * edge-selection format). Non-manifold edges (not shared by exactly 2 faces)
+ * are skipped.
+ *
+ * Geometry per face corner at a beveled vertex:
+ *   - corner between two beveled edges → the exact offset-line intersection
+ *     X = v + (t1+t2)·w/(1+t1·t2)  (t = in-face perpendiculars of the edges),
+ *   - corner between a beveled and an unbeveled edge → the corner SLIDES
+ *     along the unbeveled edge to where the beveled edge's offset line meets
+ *     it (Blender's edge-slide termination).
+ * The arc between a strip's two side-corners is sampled from the rational
+ * quadratic Bézier with control point on the original edge and weight
+ * cos(θ/2) — an EXACT circle tangent to both faces.
+ *
+ * Ends: a vertex touched by ONE beveled edge gets a fan cap from the original
+ * vertex; a vertex where 2+ beveled edges meet gets a rounded corner patch
+ * (fan from the centroid of the closed loop formed by the meeting arcs) —
+ * the sphere-octant corner on a fully beveled cube.
+ */
+export function bevelEdges(
+  mesh: Mesh,
+  edgePairsFlat: number[],
+  amount: number,
+  segments = 1,
+): Mesh {
+  if (amount <= 0 || edgePairsFlat.length < 2) return cloneMesh(mesh);
+  const seg = Math.max(1, Math.round(segments));
+  const m = cloneMesh(mesh);
+  const ekey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+  // Adjacent faces per edge (from the ORIGINAL topology).
+  const facesByEdge = new Map<string, number[]>();
+  m.faces.forEach((f, fi) => {
+    for (let i = 0; i < f.v.length; i++) {
+      const k = ekey(f.v[i]!, f.v[(i + 1) % f.v.length]!);
+      const arr = facesByEdge.get(k) ?? [];
+      arr.push(fi);
+      facesByEdge.set(k, arr);
+    }
+  });
+
+  interface BEdge { a: number; b: number; f1: number; f2: number; key: string; w: number }
+  const bedges: BEdge[] = [];
+  const selected = new Map<string, BEdge>();
+  for (let i = 0; i + 1 < edgePairsFlat.length; i += 2) {
+    const a = edgePairsFlat[i]!;
+    const b = edgePairsFlat[i + 1]!;
+    if (a === b) continue;
+    const key = ekey(a, b);
+    if (selected.has(key)) continue;
+    const fs = facesByEdge.get(key);
+    if (!fs || fs.length !== 2) continue;
+    // Clamp the width to 45% of the edge so the two end profiles never cross.
+    const w = Math.min(amount, length(sub(vGet(m, b), vGet(m, a))) * 0.45);
+    if (w < 1e-9) continue;
+    const e: BEdge = { a, b, f1: fs[0]!, f2: fs[1]!, key, w };
+    selected.set(key, e);
+    bedges.push(e);
+  }
+  if (bedges.length === 0) return cloneMesh(mesh);
+
+  // Face normals + centroids from the ORIGINAL mesh (faces get rewritten below).
+  const N = m.faces.map((f) => faceNormal(m, f));
+  const FC = m.faces.map((f) => faceCentroid(m, f));
+
+  /** In-face perpendicular of edge a→b pointing INTO face fi. */
+  const inFacePerp = (fi: number, a: number, b: number): Vec3 => {
+    const e = normalize(sub(vGet(m, b), vGet(m, a)));
+    let t = cross(N[fi]!, e);
+    const mid = scale(add(vGet(m, a), vGet(m, b)), 0.5);
+    if (dot(t, sub(FC[fi]!, mid)) < 0) t = scale(t, -1);
+    return normalize(t);
+  };
+
+  // Rewrite every face that borders a selected edge, recording the corner
+  // vertex chosen for each (edge, endpoint, face) — the strips and corner
+  // patches share those exact vertices, keeping the result watertight.
+  const sideCorner = new Map<string, number>(); // `${edgeKey}:${vert}:${face}` → vert id
+  m.faces.forEach((f, fi) => {
+    const n = f.v.length;
+    let touches = false;
+    for (let i = 0; i < n; i++) {
+      if (selected.has(ekey(f.v[i]!, f.v[(i + 1) % n]!))) { touches = true; break; }
+    }
+    if (!touches) return;
+    const newV: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const cur = f.v[i]!;
+      const prev = f.v[(i - 1 + n) % n]!;
+      const next = f.v[(i + 1) % n]!;
+      const ePrev = selected.get(ekey(prev, cur));
+      const eNext = selected.get(ekey(cur, next));
+      if (!ePrev && !eNext) {
+        newV.push(cur);
+        continue;
+      }
+      const V = vGet(m, cur);
+      let X: Vec3;
+      if (ePrev && eNext) {
+        // Corner between two beveled edges: offset-line intersection.
+        const t1 = inFacePerp(fi, prev, cur);
+        const t2 = inFacePerp(fi, cur, next);
+        const c = dot(t1, t2);
+        const w = Math.min(ePrev.w, eNext.w);
+        X = c > -0.99
+          ? add(V, scale(add(t1, t2), w / (1 + c)))
+          : add(V, scale(t1, w)); // degenerate fold-back — arbitrary but stable
+      } else {
+        // One beveled edge: slide the corner along the UNBEVELED loop edge to
+        // where the beveled edge's offset line crosses it.
+        const bev = (eNext ?? ePrev)!;
+        const tperp = eNext ? inFacePerp(fi, cur, next) : inFacePerp(fi, prev, cur);
+        const other = eNext ? prev : next; // the unbeveled edge's far endpoint
+        const u = sub(vGet(m, other), V);
+        const ul = length(u);
+        const ud = ul > 1e-9 ? scale(u, 1 / ul) : tperp;
+        const k = dot(ud, tperp);
+        const s = k > 0.05 ? Math.min(bev.w / k, ul * 0.9) : bev.w;
+        X = add(V, k > 0.05 ? scale(ud, s) : scale(tperp, bev.w));
+      }
+      const id = vAdd(m, X);
+      newV.push(id);
+      if (ePrev) sideCorner.set(`${ePrev.key}:${cur}:${fi}`, id);
+      if (eNext) sideCorner.set(`${eNext.key}:${cur}:${fi}`, id);
+    }
+    m.faces[fi] = { v: newV };
+  });
+
+  /** Sample the circular-arc profile at one strip end: from side corner A
+   *  (on f1) to side corner B (on f2), bulging toward the original edge —
+   *  rational quadratic Bézier with control point on the edge line and
+   *  weight cos(θ/2) traces the exact tangent circle. Returns seg+1 vertex
+   *  ids, reusing A and B at the ends. */
+  const arcCache = new Map<string, number[]>(); // `${edgeKey}:${vert}` → ids f1→f2
+  const endArc = (e: BEdge, endVert: number): number[] | null => {
+    const cacheKey = `${e.key}:${endVert}`;
+    const hit = arcCache.get(cacheKey);
+    if (hit) return hit;
+    const idA = sideCorner.get(`${e.key}:${endVert}:${e.f1}`);
+    const idB = sideCorner.get(`${e.key}:${endVert}:${e.f2}`);
+    if (idA === undefined || idB === undefined) return null;
+    const A = vGet(m, idA);
+    const B = vGet(m, idB);
+    // Control point: the tangent lines through A and B meet on the original
+    // edge line — project both and average for robustness.
+    const P0 = vGet(m, e.a);
+    const d = normalize(sub(vGet(m, e.b), P0));
+    const proj = (p: Vec3) => add(P0, scale(d, dot(sub(p, P0), d)));
+    const ctrl = scale(add(proj(A), proj(B)), 0.5);
+    const u1 = normalize(sub(A, ctrl));
+    const u2 = normalize(sub(B, ctrl));
+    const cosT = Math.max(-1, Math.min(1, dot(u1, u2)));
+    const wgt = Math.sqrt(Math.max(0, (1 + cosT) / 2)); // cos(θ/2)
+    const ids: number[] = [idA];
+    for (let k = 1; k < seg; k++) {
+      const t = k / seg;
+      const b0 = (1 - t) * (1 - t);
+      const b1 = 2 * t * (1 - t) * wgt;
+      const b2 = t * t;
+      const den = b0 + b1 + b2 || 1;
+      ids.push(vAdd(m, {
+        x: (b0 * A.x + b1 * ctrl.x + b2 * B.x) / den,
+        y: (b0 * A.y + b1 * ctrl.y + b2 * B.y) / den,
+        z: (b0 * A.z + b1 * ctrl.z + b2 * B.z) / den,
+      }));
+    }
+    ids.push(idB);
+    arcCache.set(cacheKey, ids);
+    return ids;
+  };
+
+  // Strip quads per edge (both end arcs ordered f1→f2, so rows pair up).
+  for (const e of bedges) {
+    const arcA = endArc(e, e.a);
+    const arcB = endArc(e, e.b);
+    if (!arcA || !arcB) continue;
+    const outward = normalize(add(N[e.f1]!, N[e.f2]!));
+    for (let k = 0; k < seg; k++) {
+      const quad = [arcA[k]!, arcB[k]!, arcB[k + 1]!, arcA[k + 1]!];
+      const flip = dot(faceNormal(m, { v: quad }), outward) < 0;
+      m.faces.push({ v: flip ? quad.reverse() : quad });
+    }
+  }
+
+  // End caps + corner patches.
+  const edgesAtVert = new Map<number, BEdge[]>();
+  for (const e of bedges) {
+    for (const v of [e.a, e.b]) {
+      const arr = edgesAtVert.get(v) ?? [];
+      arr.push(e);
+      edgesAtVert.set(v, arr);
+    }
+  }
+  for (const [v, list] of edgesAtVert) {
+    // Outward direction at the vertex (average normal of its original faces).
+    let vn: Vec3 = { x: 0, y: 0, z: 0 };
+    mesh.faces.forEach((f, fi) => { if (f.v.includes(v)) vn = add(vn, N[fi]!); });
+    vn = normalize(vn);
+    const pushFan = (center: number, ring: number[]) => {
+      for (let i = 0; i + 1 < ring.length; i++) {
+        const tri = [center, ring[i]!, ring[i + 1]!];
+        if (tri[0] === tri[1] || tri[1] === tri[2] || tri[0] === tri[2]) continue;
+        const flip = dot(faceNormal(m, { v: tri }), vn) < 0;
+        m.faces.push({ v: flip ? tri.reverse() : tri });
+      }
+    };
+    if (list.length === 1) {
+      // Single strip ending here: taper into the (still-referenced) vertex.
+      const arc = endArc(list[0]!, v);
+      if (arc) pushFan(v, arc);
+      continue;
+    }
+    // 2+ strips meet: chain their end arcs (they share side-corner vertices)
+    // into one loop and fan from its centroid — the rounded corner patch.
+    const remaining = list
+      .map((e) => endArc(e, v))
+      .filter((a): a is number[] => !!a && a.length >= 2);
+    if (remaining.length < 2) continue;
+    const loop: number[] = [...remaining[0]!];
+    remaining.splice(0, 1);
+    let closed = false;
+    let guard = remaining.length + 2;
+    while (remaining.length > 0 && guard-- > 0) {
+      const tail = loop[loop.length - 1]!;
+      const idx = remaining.findIndex((a) => a[0] === tail || a[a.length - 1] === tail);
+      if (idx < 0) break;
+      const nextArc = remaining.splice(idx, 1)[0]!;
+      const pts = nextArc[0] === tail ? nextArc : [...nextArc].reverse();
+      loop.push(...pts.slice(1));
+    }
+    if (loop.length >= 3 && loop[0] === loop[loop.length - 1]) {
+      loop.pop();
+      closed = true;
+    }
+    if (closed && remaining.length === 0) {
+      // Centroid vertex + fan (append the first point to close the ring).
+      let cx = 0, cy = 0, cz = 0;
+      for (const id of loop) {
+        const p = vGet(m, id);
+        cx += p.x; cy += p.y; cz += p.z;
+      }
+      const c = vAdd(m, { x: cx / loop.length, y: cy / loop.length, z: cz / loop.length });
+      pushFan(c, [...loop, loop[0]!]);
+    } else {
+      // Open chain (mixed selected/unselected edges at this corner): close
+      // through the original vertex, which the unselected faces still use.
+      pushFan(v, [...loop, v]);
+    }
+  }
+
+  return compact(m);
+}
+
 /** Merge selected verts to their centroid (Blender 'M' → At Center). */
 export function mergeAtCenter(mesh: Mesh, vertIds: number[]): Mesh {
   if (vertIds.length < 2) return cloneMesh(mesh);

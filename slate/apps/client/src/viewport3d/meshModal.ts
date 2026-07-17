@@ -12,6 +12,8 @@
  */
 
 import {
+  allManifoldEdges,
+  bevelEdges,
   bevelVerts,
   extrudeFaces,
   faceNormalOp,
@@ -60,9 +62,13 @@ export interface MeshModalState {
     slide: number;
     /** Mesh diagonal — maps pixel drag to a sensible amount range. */
     diag: number;
-    /** Target faces (inset) / verts (bevel) / quad face (loop-cut). */
+    /** Target faces (inset) / verts (vertex-bevel fallback) / quad face (loop-cut). */
     faces: number[];
     verts: number[];
+    /** Bevel target edges as flat [a,b, a,b, …] vertex pairs. When non-empty,
+     *  bevel runs Blender's EDGE bevel (rounded-arc strips); empty falls back
+     *  to the vertex bevel. */
+    edges: number[];
     loopFace: number;
   };
 }
@@ -90,6 +96,7 @@ export function startMeshScalar(
   op: ScalarMeshOp,
   selectedFaces: number[],
   selectedVerts: number[],
+  selectedEdges: number[] = [],
 ): MeshModalState | null {
   const found = readMesh(room, objectId);
   if (!found) return null;
@@ -103,6 +110,46 @@ export function startMeshScalar(
       : faces.length > 0
         ? [...new Set(faces.flatMap((fi) => mesh.faces[fi]!.v))]
         : Array.from({ length: vCount(mesh) }, (_, i) => i);
+
+  // Bevel targets EDGES (Blender's Ctrl+B): explicit edge selection first,
+  // else the edges of the selected faces, else edges between selected verts,
+  // else — nothing selected — every edge (the "rounded cube" case). An empty
+  // result (e.g. a single selected vertex) falls back to the vertex bevel.
+  let edges: number[] = [];
+  if (op === 'bevel') {
+    if (selectedEdges.length >= 2) {
+      edges = selectedEdges.slice();
+    } else if (faces.length > 0) {
+      const seen = new Set<string>();
+      for (const fi of faces) {
+        const fv = mesh.faces[fi]!.v;
+        for (let i = 0; i < fv.length; i++) {
+          const a = fv[i]!;
+          const b = fv[(i + 1) % fv.length]!;
+          const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          edges.push(a, b);
+        }
+      }
+    } else if (selectedVerts.length >= 2) {
+      const sel = new Set(selectedVerts);
+      const seen = new Set<string>();
+      for (const f of mesh.faces) {
+        for (let i = 0; i < f.v.length; i++) {
+          const a = f.v[i]!;
+          const b = f.v[(i + 1) % f.v.length]!;
+          if (!sel.has(a) || !sel.has(b)) continue;
+          const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          edges.push(a, b);
+        }
+      }
+    } else if (selectedVerts.length === 0) {
+      edges = allManifoldEdges(mesh);
+    }
+  }
 
   let loopFace = -1;
   if (op === 'loop-cut') {
@@ -135,6 +182,7 @@ export function startMeshScalar(
       diag: diagonalOf(mesh),
       faces: faces.length > 0 ? faces : mesh.faces.map((_, i) => i),
       verts,
+      edges,
       loopFace,
     },
   };
@@ -147,7 +195,11 @@ export function applyMeshScalar(room: SlateRoom, state: MeshModalState): void {
   const base = state.baseMesh;
   let next: MeshTopology | null = null;
   if (s.op === 'bevel') {
-    next = bevelVerts(base, s.verts, Math.max(0, s.amount) * s.diag, Math.max(1, Math.round(s.cuts ?? 1)));
+    // Edge bevel (Blender's Ctrl+B, rounded-arc profile) whenever we have
+    // target edges; vertex bevel only as the fallback (e.g. one lone vertex).
+    next = s.edges.length >= 2
+      ? bevelEdges(base, s.edges, Math.max(0, s.amount) * s.diag, Math.max(1, Math.round(s.cuts ?? 1)))
+      : bevelVerts(base, s.verts, Math.max(0, s.amount) * s.diag, Math.max(1, Math.round(s.cuts ?? 1)));
   } else if (s.op === 'inset') {
     next = insetFaces(base, s.faces, Math.max(0, s.amount) * s.diag);
   } else if (s.op === 'loop-cut') {

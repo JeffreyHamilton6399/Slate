@@ -4,15 +4,24 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, FolderOpen, Clock, Trash2 } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
 import { Dialog } from '../ui/Dialog';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '../ui/DropdownMenu';
 import { useAppStore } from './store';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
+import { AboutDialog } from './AboutDialog';
+import { TermsDialog } from './TermsDialog';
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -25,6 +34,8 @@ export function Onboarding() {
   const [mode, setMode] = useState<'2d' | '3d' | 'audio'>('2d');
   const [rooms, setRooms] = useState<PublicRoom[]>([]);
   const [allProjectsOpen, setAllProjectsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
   const [savesVersion, setSavesVersion] = useState(0);
 
   // Build recents from local saves (max 3).
@@ -123,6 +134,50 @@ export function Onboarding() {
             </h1>
             <p className="text-xs text-text-dim">Real-time whiteboard &amp; 3D editor</p>
           </div>
+          <div className="flex-1" />
+          {/* Quick donate text link — small, unobtrusive. */}
+          <a
+            href="https://buymeacoffee.com/jeffreyscof"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="flex items-center gap-1 text-[11px] text-text-dim transition-colors hover:text-accent"
+            title="Support Slate — buy me a coffee"
+          >
+            <Coffee size={12} />
+            <span>Donate</span>
+          </a>
+          {/* Guest profile dropdown — no account, so no Settings / Sign-in. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Account menu"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-border-2 bg-bg-3 text-text-mid transition-colors hover:border-accent/40 hover:text-accent"
+              >
+                <User size={14} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[200px]">
+              <div className="px-2.5 py-1.5">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
+                  Account
+                </p>
+                <p className="truncate text-xs font-medium text-text">Guest</p>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setAboutOpen(true)}>
+                <Info size={14} /> About
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setTermsOpen(true)}>
+                <FileText size={14} /> Terms &amp; Privacy
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
+              >
+                <Coffee size={14} /> Donate
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         <form onSubmit={submit} className="flex flex-col gap-4">
           <div>
@@ -280,6 +335,8 @@ export function Onboarding() {
           <Button variant="primary" size="sm" onClick={() => setAllProjectsOpen(false)}>Close</Button>
         </div>
       </Dialog>
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
     </div>
   );
 }

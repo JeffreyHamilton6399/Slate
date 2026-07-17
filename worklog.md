@@ -824,3 +824,99 @@ Stage Summary:
 - Retry budget: 10s (was 3s) AND resets on the sample-arrival signal — large multi-MB samples arriving as 512KB Yjs chunks over slow links now make it.
 - Pre-warm: samples arriving while paused are decoded + cached immediately → first play() has zero sample-load latency.
 - TypeScript clean for modified files; no new dependencies; no API breakage (additive only; play() signature unchanged; registerSampleSyncMap function unchanged, just moved call site).
+
+---
+Task ID: ROUND9-B
+Agent: Main
+Task: Add 2D animation export as MP4 (port the 3D viewport's MediaRecorder + canvas.captureStream pattern to the 2D timeline).
+
+Work Log:
+- Read /home/z/my-project/worklog.md (previous rounds) and the 3D reference pattern at viewport3d/Viewport3D.tsx:852-936 (`onRenderAnimation`).
+- Read the 2D side: canvas2d/Timeline2D.tsx (header layout + hasAnimation logic), canvas2d/store.ts (setAnimFrame/setAnimPreview/animFps/animDuration), canvas2d/engine.ts (`loop` guard: only repaints when `dirty || live.stroke || live.shape || animPreview`), canvas2d/Canvas2D.tsx (canvasRef + the single `<canvas className="block h-full w-full" />` at line 910), canvas2d/Minimap.tsx (the only other <canvas>, identified by `aria-label="Minimap"`), files/export2d.ts (PNG/JPG/WebP/SVG export for reference), ui/Toast.tsx (toast API — push-only, no update).
+- Created `/home/z/my-project/slate/apps/client/src/files/export2dVideo.ts` exporting `export2dVideo({ canvas, fps, duration, onProgress })`:
+  - MIME negotiation: tries `video/mp4;codecs=avc1.640028` → `video/mp4;codecs=avc1` → `video/mp4` → `video/webm;codecs=vp9` → `video/webm;codecs=vp8` → `video/webm` (matches the 3D viewport list exactly).
+  - `canvas.captureStream(fps)` + `new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 })`.
+  - Sets `animPlaying=false`, `animFrame=0`, then `animPreview=true` (in that order — `setAnimFrame(0)` clears animPreview, so we re-flip it on; the engine's render loop only repaints when animPreview is true).
+  - Steps frames `i = 0..totalFrames-1`, calling `setAnimFrame(i)` + `setAnimPreview(true)` + waiting `1000 / fps` ms (setTimeout) per frame so `captureStream` has time to sample each distinct frame (one rAF alone is too fast — multiple frames collapse into a single recorder sample).
+  - `onProgress((i+1) / totalFrames)` after each frame.
+  - `recorder.onstop` builds a Blob, triggers download as `slate-animation.{mp4|webm}`, then restores `animFrame=0` + `animPreview=false`.
+  - One rAF wait before `recorder.start()` so the canvas repaints at frame 0 first; one rAF wait before `recorder.stop()` so the final frame paints.
+- Modified `/home/z/my-project/slate/apps/client/src/canvas2d/Timeline2D.tsx`:
+  - Added imports: `useCallback`, `Clapperboard` (lucide), `export2dVideo`, `toast`.
+  - Added `exporting` + `exportPct` state and an `onExportVideo` async callback that:
+    1. Bails + toasts if `!hasAnimation` (no cel frames on >1 frame AND no motion keyframes).
+    2. Finds the canvas via `document.querySelector('canvas:not([aria-label])')` (skips the Minimap canvas which carries `aria-label="Minimap"`) with a fallback to `document.querySelector('canvas')`.
+    3. Bails + toasts `error` if the canvas/MediaRecorder/captureStream are unavailable.
+    4. Sets `animPlaying=false`, calls `export2dVideo`, drives `setExportPct` via `onProgress`.
+    5. Toasts `success` "Animation exported" on resolve, `error` "Export failed" on throw, resets state in `finally`.
+  - Added an "MP4" button (Clapperboard icon) at the end of the timeline header, after the Frames input. Disabled while exporting or when there's no animation. While exporting it shows `bg-warn/20 text-warn` and the live percent; otherwise it shows the "MP4" label. Title/aria-label included.
+- Verified with `npx tsc --noEmit` from `apps/client`: only 2 pre-existing errors (`Cannot find type definition file for 'vite-plugin-pwa/client'` and `'vite/client'`) — both environment-level config issues unrelated to this task; no errors in export2dVideo.ts or Timeline2D.tsx. (ESLint couldn't run — `eslint-config-prettier` isn't installed in this sandbox, also pre-existing.)
+- Checked dev.log tail: only `GET /health 404` heartbeats, no compile errors from the new code.
+
+Stage Summary:
+- New file: `files/export2dVideo.ts` — standalone MP4/WebM video exporter for the 2D canvas, mirrors the 3D viewport's `onRenderAnimation` but uses frame-stepped setTimeout waits instead of rAF timing so `captureStream` reliably samples every cel frame.
+- Modified file: `canvas2d/Timeline2D.tsx` — added an "MP4" export button to the open-timeline header with live progress, animation-presence guard, unsupported-browser guard, and success/failure toasts.
+- No changes to the engine, store, or renderer — the exporter just drives the existing `animFrame`/`animPreview` store state and lets the engine's render loop repaint naturally.
+
+---
+Task ID: ROUND9-A
+Agent: main (Z.ai Code)
+Task: Add Donate, About, Terms, Privacy pages + Profile dropdown (Home + Onboarding)
+
+Work Log:
+- Read worklog (latest ROUND7-A) + the 2 target files fully: app/Home.tsx, app/Onboarding.tsx. Also read ui/Dialog.tsx, ui/DropdownMenu.tsx, ui/Button.tsx, app/Settings.tsx (for the SettingsDialog API pattern), and the Entry component flow.
+- Confirmed Radix DropdownMenu primitives already wrapped in ../ui/DropdownMenu (DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator) — reused them.
+- Confirmed Home.tsx had a LOCAL TermsDialog function (lines 277-303 in original) used by SignIn; replaced it with the shared one to avoid a name clash after importing from ./TermsDialog.
+
+Files Created (2):
+1. slate/apps/client/src/app/TermsDialog.tsx — shared Terms of Service + Privacy Policy dialog. Three sections (Terms of Service, Privacy Policy, Data Retention) per task spec. Uses existing `Dialog` (z-1100, renders above the z-1000 entry gates). Scrollable up to 50vh. Close button.
+2. slate/apps/client/src/app/AboutDialog.tsx — exports `AboutDialog({ open, onOpenChange })`. Title "Slate is free forever". Body paragraph: "Slate is a real-time collaborative 2D whiteboard, 3D editor, and audio DAW. It's free forever, open for everyone, and works in your browser." Four sections, each separated by a border-top:
+   - Give Feedback: ghost button with Mail icon → opens mailto:jeffreyhamilton6399@gmail.com?subject=Slate%20Feedback with body template via window.open('_blank').
+   - Support Slate: Buy me a coffee anchor (not Button — uses an <a> so target=_blank works without JS) with Coffee icon → https://buymeacoffee.com/jeffreyscof.
+   - Terms & Privacy: ghost button with FileText icon → opens nested TermsDialog (separate `termsOpen` state held inside AboutDialog).
+   - Close button at the bottom.
+   Renders `<TermsDialog>` as a sibling so it can stack on top.
+
+Files Modified (2):
+3. slate/apps/client/src/app/Home.tsx:
+   - Imports: added Coffee, Info, FileText, User from lucide-react; added DropdownMenu primitives from ../ui/DropdownMenu; added AboutDialog from ./AboutDialog; added TermsDialog from ./TermsDialog.
+   - Removed the local TermsDialog function (was 27 lines, used by SignIn). The `<TermsDialog open={termsOpen} ...>` call inside SignIn now resolves to the shared import.
+   - Added `aboutOpen` + `termsOpen` useState hooks in Home (next to the existing `settingsOpen`).
+   - Replaced the header's three widgets (email span + Settings icon button + Sign out icon button) with a single `<ProfileMenu>` component (defined at bottom of file).
+   - ProfileMenu: a 32×32 circular avatar button (accent-tinted) showing the user's first letter (or User icon if no email). Opens a Radix DropdownMenu (align=end, min-w 220px) with:
+     • Account info block: "Signed in as" + email (truncated, title attr for full text)
+     • Settings (SettingsIcon) → setSettingsOpen(true)
+     • About (Info) → setAboutOpen(true)
+     • Terms & Privacy (FileText) → setTermsOpen(true)
+     • Donate (Coffee) → window.open(buymeacoffee, '_blank', 'noopener,noreferrer')
+     • separator
+     • Sign out (LogOut, destructive) → supabase?.auth.signOut()
+   - Rendered `<AboutDialog open={aboutOpen} ...>` and `<TermsDialog open={termsOpen} ...>` at the bottom of Home, next to the existing `<SettingsDialog>` and `<AllProjectsDialog>`.
+   - All dialogs share the existing z-1100 Radix Dialog overlay; profile dropdown is z-1102 (DropdownMenu.tsx default), so the dropdown closes (Radix auto-close on item select / outside click / Esc) BEFORE the dialog opens — no focus-trap conflict.
+
+4. slate/apps/client/src/app/Onboarding.tsx:
+   - Imports: added Coffee, Info, FileText, User from lucide-react; added DropdownMenu primitives; added AboutDialog + TermsDialog imports.
+   - Added `aboutOpen` + `termsOpen` useState hooks.
+   - Modified the header to add a flex-1 spacer, a small Donate text link (Coffee icon + "Donate" in 11px text-text-dim → hover:text-accent), then a Guest profile dropdown. The link and dropdown sit in the top-right corner of the onboarding card.
+   - Guest dropdown: 32×32 circular button with border-border-2 bg-bg-3 (subdued, since there's no account) showing a User icon. Opens DropdownMenu (align=end, min-w 200px) with:
+     • Account block: "Account" / "Guest"
+     • About (Info) → setAboutOpen(true)
+     • Terms & Privacy (FileText) → setTermsOpen(true)
+     • Donate (Coffee) → window.open(buymeacoffee)
+     NO Settings item (onboarding mode has no settings dialog), NO Sign-in/out (accounts disabled in onboarding mode).
+   - Rendered `<AboutDialog>` and `<TermsDialog>` after the All Projects dialog at the bottom of Onboarding.
+
+Verification:
+- `bun install` at the slate workspace root (deps weren't installed in this env) → 1744 packages installed cleanly.
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, 0 lines of output. Clean across all 4 files (2 new, 2 modified) plus the rest of the codebase. (The previous round's "46 pre-existing canvas2d errors" appear to have been from a different env state — they're not present in this run.)
+- All Radix DropdownMenu items auto-close the menu on select; the dialogs open via separate useState hooks so the close-then-open sequence works without focus-trap deadlock.
+- The Buy me a coffee link in AboutDialog uses a raw `<a target="_blank">` (not a Button onClick) so middle-click / cmd-click work as users expect for external links.
+- mailto: link uses window.open with a body template (URL-encoded) so the user's email client opens with subject + body pre-filled.
+
+Stage Summary:
+- Home header is now a single circular avatar in the top-right; click it for Settings / About / Terms / Donate / Sign out.
+- Onboarding header has both a small "Donate" text link AND a Guest avatar dropdown (About / Terms / Donate) in the top-right.
+- About dialog explains Slate, links to feedback email, donate page, and the Terms dialog.
+- Terms dialog is a single shared component used by: SignIn (sign-up ToS link), Home profile menu, Onboarding profile menu, and About dialog. Three sections: Terms of Service, Privacy Policy, Data Retention.
+- All z-index stacking preserved (Radix Dialog z-1100/1101 > entry gates z-1000; DropdownMenu z-1102 > Dialog content).
+- No new dependencies added; only reused existing Radix primitives + lucide icons already in package.json.

@@ -8,15 +8,24 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Settings as SettingsIcon, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, Info, FileText, User } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '../ui/DropdownMenu';
 import { cn } from '../utils/cn';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
 import { SettingsDialog } from './Settings';
+import { AboutDialog } from './AboutDialog';
+import { TermsDialog } from './TermsDialog';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
@@ -274,33 +283,7 @@ function SignIn() {
 }
 
 /** Placeholder legal terms — swap for real counsel-reviewed text before launch. */
-function TermsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Terms of Service & Privacy Policy">
-      <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto text-xs text-text-mid">
-        <p className="font-medium text-text">Terms of Service</p>
-        <p>
-          Slate is provided as-is, without warranty of any kind. You are responsible for the
-          content you create and share. Boards can be public — do not post anything you do not
-          have the right to share. Accounts that abuse the service may be removed.
-        </p>
-        <p className="font-medium text-text">Privacy</p>
-        <p>
-          Your email address and password hash are stored with our authentication provider
-          (Supabase) solely to operate your account. Board saves you back up are stored under
-          your account and are not shared with other users. Live board content is synced with
-          the collaborators in the same board. We do not sell your data.
-        </p>
-        <p>Questions? Contact the board owner or the project maintainer.</p>
-      </div>
-      <div className="flex justify-end pt-3">
-        <Button variant="primary" size="sm" onClick={() => onOpenChange(false)}>
-          Close
-        </Button>
-      </div>
-    </Dialog>
-  );
-}
+/* TermsDialog moved to ./TermsDialog.tsx — shared with Home + Onboarding profile menus. */
 
 interface RecentProject {
   boardName: string;
@@ -321,6 +304,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [createMode, setCreateMode] = useState<'2d' | '3d' | 'audio'>('2d');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
   const [cloudNote, setCloudNote] = useState('Syncing projects…');
 
   /** Refresh both the recents widget + the All Projects dialog list. */
@@ -405,13 +390,12 @@ function Home({ email, userId }: { email: string; userId: string }) {
           <SlateMark />
           <span className="text-lg font-semibold tracking-tight">Slate</span>
           <div className="flex-1" />
-          <span className="hidden text-xs text-text-dim sm:inline">{email}</span>
-          <Button variant="icon" size="none" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
-            <SettingsIcon size={16} />
-          </Button>
-          <Button variant="icon" size="none" aria-label="Sign out" onClick={() => void supabase?.auth.signOut()}>
-            <LogOut size={16} />
-          </Button>
+          <ProfileMenu
+            email={email}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenAbout={() => setAboutOpen(true)}
+            onOpenTerms={() => setTermsOpen(true)}
+          />
         </header>
 
         {/* Hero + create cards */}
@@ -560,6 +544,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
         )}
       </div>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
       <AllProjectsDialog
         open={allProjectsOpen}
         onOpenChange={setAllProjectsOpen}
@@ -711,4 +697,72 @@ function timeAgo(t: number): string {
   if (h < 24) return `${h} h ago`;
   const d = Math.floor(h / 24);
   return d === 1 ? 'yesterday' : `${d} days ago`;
+}
+
+/**
+ * Circular avatar button in the top-right of the Home header. Opens a dropdown
+ * with account info + quick links (Settings, About, Terms, Donate, Sign out).
+ * Closes on outside-click / item-select / Esc — handled by Radix.
+ */
+function ProfileMenu({
+  email,
+  onOpenSettings,
+  onOpenAbout,
+  onOpenTerms,
+}: {
+  email: string;
+  onOpenSettings: () => void;
+  onOpenAbout: () => void;
+  onOpenTerms: () => void;
+}) {
+  const initial = email ? email[0]?.toUpperCase() ?? '?' : null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Account menu"
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-accent transition-colors hover:bg-accent/25 hover:border-accent/70"
+        >
+          {initial ? (
+            <span className="text-xs font-semibold">{initial}</span>
+          ) : (
+            <User size={14} />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[220px]">
+        <div className="px-2.5 py-1.5">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
+            Signed in as
+          </p>
+          <p className="truncate text-xs font-medium text-text" title={email || 'Guest'}>
+            {email || 'Guest'}
+          </p>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onOpenSettings}>
+          <SettingsIcon size={14} /> Settings
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpenAbout}>
+          <Info size={14} /> About
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpenTerms}>
+          <FileText size={14} /> Terms &amp; Privacy
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
+        >
+          <Coffee size={14} /> Donate
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          destructive
+          onSelect={() => void supabase?.auth.signOut()}
+        >
+          <LogOut size={14} /> Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }

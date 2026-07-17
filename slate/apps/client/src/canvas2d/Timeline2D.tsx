@@ -12,11 +12,13 @@
  * depth slider for how many ghost frames to show on each side.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Diamond, ChevronDown, ChevronUp, Film, Layers, SkipBack, SkipForward } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Play, Pause, Diamond, ChevronDown, ChevronUp, Film, Layers, SkipBack, SkipForward, Clapperboard } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { useCanvasStore } from './store';
 import { audioEditorHovered } from '../audio/AudioEditor';
+import { export2dVideo } from '../files/export2dVideo';
+import { toast } from '../ui/Toast';
 import type { Shape } from '@slate/sync-protocol';
 
 interface TimelineProps {
@@ -134,6 +136,59 @@ export function Timeline2D({ selection: _selection }: TimelineProps) {
     if (!animPlaying && animTime === 0) setAnimPreview(false);
   }, [animPlaying, animTime, setAnimPreview]);
 
+  // "Export MP4" — record the canvas while stepping every frame at the
+  // configured FPS, then download the blob. Mirrors the 3D viewport's
+  // Render Animation. Button label shows live progress while recording.
+  const [exporting, setExporting] = useState(false);
+  const [exportPct, setExportPct] = useState(0);
+  const onExportVideo = useCallback(async () => {
+    if (exporting) return;
+    if (!hasAnimation) {
+      toast({
+        title: 'No animation to export',
+        description: 'Stamp content on more than one frame, or add motion keyframes first.',
+      });
+      return;
+    }
+    // The 2D editor owns a single <canvas> (the minimap canvas has aria-label,
+    // so this selector skips it). It's the first canvas in DOM order.
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas:not([aria-label])')
+      ?? document.querySelector<HTMLCanvasElement>('canvas');
+    if (!canvas || typeof canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+      toast({
+        title: 'Recording unsupported',
+        description: 'This browser can’t record the canvas.',
+        variant: 'error',
+      });
+      return;
+    }
+    setExporting(true);
+    setExportPct(0);
+    setAnimPlaying(false);
+    try {
+      await export2dVideo({
+        canvas,
+        fps: animFps,
+        duration: animDuration,
+        onProgress: (pct) => setExportPct(pct),
+      });
+      toast({
+        title: 'Animation exported',
+        description: 'Saved as a video file.',
+        variant: 'success',
+      });
+    } catch (err) {
+      toast({
+        title: 'Export failed',
+        description: (err as Error).message,
+        variant: 'error',
+      });
+    } finally {
+      setExporting(false);
+      setExportPct(0);
+    }
+  }, [exporting, hasAnimation, animFps, animDuration, setAnimPlaying]);
+
   // Space = play/pause while the timeline is open. Yields to the audio
   // transport while the pointer is over a docked audio editor.
   useEffect(() => {
@@ -228,6 +283,28 @@ export function Timeline2D({ selection: _selection }: TimelineProps) {
             className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-[10px] text-text outline-none focus:border-accent"
           />
         </label>
+        <button
+          onClick={onExportVideo}
+          disabled={exporting || !hasAnimation}
+          className={`flex h-6 items-center gap-1 rounded px-1.5 text-[9px] font-mono uppercase tracking-wider ${
+            exporting
+              ? 'bg-warn/20 text-warn'
+              : hasAnimation
+                ? 'text-text-mid hover:bg-bg-3 hover:text-text'
+                : 'text-text-dim opacity-50'
+          } disabled:cursor-not-allowed`}
+          title={
+            !hasAnimation
+              ? 'No animation to export — add cel frames or motion keyframes first'
+              : exporting
+                ? `Recording… ${Math.round(exportPct * 100)}%`
+                : 'Export the animation as an MP4 video (WebM fallback)'
+          }
+          aria-label="Export animation as MP4"
+        >
+          <Clapperboard size={11} />
+          {exporting ? `${Math.round(exportPct * 100)}%` : 'MP4'}
+        </button>
       </div>
 
       {/* Onion-skin bar — toggle + how many ghost frames each side. */}

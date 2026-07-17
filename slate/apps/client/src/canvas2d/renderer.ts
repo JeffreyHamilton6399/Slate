@@ -39,6 +39,8 @@ export interface SceneFrame {
   animTime?: number;
   /** Onion skin: draw previous/next frames as ghost overlays. */
   onionSkin?: boolean;
+  /** How many frames of onion skin to ghost on each side (default 1). */
+  onionSkinFrames?: number;
   /** Frames per second (for onion skin frame stepping). */
   animFps?: number;
   /** Frame-based (cel) animation mode — only the current frame's content
@@ -148,9 +150,12 @@ export function renderScene(
       // content stamped onto the current frame — plus any static, frame-less
       // content — is drawn. Empty frames render blank.
       if (scene.onionSkin) {
-        // Ghost the immediate neighbours: previous frame red, next frame green.
-        const drawGhost = (f: number, tint: string) => {
-          ctx.globalAlpha = layer.opacity * 0.28;
+        // Ghost up to `onionSkinFrames` neighbours each side: previous frames
+        // red, next frames green, fading out the further from the current
+        // frame (drawn farthest-first so nearer ghosts paint on top).
+        const depth = Math.max(1, Math.min(5, scene.onionSkinFrames ?? 1));
+        const drawGhost = (f: number, tint: string, alpha: number) => {
+          ctx.globalAlpha = layer.opacity * alpha;
           for (const sh of shapes) {
             if (sh.frame === f) { ctx.save(); drawShapeTint(ctx, sh, tint); ctx.restore(); }
           }
@@ -159,11 +164,21 @@ export function renderScene(
           }
           ctx.globalAlpha = layer.opacity;
         };
-        if (curFrame > 0) drawGhost(curFrame - 1, '#ff4444');
-        drawGhost(curFrame + 1, '#44ff44');
+        for (let i = depth; i >= 1; i--) {
+          const alpha = 0.3 * (depth - i + 1) / depth;
+          if (curFrame - i >= 0) drawGhost(curFrame - i, '#ff4444', alpha);
+          drawGhost(curFrame + i, '#44ff44', alpha);
+        }
       }
       for (const sh of shapes) {
-        if (sh.frame == null || sh.frame === curFrame) drawShape(ctx, sh);
+        if (sh.frame == null || sh.frame === curFrame) {
+          // Motion keyframes still animate inside cel mode (Animate's tweens
+          // coexist with frame-by-frame cels) — boards keyframed before the
+          // frame timeline became the only mode keep playing.
+          const override = (sh.anim?.length ?? 0) > 0 ? sampleAnim2D(sh.anim, animTime) : null;
+          if (override) drawShapeWithAnim(ctx, sh, override);
+          else drawShape(ctx, sh);
+        }
       }
       for (const st of strokes) {
         if (st.frame == null || st.frame === curFrame) drawStroke(ctx, st);

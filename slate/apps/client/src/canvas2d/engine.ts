@@ -39,6 +39,8 @@ interface EngineOpts {
   getAnimTime: () => number;
   getAnimPreview: () => boolean;
   getOnionSkin: () => boolean;
+  /** Onion-skin ghost depth (frames each side). */
+  getOnionSkinFrames: () => number;
   getAnimFps: () => number;
   /** Frame-based (cel) animation mode is active. */
   getAnimMode: () => boolean;
@@ -319,6 +321,7 @@ export class CanvasEngine {
       paper,
       animTime,
       onionSkin: this.opts.getOnionSkin(),
+      onionSkinFrames: this.opts.getOnionSkinFrames(),
       animFps: this.opts.getAnimFps(),
       animMode: this.opts.getAnimMode(),
       animFrame: this.opts.getAnimFrame(),

@@ -57,8 +57,9 @@ interface CanvasState {
   animPlaying: boolean;
   /** True while scrubbing/playing — engine repaints every frame. */
   animPreview: boolean;
-  /** Animation mode toggle — when true, shows the frame-based animation UI
-   *  (Adobe Animate style: frame strip, onion skin, playhead in frames). */
+  /** Frame-animation (cel) mode. Driven by the Timeline2D open state — the
+   *  timeline IS the mode switch (Adobe Animate style): open = new strokes
+   *  stamp onto the current frame, closed = plain whiteboard drawing. */
   animMode: boolean;
   /** Frames per second for frame-based animation (default 24, like film). */
   animFps: number;
@@ -66,6 +67,8 @@ interface CanvasState {
   animFrame: number;
   /** Onion skin: show previous/next frames as ghost overlays. */
   onionSkin: boolean;
+  /** How many frames of onion skin to ghost on each side (1..5). */
+  onionSkinFrames: number;
 
   setTool: (t: ToolId) => void;
   setStroke: (c: string) => void;
@@ -89,6 +92,7 @@ interface CanvasState {
   setAnimFps: (fps: number) => void;
   setAnimFrame: (f: number) => void;
   setOnionSkin: (o: boolean) => void;
+  setOnionSkinFrames: (n: number) => void;
 }
 
 const DEFAULT_STROKE = '#e0dff5';
@@ -116,6 +120,7 @@ export const useCanvasStore = create<CanvasState>()(
       animFps: 24,
       animFrame: 0,
       onionSkin: false,
+      onionSkinFrames: 2,
       setTool: (tool) => set({ tool }),
       setStroke: (stroke) => set({ stroke }),
       setFill: (fill) => set({ fill }),
@@ -146,7 +151,9 @@ export const useCanvasStore = create<CanvasState>()(
       fit: () => set({ zoom: 1, panX: 0, panY: 0 }),
       setAnimTime: (t) => set((s) => ({ animTime: Math.max(0, t), animPreview: s.animPlaying || t > 0 })),
       setAnimDuration: (d) => set((s) => {
-        const duration = Math.max(0.5, Math.min(600, d));
+        // Floor of 0.1s (not 0.5) so short frame loops are possible — e.g. a
+        // 4-frame cycle at 24fps is ~0.17s.
+        const duration = Math.max(0.1, Math.min(600, d));
         return { animDuration: duration, animTime: Math.min(s.animTime, duration) };
       }),
       setAnimPlaying: (p) => set((s) => ({ animPlaying: p, animPreview: p || s.animPreview })),
@@ -159,6 +166,7 @@ export const useCanvasStore = create<CanvasState>()(
         return { animFrame: frame, animTime: frame / fps, animPreview: s.animPlaying || frame > 0 };
       }),
       setOnionSkin: (onionSkin) => set({ onionSkin }),
+      setOnionSkinFrames: (n) => set({ onionSkinFrames: Math.max(1, Math.min(5, Math.round(n))) }),
     }),
     {
       name: 'slate.canvas.v1',

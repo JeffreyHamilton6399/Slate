@@ -1,14 +1,32 @@
 /**
  * LayersPanel — Photoshop-style layer list backed by Y.Array.
  *
- * Reorderable via dnd-kit (Phase 4 polish). For now we expose add / rename /
- * visibility / lock / opacity / delete which is enough for the 2D canvas to
- * route strokes to the active layer.
+ * Reorder by grabbing the grip handle and dragging (dnd-kit sortable; also
+ * keyboard-accessible — focus the grip, Space to lift, arrows to move).
+ * Add / rename / visibility / lock / opacity / delete route strokes to the
+ * active layer on the 2D canvas.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import * as Y from 'yjs';
-import { Plus, Eye, EyeOff, Lock, LockOpen, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, Eye, EyeOff, Lock, LockOpen, Trash2, GripVertical } from 'lucide-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useRoom } from '../sync/RoomContext';
 import { Button } from '../ui/Button';
 import { makeId } from '../utils/id';
@@ -56,6 +74,44 @@ export function LayersPanel() {
     });
   };
 
+  // Display order is top-down (highest array index first, Photoshop-style).
+  const display = useMemo(() => items.slice().reverse(), [items]);
+
+  // Distance constraint so plain clicks on the grip don't count as drags;
+  // keyboard sensor makes reordering accessible (Space to lift, arrows).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  /** Drop handler: compute the new display order, then rebuild the Y.Array in
+   *  one transaction. Yjs forbids re-inserting live Y.Maps, so each layer map
+   *  is cloned. Rebuilding wholesale (rather than splicing) keeps the logic
+   *  index-shift-proof; layer counts are small so the cost is negligible. */
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const displayIds = display.map((l) => l.id);
+    const from = displayIds.indexOf(String(active.id));
+    const to = displayIds.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    const newDisplay = arrayMove(displayIds, from, to);
+    const newArrayOrder = newDisplay.slice().reverse(); // back to bottom-first array order
+    room.slate.doc.transact(() => {
+      const arr = room.slate.layers();
+      const byId = new Map<string, Y.Map<unknown>>();
+      arr.forEach((m) => {
+        const clone = cloneLayerMap(m);
+        if (clone) byId.set(String(m.get('id')), clone);
+      });
+      const maps = newArrayOrder
+        .map((id) => byId.get(id))
+        .filter((m): m is Y.Map<unknown> => !!m);
+      arr.delete(0, arr.length);
+      arr.insert(0, maps);
+    });
+  };
+
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -67,14 +123,20 @@ export function LayersPanel() {
       </div>
       {/* Top-down: the topmost (last-drawn) layer sits at the top of the list,
           Photoshop-style, and the list never scrolls sideways. */}
-      <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
-        {items
-          .map((l, i) => ({ l, i }))
-          .reverse()
-          .map(({ l, i }) => (
-            <LayerRow key={l.id} layer={l} index={i} total={items.length} active={l.id === activeLayerId} />
-          ))}
-      </ul>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={display.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+          <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
+            {display.map((l) => (
+              <LayerRow
+                key={l.id}
+                layer={l}
+                index={items.findIndex((x) => x.id === l.id)}
+                active={l.id === activeLayerId}
+              />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
     </div>
   );
 }
@@ -82,16 +144,15 @@ export function LayersPanel() {
 function LayerRow({
   layer,
   index,
-  total,
   active,
 }: {
   layer: Layer;
   index: number;
-  total: number;
   active: boolean;
 }) {
   const room = useRoom();
   const setActiveLayer = useLayersStore((s) => s.setActiveLayer);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: layer.id });
   const yMap = room.slate.layers().get(index);
   if (!yMap) return null;
 
@@ -103,63 +164,29 @@ function LayerRow({
     room.slate.doc.transact(() => room.slate.layers().delete(index, 1));
   };
 
-  // Reorder by swapping this layer with an adjacent one. Yjs won't let the
-  // same Y.Map be re-inserted, so we clone both maps, delete the pair, and
-  // re-insert them in the swapped order in one transaction. `dir` is in visual
-  // terms: the list is drawn top-down (highest array index at the top), so
-  // moving "up" the list means swapping toward the END of the array.
-  const swap = (dir: 'up' | 'down') => {
-    const other = dir === 'up' ? index + 1 : index - 1;
-    if (other < 0 || other >= total) return;
-    const lo = Math.min(index, other);
-    room.slate.doc.transact(() => {
-      const arr = room.slate.layers();
-      const a = cloneLayerMap(arr.get(lo));
-      const b = cloneLayerMap(arr.get(lo + 1));
-      if (!a || !b) return;
-      arr.delete(lo, 2);
-      arr.insert(lo, [b, a]);
-    });
-  };
-  const canUp = index < total - 1; // toward top of the list
-  const canDown = index > 0; // toward bottom of the list
-
   return (
     <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
       onClick={() => setActiveLayer(layer.id)}
       className={
         'group flex flex-col gap-1 rounded-sm px-2 py-1.5 cursor-pointer border ' +
-        (active ? 'bg-bg-4 border-accent/40' : 'bg-bg-3 border-transparent hover:bg-bg-4')
+        (active ? 'bg-bg-4 border-accent/40' : 'bg-bg-3 border-transparent hover:bg-bg-4') +
+        (isDragging ? ' relative z-10 opacity-80 shadow-lg' : '')
       }
     >
-      {/* Row 1: reorder · visibility · lock · name · delete — all fit, no side-scroll. */}
+      {/* Row 1: drag grip · visibility · lock · name · delete. */}
       <div className="flex min-w-0 items-center gap-1.5">
-        <div className="flex shrink-0 flex-col -my-0.5">
-          <button
-            type="button"
-            aria-label="Move layer up"
-            disabled={!canUp}
-            onClick={(e) => {
-              e.stopPropagation();
-              swap('up');
-            }}
-            className="text-text-dim hover:text-text disabled:opacity-20 disabled:hover:text-text-dim"
-          >
-            <ChevronUp size={11} />
-          </button>
-          <button
-            type="button"
-            aria-label="Move layer down"
-            disabled={!canDown}
-            onClick={(e) => {
-              e.stopPropagation();
-              swap('down');
-            }}
-            className="text-text-dim hover:text-text disabled:opacity-20 disabled:hover:text-text-dim"
-          >
-            <ChevronDown size={11} />
-          </button>
-        </div>
+        <button
+          type="button"
+          aria-label={`Reorder ${layer.name} (drag, or Space + arrows)`}
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 cursor-grab touch-none text-text-dim hover:text-text active:cursor-grabbing"
+        >
+          <GripVertical size={12} />
+        </button>
         <button
           type="button"
           aria-label={layer.visible ? 'Hide layer' : 'Show layer'}

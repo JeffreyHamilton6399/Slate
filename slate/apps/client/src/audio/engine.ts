@@ -54,8 +54,16 @@ export class AudioEngine {
   /** Active track gain nodes (for live volume/pan changes). */
   private trackGains = new Map<string, GainNode>();
   private trackPanners = new Map<string, StereoPannerNode>();
-  /** Per-track effect nodes (reverb/delay/EQ) — inserted between gain and panner. */
-  private trackEffects = new Map<string, { reverb: ConvolverNode; delay: DelayNode; eq: BiquadFilterNode }>();
+  /** Per-track 3-band channel EQ (low shelf 200 Hz / peak 1 kHz / high shelf
+   *  4 kHz), inserted between the track gain and panner. */
+  private trackEqs = new Map<string, { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode }>();
+  /** Per-track send gains into the shared reverb/delay FX bus (post-EQ). */
+  private trackSends = new Map<string, { reverb: GainNode; delay: GainNode }>();
+  /** Shared FX bus — ONE convolver + ONE feedback delay for the whole mix;
+   *  per-track send gains control how much each track feeds them. */
+  private fxReverb: ConvolverNode | null = null;
+  private fxDelay: DelayNode | null = null;
+  private fxDelayFeedback: GainNode | null = null;
   /** Master volume (0..1). */
   private masterVolume = 0.9;
   /** Loop region (null = no loop). */
@@ -230,35 +238,98 @@ export class AudioEngine {
     await this.getBuffer(clip); // pre-warm the cache
   }
 
-  /** Build per-track gain+panner chain for the current set of tracks. */
+  /** Lazily build the shared FX bus (one reverb + one feedback echo the whole
+   *  mix shares; per-track send gains feed them). */
+  private ensureFxBus(): void {
+    if (this.fxReverb || !this.ctx || !this.masterGain) return;
+    const ctx = this.ctx;
+    this.fxReverb = ctx.createConvolver();
+    this.fxReverb.buffer = this.makeReverbIR(ctx, 2.2, 3);
+    this.fxReverb.connect(this.masterGain);
+    this.fxDelay = ctx.createDelay(1);
+    this.fxDelay.delayTime.value = this.delayTimeForBpm();
+    this.fxDelayFeedback = ctx.createGain();
+    this.fxDelayFeedback.gain.value = 0.35;
+    this.fxDelay.connect(this.fxDelayFeedback);
+    this.fxDelayFeedback.connect(this.fxDelay);
+    this.fxDelay.connect(this.masterGain);
+  }
+
+  /** Dotted-eighth echo synced to the project tempo (the classic slap). */
+  private delayTimeForBpm(): number {
+    return Math.min(1, 0.375 * (60 / this.bpm));
+  }
+
+  /** Build the per-track chain for the current set of tracks:
+   *  gain → EQ low/mid/high → panner → master, with post-EQ sends into the
+   *  shared reverb/delay bus. Values (volume, pan, EQ dB, send levels) are
+   *  re-applied on every call, so this doubles as the "apply Yjs → graph"
+   *  step for live edits from the settings panel. */
   private setupTrackNodes(tracks: AudioTrack[]): void {
     const ctx = this.ctx!;
+    this.ensureFxBus();
     // Remove stale nodes.
     for (const [id] of this.trackGains) {
       if (!tracks.find((t) => t.id === id)) {
         this.trackGains.get(id)?.disconnect();
         this.trackPanners.get(id)?.disconnect();
+        const eq = this.trackEqs.get(id);
+        if (eq) { eq.low.disconnect(); eq.mid.disconnect(); eq.high.disconnect(); }
+        const sends = this.trackSends.get(id);
+        if (sends) { sends.reverb.disconnect(); sends.delay.disconnect(); }
         this.trackGains.delete(id);
         this.trackPanners.delete(id);
+        this.trackEqs.delete(id);
+        this.trackSends.delete(id);
       }
     }
     // Create missing nodes.
     for (const track of tracks) {
       if (!this.trackGains.has(track.id)) {
         const gain = ctx.createGain();
+        const low = ctx.createBiquadFilter();
+        low.type = 'lowshelf';
+        low.frequency.value = 200;
+        const mid = ctx.createBiquadFilter();
+        mid.type = 'peaking';
+        mid.frequency.value = 1000;
+        mid.Q.value = 0.9;
+        const high = ctx.createBiquadFilter();
+        high.type = 'highshelf';
+        high.frequency.value = 4000;
         const panner = ctx.createStereoPanner();
-        gain.connect(panner);
+        gain.connect(low);
+        low.connect(mid);
+        mid.connect(high);
+        high.connect(panner);
         panner.connect(this.masterGain!);
+        const reverbSend = ctx.createGain();
+        reverbSend.gain.value = 0;
+        const delaySend = ctx.createGain();
+        delaySend.gain.value = 0;
+        high.connect(reverbSend);
+        high.connect(delaySend);
+        if (this.fxReverb) reverbSend.connect(this.fxReverb);
+        if (this.fxDelay) delaySend.connect(this.fxDelay);
         this.trackGains.set(track.id, gain);
         this.trackPanners.set(track.id, panner);
+        this.trackEqs.set(track.id, { low, mid, high });
+        this.trackSends.set(track.id, { reverb: reverbSend, delay: delaySend });
       }
       // Update values.
       const gain = this.trackGains.get(track.id)!;
       const panner = this.trackPanners.get(track.id)!;
+      const eq = this.trackEqs.get(track.id)!;
+      const sends = this.trackSends.get(track.id)!;
       const anySolo = tracks.some((t) => t.solo);
       const audible = anySolo ? track.solo : !track.muted;
       gain.gain.value = audible ? track.volume : 0;
       panner.pan.value = track.pan;
+      eq.low.gain.value = track.eqLow ?? 0;
+      eq.mid.gain.value = track.eqMid ?? 0;
+      eq.high.gain.value = track.eqHigh ?? 0;
+      sends.reverb.gain.value = track.reverbSend ?? 0;
+      sends.delay.gain.value = track.delaySend ?? 0;
     }
   }
 
@@ -345,15 +416,35 @@ export class AudioEngine {
       // speed = 1 / 2^(pitch/1200) to compensate.
       if (pitchCents !== 0) source.detune.value = pitchCents;
 
-      // Per-clip gain (fades + clip volume) → per-clip panner → track chain.
+      // Per-clip gain (fades + clip volume) → per-clip panner → optional
+      // HP/LP filters → track chain. Filters are only inserted when engaged
+      // (cutoff moved off the ends of the audible range) so the default path
+      // stays two nodes.
       const clipGain = ctx.createGain();
       const clipPan = ctx.createStereoPanner();
       clipPan.pan.value = Math.max(-1, Math.min(1, clip.pan ?? 0));
       source.connect(clipGain);
       clipGain.connect(clipPan);
+      let clipTail: AudioNode = clipPan;
+      const hp = clip.hpCutoff ?? 20;
+      if (hp > 22) {
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = 'highpass';
+        hpf.frequency.value = hp;
+        clipTail.connect(hpf);
+        clipTail = hpf;
+      }
+      const lp = clip.lpCutoff ?? 20000;
+      if (lp < 19500) {
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.frequency.value = lp;
+        clipTail.connect(lpf);
+        clipTail = lpf;
+      }
       const trackGain = this.trackGains.get(track.id);
-      if (trackGain) clipPan.connect(trackGain);
-      else clipPan.connect(this.masterGain!);
+      if (trackGain) clipTail.connect(trackGain);
+      else clipTail.connect(this.masterGain!);
 
       // How far the playhead is already into the clip (real seconds), and where
       // that lands in the source buffer (buffer seconds → scaled by speed).
@@ -454,7 +545,11 @@ export class AudioEngine {
     else this.stopMetronome();
   }
 
-  setBpm(bpm: number): void { this.bpm = bpm; }
+  setBpm(bpm: number): void {
+    this.bpm = bpm;
+    // Keep the shared echo musically in time with the new tempo.
+    if (this.fxDelay) this.fxDelay.delayTime.value = this.delayTimeForBpm();
+  }
 
   setMasterVolume(v: number): void {
     this.masterVolume = v;
@@ -487,52 +582,20 @@ export class AudioEngine {
     return ir;
   }
 
-  /** Update per-track effect settings. Each track can have reverb, delay, EQ. */
-  updateTrackEffects(trackId: string, effects: { reverb?: number; delay?: number; eqFreq?: number }): void {
-    if (!this.ctx) return;
-    let nodes = this.trackEffects.get(trackId);
-    if (!nodes) {
-      const reverb = this.ctx.createConvolver();
-      reverb.buffer = this.makeReverbIR(this.ctx, 2, 3);
-      const delay = this.ctx.createDelay(1);
-      delay.delayTime.value = 0.3;
-      const eq = this.ctx.createBiquadFilter();
-      eq.type = 'peaking';
-      eq.frequency.value = 1000;
-      eq.gain.value = 0;
-      // Chain: gain → eq → reverb (parallel) → panner
-      const gain = this.trackGains.get(trackId);
-      const panner = this.trackPanners.get(trackId);
-      if (gain && panner) {
-        gain.disconnect();
-        gain.connect(eq);
-        eq.connect(panner);
-        // Reverb as send/return
-        const reverbGain = this.ctx.createGain();
-        reverbGain.gain.value = 0;
-        eq.connect(reverb);
-        reverb.connect(reverbGain);
-        reverbGain.connect(panner);
-        // Delay as send/return
-        const delayGain = this.ctx.createGain();
-        delayGain.gain.value = 0;
-        eq.connect(delay);
-        delay.connect(delayGain);
-        delayGain.connect(panner);
-      }
-      nodes = { reverb, delay, eq };
-      this.trackEffects.set(trackId, nodes);
-    }
-    // Apply settings (reverb/delay are 0..1 wet, eq is frequency Hz)
-    if (effects.reverb !== undefined) {
-      // Adjust the reverb send gain (connected alongside the chain)
-    }
-    if (effects.delay !== undefined) {
-      nodes.delay.delayTime.value = effects.delay * 0.5;
-    }
-    if (effects.eqFreq !== undefined) {
-      nodes.eq.frequency.value = effects.eqFreq;
-    }
+  /** Set one EQ band's gain (dB) directly on a track's filter node — O(1),
+   *  used by the settings-panel knobs for live feedback during playback.
+   *  No-op before the graph exists; the next play() reads the Yjs value. */
+  setTrackEq(trackId: string, band: 'low' | 'mid' | 'high', dB: number): void {
+    const eq = this.trackEqs.get(trackId);
+    if (!eq) return;
+    eq[band].gain.value = Math.max(-12, Math.min(12, dB));
+  }
+
+  /** Set a track's reverb/delay send level (0..1) directly — O(1) live write. */
+  setTrackSend(trackId: string, which: 'reverb' | 'delay', level: number): void {
+    const sends = this.trackSends.get(trackId);
+    if (!sends) return;
+    sends[which].gain.value = Math.max(0, Math.min(1, level));
   }
 
   private startMetronome(): void {
@@ -664,8 +727,18 @@ export class AudioEngine {
     }
     this.trackGains.forEach((g) => g.disconnect());
     this.trackPanners.forEach((p) => p.disconnect());
+    this.trackEqs.forEach((eq) => { eq.low.disconnect(); eq.mid.disconnect(); eq.high.disconnect(); });
+    this.trackSends.forEach((s) => { s.reverb.disconnect(); s.delay.disconnect(); });
     this.trackGains.clear();
     this.trackPanners.clear();
+    this.trackEqs.clear();
+    this.trackSends.clear();
+    this.fxReverb?.disconnect();
+    this.fxDelay?.disconnect();
+    this.fxDelayFeedback?.disconnect();
+    this.fxReverb = null;
+    this.fxDelay = null;
+    this.fxDelayFeedback = null;
     this.bufferCache.clear();
     this.retryingClips.clear();
     this.retryAttempts.clear();

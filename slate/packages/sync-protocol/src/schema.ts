@@ -291,6 +291,16 @@ export interface AudioTrack {
   armed: boolean;
   /** Display order (0 = top). */
   order: number;
+  /** 3-band channel EQ, gains in dB (-12..+12). Low shelf @ 200 Hz. Default 0. */
+  eqLow?: number;
+  /** Mid peaking band @ 1 kHz, dB (-12..+12). Default 0. */
+  eqMid?: number;
+  /** High shelf @ 4 kHz, dB (-12..+12). Default 0. */
+  eqHigh?: number;
+  /** Reverb send level 0..1 (post-EQ, into the shared room reverb). Default 0. */
+  reverbSend?: number;
+  /** Delay send level 0..1 (post-EQ, into the shared echo). Default 0. */
+  delaySend?: number;
 }
 
 /** A clip on a track — a segment of audio placed at a specific time. */
@@ -330,6 +340,12 @@ export interface AudioClip {
    *  octave up, -1200 = one octave down. Stored in cents so the Yjs value is
    *  the same unit the Web Audio `detune` AudioParam expects. Default 0. */
   pitch?: number;
+  /** High-pass filter cutoff in Hz. 20 (= bottom of hearing) means OFF.
+   *  Default 20. */
+  hpCutoff?: number;
+  /** Low-pass filter cutoff in Hz. 20000 (= top of hearing) means OFF.
+   *  Default 20000. */
+  lpCutoff?: number;
 }
 
 /** Transport state for the audio editor — synced via awareness (ephemeral). */

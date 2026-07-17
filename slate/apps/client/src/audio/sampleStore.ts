@@ -14,6 +14,7 @@
  */
 
 import * as Y from 'yjs';
+import { AUDIO_SYNC_BUDGET_CHARS } from '@slate/sync-protocol';
 
 const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
@@ -262,22 +263,43 @@ export interface SampleSyncInfo {
   channels: number;
 }
 
+/** Total base64 chars currently stored in the sync map, excluding entries for
+ *  `exceptKey` (a re-publish replaces those, so they don't count against it). */
+function syncMapUsedChars(map: Y.Map<string>, exceptKey: string): number {
+  let used = 0;
+  map.forEach((v, entry) => {
+    if (baseKeyOf(entry) !== exceptKey) used += v.length;
+  });
+  return used;
+}
+
 /** Publish samples to the Yjs sync map so other peers receive them. */
 function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
   if (!syncMap || !syncRoom) return;
   try {
     const doc = syncRoom.slate.doc;
     const map = syncMap;
+    // Doc-size budget: the sync map lives in the Yjs doc FOREVER, and after a
+    // server restart the whole doc travels as one SyncStep2 message. Unbounded
+    // growth eventually exceeds MAX_UPDATE_BYTES / the transport's maxPayload,
+    // which kills the connection on every reconnect — the board becomes
+    // permanently unsyncable and peers flap in and out. Both paths below skip
+    // (visibly) once the budget is spent; the clip still plays locally.
+    const budgetLeft = AUDIO_SYNC_BUDGET_CHARS - syncMapUsedChars(map, key);
     // base64 expands bytes 4/3× — decide the path from the raw size so large
     // clips never pay for a throwaway float32 encoding.
     if (float32.byteLength <= (CHUNK_CHARS * 3) / 4) {
-      // Mark synced BEFORE writing: our own sets fire the local observer, and
-      // without this it would pointlessly re-decode + re-store our own blob.
-      syncedKeys.add(key);
       // Fits in one update — plain legacy float32 entry (older clients read it).
       const f32base64 = bytesToBase64(
         new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength),
       );
+      if (f32base64.length > budgetLeft) {
+        window.dispatchEvent(new CustomEvent('slate:audio-sync-skipped', { detail: key }));
+        return;
+      }
+      // Mark synced BEFORE writing: our own sets fire the local observer, and
+      // without this it would pointlessly re-decode + re-store our own blob.
+      syncedKeys.add(key);
       doc.transact(() => {
         map.set(key, f32base64);
         clearChunks(map, key); // drop stale chunks from a previous larger publish
@@ -301,9 +323,10 @@ function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncI
       syncCh = syncCh || info.channels;
       reduced = true;
     }
-    if (payload.length * 2 > SYNC_PAYLOAD_LIMIT) {
-      // Even the reduced copy is too big (≫10min) — skip VISIBLY: silently
-      // not syncing read as "broken for everyone else". AudioEditor toasts.
+    if (payload.length * 2 > SYNC_PAYLOAD_LIMIT || payload.length * 2 * (4 / 3) > budgetLeft) {
+      // Too big even reduced (≫10min), or the map's total budget is spent —
+      // skip VISIBLY: silently not syncing read as "broken for everyone
+      // else". AudioEditor toasts.
       window.dispatchEvent(new CustomEvent('slate:audio-sync-skipped', { detail: key }));
       return;
     }

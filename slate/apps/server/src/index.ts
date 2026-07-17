@@ -22,6 +22,7 @@ import staticFiles from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
 import { z } from 'zod';
+import { MAX_UPDATE_BYTES } from '@slate/sync-protocol';
 import { env, isProd } from './config.js';
 import { issueIdentity } from './identity.js';
 import { createRelay } from './relay.js';
@@ -56,7 +57,13 @@ await app.register(cors, { origin: corsOrigins });
 
 await app.register(websocket, {
   options: {
-    maxPayload: 1_500_000,
+    // MUST be ≥ MAX_UPDATE_BYTES: ws terminates the socket (1009) on any
+    // frame above this cap BEFORE the relay's own size check runs. A client
+    // whose doc holds synced audio sends the whole thing as ONE SyncStep2
+    // after a server restart — with the old 1.5MB cap that message was
+    // unsendable, so the provider reconnected and died in a loop forever
+    // (users saw peers "teleporting" in and out of the board).
+    maxPayload: MAX_UPDATE_BYTES + 1_048_576,
   },
 });
 

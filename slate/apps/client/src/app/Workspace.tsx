@@ -39,9 +39,10 @@ import { VoiceProvider } from '../voice/VoiceProvider';
 import { PeopleWidget } from './PeopleWidget';
 
 /** How long the host may be absent from presence before the live session ends
- *  for everyone else. Long enough to survive a host reload or brief network
- *  blip, short enough that a real departure clears the room promptly. */
-const HOST_ABSENT_GRACE_MS = 10_000;
+ *  for everyone else. Long enough to survive a host reload, a brief network
+ *  blip, or the awareness gap right after a server reconnect, short enough
+ *  that a real departure clears the room promptly. */
+const HOST_ABSENT_GRACE_MS = 25_000;
 
 export function Workspace() {
   const board = useAppStore((s) => s.currentBoard)!;
@@ -134,6 +135,8 @@ export function Workspace() {
   //     and boards with no designated host are left alone.
   const hostSeenRef = useRef(false);
   const hostGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusRef = useRef(status);
+  statusRef.current = status;
   useEffect(() => {
     if (!room) return;
     const meta = room.slate.meta();
@@ -156,10 +159,17 @@ export function Workspace() {
         clearGrace();
         return;
       }
+      // While WE are disconnected/reconnecting, awareness is stale or empty —
+      // everyone looks absent, including the host. Judging host presence from
+      // that view kicked whole rooms to Home whenever the server blipped
+      // (users "teleporting in and out of the lobby"). Only a host that is
+      // absent from a HEALTHY connection counts.
+      if (statusRef.current !== 'connected') return;
       if (!hostSeenRef.current) return; // never saw the host → don't boot
       if (hostGraceRef.current) return; // countdown already running
       hostGraceRef.current = setTimeout(() => {
         hostGraceRef.current = null;
+        if (statusRef.current !== 'connected') return; // we dropped mid-grace — can't judge
         if (!hostAbsent()) return; // host came back during the grace window
         toast({
           title: 'Session ended',

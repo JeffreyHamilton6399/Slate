@@ -1,14 +1,17 @@
 /**
- * AudioSettingsPanel — shows properties of the selected audio clip or track.
- * When a clip is selected: clip name, gain, pan, fade in/out, speed/pitch,
- * normalize, reverse, delete.
- * When no clip is selected: shows selected track properties (volume, pan,
- * mute, solo, arm).
- * Also has an import button + audio asset library at the bottom.
+ * AudioSettingsPanel — real audio-editor settings for the selected clip or
+ * track, DAW channel-strip style.
+ *
+ * Clip: gain (dB) / pan, fades, speed / pitch, high-pass & low-pass filters,
+ * mute, split/duplicate/normalize/reverse, move-to-track.
+ * Track: volume (dB) / pan, 3-band EQ (low shelf 200 Hz, mid peak 1 kHz,
+ * high shelf 4 kHz), reverb & delay sends, mute/solo/arm.
  *
  * All numeric parameters use the RotaryKnob component below — a circular DAW
  * knob (Ableton/FL Studio style) with a coloured value arc + indicator line,
  * drag-to-adjust (vertical), mouse-wheel, and keyboard arrow support.
+ * Track EQ/send edits are audible live: the AudioEditor re-applies track
+ * values to the audio graph on every Yjs track change.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,6 +23,23 @@ import {
   updateAudioTrack, splitAudioClip, deleteAudioTrack,
 } from '../audio/scene';
 import { loadSamples, storeSamples } from '../audio/sampleStore';
+
+/** Linear amplitude → decibels for display (0 → -∞). */
+function fmtDb(v: number): string {
+  if (v <= 0.001) return '-∞ dB';
+  const db = 20 * Math.log10(v);
+  return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+}
+
+/** EQ band gain formatting: flat reads "0.0", boosts get a +. */
+function fmtBandDb(v: number): string {
+  return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
+}
+
+/** Filter cutoff formatting: Hz below 1k, kHz above. */
+function fmtHz(v: number): string {
+  return v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`;
+}
 
 export function AudioSettingsPanel() {
   const room = useRoom();
@@ -119,7 +139,8 @@ export function AudioSettingsPanel() {
               format={(v) => `${v.toFixed(2)}s`}
             />
           </div>
-          {/* Gain + Pan — rotary knobs */}
+          {/* Gain + Pan — rotary knobs. Gain is stored linear (0..1.5 ≈
+              -∞..+3.5 dB) but displayed in dB like a real channel strip. */}
           <div className="grid grid-cols-2 gap-2">
             <RotaryKnob
               label="Gain"
@@ -128,7 +149,7 @@ export function AudioSettingsPanel() {
               max={1.5}
               step={0.01}
               onChange={(v) => setClip({ gain: v })}
-              format={(v) => `${Math.round(v * 100)}`}
+              format={fmtDb}
             />
             <RotaryKnob
               label="Pan"
@@ -167,6 +188,30 @@ export function AudioSettingsPanel() {
                 const n = Math.round(v);
                 return n > 0 ? `+${n} st` : `${n} st`;
               }}
+            />
+          </div>
+          {/* Filters — high-pass cuts rumble/mud, low-pass tames hiss or
+              makes the "muffled" telephone/underwater effect. At the extreme
+              ends (20 Hz / 20 kHz) the filter is bypassed entirely. */}
+          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">Filters</p>
+          <div className="grid grid-cols-2 gap-2">
+            <RotaryKnob
+              label="High-pass"
+              value={clip.hpCutoff ?? 20}
+              min={20}
+              max={1000}
+              step={5}
+              onChange={(v) => setClip({ hpCutoff: v })}
+              format={(v) => (v <= 22 ? 'Off' : fmtHz(v))}
+            />
+            <RotaryKnob
+              label="Low-pass"
+              value={clip.lpCutoff ?? 20000}
+              min={500}
+              max={20000}
+              step={100}
+              onChange={(v) => setClip({ lpCutoff: v })}
+              format={(v) => (v >= 19500 ? 'Off' : fmtHz(v))}
             />
           </div>
           {/* Mute + source info */}
@@ -221,7 +266,7 @@ export function AudioSettingsPanel() {
             <label className="field-label">Color</label>
             <input type="color" value={track.color} onChange={(e) => setTrack({ color: e.target.value })} className="h-7 w-full rounded border border-border bg-transparent" />
           </div>
-          {/* Volume + Pan — rotary knobs */}
+          {/* Volume + Pan — rotary knobs. Volume stored linear, shown in dB. */}
           <div className="grid grid-cols-2 gap-2">
             <RotaryKnob
               label="Volume"
@@ -230,7 +275,7 @@ export function AudioSettingsPanel() {
               max={1}
               step={0.01}
               onChange={(v) => setTrack({ volume: v })}
-              format={(v) => `${Math.round(v * 100)}`}
+              format={fmtDb}
             />
             <RotaryKnob
               label="Pan"
@@ -240,6 +285,64 @@ export function AudioSettingsPanel() {
               step={0.01}
               onChange={(v) => setTrack({ pan: v })}
               format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
+            />
+          </div>
+          {/* 3-band channel EQ — low shelf 200 Hz, mid peak 1 kHz, high shelf
+              4 kHz. ±12 dB like a console strip. Audible live during playback. */}
+          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">EQ</p>
+          <div className="grid grid-cols-3 gap-1">
+            <RotaryKnob
+              label="Low"
+              value={track.eqLow ?? 0}
+              min={-12}
+              max={12}
+              step={0.5}
+              onChange={(v) => setTrack({ eqLow: v })}
+              format={fmtBandDb}
+              size={42}
+            />
+            <RotaryKnob
+              label="Mid"
+              value={track.eqMid ?? 0}
+              min={-12}
+              max={12}
+              step={0.5}
+              onChange={(v) => setTrack({ eqMid: v })}
+              format={fmtBandDb}
+              size={42}
+            />
+            <RotaryKnob
+              label="High"
+              value={track.eqHigh ?? 0}
+              min={-12}
+              max={12}
+              step={0.5}
+              onChange={(v) => setTrack({ eqHigh: v })}
+              format={fmtBandDb}
+              size={42}
+            />
+          </div>
+          {/* FX sends — shared room reverb + tempo-synced echo, per-track
+              send level (0 = dry). */}
+          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">Sends</p>
+          <div className="grid grid-cols-2 gap-2">
+            <RotaryKnob
+              label="Reverb"
+              value={track.reverbSend ?? 0}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => setTrack({ reverbSend: v })}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+            <RotaryKnob
+              label="Delay"
+              value={track.delaySend ?? 0}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => setTrack({ delaySend: v })}
+              format={(v) => `${Math.round(v * 100)}%`}
             />
           </div>
           <div className="flex gap-1">

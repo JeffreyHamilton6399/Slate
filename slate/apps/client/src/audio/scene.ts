@@ -55,6 +55,11 @@ export function readAudioTrack(m: Y.Map<unknown>, id: string): AudioTrack | null
     muted: (m.get('muted') as boolean) ?? false, solo: (m.get('solo') as boolean) ?? false,
     kind: (m.get('kind') as 'audio' | 'midi') ?? 'audio', input: (m.get('input') as 'mic' | 'none') ?? 'none',
     armed: (m.get('armed') as boolean) ?? false, order: (m.get('order') as number) ?? 0,
+    eqLow: (m.get('eqLow') as number) ?? 0,
+    eqMid: (m.get('eqMid') as number) ?? 0,
+    eqHigh: (m.get('eqHigh') as number) ?? 0,
+    reverbSend: (m.get('reverbSend') as number) ?? 0,
+    delaySend: (m.get('delaySend') as number) ?? 0,
   };
 }
 
@@ -179,6 +184,8 @@ export function readAudioClip(m: Y.Map<unknown>, id: string): AudioClip | null {
     mute: (m.get('mute') as boolean) ?? false,
     speed: (m.get('speed') as number) ?? 1,
     pitch: (m.get('pitch') as number) ?? 0,
+    hpCutoff: (m.get('hpCutoff') as number) ?? 20,
+    lpCutoff: (m.get('lpCutoff') as number) ?? 20000,
   };
 }
 

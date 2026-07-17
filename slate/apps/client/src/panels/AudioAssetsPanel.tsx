@@ -90,7 +90,22 @@ export function AudioAssetsPanel() {
   };
 
   return (
-    <div className="flex h-full flex-col gap-2 p-2">
+    <div
+      className="flex h-full flex-col gap-2 p-2"
+      // The tips below advertise "Drag audio files here" — without these
+      // handlers the browser would navigate away to the dropped file instead.
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const files = [...(e.dataTransfer?.files ?? [])].filter((f) =>
+          /\.(mp3|wav|ogg|m4a|flac|aac|webm)$/i.test(f.name),
+        );
+        if (files.length === 0) return;
+        e.preventDefault();
+        for (const f of files) void handleImport(f);
+      }}
+    >
       <div className="flex items-center justify-between">
         <h5 className="panel-title text-[10px] font-mono uppercase tracking-wider text-text-dim">Audio Assets</h5>
         <button

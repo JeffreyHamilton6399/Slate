@@ -10,9 +10,27 @@ export const PROTOCOL_VERSION = 1;
  *  the board permanently unsyncable for that peer. Real cases that blew the
  *  old 1 MB cap: a large imported 3D mesh (vertex arrays live in the doc), an
  *  initial SyncStep2 of a board authored while the server slept, and (before
- *  chunking) a base64 audio sample blob. 16 MB covers all of these while still
- *  bounding what a hostile client can make the server buffer per message. */
-export const MAX_UPDATE_BYTES = 16_000_000;
+ *  chunking) a base64 audio sample blob.
+ *
+ *  The dominant term is the initial SyncStep2 after the server lost its copy
+ *  (free-tier restarts wipe the disk): the client sends its ENTIRE doc as one
+ *  message, including the audio sample-sync map. That map is bounded client-
+ *  side by AUDIO_SYNC_BUDGET_CHARS; 48 MB = that budget + meshes/strokes +
+ *  Yjs framing headroom, while still bounding what a hostile client can make
+ *  the server buffer per message.
+ *
+ *  IMPORTANT: the server's websocket `maxPayload` must be ≥ this value — the
+ *  transport kills the socket BEFORE the relay sees the message, which is
+ *  exactly the reconnect-flap this constant exists to prevent (the server
+ *  imports it for that reason). */
+export const MAX_UPDATE_BYTES = 48_000_000;
+
+/** Total base64 chars allowed in the audio sample-sync Y.Map (~32 MB ≈ 24 MB
+ *  of int16 PCM ≈ one full song plus a pile of one-shots). The map lives in
+ *  the Yjs doc forever, so an unbounded map eventually makes the post-restart
+ *  SyncStep2 exceed MAX_UPDATE_BYTES and the board unsyncable. Publishers
+ *  must skip (with a visible toast) once the budget is spent. */
+export const AUDIO_SYNC_BUDGET_CHARS = 32_000_000;
 
 /** Largest single chat message (chars). */
 export const MAX_CHAT_LEN = 2000;

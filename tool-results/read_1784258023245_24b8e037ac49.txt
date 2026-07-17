@@ -1,0 +1,602 @@
+     1→/**
+     2→ * AudioEditor — CapCut/BandLab-style DAW.
+     3→ * Key optimization: waveforms are pre-computed as PNG data URLs cached per
+     4→ * clip id + sample count. The canvas only draws ONCE when a clip is first
+     5→ * seen or its samples change — not on every version bump.
+     6→ */
+     7→
+     8→import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+     9→import type * as Y from 'yjs';
+    10→import {
+    11→  Mic, Pause, Play, Plus, Trash2, Volume2, VolumeX, Headphones,
+    12→  Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
+    13→  ChevronLeft, ChevronRight, Maximize2,
+    14→} from 'lucide-react';
+    15→import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
+    16→import { useRoom } from '../sync/RoomContext';
+    17→import { useAppStore } from '../app/store';
+    18→import { toast } from '../ui/Toast';
+    19→import {
+    20→  addAudioClip, addAudioTrack, decodeAudioFile, deleteAudioClip,
+    21→  deleteAudioTrack, duplicateAudioClip, readAudioClip, readAudioTrack,
+    22→  setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
+    23→} from './scene';
+    24→import { AudioEngine } from './engine';
+    25→import { loadSamples, registerSampleSyncMap } from './sampleStore';
+    26→
+    27→/** True while the pointer is over the audio editor. Written here, read by the
+    28→ *  2D animation timeline so its Space handler yields to the audio transport
+    29→ *  when both are on screen (docked audio panel on a 2D board). */
+    30→export const audioEditorHovered = { current: false };
+    31→
+    32→const TRACK_H = 60;
+    33→/** px-per-sec zoom limits. The min is intentionally tiny (2) so a long mix
+    34→ *  (e.g. a 3-minute song = 180s) still fits in a typical viewport at the
+    35→ *  widest zoom-out — 180s * 2px = 360px, well within a timeline pane. The
+    36→ *  Fit-to-window button uses this as the floor so the computed fit value is
+    37→ *  never silently clamped away. */
+    38→const MIN_PX_PER_SEC = 2;
+    39→const MAX_PX_PER_SEC = 800;
+    40→/** Width of the sticky track-header column (Tailwind w-44 = 11rem = 176px).
+    41→ *  Used by the Fit-to-window calculation to subtract the header from the
+    42→ *  scroll viewport so we fit clips into the visible TIMELINE area only. */
+    43→const TRACK_HEADER_W = 176;
+    44→
+    45→// ── Waveform cache: pre-computed PNG data URLs ───────────────────────────────
+    46→// Key: `${clipId}:${sampleCount}:${width}` → data URL
+    47→const waveformPNGCache = new Map<string, string>();
+    48→
+    49→// Draw only the window [startFrame, endFrame) of the sample across `width`
+    50→// pixels. Rendering the *window* (not the whole sample stretched) is what makes
+    51→// trimming look like cutting the audio away rather than squashing it.
+    52→function computeWaveformPNG(samples: Float32Array, channels: number, width: number, color: string, height: number, startFrame: number, endFrame: number): string {
+    53→  const canvas = document.createElement('canvas');
+    54→  const dpr = window.devicePixelRatio || 1;
+    55→  const w = Math.max(2, Math.floor(width));
+    56→  canvas.width = w * dpr;
+    57→  canvas.height = height * dpr;
+    58→  const ctx = canvas.getContext('2d')!;
+    59→  ctx.scale(dpr, dpr);
+    60→  ctx.clearRect(0, 0, w, height);
+    61→  const totalFrames = samples.length / channels;
+    62→  const s = Math.max(0, Math.min(totalFrames, Math.floor(startFrame)));
+    63→  const e = Math.max(s, Math.min(totalFrames, Math.floor(endFrame)));
+    64→  const span = e - s;
+    65→  if (span <= 0) return canvas.toDataURL();
+    66→  const mid = height / 2;
+    67→  ctx.fillStyle = color;
+    68→  for (let x = 0; x < w; x++) {
+    69→    const f0 = s + Math.floor((x / w) * span);
+    70→    const f1 = Math.min(e, s + Math.floor(((x + 1) / w) * span) + 1);
+    71→    let peak = 0;
+    72→    for (let i = f0; i < f1; i++) { const v = Math.abs(samples[i * channels] ?? 0); if (v > peak) peak = v; }
+    73→    const bh = Math.max(1, peak * mid * 0.85);
+    74→    ctx.fillRect(x, mid - bh, 1, bh * 2);
+    75→  }
+    76→  return canvas.toDataURL();
+    77→}
+    78→
+    79→/** Waveform image for the buffer window the clip actually plays. With speed s,
+    80→ *  a clip of `duration` timeline seconds consumes `duration*s` buffer seconds.
+    81→ *
+    82→ *  Two robustness fixes:
+    83→ *  1. If `loadSamples` returns an EMPTY Float32Array (length 0) — which happens
+    84→ *     when a freshly-split/created clip's IndexedDB write hasn't landed yet —
+    85→ *     we DON'T cache the resulting blank PNG. Instead we show the `···`
+    86→ *     placeholder and retry a few times (500ms apart) so the real waveform
+    87→ *     appears once the samples are available.
+    88→ *  2. We listen for `slate:audio-clip-changed` (fired by Normalize/Reverse/split)
+    89→ *     and invalidate our cache entry for the current clipId, then force a
+    90→ *     recompute via a `bust` counter — otherwise the memoised component would
+    91→ *     keep showing the stale PNG even after the cache was cleared. */
+    92→const WaveformImg = memo(function WaveformImg({ clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color }: {
+    93→  clipId: string; sampleKey: string; channels: number; sampleRate: number;
+    94→  offset: number; duration: number; speed: number; width: number; color: string;
+    95→}) {
+    96→  const height = TRACK_H - 6;
+    97→  const [imgUrl, setImgUrl] = useState<string>('');
+    98→  const [bust, setBust] = useState(0);
+    99→  const retryRef = useRef(0);
+   100→
+   101→  // Invalidate cached PNGs for this clip when its samples change (normalize /
+   102→  // reverse / split). The parent AudioEditor also invalidates + bumps version,
+   103→  // but the memoised WaveformImg wouldn't otherwise recompute (its primitive
+   104→  // props are unchanged) — the `bust` counter forces the load effect to re-run.
+   105→  useEffect(() => {
+   106→    const onChanged = (e: Event) => {
+   107→      const detail = (e as CustomEvent<string>).detail;
+   108→      // Match by clipId (normalize/reverse/split events) OR by sampleKey
+   109→      // (multiplayer sample-arrival events from registerSampleSyncMap).
+   110→      if (detail !== clipId && detail !== sampleKey) return;
+   111→      for (const key of waveformPNGCache.keys()) {
+   112→        if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+   113→      }
+   114→      retryRef.current = 0;
+   115→      setBust((n) => n + 1);
+   116→    };
+   117→    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   118→    return () => window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   119→  }, [clipId, sampleKey]);
+   120→
+   121→  useEffect(() => {
+   122→    const startFrame = Math.round(offset * sampleRate);
+   123→    const endFrame = Math.round((offset + duration * speed) * sampleRate);
+   124→    const cacheKey = `${clipId}:${sampleKey}:${startFrame}:${endFrame}:${Math.floor(width)}`;
+   125→    const cached = waveformPNGCache.get(cacheKey);
+   126→    if (cached) { setImgUrl(cached); return; }
+   127→    let cancelled = false;
+   128→    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+   129→
+   130→    const attempt = () => {
+   131→      if (cancelled) return;
+   132→      void loadSamples(sampleKey).then((samples) => {
+   133→        if (cancelled) return;
+   134→        // Empty samples = the IndexedDB write for this sampleKey hasn't landed
+   135→        // yet (e.g. brand-new clip from a split, OR a remote peer's clip whose
+   136→        // sample blob is still in flight via the Yjs sync map). DON'T cache a
+   137→        // blank PNG — retry for up to 10s (20 × 500ms) so the real waveform
+   138→        // appears once the samples arrive. The previous 5-retry / 2.5s budget
+   139→        // was too short for cross-peer sample sync, which can take several
+   140→        // seconds for a 5MB blob over a slow link. The `slate:audio-clip-changed`
+   141→        // event (dispatched by onClipsAdded when a remote clip is added, and by
+   142→        // registerSampleSyncMap when samples arrive) resets `retryRef` to 0 so
+   143→        // the WaveformImg re-tries immediately on the signal — this retry
+   144→        // budget is the safety net for the case where the event fires before
+   145→        // the WaveformImg mounts, or doesn't fire at all.
+   146→        if (samples.length === 0) {
+   147→          if (retryRef.current < 20) {
+   148→            retryRef.current += 1;
+   149→            retryTimer = setTimeout(attempt, 500);
+   150→          }
+   151→          return;
+   152→        }
+   153→        retryRef.current = 0;
+   154→        const url = computeWaveformPNG(samples, channels, width, color, height, startFrame, endFrame);
+   155→        waveformPNGCache.set(cacheKey, url);
+   156→        setImgUrl(url);
+   157→      });
+   158→    };
+   159→    attempt();
+   160→
+   161→    return () => {
+   162→      cancelled = true;
+   163→      if (retryTimer) clearTimeout(retryTimer);
+   164→    };
+   165→  }, [clipId, sampleKey, channels, sampleRate, offset, duration, speed, width, color, height, bust]);
+   166→
+   167→  if (!imgUrl) return <div className="flex h-full items-center justify-center text-[7px] text-text-dim">···</div>;
+   168→  return <img src={imgUrl} alt="" className="pointer-events-none h-full w-full" style={{ objectFit: 'fill' }} />;
+   169→});
+   170→
+   171→/** Drop cached waveform PNGs for a clip (call when its samples change). */
+   172→function invalidateWaveform(clipId: string): void {
+   173→  for (const key of waveformPNGCache.keys()) if (key.startsWith(`${clipId}:`)) waveformPNGCache.delete(key);
+   174→}
+   175→
+   176→// ── Main ────────────────────────────────────────────────────────────────────
+   177→
+   178→export function AudioEditor() {
+   179→  const room = useRoom();
+   180→  const slate = room.slate;
+   181→  const [version, setVersion] = useState(0);
+   182→  const [playing, setPlaying] = useState(false);
+   183→  const [bpm, setBpmState] = useState(slate.audioBpm());
+   184→  const [metronome, setMetronome] = useState(false);
+   185→  const [recording, setRecording] = useState(false);
+   186→  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+   187→  const [masterVol, setMasterVol] = useState(0.85);
+   188→  const [looping, setLooping] = useState(false);
+   189→  const [loopStart, setLoopStart] = useState(0);
+   190→  const [loopEnd, setLoopEnd] = useState(8);
+   191→  const [pxPerSec, setPxPerSec] = useState(80);
+   192→  const engineRef = useRef<AudioEngine | null>(null);
+   193→  const stopRecRef = useRef<(() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>) | null>(null);
+   194→  const rafRef = useRef(0);
+   195→  const positionRef = useRef(0);
+   196→  // Refs mirror the latest `playing` and `slate` so the long-lived Yjs / event
+   197→  // listeners (which close over the initial render) can read fresh values
+   198→  // without re-subscribing on every state change.
+   199→  const playingRef = useRef(false);
+   200→  playingRef.current = playing;
+   201→  const hoveredRef = audioEditorHovered;
+   202→  const slateRef = useRef(slate);
+   203→  slateRef.current = slate;
+   204→  /** Debounce timer for restartPlayback — coalesces rapid clip/sample changes
+   205→   *  so we don't tear down and rebuild the scheduler 5× in a row when a peer
+   206→   *  adds several clips at once. */
+   207→  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   208→  const playheadRef = useRef<HTMLDivElement | null>(null);
+   209→  const posDisplayRef = useRef<HTMLSpanElement | null>(null);
+   210→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   211→  const dragRef = useRef<{
+   212→    clipId: string; el: HTMLElement; waveEl: HTMLElement | null;
+   213→    os: number; od: number; oo: number; speed: number; sx: number;
+   214→    leftLimit: number; rightLimit: number; mode: 'drag' | 'trimL' | 'trimR';
+   215→    neighbours: { start: number; end: number }[];
+   216→  } | null>(null);
+   217→  /** Latest pointer `clientX` during an active drag — written by every
+   218→   *  `pointermove` and read inside a `requestAnimationFrame` callback. Decouples
+   219→   *  the high-frequency pointermove stream (~60-120Hz on modern pointers) from
+   220→   *  the actual DOM-mutation work, so multiple moves within the same frame
+   221→   *  coalesce into a single `style.left`/`style.width` write. Null when no
+   222→   *  drag is in progress. */
+   223→  const moveXRef = useRef<number | null>(null);
+   224→  /** Pending rAF id for processing the next drag move. Zero when no frame is
+   225→   *  scheduled. Lets `onMove` bail out cheaply (one ref read + one rAF check)
+   226→   *  when a frame is already queued. */
+   227→  const moveRafRef = useRef(0);
+   228→  const selectedRef = useRef<string | null>(null);
+   229→  selectedRef.current = selectedClipId;
+   230→  const clipsRef = useRef<AudioClip[]>([]);
+   231→  const pxRef = useRef(pxPerSec);
+   232→  pxRef.current = pxPerSec;
+   233→  /** Desired scrollLeft to apply after the next pxPerSec commit (used by
+   234→   *  zoomAtPlayhead so the playhead stays at the same screen position when
+   235→   *  zooming). Cleared in the layout effect below once applied. */
+   236→  const pendingScrollRef = useRef<number | null>(null);
+   237→
+   238→  /** Schedule a debounced restartPlayback (500ms). Called when the clip set
+   239→   *  changes mid-playback (remote peer adds a clip) or when a clip's samples
+   240→   *  arrive after play started (remote sample blob landed via the sync map).
+   241→   *  The debounce coalesces rapid bursts so we don't tear down and rebuild
+   242→   *  the scheduler repeatedly. No-op when not playing. Reads only refs, so the
+   243→   *  callback identity is stable for the lifetime of the component. */
+   244→  const scheduleRestart = useCallback(() => {
+   245→    if (!playingRef.current) return;
+   246→    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+   247→    restartTimerRef.current = setTimeout(() => {
+   248→      restartTimerRef.current = null;
+   249→      const eng = engineRef.current;
+   250→      if (eng && playingRef.current) eng.restartPlayback(slateRef.current, positionRef.current);
+   251→    }, 500);
+   252→  }, []);
+   253→
+   254→  // Yjs subscription.
+   255→  useEffect(() => {
+   256→    // Register the multiplayer sample sync map so audio clips imported by
+   257→    // other peers are automatically received and stored locally.
+   258→    registerSampleSyncMap(room);
+   259→    const tracks = slate.audioTracks();
+   260→    const clips = slate.audioClips();
+   261→    const audioMap = slate.doc.getMap('audio');
+   262→    let pending = false;
+   263→    const bump = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; setVersion((v) => v + 1); }); };
+   264→    tracks.observeDeep(bump); clips.observeDeep(bump); audioMap.observe(bump); bump();
+   265→    // Detect NEW clips being added while playing and schedule a debounced
+   266→    // restartPlayback so the new clip is picked up mid-playback without a
+   267→    // manual stop/play. We watch the shallow clips map (not observeDeep) so
+   268→    // we only react to key additions, not to every property edit on an
+   269→    // existing clip (which would restart playback every time a peer nudged
+   270→    // a clip's volume, fighting the user). The restart is debounced 500ms so
+   271→    // a burst of additions (e.g. a peer imports 5 files) coalesces into one.
+   272→    //
+   273→    // LIVE WAVEFORM REFRESH: when a remote peer adds a clip, its metadata
+   274→    // arrives via Yjs immediately but the sample blob travels separately via
+   275→    // the audioSampleSync Y.Map (see sampleStore.ts). If we don't ping the
+   276→    // WaveformImg, it might have already exhausted its empty-samples retry
+   277→    // budget (now 10s, but a slow link can still exceed that) and given up
+   278→    // showing a blank "···" placeholder until the user refreshes. So for
+   279→    // each newly-added clip we:
+   280→    //   1. clearCache(clipId) on the engine so the next play re-loads samples
+   281→    //      (the cache might hold a null/empty entry from a prior failed getBuffer)
+   282→    //   2. dispatch `slate:audio-clip-changed` with the clipId — the
+   283→    //      AudioEditor's listener (below) re-invalidates the waveform cache +
+   284→    //      clears the engine cache + bumps version, AND the WaveformImg's own
+   285→    //      listener resets its retryRef to 0 and bumps `bust` to immediately
+   286→    //      re-attempt loadSamples (which will now find the synced blob once
+   287→    //      it lands).
+   288→    //   3. scheduleRestart() so if we're currently playing, the new clip is
+   289→    //      picked up atomically (debounced 500ms to coalesce bursts).
+   290→    const onClipsAdded = (event: Y.YMapEvent<Y.Map<unknown>>) => {
+   291→      const addedIds: string[] = [];
+   292→      for (const key of event.keysChanged) {
+   293→        const change = event.changes.keys.get(key);
+   294→        if (change?.action === 'add') addedIds.push(key);
+   295→      }
+   296→      if (addedIds.length === 0) return;
+   297→      for (const id of addedIds) {
+   298→        engineRef.current?.clearCache(id);
+   299→        window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: id }));
+   300→      }
+   301→      scheduleRestart();
+   302→    };
+   303→    clips.observe(onClipsAdded);
+   304→    const lateRead = setTimeout(bump, 200);
+   305→    return () => { clearTimeout(lateRead); tracks.unobserveDeep(bump); clips.unobserveDeep(bump); audioMap.unobserve(bump); clips.unobserve(onClipsAdded); };
+   306→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   307→  }, [slate]);
+   308→
+   309→  useEffect(() => {
+   310→    engineRef.current = new AudioEngine();
+   311→    engineRef.current.setMasterVolume(masterVol);
+   312→    return () => {
+   313→      // Cancel any pending restart so it doesn't fire after dispose().
+   314→      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+   315→      engineRef.current?.dispose();
+   316→      engineRef.current = null;
+   317→    };
+   318→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   319→  }, []);
+   320→
+   321→  // Playhead — direct DOM.
+   322→  useEffect(() => {
+   323→    if (!playing) {
+   324→      // Playback just stopped — cancel any pending mid-playback restart so
+   325→      // it doesn't fire and call restartPlayback (which would re-start audio
+   326→      // after the user pressed pause).
+   327→      if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+   328→      return;
+   329→    }
+   330→    const tick = () => {
+   331→      rafRef.current = requestAnimationFrame(tick);
+   332→      const eng = engineRef.current; if (!eng) return;
+   333→      const pos = eng.getPosition();
+   334→      positionRef.current = pos;
+   335→      if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
+   336→      if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+   337→      if (pos > timelineDuration + 2) { eng.stop(); setPlaying(false); }
+   338→    };
+   339→    rafRef.current = requestAnimationFrame(tick);
+   340→    return () => cancelAnimationFrame(rafRef.current);
+   341→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   342→  }, [playing]);
+   343→
+   344→  // Ctrl+scroll zoom — centred on the playhead so the screen position under
+   345→  // the cursor/playhead stays put instead of zooming toward the left edge.
+   346→  /** Zoom while keeping the playhead at the same screen offset. Records the
+   347→   *  playhead's offset from the left edge of the visible viewport (relative to
+   348→   *  the timeline content), changes `pxPerSec`, then schedules a scroll
+   349→   *  correction so the playhead lands at the same offset in the new zoom.
+   350→   *  The actual `scrollLeft` write happens in the layout effect below (after
+   351→   *  React commits the new `minWidth` on the timeline div — setting it earlier
+   352→   *  would be clamped by the stale `scrollWidth`). */
+   353→  const zoomAtPlayhead = useCallback((newPxPerSec: number) => {
+   354→    const el = scrollRef.current;
+   355→    const oldPxPerSec = pxRef.current;
+   356→    if (!el || oldPxPerSec === newPxPerSec) {
+   357→      setPxPerSec(newPxPerSec);
+   358→      return;
+   359→    }
+   360→    const scrollLeft = el.scrollLeft;
+   361→    const playheadX = positionRef.current * oldPxPerSec;
+   362→    const playheadOffset = playheadX - scrollLeft;
+   363→    const newPlayheadX = positionRef.current * newPxPerSec;
+   364→    const newScrollLeft = newPlayheadX - playheadOffset;
+   365→    pendingScrollRef.current = newScrollLeft;
+   366→    setPxPerSec(newPxPerSec);
+   367→  }, []);
+   368→
+   369→  // Apply any pending scroll correction after pxPerSec commits to the DOM.
+   370→  useLayoutEffect(() => {
+   371→    if (pendingScrollRef.current !== null && scrollRef.current) {
+   372→      scrollRef.current.scrollLeft = pendingScrollRef.current;
+   373→      pendingScrollRef.current = null;
+   374→    }
+   375→  }, [pxPerSec]);
+   376→
+   377→  useEffect(() => {
+   378→    const el = scrollRef.current; if (!el) return;
+   379→    const onWheel = (e: WheelEvent) => {
+   380→      if (!e.ctrlKey && !e.metaKey) return;
+   381→      e.preventDefault();
+   382→      const next = Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, pxRef.current * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+   383→      zoomAtPlayhead(next);
+   384→    };
+   385→    el.addEventListener('wheel', onWheel, { passive: false });
+   386→    return () => el.removeEventListener('wheel', onWheel);
+   387→  }, [zoomAtPlayhead]);
+   388→
+   389→  // Global pointermove/up — pure DOM, zero React state.
+   390→  // rAF-throttled: pointermove fires at the hardware's report rate (often
+   391→  // 60-120Hz), and the move handler does a neighbours-overlap scan on every
+   392→  // event. Coalescing multiple moves into a single rAF callback caps the work
+   393→  // at the display refresh rate (~60fps) so a fast pointer drag never stalls
+   394→  // the main thread. A no-op skip (cursor hasn't moved since the last
+   395→  // processed frame) avoids redundant DOM writes for stationary pointers.
+   396→  useEffect(() => {
+   397→    /** Last clientX we actually applied to the DOM. Lets us skip work when
+   398→     *  pointermove fires with the same x (e.g. a touchpad reporting pressure
+   399→     *  changes without movement, or sub-pixel jitter that rounds to the same
+   400→     *  px). */
+   401→    let lastProcessedX: number | null = null;
+   402→
+   403→    const applyMove = () => {
+   404→      moveRafRef.current = 0;
+   405→      const d = dragRef.current;
+   406→      if (!d) return;
+   407→      const clientX = moveXRef.current;
+   408→      if (clientX === null) return;
+   409→      // Skip no-op moves — cursor hasn't moved to a new pixel since the last
+   410→      // frame we processed. Saves a neighbours scan + 1-2 style writes.
+   411→      if (lastProcessedX === clientX) return;
+   412→      lastProcessedX = clientX;
+   413→
+   414→      const pps = pxRef.current;
+   415→      const dt = (clientX - d.sx) / pps;
+   416→      const oldEnd = d.os + d.od;
+   417→      if (d.mode === 'drag') {
+   418→        // Snap-to-neighbour drag: the clip follows the mouse, but if the new
+   419→        // position would overlap another clip on the same track, instead of
+   420→        // stopping dead at the neighbour's edge we JUMP to the free side of
+   421→        // that neighbour (right of it when dragging right, left of it when
+   422→        // dragging left). Iterates so a chain of back-to-back clips resolves
+   423→        // to the next free slot. A small overlap threshold avoids accidental
+   424→        // snaps when the cursor barely crosses the boundary.
+   425→        const duration = d.od;
+   426→        const rawStart = d.os + dt;
+   427→        let start = rawStart;
+   428→        const overlapThreshold = 0.05; // s — ignore near-boundary jitter
+   429→        for (let iter = 0; iter < d.neighbours.length + 1; iter++) {
+   430→          const blocker = d.neighbours.find((n) => {
+   431→            const ovStart = Math.max(start, n.start);
+   432→            const ovEnd = Math.min(start + duration, n.end);
+   433→            return ovEnd - ovStart > overlapThreshold;
+   434→          });
+   435→          if (!blocker) break;
+   436→          if (dt >= 0) start = blocker.end;          // snap to RIGHT of blocker
+   437→          else start = blocker.start - duration;     // snap to LEFT of blocker
+   438→        }
+   439→        // Fallback clamp: never let the clip start before t=0.
+   440→        start = Math.max(0, start);
+   441→        d.el.style.left = `${start * pps}px`;
+   442→      } else if (d.mode === 'trimL') {
+   443→        // Cut from the left: never past the left neighbour, the source start
+   444→        // (offset ≥ 0 → limited by the trimmed head in timeline seconds), or a
+   445→        // minimum width.
+   446→        const minStart = Math.max(d.leftLimit, d.os - d.oo / d.speed);
+   447→        const start = Math.min(oldEnd - 0.1, Math.max(minStart, d.os + dt));
+   448→        d.el.style.left = `${start * pps}px`;
+   449→        d.el.style.width = `${(oldEnd - start) * pps}px`;
+   450→        // Shift the (fixed-width) waveform the opposite way so the audio stays
+   451→        // anchored — the newly-trimmed head is clipped, not squashed.
+   452→        if (d.waveEl) d.waveEl.style.left = `${-(start - d.os) * pps}px`;
+   453→      } else if (d.mode === 'trimR') {
+   454→        // Cut from the right: never past the right neighbour or a min width.
+   455→        const end = Math.min(d.rightLimit, Math.max(d.os + 0.1, oldEnd + dt));
+   456→        d.el.style.width = `${(end - d.os) * pps}px`;
+   457→      }
+   458→    };
+   459→
+   460→    const onMove = (ev: PointerEvent) => {
+   461→      const d = dragRef.current; if (!d) return;
+   462→      // Stash the latest clientX — the rAF callback reads it. Cheap (one ref
+   463→      // write) so even 120Hz pointermove streams don't pile up work.
+   464→      moveXRef.current = ev.clientX;
+   465→      // Schedule a frame if one isn't already pending. The guard is what
+   466→      // coalesces multiple moves within the same frame into one DOM write.
+   467→      if (!moveRafRef.current) {
+   468→        moveRafRef.current = requestAnimationFrame(applyMove);
+   469→      }
+   470→    };
+   471→    const onUp = () => {
+   472→      const d = dragRef.current; if (!d) return;
+   473→      // Cancel any pending rAF — we'll process the final position
+   474→      // SYNCHRONOUSLY here so the committed Yjs value reflects the exact
+   475→      // pointer-up location (otherwise the last pointermove before pointerup
+   476→      // could be dropped, leaving the committed position ~1 frame behind the
+   477→      // cursor). The `force` flag bypasses the no-op skip in case the final
+   478→      // pointermove had the same clientX as the prior processed frame but we
+   479→      // still need to read the just-written style to commit to Yjs.
+   480→      if (moveRafRef.current) {
+   481→        cancelAnimationFrame(moveRafRef.current);
+   482→        moveRafRef.current = 0;
+   483→      }
+   484→      if (moveXRef.current !== null) {
+   485→        lastProcessedX = null; // bypass the no-op skip on the final flush
+   486→        applyMove();
+   487→      }
+   488→      const pps = pxRef.current;
+   489→      const left = parseFloat(d.el.style.left) / pps;
+   490→      const width = parseFloat(d.el.style.width) / pps;
+   491→      if (d.mode === 'drag') updateAudioClip(slate, d.clipId, { start: Math.max(0, left) });
+   492→      else if (d.mode === 'trimL') updateAudioClip(slate, d.clipId, { start: left, duration: width, offset: Math.max(0, d.oo + (left - d.os) * d.speed) });
+   493→      else if (d.mode === 'trimR') updateAudioClip(slate, d.clipId, { duration: width });
+   494→      moveXRef.current = null;
+   495→      lastProcessedX = null;
+   496→      dragRef.current = null;
+   497→    };
+   498→    window.addEventListener('pointermove', onMove);
+   499→    window.addEventListener('pointerup', onUp);
+   500→    return () => {
+   501→      window.removeEventListener('pointermove', onMove);
+   502→      window.removeEventListener('pointerup', onUp);
+   503→      // Don't leak a pending rAF if the component unmounts mid-drag.
+   504→      if (moveRafRef.current) {
+   505→        cancelAnimationFrame(moveRafRef.current);
+   506→        moveRafRef.current = 0;
+   507→      }
+   508→    };
+   509→  }, [slate]);
+   510→
+   511→  // Hotkeys. Gated: on an audio board the editor always owns them; on a 2D/3D
+   512→  // board (where the editor is one docked panel among many) they only fire
+   513→  // while the pointer is over the editor — otherwise Space fought the 2D
+   514→  // animation timeline (both played), and C/D/R fired while drawing.
+   515→  useEffect(() => {
+   516→    const onKey = (e: KeyboardEvent) => {
+   517→      const t = e.target as HTMLElement;
+   518→      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+   519→      const isAudioBoard = useAppStore.getState().currentBoard?.mode === 'audio';
+   520→      if (!isAudioBoard && !hoveredRef.current) return;
+   521→      const k = e.key.toLowerCase();
+   522→      if (k === ' ') { e.preventDefault(); togglePlay(); }
+   523→      else if (k === 'c' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); void splitAudioClip(slate, selectedRef.current, positionRef.current); }
+   524→      else if ((k === 'delete' || k === 'backspace') && selectedRef.current) { e.preventDefault(); deleteAudioClip(slate, selectedRef.current); setSelectedClipId(null); }
+   525→      else if (k === 'd' && !e.ctrlKey && selectedRef.current) { e.preventDefault(); dupClip(selectedRef.current); }
+   526→      else if (k === 'l') { e.preventDefault(); setLooping((n) => !n); }
+   527→      else if (k === 'm') { e.preventDefault(); setMetronome((n) => { engineRef.current?.setMetronome(!n); return !n; }); }
+   528→      else if (k === 'r' && !e.ctrlKey) { e.preventDefault(); void toggleRecord(); }
+   529→      else if (k === 'arrowleft') { e.preventDefault(); seek(positionRef.current - 2); }
+   530→      else if (k === 'arrowright') { e.preventDefault(); seek(positionRef.current + 2); }
+   531→      else if (k === 'home') { e.preventDefault(); seek(0); }
+   532→    };
+   533→    window.addEventListener('keydown', onKey);
+   534→    return () => window.removeEventListener('keydown', onKey);
+   535→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   536→  }, [playing, recording]);
+   537→
+   538→  // Read from Yjs — lightweight (no samples copied).
+   539→  const tracks: AudioTrack[] = useMemo(() => {
+   540→    const list: AudioTrack[] = [];
+   541→    slate.audioTracks().forEach((m, id) => { const t = readAudioTrack(m, id); if (t) list.push(t); });
+   542→    list.sort((a, b) => a.order - b.order);
+   543→    return list;
+   544→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   545→  }, [slate, version]);
+   546→
+   547→  const clips: AudioClip[] = useMemo(() => {
+   548→    const list: AudioClip[] = [];
+   549→    slate.audioClips().forEach((m, id) => { const c = readAudioClip(m, id); if (c) list.push(c); });
+   550→    return list;
+   551→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   552→  }, [slate, version]);
+   553→  clipsRef.current = clips;
+   554→
+   555→  // When a clip's samples change (normalize/reverse from the settings panel,
+   556→  // OR a remote peer's sample blob just landed via the Yjs sync map),
+   557→  // drop the cached waveform + decoded buffer so both refresh, AND — if we're
+   558→  // currently playing — schedule a debounced restartPlayback so the clip is
+   559→  // picked up. This covers the case where a clip's metadata arrived but its
+   560→  // samples were still in flight: getBuffer returned null on the first pass,
+   561→  // and this restart re-schedules once the samples are usable.
+   562→  useEffect(() => {
+   563→    const onChanged = (e: Event) => {
+   564→      const id = (e as CustomEvent<string>).detail;
+   565→      invalidateWaveform(id);
+   566→      engineRef.current?.clearCache(id);
+   567→      setVersion((v) => v + 1);
+   568→      scheduleRestart();
+   569→    };
+   570→    // A clip too large for live sync plays fine locally but is silent for
+   571→    // collaborators — say so instead of failing silently.
+   572→    const onSkipped = () => {
+   573→      toast({
+   574→        title: 'Clip too large to share live',
+   575→        description: 'It plays for you, but collaborators won’t receive the audio. Try a shorter clip.',
+   576→        variant: 'error',
+   577→      });
+   578→    };
+   579→    window.addEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   580→    window.addEventListener('slate:audio-sync-skipped', onSkipped);
+   581→    return () => {
+   582→      window.removeEventListener('slate:audio-clip-changed', onChanged as EventListener);
+   583→      window.removeEventListener('slate:audio-sync-skipped', onSkipped);
+   584→    };
+   585→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   586→  }, []);
+   587→
+   588→  const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
+   589→
+   590→  /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
+   591→   *  currently-visible timeline viewport (scroll container minus the sticky
+   592→   *  track-header column). Clamped to [MIN, MAX] so absurdly long or short
+   593→   *  sessions still produce a sane zoom. Goes through `zoomAtPlayhead` so the
+   594→   *  playhead stays on screen when the fit value would still overflow. */
+   595→  const fitToWindow = useCallback(() => {
+   596→    const el = scrollRef.current;
+   597→    if (!el) return;
+   598→    const viewportW = Math.max(50, el.clientWidth - TRACK_HEADER_W);
+   599→    const fit = viewportW / Math.max(1, timelineDuration);
+   600→    zoomAtPlayhead(Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, fit)));
+
+[showing lines 1-600 of 918; use offset=601 with limit to continue reading]

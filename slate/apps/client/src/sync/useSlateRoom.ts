@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AwarenessState } from '@slate/sync-protocol';
 import { SlateRoom, type ConnectionStatus } from './provider.js';
+import { registerSampleSyncMap } from '../audio/sampleStore';
 
 export interface UseSlateRoomResult {
   room: SlateRoom | null;
@@ -107,6 +108,17 @@ export function useSlateRoom(roomName: string | null, displayName?: string): Use
       setRoom(r);
       unsubs.push(r.onStatusChange(setStatus));
       unsubs.push(r.onAwarenessChange(setAwareness));
+      // Register the multiplayer audio sample-sync map as soon as the room
+      // resolves — NOT from the AudioEditor mount. Previously this only ran
+      // when the AudioEditor mounted, so a peer on a 2D/3D board (with the
+      // audio panel closed) never registered the sync map and never received
+      // remote sample blobs. When they later opened the audio panel, the
+      // initial scan caught up, but there was a window where clips were
+      // silent. Registering here ensures the Y.Map observer + initial scan
+      // run for every peer the moment the room opens, regardless of which
+      // editor mode is active. Idempotent — `registerSampleSyncMap` no-ops
+      // if `room` is the same instance it was last called with.
+      registerSampleSyncMap(r);
     };
     if (entry.room) attach(entry.room);
     else entry.promise.then(attach).catch((e) => !cancelled && setError(e as Error));

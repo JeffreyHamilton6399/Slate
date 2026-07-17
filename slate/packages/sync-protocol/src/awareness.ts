@@ -25,6 +25,9 @@ export interface AwarenessState {
   isHost: boolean;
   /** When this peer joined. */
   joinedAt: number;
+  /** Audio transport playhead — position in seconds + playing flag.
+   *  null when the peer isn't in the audio editor or isn't playing. */
+  audio: { pos: number; playing: boolean } | null;
 }
 
 export function makeAwarenessState(partial: Partial<AwarenessState>): AwarenessState {
@@ -40,6 +43,7 @@ export function makeAwarenessState(partial: Partial<AwarenessState>): AwarenessS
     inVoice: partial.inVoice ?? false,
     isHost: partial.isHost ?? false,
     joinedAt: partial.joinedAt ?? Date.now(),
+    audio: partial.audio ?? null,
   };
 }
 

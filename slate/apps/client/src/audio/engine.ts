@@ -10,6 +10,7 @@ import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
 import type { SlateDoc } from '../sync/doc';
 import { readAudioClip, readAudioTrack } from './scene';
 import { loadSamples } from './sampleStore';
+import { toast } from '../ui/Toast';
 
 interface PlayingClip {
   source: AudioBufferSourceNode;
@@ -36,6 +37,20 @@ export class AudioEngine {
    *  retry loops for the same clip when several play()/restartPlayback() calls
    *  race (e.g. a remote clip arriving while the user is scrubbing). */
   private retryingClips = new Set<string>();
+  /** Per-clip attempt counts for the getBuffer retry loop. Read + bumped inside
+   *  the loop; reset to 0 by `slate:audio-clip-changed` events (sample arrival)
+   *  so a clip whose samples took longer than the initial budget still gets
+   *  more attempts instead of being silently dropped. */
+  private retryAttempts = new Map<string, number>();
+  /** One-time gesture listener that resumes a suspended AudioContext on the
+   *  first pointerdown/keydown/touchstart. Held as a field so dispose() can
+   *  remove it if the engine is torn down before any gesture fires. */
+  private gestureHandler: (() => void) | null = null;
+  /** Listener for `slate:audio-clip-changed` — resets a clip's retry budget
+   *  when its samples land (fired by sampleStore's tryImportEntry on remote
+   *  sample arrival, and by AudioEditor on local clip edits). Held as a field
+   *  so dispose() can remove it. */
+  private clipChangedHandler: ((e: Event) => void) | null = null;
   /** Active track gain nodes (for live volume/pan changes). */
   private trackGains = new Map<string, GainNode>();
   private trackPanners = new Map<string, StereoPannerNode>();
@@ -49,7 +64,33 @@ export class AudioEngine {
    *  with the playhead (getPosition only wraps the display). */
   private loopTimer: number | null = null;
 
-  /** Ensure the AudioContext is created (must be after user gesture). */
+  constructor() {
+    // Reset any in-flight retry loop's attempt counter when samples for that
+    // clip arrive (or when the clip is otherwise mutated). Without this, a
+    // remote peer whose sample blob arrives JUST after the 20×500ms budget
+    // expired would never hear the clip until the next play() — the cache
+    // miss path would re-enter the retry loop, but only if the clip is
+    // re-requested. Resetting mid-loop extends the budget on the signal
+    // that the samples are now available, so the in-flight loop wins on
+    // its next iteration instead of giving up.
+    this.clipChangedHandler = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (typeof id === 'string' && this.retryingClips.has(id)) {
+        this.retryAttempts.set(id, 0);
+      }
+    };
+    window.addEventListener('slate:audio-clip-changed', this.clipChangedHandler);
+  }
+
+  /** Ensure the AudioContext is created. Browsers' autoplay policies suspend
+   *  AudioContexts created before a user gesture — `ctx.resume()` from within
+   *  a non-gesture call stack is silently ignored, so the previous
+   *  `void this.ctx.resume()` was a no-op for a remote peer who just joined
+   *  and hadn't clicked anything. Instead of silently failing, we register a
+   *  one-time gesture listener (pointerdown/keydown/touchstart) that resumes
+   *  the context on the first interaction. Callers that KNOW they're in a
+   *  gesture handler (e.g. a click on the play button) should also call
+   *  `resumeOnGesture()` directly for immediate effect. */
   private ensureContext(): AudioContext {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -58,17 +99,64 @@ export class AudioEngine {
       this.masterGain.gain.value = this.masterVolume;
       this.masterGain.connect(this.ctx.destination);
     }
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if (this.ctx.state === 'suspended') {
+      // eslint-disable-next-line no-console
+      console.warn('[slate-audio] AudioContext is suspended — will resume on the first user gesture (browser autoplay policy). Click anywhere to enable audio.');
+      this.attachGestureListener();
+    }
     return this.ctx;
+  }
+
+  /** Register a one-time pointerdown/keydown/touchstart listener that resumes
+   *  the suspended AudioContext on the first user interaction. Idempotent —
+   *  multiple calls while suspended coalesce into one listener. The listener
+   *  removes itself from all three event targets when it fires. */
+  private attachGestureListener(): void {
+    if (this.gestureHandler) return;
+    const handler = () => {
+      if (this.ctx && this.ctx.state === 'suspended') void this.ctx.resume();
+      window.removeEventListener('pointerdown', handler);
+      window.removeEventListener('keydown', handler);
+      window.removeEventListener('touchstart', handler);
+      this.gestureHandler = null;
+    };
+    this.gestureHandler = handler;
+    window.addEventListener('pointerdown', handler);
+    window.addEventListener('keydown', handler);
+    window.addEventListener('touchstart', handler);
+  }
+
+  /** Resume the AudioContext if it's suspended. Safe to call from any user
+   *  gesture handler (click, pointerdown, keydown, touchstart) — browsers
+   *  only allow `resume()` to take effect from within a gesture call stack.
+   *  No-op if the context is already running or hasn't been created yet. */
+  resumeOnGesture(): void {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      void this.ctx.resume();
+      // Clean up the gesture listener if one is pending — the explicit call
+      // supersedes it.
+      if (this.gestureHandler) {
+        window.removeEventListener('pointerdown', this.gestureHandler);
+        window.removeEventListener('keydown', this.gestureHandler);
+        window.removeEventListener('touchstart', this.gestureHandler);
+        this.gestureHandler = null;
+      }
+    }
   }
 
   /** Get or create an AudioBuffer for a clip — loads samples from IndexedDB.
    *  If the samples haven't arrived yet (empty Float32Array, which happens when
    *  a remote peer's sample-blob is still in flight via the Yjs sync map),
-   *  retries up to 10 times at 300ms intervals (3s total) before giving up and
-   *  returning null. The clip is then skipped on this play() pass, but the
-   *  AudioEditor's restart-on-sample-arrival will re-schedule it once the
-   *  samples land and the cache is populated. */
+   *  retries up to 20 times at 500ms intervals (10s total) before giving up
+   *  and returning null. The clip is then skipped on this play() pass, but
+   *  the AudioEditor's restart-on-sample-arrival will re-schedule it once the
+   *  samples land and the cache is populated. The 20×500ms budget matches
+   *  the WaveformImg retry budget — large multi-MB samples arriving as
+   *  ~512KB Yjs chunks over a slow link can take several seconds, and the
+   *  previous 10×300ms (3s) budget was too short. The `slate:audio-clip-changed`
+   *  event (fired when samples arrive) resets `retryAttempts` to 0 for any
+   *  clip currently in the loop, so the budget extends on the very signal
+   *  that the samples are now available. */
   private async getBuffer(clip: AudioClip): Promise<AudioBuffer | null> {
     const ctx = this.ctx!;
     const cached = this.bufferCache.get(clip.id);
@@ -101,13 +189,19 @@ export class AudioEngine {
       return buf;
     }
 
-    // Samples not yet arrived — retry for up to 3s (10 × 300ms). This covers
-    // the gap between a remote clip's metadata landing in Yjs and its sample
-    // blob landing in the sync map + being written to local IndexedDB.
+    // Samples not yet arrived — retry for up to 10s (20 × 500ms). This
+    // covers the gap between a remote clip's metadata landing in Yjs and
+    // its sample blob landing in the sync map + being written to local
+    // IndexedDB. The `retryAttempts` counter is read fresh on every
+    // iteration so a `slate:audio-clip-changed` event (samples arrived)
+    // can reset it to 0 mid-loop, extending the budget on the signal that
+    // the wait is over.
     this.retryingClips.add(clip.id);
+    this.retryAttempts.set(clip.id, 0);
     try {
-      for (let attempt = 0; attempt < 10; attempt++) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      while ((this.retryAttempts.get(clip.id) ?? 0) < 20) {
+        this.retryAttempts.set(clip.id, (this.retryAttempts.get(clip.id) ?? 0) + 1);
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
         buf = await buildBuffer();
         if (buf) {
           this.bufferCache.set(clip.id, buf);
@@ -116,8 +210,24 @@ export class AudioEngine {
       }
     } finally {
       this.retryingClips.delete(clip.id);
+      this.retryAttempts.delete(clip.id);
     }
     return null;
+  }
+
+  /** Pre-load (decode + cache) the AudioBuffer for a clip WITHOUT scheduling
+   *  playback. Used to warm the cache when samples arrive for a clip while
+   *  the user is paused — without this, the first play() goes through the
+   *  full getBuffer retry loop, adding audible latency to the first
+   *  playback after a remote sample lands. No-op if the clip doesn't exist
+   *  or the AudioContext hasn't been created yet (no gesture → no decoding). */
+  async preloadBuffer(slate: SlateDoc, clipId: string): Promise<void> {
+    if (!this.ctx) return;
+    const yo = slate.audioClips().get(clipId);
+    if (!yo) return;
+    const clip = readAudioClip(yo, clipId);
+    if (!clip) return;
+    await this.getBuffer(clip); // pre-warm the cache
   }
 
   /** Build per-track gain+panner chain for the current set of tracks. */
@@ -155,6 +265,19 @@ export class AudioEngine {
   /** Play all clips that intersect the current playhead. */
   async play(slate: SlateDoc, offset: number): Promise<void> {
     const ctx = this.ensureContext();
+    // Browser autoplay policy: if the AudioContext is still suspended (no
+    // user gesture yet, or the gesture listener hasn't fired), scheduling
+    // sources is a silent no-op — the user would see the playhead move but
+    // hear nothing. Bail with an actionable toast instead. The gesture
+    // listener registered in ensureContext() will resume on the first click,
+    // and the user can press play again.
+    if (ctx.state === 'suspended') {
+      toast({
+        title: 'Click anywhere to enable audio',
+        description: 'Your browser blocked audio until you interact with the page.',
+      });
+      return;
+    }
     if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
     this.playing = true;
     this.startOffset = offset;
@@ -529,11 +652,23 @@ export class AudioEngine {
 
   dispose(): void {
     this.stop();
+    if (this.gestureHandler) {
+      window.removeEventListener('pointerdown', this.gestureHandler);
+      window.removeEventListener('keydown', this.gestureHandler);
+      window.removeEventListener('touchstart', this.gestureHandler);
+      this.gestureHandler = null;
+    }
+    if (this.clipChangedHandler) {
+      window.removeEventListener('slate:audio-clip-changed', this.clipChangedHandler);
+      this.clipChangedHandler = null;
+    }
     this.trackGains.forEach((g) => g.disconnect());
     this.trackPanners.forEach((p) => p.disconnect());
     this.trackGains.clear();
     this.trackPanners.clear();
     this.bufferCache.clear();
+    this.retryingClips.clear();
+    this.retryAttempts.clear();
     if (this.ctx) {
       void this.ctx.close();
       this.ctx = null;

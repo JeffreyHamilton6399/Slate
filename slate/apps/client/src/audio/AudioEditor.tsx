@@ -12,7 +12,7 @@ import {
   Music, Upload, Scissors, Repeat, ZoomIn, ZoomOut, Copy, SkipBack,
   ChevronLeft, ChevronRight, Maximize2,
 } from 'lucide-react';
-import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
+import type { AudioClip, AudioTrack, AwarenessState } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
@@ -22,7 +22,8 @@ import {
   setAudioBpm, splitAudioClip, updateAudioClip, updateAudioTrack,
 } from './scene';
 import { AudioEngine } from './engine';
-import { loadSamples, registerSampleSyncMap } from './sampleStore';
+import { loadSamples } from './sampleStore';
+import { RemotePlayheads } from './RemotePlayheads';
 
 /** True while the pointer is over the audio editor. Written here, read by the
  *  2D animation timeline so its Space handler yields to the audio transport
@@ -234,6 +235,16 @@ export function AudioEditor() {
    *  zoomAtPlayhead so the playhead stays at the same screen position when
    *  zooming). Cleared in the layout effect below once applied. */
   const pendingScrollRef = useRef<number | null>(null);
+  /** Timestamp (performance.now ms) of the last awareness publish of our audio
+   *  playhead position. The tick rAF loop throttles publishes to ~7 Hz (150ms)
+   *  so a long play session doesn't saturate the awareness broadcast — peers
+   *  render at display rate via their own rAF, so 7 Hz is plenty for smooth
+   *  remote-playhead motion. */
+  const lastAudioPublishRef = useRef(0);
+  /** Snapshot of remote peer awareness states — passed to RemotePlayheads.
+   *  The diffing setPeerStates below skips updates that only change high-
+   *  frequency fields (audio.pos), so we don't re-render AudioEditor at 7 Hz. */
+  const [peerStates, setPeerStates] = useState<AwarenessState[]>([]);
 
   /** Schedule a debounced restartPlayback (500ms). Called when the clip set
    *  changes mid-playback (remote peer adds a clip) or when a clip's samples
@@ -251,11 +262,50 @@ export function AudioEditor() {
     }, 500);
   }, []);
 
+  // Subscribe to awareness changes. Diffing skips updates that only change
+  // high-frequency fields (audio.pos) so the parent doesn't re-render at the
+  // 7 Hz publish rate — RemotePlayheads subscribes itself for live positions.
+  useEffect(
+    () =>
+      room.onAwarenessChange((states) => {
+        setPeerStates((prev) => {
+          if (prev.length !== states.length) return states;
+          // Stable peer-set key — id + name + color + audio-presence.
+          // Position/playing/cursor/cam/voiceLevel changes are intentionally
+          // excluded so they don't trigger a re-render.
+          const key = (s: AwarenessState) =>
+            `${s.id}|${s.name}|${s.color}|${s.audio ? 1 : 0}`;
+          const prevKey = prev.map(key).sort().join(';');
+          const nextKey = states.map(key).sort().join(';');
+          return prevKey === nextKey ? prev : states;
+        });
+      }),
+    [room],
+  );
+
+  // Publish our audio playhead state whenever transport play/pause changes.
+  // Reads positionRef.current at effect-run time so the published position is
+  // always the latest. Also resets the throttle stamp so the rAF loop doesn't
+  // immediately re-publish.
+  useEffect(() => {
+    room.setLocalAwareness({ audio: { pos: positionRef.current, playing } });
+    lastAudioPublishRef.current = performance.now();
+  }, [playing, room]);
+
+  // Clear our audio playhead on unmount so other peers stop seeing us in the
+  // audio editor. (audio: null = "not in the audio editor".)
+  useEffect(() => {
+    return () => {
+      room.setLocalAwareness({ audio: null });
+    };
+  }, [room]);
+
   // Yjs subscription.
   useEffect(() => {
-    // Register the multiplayer sample sync map so audio clips imported by
-    // other peers are automatically received and stored locally.
-    registerSampleSyncMap(room);
+    // NOTE: registerSampleSyncMap(room) is now called from useSlateRoom's
+    // attach() — registering here only on AudioEditor mount meant a peer on
+    // a 2D/3D board (audio panel closed) never registered the sync map and
+    // never received remote sample blobs. See useSlateRoom.ts.
     const tracks = slate.audioTracks();
     const clips = slate.audioClips();
     const audioMap = slate.doc.getMap('audio');
@@ -334,6 +384,14 @@ export function AudioEditor() {
       positionRef.current = pos;
       if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
       if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
+      // Throttled awareness publish at ~7 Hz (150ms) — peers render at display
+      // rate via their own rAF, so 7 Hz is plenty for smooth remote playhead
+      // motion while keeping the awareness broadcast off the hot path.
+      const now = performance.now();
+      if (now - lastAudioPublishRef.current >= 150) {
+        lastAudioPublishRef.current = now;
+        room.setLocalAwareness({ audio: { pos, playing: true } });
+      }
       if (pos > timelineDuration + 2) { eng.stop(); setPlaying(false); }
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -564,6 +622,13 @@ export function AudioEditor() {
       const id = (e as CustomEvent<string>).detail;
       invalidateWaveform(id);
       engineRef.current?.clearCache(id);
+      // Pre-warm the engine's AudioBuffer cache even when not playing —
+      // otherwise a remote peer who's paused when samples land goes through
+      // the full getBuffer retry loop on their next play(), adding audible
+      // latency to the first playback. scheduleRestart() is a no-op when
+      // paused, so without this the cache stays cold until play. Safe to
+      // call when the engine has no AudioContext yet (preloadBuffer no-ops).
+      void engineRef.current?.preloadBuffer(slateRef.current, id);
       setVersion((v) => v + 1);
       scheduleRestart();
     };
@@ -605,7 +670,20 @@ export function AudioEditor() {
   const togglePlay = useCallback(() => {
     const eng = engineRef.current; if (!eng) return;
     if (playing) { eng.stop(); setPlaying(false); }
-    else { if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null); void eng.play(slate, positionRef.current); setPlaying(true); }
+    else {
+      if (looping) eng.setLoopRegion(loopStart, loopEnd); else eng.setLoopRegion(null, null);
+      // Best-effort: if the AudioContext is suspended (autoplay policy /
+      // backgrounded tab), this click IS a user gesture — kick off resume()
+      // right now so the next play attempt (this one if resume resolves in
+      // time, otherwise the user's next click) sees a running context.
+      eng.resumeOnGesture();
+      void eng.play(slate, positionRef.current);
+      // Only flip the UI to "playing" if the engine actually started. play()
+      // bails with a toast when the AudioContext is still suspended, leaving
+      // this.playing false — without this guard the Play button would flip
+      // to Pause while no audio plays.
+      if (eng.isPlaying()) setPlaying(true);
+    }
   }, [playing, slate, looping, loopStart, loopEnd]);
 
   const seek = useCallback((t: number) => {
@@ -613,7 +691,12 @@ export function AudioEditor() {
     positionRef.current = pos;
     if (playheadRef.current) playheadRef.current.style.transform = `translateX(${pos * pxRef.current}px)`;
     if (posDisplayRef.current) posDisplayRef.current.textContent = `${pos.toFixed(1)}s`;
-  }, []);
+    // Publish the new playhead position immediately so peers see the seek
+    // without waiting for the next throttled tick (which only fires while
+    // playing). Resets the throttle stamp so the rAF loop doesn't double-publish.
+    room.setLocalAwareness({ audio: { pos, playing: playingRef.current } });
+    lastAudioPublishRef.current = performance.now();
+  }, [room]);
 
   const toggleRecord = useCallback(async () => {
     if (recording) {
@@ -791,6 +874,9 @@ export function AudioEditor() {
               ))}
             </div>
           ))}
+          {/* Remote playheads — overlay on top of clips, mirroring each peer's
+           *  audio transport position. Rendered after clips so z-20 wins. */}
+          <RemotePlayheads room={room} peerStates={peerStates} pxRef={pxRef} selfId={room.identity.peerId} />
         </div>
       </div>
 

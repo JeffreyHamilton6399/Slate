@@ -173,14 +173,9 @@ export function Timeline2D({ selection }: TimelineProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [slate, selection, animTime, animPlaying, anyAnimated, animMode, setAnimPlaying]);
 
-<<<<<<< HEAD
   // Always render at least the collapsed header bar so the timeline can never
   // disappear with no way to bring it back — collapsing just shrinks it to the
   // thin header (the chevron re-expands it).
-=======
-  if (!animMode && !anyAnimated && !open) return null;
-
->>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
   const totalFrames = Math.ceil(animDuration * animFps);
 
   return (
@@ -291,7 +286,6 @@ export function Timeline2D({ selection }: TimelineProps) {
           {animMode ? (
             /* Frame mode: Adobe Animate-style frame strip */
             <div className="border-t border-border px-2 py-1">
-<<<<<<< HEAD
               <div ref={stripRef} className="flex items-center gap-1 overflow-x-auto">
                 {Array.from({ length: Math.min(totalFrames, 240) }, (_, i) => {
                   const isActive = i === animFrame;
@@ -309,16 +303,6 @@ export function Timeline2D({ selection }: TimelineProps) {
                       onPointerEnter={(e) => {
                         if (e.buttons & 1) setAnimFrame(i);
                       }}
-=======
-              <div className="flex items-center gap-1 overflow-x-auto">
-                {Array.from({ length: Math.min(totalFrames, 120) }, (_, i) => {
-                  const isActive = i === animFrame;
-                  const hasKey = animated.some((s) => s.anim?.some((k) => Math.round(k.t * animFps) === i));
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => setAnimFrame(i)}
->>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
                       className={`flex h-8 w-6 shrink-0 flex-col items-center justify-center rounded-sm border text-[7px] font-mono ${
                         isActive
                           ? 'border-warn bg-warn/20 text-warn'
@@ -333,13 +317,8 @@ export function Timeline2D({ selection }: TimelineProps) {
                     </button>
                   );
                 })}
-<<<<<<< HEAD
                 {totalFrames > 240 && (
                   <span className="px-1 text-[8px] text-text-dim">…{totalFrames - 240} more</span>
-=======
-                {totalFrames > 120 && (
-                  <span className="px-1 text-[8px] text-text-dim">…{totalFrames - 120} more</span>
->>>>>>> b642fba (Round 6: smooth audio drag (rAF throttle), live import update, eraser rAF throttle + dedup, fix track sliders (direct node writes), 2D animation mode toggle (frame-based Adobe Animate style with onion skin))
                 )}
               </div>
               {/* Frame info */}

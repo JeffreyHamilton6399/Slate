@@ -726,3 +726,101 @@ Stage Summary:
 - Eraser now erases smoothly: one erase pass per animation frame (coalesced from many pointermove events), already-erased strokes skipped within a gesture (no re-splitting / tiny fragments), radius decoupled from brush width (8–40px range), stride fixed at 3 (malformed strokes skipped), sub-strokes need ≥ 3 points (no 2-point dot fragments).
 - Track header volume + pan sliders both work and are no longer laggy: each onChange does an O(1) direct write to the Web Audio gain/panner node (no Yjs read, no graph rebuild); Yjs committed once on pointerup. Independent drag refs; clearly labelled (Volume2 icon for volume, L/R text for pan).
 - TypeScript clean (exit 0, zero errors). No new dependencies. No API breakage (new engine methods are additive; updateTracks unchanged and still used by the non-slider update path for name/mute/solo/arm edits).
+
+---
+Task ID: ROUND7-B
+Agent: Audio-playhead-awareness
+Task: Add audio playhead awareness line (like 3D camera and 2D cursor)
+
+Work Log:
+- Read worklog (latest ROUND6-B), awareness.ts, provider.ts, AudioEditor.tsx (full, 918 lines), RemoteCursors.tsx (pattern reference), and the relevant slice of Viewport3D.tsx (lines 180–260, 1320–1360) to match the existing awareness-subscribe + remote-presence pattern.
+- Confirmed React 18.3 / @types/react 18.3 → `useRef(number)` returns `MutableRefObject<number>`; used `{ current: number }` for the RemotePlayheads pxRef prop so it's structurally compatible regardless of React types version.
+
+Files modified (4) + created (1):
+
+1. `packages/sync-protocol/src/awareness.ts`
+   - Added `audio: { pos: number; playing: boolean } | null;` to `AwarenessState`.
+   - Added `audio: partial.audio ?? null,` to `makeAwarenessState`.
+
+2. `apps/client/src/sync/provider.ts`
+   - Added `audio: null,` to the initial `publishLocalAwareness` call in the constructor (line 106).
+
+3. `apps/client/src/audio/AudioEditor.tsx` (edits)
+   - Imports: added `AwarenessState` to the `@slate/sync-protocol` type import; added `import { RemotePlayheads } from './RemotePlayheads';`.
+   - Added `lastAudioPublishRef = useRef(0)` for the 7 Hz throttle stamp.
+   - Added `const [peerStates, setPeerStates] = useState<AwarenessState[]>([]);`.
+   - New useEffect: subscribes to `room.onAwarenessChange` with a diffing `setPeerStates` — only updates React state when the peer SET changes (id/name/color/audio-presence), so high-frequency `audio.pos` updates don't re-render AudioEditor at 7 Hz.
+   - New useEffect `[playing, room]`: publishes `{ audio: { pos: positionRef.current, playing } }` on every play/pause transition, and resets `lastAudioPublishRef` so the rAF tick doesn't double-publish.
+   - New useEffect `[room]` cleanup: `room.setLocalAwareness({ audio: null })` on unmount so peers stop seeing us in the audio editor.
+   - Modified the `tick` rAF callback (inside the `[playing]` playhead effect): throttled publish at ~7 Hz (150 ms) via `performance.now() - lastAudioPublishRef.current >= 150`, publishing `{ audio: { pos, playing: true } }`.
+   - Modified `seek`: now publishes `{ audio: { pos, playing: playingRef.current } }` immediately (so peers see the seek without waiting for the next tick), and resets `lastAudioPublishRef`. `seek` deps changed from `[]` to `[room]`.
+   - Mounted `<RemotePlayheads room={peerStates={peerStates} pxRef={pxRef} selfId={room.identity.peerId} />` inside the timeline `<div className="relative flex-1">` (after the clips, before the closing `</div>`), so remote playheads overlay on top of clips.
+
+4. `apps/client/src/audio/RemotePlayheads.tsx` (NEW, ~140 lines)
+   - `RemotePlayheadsBase`: derives `audioPeers` from `peerStates` prop (filter to non-self peers with `audio != null`). Maintains `elsRef` (peerId → root div) and `targetsRef` (peerId → latest pos in seconds).
+   - Internal `room.onAwarenessChange` subscription writes positions to `targetsRef` (refs only — no React state mutation), so the 7 Hz position stream never re-renders.
+   - rAF loop reads `pxRef.current` every frame and writes `el.style.transform = translateX(${pos*px}px)` for each peer — picks up zoom changes without a re-render.
+   - Renders one absolute `top-0 bottom-0 z-20 opacity-60` container per peer containing: a 1px-wide vertical line in the peer's color (full timeline height), and a small colored name-label pill at `top-7` (just below the 28 px ruler) so it doesn't fight the ruler's tick labels.
+   - `memo` wrapper with a custom `areEqual` comparator: returns true (skip render) when the peer SET and each peer's id/name/color/audio-presence are unchanged — so position-only awareness updates (which change the `peerStates` prop reference at 7 Hz) don't trigger a React re-render. The comparator builds a Map from prev and walks next, comparing the four stable fields.
+
+Design notes:
+- The 7 Hz throttle (150 ms) was chosen to match the user's spec (~7 Hz). Peers render at display rate via their own rAF, so 7 Hz is plenty for smooth remote-playhead motion.
+- The diffing `setPeerStates` in AudioEditor + the `memo` comparator in RemotePlayheads are belt-and-suspenders: either alone would prevent 7 Hz re-renders, but both together keep the parent (AudioEditor) AND the child (RemotePlayheads) from re-rendering on position-only updates.
+- The publish-on-playing useEffect runs on initial mount too (playing=false), which correctly advertises "I'm in the audio editor, paused at 0" — so peers see our playhead even before we hit play.
+- `audio: null` is the explicit "not in the audio editor" sentinel; `audio: { pos, playing: false }` means "in the editor, paused". The unmount cleanup publishes `null` so we disappear from peers' timelines when we navigate away.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → 0 errors in changed files. (46 pre-existing errors in `canvas2d/{Canvas2D,Timeline2D,engine,renderer}.ts(x)` from prior-round merge-conflict markers; filtered out, none touch audio/sync-protocol/awareness.)
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → only a pre-existing `vitest` import error in `validators.test.ts` (unrelated dev-dep issue); awareness.ts clean.
+
+Stage Summary:
+- The audio editor now has a visible playhead line that syncs across peers, mirroring the 3D camera (`cam` field) and 2D cursor (`cursor` field) awareness channels.
+- Local user: their playhead is the existing yellow `bg-warn` line (unchanged).
+- Remote peers: each gets a 1 px line in their assigned peer color with a name pill, opacity 0.6, overlaying the clips. Position updates at 7 Hz from awareness, rendered at display rate via rAF + refs (no React re-renders).
+- The line disappears for a peer when they leave the audio editor (unmount → `audio: null`).
+
+---
+Task ID: ROUND7-A
+Agent: main (Z.ai Code)
+Task: Fix audio not playable for other users — 4 root-cause fixes (autoplay policy, sync-map registration timing, retry budget, pre-warm)
+
+Work Log:
+- Read worklog (latest ROUND6-A) + all 4 target files fully: audio/engine.ts, audio/sampleStore.ts, sync/useSlateRoom.ts, audio/AudioEditor.tsx. Confirmed SlateRoom has slate.doc (provider.ts:44, doc.ts:42), toast exported from ../ui/Toast, AudioSettingsPanel dispatches slate:audio-clip-changed (lines 190, 200) so the new engine listener picks those up too.
+
+Issue 1 — AudioContext autoplay policy (audio/engine.ts):
+- ensureContext() rewritten: no longer void this.ctx.resume() on suspended; instead console.warn + attachGestureListener().
+- attachGestureListener() (new private): single handler on pointerdown+keydown+touchstart; on fire calls ctx.resume() (now in gesture stack so it succeeds) and removes itself from all three. Idempotent via gestureHandler field.
+- resumeOnGesture() (new public): sync resume from a known gesture handler; also tears down the pending gesture listener.
+- play() bails with toast "Click anywhere to enable audio" when ctx.state === 'suspended' (before setting this.playing = true or scheduling sources).
+- togglePlay (AudioEditor.tsx): calls eng.resumeOnGesture() before play() and guards setPlaying(true) with if (eng.isPlaying()) so the Play button doesn't flip to Pause when play() bailed.
+
+Issue 2 — registerSampleSyncMap only from AudioEditor:
+- useSlateRoom.ts: imported registerSampleSyncMap, called it inside attach(r) right after setRoom(r). Now runs the moment ANY consumer's room resolves, regardless of editor mode. Idempotent so multiple consumers are safe.
+- AudioEditor.tsx: removed registerSampleSyncMap(room) call from Yjs subscription useEffect; removed from ./sampleStore import (kept loadSamples); left comment pointing to useSlateRoom.ts.
+
+Issue 3 — getBuffer retry budget too short:
+- Retry budget increased 10×300ms (3s) → 20×500ms (10s), matching WaveformImg.
+- New retryAttempts: Map<string, number> field; loop reads it fresh per iteration.
+- New constructor on AudioEngine wires up a slate:audio-clip-changed window listener (clipChangedHandler) that resets retryAttempts to 0 for any clip in retryingClips — so when samples arrive mid-retry, the in-flight loop wins on its next iteration.
+- dispose() updated: removes clipChangedHandler + gestureHandler listeners; clears retryingClips + retryAttempts.
+
+Issue 4 — Pre-warm buffers when samples arrive while paused:
+- preloadBuffer(slate, clipId) (new public) on AudioEngine: looks up the clip, calls getBuffer(clip) to decode + cache without scheduling. No-op if !this.ctx or clip missing.
+- AudioEditor.tsx slate:audio-clip-changed listener: after clearCache(id), calls void engineRef.current?.preloadBuffer(slateRef.current, id) to pre-warm the cache. Safe when ctx doesn't exist yet (preloadBuffer no-ops).
+
+Verification:
+- cd /home/z/my-project/slate/apps/client && npx tsc --noEmit → 0 errors in my 3 modified files. The 46 reported errors are ALL pre-existing merge conflict markers (TS1185) in canvas2d/{Canvas2D,Timeline2D,engine,renderer}.{ts,tsx} from Round 6 commit b642fba — verified by grepping for <<<<<<< / >>>>>>> markers. None of my changes touch canvas2d.
+- ESLint can't run (missing eslint-config-prettier dep — pre-existing env issue).
+- dev.log is for the root Next.js sandbox, not Slate's Vite client; tsc clean + additive changes (new methods, new fields, new listener with cleanup, moved call site) → no runtime regressions expected.
+
+Files Modified (3):
+1. slate/apps/client/src/audio/engine.ts — toast import; 4 new private fields (retryAttempts, gestureHandler, clipChangedHandler + existing retryingClips); constructor with slate:audio-clip-changed listener; ensureContext rewritten to attachGestureListener; attachGestureListener (private); resumeOnGesture (public); preloadBuffer (public); getBuffer retry loop rewritten (20×500ms, reads retryAttempts fresh); play() suspended bail + toast; dispose() cleans up listeners + maps.
+2. slate/apps/client/src/sync/useSlateRoom.ts — registerSampleSyncMap import; called inside attach(r).
+3. slate/apps/client/src/audio/AudioEditor.tsx — registerSampleSyncMap removed from import + Yjs subscription useEffect (comment left pointing to useSlateRoom); preloadBuffer call added to slate:audio-clip-changed listener; togglePlay calls resumeOnGesture + guards setPlaying(true) with eng.isPlaying().
+
+Stage Summary:
+- Autoplay policy: suspended-context peer sees actionable toast + first gesture anywhere resumes ctx; Play button itself initiates resume via resumeOnGesture; UI doesn't lie about playing state.
+- Sync map: registers at room-open time (via useSlateRoom attach) for every peer, regardless of editor mode — closes the silent-clips window for 2D/3D users.
+- Retry budget: 10s (was 3s) AND resets on the sample-arrival signal — large multi-MB samples arriving as 512KB Yjs chunks over slow links now make it.
+- Pre-warm: samples arriving while paused are decoded + cached immediately → first play() has zero sample-load latency.
+- TypeScript clean for modified files; no new dependencies; no API breakage (additive only; play() signature unchanged; registerSampleSyncMap function unchanged, just moved call site).

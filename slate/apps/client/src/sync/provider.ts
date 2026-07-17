@@ -103,6 +103,7 @@ export class SlateRoom {
       inVoice: false,
       isHost: false,
       joinedAt: Date.now(),
+      audio: null,
     });
   }
 

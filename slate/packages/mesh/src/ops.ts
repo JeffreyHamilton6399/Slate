@@ -731,13 +731,58 @@ export function bevelEdges(
       closed = true;
     }
     if (closed && remaining.length === 0) {
-      // Centroid vertex + fan (append the first point to close the ring).
+      // Fan apex for the corner patch. The flat centroid of the loop sits
+      // INSIDE the ideal rounded corner (the boundary arcs all bulge outward)
+      // — fanning from it sank every corner into a little divot. Instead,
+      // lift the apex onto the sphere the boundary arcs already lie on:
+      // fit a sphere whose center is constrained to the line from the flat
+      // centroid toward the ORIGINAL corner vertex (1-D least squares via
+      // ternary search on distance variance), then place the apex on that
+      // sphere in the corner-vertex direction. For a fully beveled cube
+      // corner every loop point lies exactly on the octant sphere, so the
+      // fit recovers it exactly and the patch bulges like Blender's.
+      const pts = loop.map((id) => vGet(m, id));
       let cx = 0, cy = 0, cz = 0;
-      for (const id of loop) {
-        const p = vGet(m, id);
-        cx += p.x; cy += p.y; cz += p.z;
+      for (const p of pts) { cx += p.x; cy += p.y; cz += p.z; }
+      const C0: Vec3 = { x: cx / pts.length, y: cy / pts.length, z: cz / pts.length };
+      let apex = C0;
+      const V = vGet(m, v);
+      const dir = sub(V, C0);
+      const dl = length(dir);
+      if (seg > 1 && dl > 1e-9) {
+        const dhat = scale(dir, 1 / dl);
+        const spread = (t: number): { mean: number; varr: number } => {
+          const S = add(C0, scale(dir, t));
+          let mean = 0;
+          const ds = pts.map((p) => length(sub(p, S)));
+          for (const d of ds) mean += d;
+          mean /= ds.length;
+          let varr = 0;
+          for (const d of ds) varr += (d - mean) * (d - mean);
+          return { mean, varr };
+        };
+        // Sphere center sits on the far side of the loop from the corner
+        // (t < 0); search a generous bracket.
+        let lo = -8, hi = 0.5;
+        for (let it = 0; it < 48; it++) {
+          const t1 = lo + (hi - lo) / 3;
+          const t2 = hi - (hi - lo) / 3;
+          if (spread(t1).varr <= spread(t2).varr) hi = t2;
+          else lo = t1;
+        }
+        const t = (lo + hi) / 2;
+        const { mean: R, varr } = spread(t);
+        // Accept only a decent fit (arcs genuinely spherical-ish); a bad fit
+        // (wildly uneven loop) keeps the flat centroid — no worse than before.
+        if (R > 1e-9 && Math.sqrt(varr / pts.length) < R * 0.2) {
+          const S = add(C0, scale(dir, t));
+          const liftTarget = add(S, scale(dhat, R));
+          const lift = dot(sub(liftTarget, C0), dhat);
+          // Never overshoot past the original corner vertex.
+          if (lift > 0) apex = add(C0, scale(dhat, Math.min(lift, dl * 0.95)));
+        }
       }
-      const c = vAdd(m, { x: cx / loop.length, y: cy / loop.length, z: cz / loop.length });
+      const c = vAdd(m, apex);
       pushFan(c, [...loop, loop[0]!]);
     } else {
       // Open chain (mixed selected/unselected edges at this corner): close

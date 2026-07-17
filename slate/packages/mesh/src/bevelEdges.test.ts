@@ -111,6 +111,26 @@ describe('bevelEdges', () => {
     expect(cornerVerts).toBeGreaterThan(0);
   });
 
+  it('corner patch apex sits ON the octant sphere (no divot)', () => {
+    const c = cube(1);
+    const w = 0.15;
+    const out = bevelEdges(c, allManifoldEdges(c), w, 3);
+    // For the corner at (.5,.5,.5): every boundary arc lies on the sphere of
+    // radius w centered at (.5-w, .5-w, .5-w). The fan apex must sit on that
+    // sphere along the corner diagonal — the flat loop centroid (the old,
+    // divot-producing apex) is measurably INSIDE it.
+    const S = { x: 0.5 - w, y: 0.5 - w, z: 0.5 - w };
+    const k = w / Math.sqrt(3);
+    const expected = { x: S.x + k, y: S.y + k, z: S.z + k };
+    let best = Infinity;
+    for (let i = 0; i < vCount(out); i++) {
+      const p = vGet(out, i);
+      const d = Math.hypot(p.x - expected.x, p.y - expected.y, p.z - expected.z);
+      if (d < best) best = d;
+    }
+    expect(best).toBeLessThan(5e-3);
+  });
+
   it('face bevel (top 4 edges): shared slid corners — no spike at the original corners', () => {
     const c = cube(1);
     // The four edges of the top face (y = +0.5), skipping diagonals.

@@ -4,6 +4,14 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  define: {
+    // Build stamp shown in Settings → About. The PWA service worker can keep
+    // serving a cached bundle for a while after a deploy — this makes "which
+    // version is this browser actually running?" answerable at a glance.
+    __SLATE_BUILD__: JSON.stringify(
+      `${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+    ),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -6,15 +6,17 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FileAudio, Upload, Music, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileAudio, Upload, Music, Plus } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import { addAudioClip, addAudioTrack, decodeAudioFile, readAudioClip } from '../audio/scene';
 import { loadSamples, float32ToNumberArray } from '../audio/sampleStore';
 import {
   AUDIO_LIBRARY,
+  LIBRARY_CATEGORIES,
   LIBRARY_SAMPLE_RATE,
   previewLibrarySample,
+  type LibraryCategory,
   type LibrarySample,
 } from '../audio/library';
 
@@ -23,6 +25,15 @@ export function AudioAssetsPanel() {
   const slate = room.slate;
   const [version, setVersion] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Which library sections are expanded — Drums open by default.
+  const [openCats, setOpenCats] = useState<Set<LibraryCategory>>(() => new Set(['Drums']));
+  const toggleCat = (cat: LibraryCategory) =>
+    setOpenCats((cur) => {
+      const next = new Set(cur);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
 
   useEffect(() => {
     const clips = slate.audioClips();
@@ -103,39 +114,60 @@ export function AudioAssetsPanel() {
         />
       </div>
 
-      {/* Built-in library: synthesized one-shots — click the name to preview,
-          + to drop it on a new track. */}
-      <div>
+      {/* Built-in library: synthesized one-shots grouped by kind — click a
+          name to preview, + to drop it on a new track. Sections collapse so
+          the panel stays scannable. */}
+      <div className="max-h-64 overflow-y-auto">
         <p className="mb-1 flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
           <Music size={10} />
           Library
         </p>
-        <div className="grid max-h-52 grid-cols-2 gap-1 overflow-y-auto">
-          {AUDIO_LIBRARY.map((s) => (
-            <div
-              key={s.id}
-              className="group flex items-center gap-1 rounded-sm border border-border bg-bg-3 px-1.5 py-1 hover:border-accent/40"
-            >
+        {LIBRARY_CATEGORIES.map((cat) => {
+          const items = AUDIO_LIBRARY.filter((s) => s.category === cat);
+          const isOpen = openCats.has(cat);
+          return (
+            <div key={cat} className="mb-1">
               <button
                 type="button"
-                onClick={() => previewLibrarySample(s)}
-                className="min-w-0 flex-1 truncate text-left text-[11px] text-text hover:text-accent"
-                title={`Preview ${s.name}`}
+                onClick={() => toggleCat(cat)}
+                className="flex w-full items-center gap-1 rounded-sm px-0.5 py-0.5 text-[10px] font-medium text-text-mid hover:bg-bg-3 hover:text-text"
+                aria-expanded={isOpen}
               >
-                {s.name}
+                {isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                {cat}
+                <span className="ml-auto font-mono text-[9px] text-text-dim">{items.length}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => void addLibrary(s)}
-                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-text-mid hover:bg-bg-4 hover:text-accent"
-                aria-label={`Add ${s.name} to a new track`}
-                title="Add to new track"
-              >
-                <Plus size={10} />
-              </button>
+              {isOpen && (
+                <div className="mt-0.5 grid grid-cols-2 gap-1">
+                  {items.map((s) => (
+                    <div
+                      key={s.id}
+                      className="group flex items-center gap-1 rounded-sm border border-border bg-bg-3 px-1.5 py-1 hover:border-accent/40"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => previewLibrarySample(s)}
+                        className="min-w-0 flex-1 truncate text-left text-[11px] text-text hover:text-accent"
+                        title={`Preview ${s.name} (${s.duration.toFixed(2)}s)`}
+                      >
+                        {s.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void addLibrary(s)}
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-text-mid hover:bg-bg-4 hover:text-accent"
+                        aria-label={`Add ${s.name} to a new track`}
+                        title="Add to new track"
+                      >
+                        <Plus size={10} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">Imported</p>

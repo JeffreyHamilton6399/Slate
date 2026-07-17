@@ -8,9 +8,13 @@
 
 const SR = 44100;
 
+export type LibraryCategory = 'Drums' | 'Cymbals & Perc' | 'Tonal & FX';
+
 export interface LibrarySample {
   id: string;
   name: string;
+  /** Panel grouping. */
+  category: LibraryCategory;
   /** Length in seconds (shown in the panel without generating). */
   duration: number;
   generate: () => Float32Array;
@@ -307,33 +311,32 @@ function bell(): Float32Array {
 }
 
 export const AUDIO_LIBRARY: LibrarySample[] = [
-  // Drums
-  { id: 'lib-kick', name: 'Kick', duration: 0.35, generate: kick },
-  { id: 'lib-808', name: '808 Kick', duration: 0.8, generate: kick808 },
-  { id: 'lib-snare', name: 'Snare', duration: 0.25, generate: snare },
-  { id: 'lib-hat', name: 'Hi-hat (closed)', duration: 0.08, generate: () => hat(false) },
-  { id: 'lib-hat-open', name: 'Hi-hat (open)', duration: 0.4, generate: () => hat(true) },
-  { id: 'lib-clap', name: 'Clap', duration: 0.3, generate: clap },
-  { id: 'lib-snap', name: 'Snap', duration: 0.15, generate: snap },
-  { id: 'lib-rim', name: 'Rimshot', duration: 0.12, generate: rim },
-  { id: 'lib-tom-lo', name: 'Tom (low)', duration: 0.4, generate: () => tom(110, 70, 0.4, 7) },
-  { id: 'lib-tom-hi', name: 'Tom (high)', duration: 0.3, generate: () => tom(190, 125, 0.3, 9) },
-  // Cymbals & percussion
-  { id: 'lib-crash', name: 'Crash', duration: 1.6, generate: crash },
-  { id: 'lib-ride', name: 'Ride', duration: 1.0, generate: ride },
-  { id: 'lib-shaker', name: 'Shaker', duration: 0.15, generate: shaker },
-  { id: 'lib-cowbell', name: 'Cowbell', duration: 0.35, generate: cowbell },
-  { id: 'lib-wood', name: 'Woodblock', duration: 0.1, generate: woodblock },
-  { id: 'lib-conga-lo', name: 'Conga (low)', duration: 0.3, generate: () => conga(190) },
-  { id: 'lib-conga-hi', name: 'Conga (high)', duration: 0.3, generate: () => conga(250) },
-  // Tonal & FX
-  { id: 'lib-bass', name: 'Bass pluck', duration: 0.6, generate: () => bassPluck(55) },
-  { id: 'lib-stab', name: 'Synth stab', duration: 0.4, generate: stab },
-  { id: 'lib-bell', name: 'Bell', duration: 1.4, generate: bell },
-  { id: 'lib-riser', name: 'Riser', duration: 1.2, generate: riser },
-  { id: 'lib-subdrop', name: 'Sub drop', duration: 1.0, generate: subDrop },
-  { id: 'lib-laser', name: 'Laser', duration: 0.25, generate: laser },
+  { id: 'lib-kick', name: 'Kick', category: 'Drums', duration: 0.35, generate: kick },
+  { id: 'lib-808', name: '808 Kick', category: 'Drums', duration: 0.8, generate: kick808 },
+  { id: 'lib-snare', name: 'Snare', category: 'Drums', duration: 0.25, generate: snare },
+  { id: 'lib-hat', name: 'Hi-hat (closed)', category: 'Drums', duration: 0.08, generate: () => hat(false) },
+  { id: 'lib-hat-open', name: 'Hi-hat (open)', category: 'Drums', duration: 0.4, generate: () => hat(true) },
+  { id: 'lib-clap', name: 'Clap', category: 'Drums', duration: 0.3, generate: clap },
+  { id: 'lib-snap', name: 'Snap', category: 'Drums', duration: 0.15, generate: snap },
+  { id: 'lib-rim', name: 'Rimshot', category: 'Drums', duration: 0.12, generate: rim },
+  { id: 'lib-tom-lo', name: 'Tom (low)', category: 'Drums', duration: 0.4, generate: () => tom(110, 70, 0.4, 7) },
+  { id: 'lib-tom-hi', name: 'Tom (high)', category: 'Drums', duration: 0.3, generate: () => tom(190, 125, 0.3, 9) },
+  { id: 'lib-crash', name: 'Crash', category: 'Cymbals & Perc', duration: 1.6, generate: crash },
+  { id: 'lib-ride', name: 'Ride', category: 'Cymbals & Perc', duration: 1.0, generate: ride },
+  { id: 'lib-shaker', name: 'Shaker', category: 'Cymbals & Perc', duration: 0.15, generate: shaker },
+  { id: 'lib-cowbell', name: 'Cowbell', category: 'Cymbals & Perc', duration: 0.35, generate: cowbell },
+  { id: 'lib-wood', name: 'Woodblock', category: 'Cymbals & Perc', duration: 0.1, generate: woodblock },
+  { id: 'lib-conga-lo', name: 'Conga (low)', category: 'Cymbals & Perc', duration: 0.3, generate: () => conga(190) },
+  { id: 'lib-conga-hi', name: 'Conga (high)', category: 'Cymbals & Perc', duration: 0.3, generate: () => conga(250) },
+  { id: 'lib-bass', name: 'Bass pluck', category: 'Tonal & FX', duration: 0.6, generate: () => bassPluck(55) },
+  { id: 'lib-stab', name: 'Synth stab', category: 'Tonal & FX', duration: 0.4, generate: stab },
+  { id: 'lib-bell', name: 'Bell', category: 'Tonal & FX', duration: 1.4, generate: bell },
+  { id: 'lib-riser', name: 'Riser', category: 'Tonal & FX', duration: 1.2, generate: riser },
+  { id: 'lib-subdrop', name: 'Sub drop', category: 'Tonal & FX', duration: 1.0, generate: subDrop },
+  { id: 'lib-laser', name: 'Laser', category: 'Tonal & FX', duration: 0.25, generate: laser },
 ];
+
+export const LIBRARY_CATEGORIES: LibraryCategory[] = ['Drums', 'Cymbals & Perc', 'Tonal & FX'];
 
 export const LIBRARY_SAMPLE_RATE = SR;
 

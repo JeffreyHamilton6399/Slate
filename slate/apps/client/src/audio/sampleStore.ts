@@ -19,13 +19,77 @@ const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-/** Maximum sample blob size (raw Float32 bytes) to sync via Yjs.
- *  24MB ≈ 2.2min mono / 1.1min stereo @ 44.1kHz — sent over the wire as int16
- *  (half the bytes) in bounded chunks. The old 5MB cap silently skipped
- *  anything past ~14s of stereo, which read as "other users can't hear my
- *  audio" for any real song. Clips beyond the cap still get a visible warning
- *  (slate:audio-sync-skipped) instead of failing silently. */
-const SYNC_SIZE_LIMIT = 24_000_000;
+/** Maximum int16 payload (bytes) to sync via Yjs after reduction.
+ *
+ *  Real songs decode HUGE — 3min of stereo @44.1kHz is ~63MB of Float32 — so
+ *  a fixed raw cap silently skipped almost every actual track ("other users
+ *  see my clip but can't hear it"). Instead of skipping, the publisher now
+ *  walks a reduction ladder until the payload fits:
+ *    1. int16 instead of float32 (always, for chunked payloads — CD depth),
+ *    2. downmix to mono,
+ *    3. halve the sample rate (44.1kHz → 22.05kHz).
+ *  Receivers reconstruct to the clip's original rate/channel count so the
+ *  stored samples keep the sampleKey invariant. A 3-minute stereo song lands
+ *  at ~16MB; only beyond ~12 minutes does a clip stop syncing (with a toast).
+ *  Collaborators hear a mono/22kHz copy of long tracks — clearly fine for
+ *  working together; the importer keeps full fidelity locally. */
+const SYNC_PAYLOAD_LIMIT = 16_000_000;
+
+/** Interleaved multi-channel → mono by channel averaging. */
+function toMono(f32: Float32Array, channels: number): Float32Array {
+  if (channels <= 1) return f32;
+  const frames = Math.floor(f32.length / channels);
+  const out = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    let s = 0;
+    for (let c = 0; c < channels; c++) s += f32[i * channels + c]!;
+    out[i] = s / channels;
+  }
+  return out;
+}
+
+/** Halve the sample rate of a mono buffer (pair-average = crude lowpass). */
+function halveRate(f32: Float32Array): Float32Array {
+  const out = new Float32Array(Math.floor(f32.length / 2));
+  for (let i = 0; i < out.length; i++) out[i] = ((f32[i * 2] ?? 0) + (f32[i * 2 + 1] ?? 0)) / 2;
+  return out;
+}
+
+/** Rebuild a received (possibly mono/downsampled) sync copy back to the
+ *  clip's original sample rate and channel count, so the stored samples match
+ *  what the clip metadata describes (the engine derives buffer length and
+ *  pitch from clip.sampleRate/channels). */
+function reconstruct(
+  mono: Float32Array,
+  syncRate: number,
+  origRate: number,
+  origCh: number,
+): Float32Array {
+  let f = mono;
+  if (origRate !== syncRate && syncRate > 0) {
+    const frames = mono.length;
+    const outFrames = Math.max(1, Math.round((frames * origRate) / syncRate));
+    const out = new Float32Array(outFrames);
+    const step = outFrames > 1 ? (frames - 1) / (outFrames - 1) : 0;
+    for (let i = 0; i < outFrames; i++) {
+      const pos = i * step;
+      const i0 = Math.floor(pos);
+      const t = pos - i0;
+      const a = mono[i0] ?? 0;
+      const b = mono[i0 + 1] ?? a;
+      out[i] = a * (1 - t) + b * t;
+    }
+    f = out;
+  }
+  if (origCh > 1) {
+    const inter = new Float32Array(f.length * origCh);
+    for (let i = 0; i < f.length; i++) {
+      for (let c = 0; c < origCh; c++) inter[i * origCh + c] = f[i]!;
+    }
+    return inter;
+  }
+  return f;
+}
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -112,25 +176,34 @@ function tryImportEntry(entry: string): void {
   if (syncedKeys.has(key)) return;
   let base64: string;
   let encoding: 'f32' | 'i16' = 'f32';
+  /** Set when the payload was reduced for sync — rebuild to this format. */
+  let rebuild: { syncRate: number; origRate: number; origCh: number } | null = null;
   const plain = syncMap.get(key);
   if (plain !== undefined) {
     base64 = plain; // plain entries are always float32 (legacy format)
   } else {
     // Chunked: need the meta (chunk count) plus every chunk present. Meta is
-    // either "12" (older float32 chunks) or "12:i16" (int16-encoded).
+    // "12" (older float32 chunks), "12:i16" (int16 at original format), or
+    // "12:i16:syncRate:syncCh:origRate:origCh" (reduced — see publish).
     const metaRaw = syncMap.get(`${key}#meta`);
     if (metaRaw === undefined) return;
-    const [countStr, enc] = metaRaw.split(':');
-    const count = Number(countStr);
+    const parts = metaRaw.split(':');
+    const count = Number(parts[0]);
     if (!Number.isInteger(count) || count <= 0) return;
-    if (enc === 'i16') encoding = 'i16';
-    const parts: string[] = [];
+    if (parts[1] === 'i16') encoding = 'i16';
+    if (parts.length >= 6) {
+      const syncRate = Number(parts[2]);
+      const origRate = Number(parts[4]);
+      const origCh = Number(parts[5]);
+      if (syncRate > 0 && origRate > 0 && origCh > 0) rebuild = { syncRate, origRate, origCh };
+    }
+    const pieces: string[] = [];
     for (let i = 0; i < count; i++) {
       const c = syncMap.get(`${key}#${i}`);
       if (c === undefined) return; // still in flight — retry on next change
-      parts.push(c);
+      pieces.push(c);
     }
-    base64 = parts.join('');
+    base64 = pieces.join('');
   }
   // Decode base64 → bytes → Float32Array → store locally. Store WITHOUT
   // publishing: re-publishing what we just received would make every peer
@@ -149,6 +222,9 @@ function tryImportEntry(entry: string): void {
     } else {
       float32 = new Float32Array(bytes.buffer);
     }
+    // Reduced payloads (mono / downsampled) get rebuilt to the clip's original
+    // rate + channel count so the engine's clip.sampleRate/channels math holds.
+    if (rebuild) float32 = reconstruct(float32, rebuild.syncRate, rebuild.origRate, rebuild.origCh);
     syncedKeys.add(key);
     void storeSamplesLocal(key, float32).then(() => {
       // Notify the AudioEditor that samples arrived.
@@ -178,24 +254,26 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(parts.join(''));
 }
 
+/** Format info the publisher needs to shrink big clips for sync (and that
+ *  receivers use to reconstruct). Optional — without it, oversized clips are
+ *  skipped rather than reduced. */
+export interface SampleSyncInfo {
+  sampleRate: number;
+  channels: number;
+}
+
 /** Publish samples to the Yjs sync map so other peers receive them. */
-function publishToSyncMap(key: string, float32: Float32Array): void {
+function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
   if (!syncMap || !syncRoom) return;
-  if (float32.byteLength > SYNC_SIZE_LIMIT) {
-    // Make the skip VISIBLE — silently not syncing read as "broken for
-    // everyone else". The AudioEditor toasts on this event.
-    window.dispatchEvent(new CustomEvent('slate:audio-sync-skipped', { detail: key }));
-    return;
-  }
   try {
     const doc = syncRoom.slate.doc;
     const map = syncMap;
-    // Mark synced BEFORE writing: our own sets fire the local observer, and
-    // without this it would pointlessly re-decode + re-store our own blob.
-    syncedKeys.add(key);
     // base64 expands bytes 4/3× — decide the path from the raw size so large
     // clips never pay for a throwaway float32 encoding.
     if (float32.byteLength <= (CHUNK_CHARS * 3) / 4) {
+      // Mark synced BEFORE writing: our own sets fire the local observer, and
+      // without this it would pointlessly re-decode + re-store our own blob.
+      syncedKeys.add(key);
       // Fits in one update — plain legacy float32 entry (older clients read it).
       const f32base64 = bytesToBase64(
         new Uint8Array(float32.buffer, float32.byteOffset, float32.byteLength),
@@ -206,12 +284,33 @@ function publishToSyncMap(key: string, float32: Float32Array): void {
       });
       return;
     }
-    // Chunked path: encode as int16 — half the bytes on the wire and in the
-    // doc for no audible difference (16-bit is CD depth). Receivers detect the
-    // encoding via the `:i16` marker on the chunk-count meta entry.
-    const i16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const v = Math.max(-1, Math.min(1, float32[i]!));
+    // Chunked path — encode as int16 (CD depth, half the bytes), then walk
+    // the reduction ladder until the payload fits: mono, then half rate.
+    let payload = float32;
+    let syncRate = info?.sampleRate ?? 0;
+    let syncCh = info?.channels ?? 0;
+    let reduced = false;
+    if (payload.length * 2 > SYNC_PAYLOAD_LIMIT && info && info.channels > 1) {
+      payload = toMono(payload, info.channels);
+      syncCh = 1;
+      reduced = true;
+    }
+    if (payload.length * 2 > SYNC_PAYLOAD_LIMIT && info) {
+      payload = halveRate(payload);
+      syncRate = Math.round((syncRate || info.sampleRate) / 2);
+      syncCh = syncCh || info.channels;
+      reduced = true;
+    }
+    if (payload.length * 2 > SYNC_PAYLOAD_LIMIT) {
+      // Even the reduced copy is too big (≫10min) — skip VISIBLY: silently
+      // not syncing read as "broken for everyone else". AudioEditor toasts.
+      window.dispatchEvent(new CustomEvent('slate:audio-sync-skipped', { detail: key }));
+      return;
+    }
+    syncedKeys.add(key); // before writing — see the plain path note above
+    const i16 = new Int16Array(payload.length);
+    for (let i = 0; i < payload.length; i++) {
+      const v = Math.max(-1, Math.min(1, payload[i]!));
       i16[i] = Math.round(v * 32767);
     }
     const base64 = bytesToBase64(new Uint8Array(i16.buffer));
@@ -221,9 +320,15 @@ function publishToSyncMap(key: string, float32: Float32Array): void {
       const piece = base64.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
       doc.transact(() => map.set(`${key}#${i}`, piece));
     }
-    // Meta last: receivers assemble only once every chunk has landed. Also
-    // drop the plain entry and any stale higher-index chunks from a previous
-    // (larger) publish of this key.
+    // Meta last: receivers assemble only once every chunk has landed. Reduced
+    // payloads carry the sync + original formats so receivers can rebuild:
+    //   `${count}:i16:${syncRate}:${syncCh}:${origRate}:${origCh}`
+    // Unreduced payloads keep the compact `${count}:i16` form. Also drop the
+    // plain entry and stale higher-index chunks from a previous publish.
+    const meta =
+      reduced && info
+        ? `${count}:i16:${syncRate}:${syncCh}:${info.sampleRate}:${info.channels}`
+        : `${count}:i16`;
     doc.transact(() => {
       map.delete(key);
       for (const entry of [...map.keys()]) {
@@ -231,7 +336,7 @@ function publishToSyncMap(key: string, float32: Float32Array): void {
         const idx = Number(entry.slice(key.length + 1));
         if (Number.isInteger(idx) && idx >= count) map.delete(entry);
       }
-      map.set(`${key}#meta`, `${count}:i16`);
+      map.set(`${key}#meta`, meta);
     });
   } catch {
     // ignore — large clips just don't sync
@@ -260,12 +365,18 @@ async function storeSamplesLocal(key: string, samples: number[] | Float32Array):
   });
 }
 
-/** Store audio samples in IndexedDB. Accepts number[] or Float32Array. */
-export async function storeSamples(key: string, samples: number[] | Float32Array): Promise<void> {
+/** Store audio samples in IndexedDB. Accepts number[] or Float32Array.
+ *  Pass `syncInfo` (the clip's sample rate + channel count) so clips too big
+ *  to sync verbatim can be reduced (mono/downsampled) instead of skipped. */
+export async function storeSamples(
+  key: string,
+  samples: number[] | Float32Array,
+  syncInfo?: SampleSyncInfo,
+): Promise<void> {
   const float32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
   await storeSamplesLocal(key, float32);
   // After local store succeeds, publish to the Yjs sync map for other peers.
-  publishToSyncMap(key, float32);
+  publishToSyncMap(key, float32, syncInfo);
 }
 
 /** Load audio samples from IndexedDB by key. Returns Float32Array. */

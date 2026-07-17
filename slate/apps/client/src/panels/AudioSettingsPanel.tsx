@@ -186,7 +186,7 @@ export function AudioSettingsPanel() {
               const g = 1 / max;
               const normed = new Float32Array(samples.length);
               for (let i = 0; i < samples.length; i++) normed[i] = samples[i]! * g;
-              await storeSamples(clip.sampleKey, normed);
+              await storeSamples(clip.sampleKey, normed, { sampleRate: clip.sampleRate, channels: clip.channels });
               window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
               toast({ title: 'Normalized' });
             }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><Wand2 size={10} />Normalize</button>
@@ -196,7 +196,7 @@ export function AudioSettingsPanel() {
               const frames = samples.length / ch;
               const out = new Float32Array(samples.length);
               for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
-              await storeSamples(clip.sampleKey, out);
+              await storeSamples(clip.sampleKey, out, { sampleRate: clip.sampleRate, channels: clip.channels });
               window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
               toast({ title: 'Reversed' });
             }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><FlipHorizontal2 size={10} />Reverse</button>

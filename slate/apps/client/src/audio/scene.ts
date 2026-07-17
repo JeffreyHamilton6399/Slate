@@ -72,8 +72,10 @@ export async function addAudioClip(
   const id = makeId('clip');
   const sampleKey = `samples:${id}`;
   // Store samples in IndexedDB (NOT Yjs). Pass as Float32Array for speed.
+  // syncInfo lets the multiplayer sync reduce (mono/downsample) big clips
+  // instead of skipping them.
   const f32 = clip.samples instanceof Float32Array ? clip.samples : new Float32Array(clip.samples);
-  await storeSamples(sampleKey, f32);
+  await storeSamples(sampleKey, f32, { sampleRate: clip.sampleRate, channels: clip.channels });
   const track = slate.audioTracks().get(trackId);
   const color = clip.color ?? (track ? (track.get('color') as string) : '#7c6aff');
   const full: AudioClip = {
@@ -115,8 +117,9 @@ export async function splitAudioClip(slate: SlateDoc, id: string, splitTime: num
   // (slice() on a Float32Array returns Float32Array) — pass them straight through
   // without converting to number[] (which would double the memory for big clips).
   const newKey = `samples:${makeId('clip')}`;
-  await storeSamples(clip.sampleKey, samplesA);
-  await storeSamples(newKey, samplesB);
+  const syncInfo = { sampleRate: clip.sampleRate, channels: clip.channels };
+  await storeSamples(clip.sampleKey, samplesA, syncInfo);
+  await storeSamples(newKey, samplesB, syncInfo);
 
   slate.doc.transact(() => {
     yo.set('duration', relTime);

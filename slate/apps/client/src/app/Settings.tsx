@@ -210,6 +210,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             (Yjs) over a WebSocket relay; voice runs over the same relay. Installable
             as an app and works offline.
           </p>
+          <p className="mt-1 text-xs text-text-dim">
+            Build <span className="font-mono">{__SLATE_BUILD__}</span> — if a collaborator
+            sees different behavior, compare builds (an installed app can lag a deploy;
+            reload twice to update).
+          </p>
         </div>
       </div>
     </Dialog>

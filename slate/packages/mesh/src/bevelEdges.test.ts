@@ -114,7 +114,9 @@ describe('bevelEdges', () => {
   it('corner patch apex sits ON the octant sphere (no divot)', () => {
     const c = cube(1);
     const w = 0.15;
-    const out = bevelEdges(c, allManifoldEdges(c), w, 3);
+    // seg=4 (even) so the corner grid has interior points to check — at odd
+    // seg the center vertex is legitimately the only interior point.
+    const out = bevelEdges(c, allManifoldEdges(c), w, 4);
     // For the corner at (.5,.5,.5): every boundary arc lies on the sphere of
     // radius w centered at (.5-w, .5-w, .5-w). The fan apex must sit on that
     // sphere along the corner diagonal — the flat loop centroid (the old,

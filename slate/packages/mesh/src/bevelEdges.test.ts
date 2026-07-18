@@ -129,6 +129,18 @@ describe('bevelEdges', () => {
       if (d < best) best = d;
     }
     expect(best).toBeLessThan(5e-3);
+    // And EVERY vertex strictly inside the corner region (the patch interior:
+    // apex + concentric rings — strip arcs sit at one coord == 0.5-w) must be
+    // ON the sphere too: a flat cone/fan interior fails this at the rings.
+    let interior = 0;
+    for (let i = 0; i < vCount(out); i++) {
+      const p = vGet(out, i);
+      if (p.x > S.x + 0.01 && p.y > S.y + 0.01 && p.z > S.z + 0.01) {
+        interior++;
+        expect(Math.abs(Math.hypot(p.x - S.x, p.y - S.y, p.z - S.z) - w)).toBeLessThan(5e-3);
+      }
+    }
+    expect(interior).toBeGreaterThan(1); // apex + at least one ring point
   });
 
   it('face bevel (top 4 edges): shared slid corners — no spike at the original corners', () => {

@@ -731,24 +731,26 @@ export function bevelEdges(
       closed = true;
     }
     if (closed && remaining.length === 0) {
-      // Fan apex for the corner patch. The flat centroid of the loop sits
-      // INSIDE the ideal rounded corner (the boundary arcs all bulge outward)
-      // — fanning from it sank every corner into a little divot. Instead,
-      // lift the apex onto the sphere the boundary arcs already lie on:
-      // fit a sphere whose center is constrained to the line from the flat
-      // centroid toward the ORIGINAL corner vertex (1-D least squares via
-      // ternary search on distance variance), then place the apex on that
-      // sphere in the corner-vertex direction. For a fully beveled cube
-      // corner every loop point lies exactly on the octant sphere, so the
-      // fit recovers it exactly and the patch bulges like Blender's.
+      // Corner patch. A single fan from one apex approximates the rounded
+      // corner with a flat CONE — fine when the bevel is narrow, but at wide
+      // bevels the corner sphere is huge and the cone's long skinny triangles
+      // crease visibly and sag inside the sphere (the "messed-up corner").
+      // Instead: fit the sphere the boundary arcs lie on (center constrained
+      // to the line from the loop centroid toward the ORIGINAL corner vertex,
+      // 1-D least squares via ternary search), then build a SPHERICAL GRID —
+      // an apex on the sphere plus seg-1 concentric rings slerped between the
+      // apex direction and each boundary point's direction. For a fully
+      // beveled cube corner every boundary point lies exactly on the octant
+      // sphere, so the patch reproduces the true sphere octant like Blender.
+      // A poor fit (irregular loop) falls back to the flat centroid fan.
       const pts = loop.map((id) => vGet(m, id));
       let cx = 0, cy = 0, cz = 0;
       for (const p of pts) { cx += p.x; cy += p.y; cz += p.z; }
       const C0: Vec3 = { x: cx / pts.length, y: cy / pts.length, z: cz / pts.length };
-      let apex = C0;
       const V = vGet(m, v);
       const dir = sub(V, C0);
       const dl = length(dir);
+      let fit: { S: Vec3; R: number; dhat: Vec3 } | null = null;
       if (seg > 1 && dl > 1e-9) {
         const dhat = scale(dir, 1 / dl);
         const spread = (t: number): { mean: number; varr: number } => {
@@ -772,18 +774,54 @@ export function bevelEdges(
         }
         const t = (lo + hi) / 2;
         const { mean: R, varr } = spread(t);
-        // Accept only a decent fit (arcs genuinely spherical-ish); a bad fit
-        // (wildly uneven loop) keeps the flat centroid — no worse than before.
         if (R > 1e-9 && Math.sqrt(varr / pts.length) < R * 0.2) {
-          const S = add(C0, scale(dir, t));
-          const liftTarget = add(S, scale(dhat, R));
-          const lift = dot(sub(liftTarget, C0), dhat);
-          // Never overshoot past the original corner vertex.
-          if (lift > 0) apex = add(C0, scale(dhat, Math.min(lift, dl * 0.95)));
+          fit = { S: add(C0, scale(dir, t)), R, dhat };
         }
       }
-      const c = vAdd(m, apex);
-      pushFan(c, [...loop, loop[0]!]);
+      if (fit) {
+        const { S, R, dhat } = fit;
+        const n = loop.length;
+        const apexId = vAdd(m, add(S, scale(dhat, R)));
+        const pushOriented = (poly: number[]) => {
+          const flip = dot(faceNormal(m, { v: poly }), vn) < 0;
+          m.faces.push({ v: flip ? [...poly].reverse() : poly });
+        };
+        // Concentric rings between the apex (t=0) and the boundary loop
+        // (t=1): directions slerp from the apex direction to each boundary
+        // point's direction; radii lerp to each point's true distance so
+        // slightly-off-sphere boundaries still join seamlessly.
+        const rings: number[][] = [];
+        for (let r = 1; r < seg; r++) {
+          const tt = r / seg;
+          const ring: number[] = [];
+          for (let i = 0; i < n; i++) {
+            const u1 = normalize(sub(pts[i]!, S));
+            const cosO = Math.max(-1, Math.min(1, dot(dhat, u1)));
+            const om = Math.acos(cosO);
+            let d2: Vec3;
+            if (om < 1e-4) d2 = u1;
+            else {
+              const so = Math.sin(om);
+              d2 = normalize(add(scale(dhat, Math.sin((1 - tt) * om) / so), scale(u1, Math.sin(tt * om) / so)));
+            }
+            const Ri = R * (1 - tt) + length(sub(pts[i]!, S)) * tt;
+            ring.push(vAdd(m, add(S, scale(d2, Ri))));
+          }
+          rings.push(ring);
+        }
+        const r1 = rings[0] ?? loop;
+        for (let i = 0; i < n; i++) pushOriented([apexId, r1[i]!, r1[(i + 1) % n]!]);
+        for (let r = 0; r < rings.length; r++) {
+          const cur = rings[r]!;
+          const nxt = r + 1 < rings.length ? rings[r + 1]! : loop;
+          for (let i = 0; i < n; i++) {
+            pushOriented([cur[i]!, cur[(i + 1) % n]!, nxt[(i + 1) % n]!, nxt[i]!]);
+          }
+        }
+      } else {
+        const c = vAdd(m, C0);
+        pushFan(c, [...loop, loop[0]!]);
+      }
     } else {
       // Open chain (mixed selected/unselected edges at this corner): close
       // through the original vertex, which the unselected faces still use.

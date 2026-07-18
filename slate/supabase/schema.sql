@@ -9,6 +9,10 @@
 -- 4. Add to the client build environment (Vercel → Settings → Env vars):
 --      VITE_SUPABASE_URL=      (Project settings → API → Project URL)
 --      VITE_SUPABASE_ANON_KEY= (Project settings → API → anon public key)
+--
+-- This whole file is IDEMPOTENT — safe to run again on an existing project
+-- (tables/columns use `if not exists`; each policy is dropped-then-created,
+-- since Postgres has no `create policy if not exists`).
 
 -- Per-user board save backups (mirrors the local save slots).
 create table if not exists public.board_saves (
@@ -24,18 +28,22 @@ create table if not exists public.board_saves (
 
 alter table public.board_saves enable row level security;
 
+drop policy if exists "users read own saves" on public.board_saves;
 create policy "users read own saves"
   on public.board_saves for select
   using (auth.uid() = user_id);
 
+drop policy if exists "users insert own saves" on public.board_saves;
 create policy "users insert own saves"
   on public.board_saves for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "users update own saves" on public.board_saves;
 create policy "users update own saves"
   on public.board_saves for update
   using (auth.uid() = user_id);
 
+drop policy if exists "users delete own saves" on public.board_saves;
 create policy "users delete own saves"
   on public.board_saves for delete
   using (auth.uid() = user_id);
@@ -64,14 +72,17 @@ alter table public.profiles enable row level security;
 
 -- Anyone signed in can read profiles (needed to look up friends by email +
 -- to render display names in the friends list).
+drop policy if exists "Users can read all profiles" on public.profiles;
 create policy "Users can read all profiles"
   on public.profiles for select
   using (true);
 
+drop policy if exists "Users can insert own profile" on public.profiles;
 create policy "Users can insert own profile"
   on public.profiles for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile"
   on public.profiles for update
   using (auth.uid() = user_id);
@@ -92,18 +103,22 @@ alter table public.friends enable row level security;
 
 -- Either side of a relationship can read it (so the recipient sees the
 -- incoming request and the sender sees the outgoing one).
+drop policy if exists "Users can read own friends" on public.friends;
 create policy "Users can read own friends"
   on public.friends for select
   using (auth.uid() = user_id or auth.uid() = friend_id);
 
+drop policy if exists "Users can insert own friends" on public.friends;
 create policy "Users can insert own friends"
   on public.friends for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update own friends" on public.friends;
 create policy "Users can update own friends"
   on public.friends for update
   using (auth.uid() = user_id or auth.uid() = friend_id);
 
+drop policy if exists "Users can delete own friends" on public.friends;
 create policy "Users can delete own friends"
   on public.friends for delete
   using (auth.uid() = user_id or auth.uid() = friend_id);

@@ -708,12 +708,43 @@ export function bevelEdges(
       if (arc) pushFan(v, arc);
       continue;
     }
-    // 2+ strips meet: chain their end arcs (they share side-corner vertices)
-    // into one loop and fan from its centroid — the rounded corner patch.
+    /** Push a polygon oriented outward at this vertex (dedupes repeated ids). */
+    const pushPoly = (poly: number[]) => {
+      const uniq = poly.filter((id, i, a) => a.indexOf(id) === i);
+      if (uniq.length < 3) return;
+      const flip = dot(faceNormal(m, { v: uniq }), vn) < 0;
+      m.faces.push({ v: flip ? uniq.reverse() : uniq });
+    };
     const remaining = list
       .map((e) => endArc(e, v))
       .filter((a): a is number[] => !!a && a.length >= 2);
     if (remaining.length < 2) continue;
+    // EXACTLY TWO strips meeting (a face-bevel corner: two beveled edges +
+    // an unbeveled one): the two end arcs share BOTH endpoints, bounding a
+    // narrow lens. The sphere grid below is wrong for that shape — a lens is
+    // nowhere near a sphere cap, and the fitted apex ended up far off the
+    // surface, extruding a pinched "tent" sliver down the unbeveled edge.
+    // The right fill is a LADDER: rungs between corresponding points of the
+    // two arcs (triangles at the shared ends, quads between). Nearly flat,
+    // no new vertices, blends the two strips like Blender's terminating
+    // corner.
+    if (remaining.length === 2) {
+      const a1 = remaining[0]!;
+      let a2 = remaining[1]!;
+      const last = (a: number[]) => a[a.length - 1]!;
+      const sharedBoth =
+        (a1[0] === a2[0] && last(a1) === last(a2)) ||
+        (a1[0] === last(a2) && last(a1) === a2[0]);
+      if (sharedBoth) {
+        if (a1[0] !== a2[0]) a2 = [...a2].reverse();
+        for (let i = 0; i + 1 < a1.length; i++) {
+          pushPoly([a1[i]!, a1[i + 1]!, a2[i + 1]!, a2[i]!]);
+        }
+        continue;
+      }
+    }
+    // 3+ strips meet: chain their end arcs (they share side-corner vertices)
+    // into one closed loop for the rounded corner patch.
     const loop: number[] = [...remaining[0]!];
     remaining.splice(0, 1);
     let closed = false;

@@ -157,6 +157,19 @@ describe('bevelEdges', () => {
       }
     }
     expect(pairs.length).toBe(8);
+    {
+      // Lens corners (two strips + one unbeveled edge) fill with a LADDER
+      // between the two end arcs: NO extra vertices beyond the arcs
+      // themselves. The old sphere-grid fill invented an off-surface apex +
+      // rings here, extruding a pinched tent down the unbeveled edge.
+      const seg = 3;
+      const out3 = bevelEdges(c, pairs, 0.2, seg);
+      // 4 kept bottom originals + 4 top-face corners + 4 shared slid corners
+      // + 8 end arcs × (seg-1) interior points = 28 vertices, 6 rewritten
+      // faces + 4 strips × seg + 4 lens ladders × seg = 30 faces.
+      expect(vCount(out3)).toBe(28);
+      expect(out3.faces.length).toBe(30);
+    }
     const out = bevelEdges(c, pairs, 0.2, 2);
     // REGRESSION: the two side faces flanking each vertical edge used to
     // create separate coincident slid corners, breaking the corner-patch

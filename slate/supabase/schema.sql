@@ -51,8 +51,14 @@ create table if not exists public.profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null default 'Anonymous',
   email text,
+  -- Cropped avatar as a small (~128px) JPEG data URL. Kept inline (not
+  -- Storage) so it syncs with a plain profiles read — friends see your pic.
+  avatar_url text,
   created_at timestamptz not null default now()
 );
+
+-- Safe to re-run on an existing project that predates the avatar column.
+alter table public.profiles add column if not exists avatar_url text;
 
 alter table public.profiles enable row level security;
 

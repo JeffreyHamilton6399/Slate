@@ -18,6 +18,8 @@ export interface Friend {
   userId: string;
   displayName: string;
   email: string | null;
+  /** Small JPEG data URL, or null. */
+  avatarUrl: string | null;
   status: FriendStatus;
   /** true = THEY sent the request to ME; false = I sent the request to them. */
   incoming: boolean;
@@ -27,6 +29,19 @@ interface ProfileRow {
   user_id: string;
   display_name: string;
   email: string | null;
+  avatar_url: string | null;
+}
+
+/** The friends feature needs the profiles/friends tables (supabase/schema.sql).
+ *  PostgREST reports a missing table as "Could not find the table … in the
+ *  schema cache" (or a 42P01 relation-does-not-exist). Turn that into one
+ *  actionable message instead of a raw Postgres string. */
+function friendlyError(msg: string | undefined): string | undefined {
+  if (!msg) return msg;
+  if (/schema cache|does not exist|relation .* does not/i.test(msg)) {
+    return 'Friends need a one-time database setup — run supabase/schema.sql in your Supabase project (SQL editor), then try again.';
+  }
+  return msg;
 }
 
 interface FriendRow {
@@ -60,7 +75,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
   );
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
-    .select('user_id,display_name,email')
+    .select('user_id,display_name,email,avatar_url')
     .in('user_id', otherIds);
   if (pErr) {
     console.warn('getFriends profiles lookup failed:', pErr.message);
@@ -89,6 +104,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
         userId: otherId,
         displayName: p?.display_name ?? 'Anonymous',
         email: p?.email ?? null,
+        avatarUrl: p?.avatar_url ?? null,
         status: r.status,
         incoming,
       });
@@ -126,11 +142,11 @@ export async function sendFriendRequest(
   // Look up the friend's profile by email.
   const { data: profile, error: pErr } = await supabase
     .from('profiles')
-    .select('user_id,display_name,email')
+    .select('user_id,display_name,email,avatar_url')
     .eq('email', email)
     .maybeSingle();
-  if (pErr) return { ok: false, error: pErr.message };
-  if (!profile) return { ok: false, error: 'User not found' };
+  if (pErr) return { ok: false, error: friendlyError(pErr.message) };
+  if (!profile) return { ok: false, error: 'No Slate user with that email — they need an account first.' };
   const friend = profile as ProfileRow;
 
   // Already friends (either direction)? Short-circuit.
@@ -158,7 +174,7 @@ export async function sendFriendRequest(
     friend_id: friend.user_id,
     status: 'pending',
   });
-  if (insErr) return { ok: false, error: insErr.message };
+  if (insErr) return { ok: false, error: friendlyError(insErr.message) };
   return { ok: true };
 }
 
@@ -223,13 +239,26 @@ export async function upsertMyProfile(
   userId: string,
   displayName: string,
   email: string | null,
+  avatarUrl?: string | null,
 ): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase
-    .from('profiles')
-    .upsert(
-      { user_id: userId, display_name: displayName, email },
-      { onConflict: 'user_id' },
-    );
+  const row: Record<string, unknown> = { user_id: userId, display_name: displayName, email };
+  // Only send avatar_url when provided so a name-only update never clears it.
+  if (avatarUrl !== undefined) row.avatar_url = avatarUrl || null;
+  const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
   if (error) console.warn('upsertMyProfile failed:', error.message);
+}
+
+/** Fetch MY profile (used on sign-in to pull the avatar synced from another
+ *  device). Returns null if unconfigured / not found. */
+export async function fetchMyProfile(userId: string): Promise<{ displayName: string; avatarUrl: string | null } | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('display_name,avatar_url')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as { display_name: string; avatar_url: string | null };
+  return { displayName: row.display_name, avatarUrl: row.avatar_url };
 }

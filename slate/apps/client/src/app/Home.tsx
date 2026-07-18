@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, User, UserCircle } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -23,6 +23,7 @@ import { cn } from '../utils/cn';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
+import { Avatar } from './Avatar';
 import { ProfileDialog, type ProfileTab } from './ProfileDialog';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
@@ -727,20 +728,18 @@ function ProfileMenu({
   email: string;
   onOpenProfile: () => void;
 }) {
-  const initial = email ? email[0]?.toUpperCase() ?? '?' : null;
+  const displayName = useAppStore((s) => s.displayName);
+  const avatarUrl = useAppStore((s) => s.avatarUrl);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           aria-label="Account menu"
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-accent transition-colors hover:bg-accent/25 hover:border-accent/70"
+          className="rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
+          title="Account"
         >
-          {initial ? (
-            <span className="text-sm font-semibold">{initial}</span>
-          ) : (
-            <User size={15} />
-          )}
+          <Avatar url={avatarUrl} name={displayName || email} size={34} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[220px]">

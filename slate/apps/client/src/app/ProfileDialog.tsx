@@ -9,8 +9,9 @@
  *   Settings — appearance (theme/accent), voice, 3D viewport, layout reset
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  Camera,
   Check,
   CloudDownload,
   CloudUpload,
@@ -18,6 +19,7 @@ import {
   Moon,
   Settings as SettingsIcon,
   Sun,
+  Trash2,
   User as UserIcon,
   UserMinus,
   UserPlus,
@@ -31,11 +33,13 @@ import { useAppStore, type Theme } from './store';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { useFriends } from '../account/useFriends';
-import { upsertMyProfile } from '../account/friends';
+import { upsertMyProfile, fetchMyProfile } from '../account/friends';
 import { backupSavesToCloud, restoreSavesFromCloud } from '../account/cloudSaves';
 import { useDockStore } from '../workspace/dockStore';
 import { useVoiceOptional } from '../voice/useVoiceOptional';
 import { toast } from '../ui/Toast';
+import { Avatar } from './Avatar';
+import { AvatarCropper } from './AvatarCropper';
 
 export type ProfileTab = 'profile' | 'friends' | 'settings';
 
@@ -54,29 +58,42 @@ const TABS: { id: ProfileTab; label: string; Icon: typeof UserIcon }[] = [
 
 export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: ProfileDialogProps) {
   const displayName = useAppStore((s) => s.displayName);
+  const avatarUrl = useAppStore((s) => s.avatarUrl);
+  const setAvatarUrl = useAppStore((s) => s.setAvatarUrl);
+  const setDisplayName = useAppStore((s) => s.setDisplayName);
   const [tab, setTab] = useState<ProfileTab>(initialTab);
   const { user } = useAccount();
   const email = user?.email ?? '';
-  const initial = email ? email[0]?.toUpperCase() ?? '?' : '?';
 
   // Jump to the requested tab each time the screen opens.
   useEffect(() => {
     if (open) setTab(initialTab);
   }, [open, initialTab]);
 
+  // On open, pull the avatar/name synced from another device (if the local
+  // store hasn't got one yet). Keeps the pic following the account.
+  useEffect(() => {
+    if (!open || !user?.id) return;
+    let cancelled = false;
+    void fetchMyProfile(user.id).then((prof) => {
+      if (cancelled || !prof) return;
+      if (prof.avatarUrl && !useAppStore.getState().avatarUrl) setAvatarUrl(prof.avatarUrl);
+      if (prof.displayName && !useAppStore.getState().displayName) setDisplayName(prof.displayName);
+    });
+    return () => { cancelled = true; };
+  }, [open, user?.id, setAvatarUrl, setDisplayName]);
+
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      className="max-w-4xl w-[94vw] p-0"
+      className="max-w-5xl w-[95vw] p-0"
     >
-      <div className="flex h-[80vh] max-h-[680px] min-h-[420px] flex-col sm:flex-row">
+      <div className="flex max-h-[85vh] min-h-[300px] flex-col sm:flex-row">
         {/* Tab rail */}
-        <nav className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-52 sm:flex-col sm:border-b-0 sm:border-r">
+        <nav className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
           <div className="mb-2 hidden items-center gap-2 px-1.5 sm:flex">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-sm font-semibold text-accent">
-              {initial}
-            </span>
+            <Avatar url={avatarUrl} name={displayName || email} size={38} />
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
               <p className="truncate text-[11px] text-text-dim" title={email}>{email || 'Not signed in'}</p>
@@ -117,24 +134,61 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
   );
 }
 
-/** Profile tab — identity + account (name, cloud backup, sign out). */
+/** Profile tab — identity + account (avatar, name, cloud backup, sign out). */
 function ProfileTabView() {
   const displayName = useAppStore((s) => s.displayName);
   const setDisplayName = useAppStore((s) => s.setDisplayName);
+  const avatarUrl = useAppStore((s) => s.avatarUrl);
+  const setAvatarUrl = useAppStore((s) => s.setAvatarUrl);
   const { user } = useAccount();
   const email = user?.email ?? '';
   const userId = user?.id;
   const [name, setName] = useState(displayName);
   useEffect(() => setName(displayName), [displayName]);
-  const initial = email ? email[0]?.toUpperCase() ?? '?' : '?';
+
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+
+  const onPickFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) {
+      toast({ title: 'Pick an image file', variant: 'error' });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setCropSrc(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const saveAvatar = (dataUrl: string | null) => {
+    setAvatarUrl(dataUrl ?? '');
+    if (userId) void upsertMyProfile(userId, useAppStore.getState().displayName || name, email, dataUrl ?? null);
+  };
 
   return (
     <div className="flex flex-col gap-5">
       <h3 className="text-lg font-semibold text-text">Profile</h3>
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-2 p-3">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-xl font-semibold text-accent">
-          {initial}
-        </div>
+      <div className="flex items-center gap-4 rounded-lg border border-border bg-bg-2 p-4">
+        {/* Avatar with hover camera overlay (Google-style). */}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="group relative shrink-0 rounded-full"
+          title="Change photo"
+          aria-label="Change profile photo"
+        >
+          <Avatar url={avatarUrl} name={displayName || email} size={72} className="ring-2 ring-border" />
+          <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+            <Camera size={20} className="text-white" />
+          </span>
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = ''; }}
+        />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
           {email ? (
@@ -142,6 +196,17 @@ function ProfileTabView() {
           ) : (
             <p className="text-xs text-text-dim">Not signed in</p>
           )}
+          <div className="mt-2 flex gap-2">
+            <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
+              <Camera size={13} />
+              <span className="ml-1.5">{avatarUrl ? 'Change photo' : 'Upload photo'}</span>
+            </Button>
+            {avatarUrl && (
+              <Button variant="ghost" size="sm" onClick={() => saveAvatar(null)} aria-label="Remove photo">
+                <Trash2 size={13} />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -153,7 +218,7 @@ function ProfileTabView() {
             size="sm"
             onClick={() => {
               setDisplayName(name);
-              if (userId) void upsertMyProfile(userId, name, email);
+              if (userId) void upsertMyProfile(userId, name, email, useAppStore.getState().avatarUrl || null);
               toast({ title: 'Display name updated' });
             }}
           >
@@ -167,6 +232,13 @@ function ProfileTabView() {
         <FieldLabel>Account</FieldLabel>
         <AccountSection />
       </div>
+
+      <AvatarCropper
+        open={cropSrc !== null}
+        src={cropSrc}
+        onCancel={() => setCropSrc(null)}
+        onCrop={(dataUrl) => { setCropSrc(null); saveAvatar(dataUrl); toast({ title: 'Photo updated' }); }}
+      />
     </div>
   );
 }
@@ -193,6 +265,9 @@ function SettingsTabView() {
     <div className="flex flex-col gap-5">
       <h3 className="text-lg font-semibold text-text">Settings</h3>
 
+      {/* Two columns on wide screens so settings span across instead of
+          stacking into one very tall column. */}
+      <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
       {/* Appearance */}
       <div>
         <FieldLabel>Theme</FieldLabel>
@@ -261,7 +336,7 @@ function SettingsTabView() {
       </div>
 
       {/* Voice */}
-      <div className="border-t border-border pt-4">
+      <div>
         <FieldLabel>Voice</FieldLabel>
         <label className="flex items-center gap-2 text-xs text-text-mid">
           <span className="w-24 shrink-0">Output volume</span>
@@ -284,7 +359,7 @@ function SettingsTabView() {
       </div>
 
       {/* 3D viewport */}
-      <div className="border-t border-border pt-4">
+      <div>
         <FieldLabel>3D viewport</FieldLabel>
         <label className="flex items-start gap-2 text-xs text-text-mid">
           <input
@@ -308,7 +383,7 @@ function SettingsTabView() {
       </div>
 
       {/* Layout */}
-      <div className="border-t border-border pt-4">
+      <div>
         <FieldLabel>Layout</FieldLabel>
         <Button
           variant="ghost"
@@ -320,6 +395,7 @@ function SettingsTabView() {
         >
           Reset dock layout
         </Button>
+      </div>
       </div>
     </div>
   );
@@ -441,9 +517,7 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
                     key={f.userId}
                     className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
                   >
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-semibold text-accent">
-                      {(f.displayName || '?')[0]?.toUpperCase()}
-                    </div>
+                    <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
                       {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}

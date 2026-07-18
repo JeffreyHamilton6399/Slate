@@ -23,6 +23,8 @@ export interface JoinedBoard {
 interface AppState {
   /** Latest display name chosen in onboarding. */
   displayName: string;
+  /** Cropped avatar as a small JPEG data URL ('' = none, show initial). */
+  avatarUrl: string;
   /** Current board, or null if user is on the boards list. */
   currentBoard: JoinedBoard | null;
   /** UI flag for command palette / overlays. */
@@ -51,6 +53,7 @@ interface AppState {
   showTransformHud: boolean;
 
   setDisplayName: (n: string) => void;
+  setAvatarUrl: (url: string) => void;
   setTheme: (t: Theme) => void;
   setPaperFollowsTheme: (v: boolean) => void;
   setUnits: (u: LengthUnit) => void;
@@ -70,6 +73,7 @@ export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       displayName: '',
+      avatarUrl: '',
       currentBoard: null,
       shortcutsOpen: false,
       settingsOpen: false,
@@ -83,6 +87,7 @@ export const useAppStore = create<AppState>()(
       voiceVolume: 1,
       showTransformHud: true,
       setDisplayName: (displayName) => set({ displayName }),
+      setAvatarUrl: (avatarUrl) => set({ avatarUrl }),
       setTheme: (theme) => set({ theme }),
       setPaperFollowsTheme: (paperFollowsTheme) => set({ paperFollowsTheme }),
       setUnits: (units) => set({ units }),
@@ -102,6 +107,7 @@ export const useAppStore = create<AppState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         displayName: s.displayName,
+        avatarUrl: s.avatarUrl,
         currentBoard: s.currentBoard,
         theme: s.theme,
         paperFollowsTheme: s.paperFollowsTheme,

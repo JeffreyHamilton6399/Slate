@@ -22,7 +22,12 @@ export function Dialog({ open, onOpenChange, title, description, children, class
         <RadixDialog.Overlay className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur-sm animate-fade-in" />
         <RadixDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[1101] -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-md rounded-lg surface shadow-2xl p-6 animate-slide-up',
+            'fixed left-1/2 top-1/2 z-[1101] -translate-x-1/2 -translate-y-1/2 w-[92vw] rounded-lg surface shadow-2xl animate-slide-up',
+            // `cn` is plain clsx (no tailwind-merge), so a base class would
+            // fight a caller's override by CSS source order. Only apply the
+            // defaults when the caller didn't pass their own.
+            !className?.includes('max-w-') && 'max-w-md',
+            !className?.includes('p-0') && 'p-6',
             className,
           )}
         >

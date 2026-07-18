@@ -26,12 +26,37 @@ export interface OscSpec {
   level: number;
 }
 
+/** Synthesis model. `subtractive` = the classic oscillator+filter synth;
+ *  `string` = Karplus-Strong physical modelling (a plucked/struck string — the
+ *  realistic guitar/harp/pizzicato path); `fm` = 2-operator FM (realistic
+ *  electric piano / bells / clav). All three run on plain Web Audio nodes so
+ *  they render offline for recorded takes just like the subtractive path. */
+export type SynthEngine = 'subtractive' | 'string' | 'fm';
+
 export interface InstrumentParams {
   id: string;
   name: string;
   /** True for the factory presets (not deletable, saved-as instead of over). */
   builtIn?: boolean;
-  /** 1-3 oscillators summed into the filter. */
+  /** Synthesis model (default 'subtractive'). */
+  engine?: SynthEngine;
+  /** ── String (Karplus-Strong) params ──────────────────────────────────── */
+  /** Loop-filter brightness 0..1 — higher rings the high harmonics longer
+   *  (steel string / bright), lower is darker (nylon / muted). */
+  stringDamping?: number;
+  /** Loop feedback 0.8..0.999 — how long the string sustains before it decays
+   *  to silence. 0.99 ≈ an acoustic guitar; 0.999 ≈ a long-ringing harp. */
+  stringDecay?: number;
+  /** ── FM params ────────────────────────────────────────────────────────── */
+  /** Modulator : carrier frequency ratio. Integer ratios (1, 2, 3) = harmonic
+   *  (e-piano, brass); non-integers (1.4, 3.5) = inharmonic (bells, metallic). */
+  fmRatio?: number;
+  /** Modulation index (brightness / timbre richness). */
+  fmIndex?: number;
+  /** Seconds for the modulation index to decay toward ~0 — the classic FM
+   *  "bright attack, mellow tail". 0 = constant brightness (organ-like). */
+  fmDecay?: number;
+  /** 1-3 oscillators summed into the filter (subtractive engine). */
   oscs: OscSpec[];
   /** White-noise level 0..1 mixed pre-filter (hammer click / breath). */
   noise: number;
@@ -119,9 +144,72 @@ function getNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
   return buf;
 }
 
-/** Build and start one note's node graph:
- *  oscs (+noise) → lowpass filter (env + key tracking) → amp ADSR → dest.
- *  Works on both AudioContext (live) and OfflineAudioContext (render). */
+/** Karplus-Strong loop-delay tuning offset (in samples): a plucked string's
+ *  pitch is set by the TOTAL round-trip delay = the delay line PLUS the loop
+ *  lowpass's group delay. Subtract the filter's ~1-sample delay from the delay
+ *  line so the sounding pitch matches the note (verified by the pitch test in
+ *  instruments.test.ts to land within a few cents across the range). */
+const KS_DELAY_SAMPLES_OFFSET = 1.0;
+
+/** Render a plucked/struck string (Karplus-Strong) into an AudioBuffer.
+ *
+ *  A Web Audio DelayNode feedback loop is the "obvious" way to do this, but in
+ *  practice the loop DIVERGES (RMS blows up) — feedback DelayNodes are
+ *  unreliable, especially offline. So we compute the sample loop directly in JS
+ *  (one delay line + a one-pole lowpass in the feedback path, exactly the
+ *  algorithm the pitch test validates) and hand the result back as a buffer the
+ *  voice plays through its amp envelope. Deterministic, always stable, in tune,
+ *  and identical on live and offline contexts. The buffer length is the string's
+ *  natural decay time (to ~-60 dB) capped at 3 s — holding a key longer than the
+ *  string rings just goes quiet, like a real plucked string. */
+function renderStringBuffer(
+  ctx: BaseAudioContext,
+  f: number,
+  damping: number,
+  decay: number,
+): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const fb = clamp(decay, 0.8, 0.9995);
+  const delaySamples = Math.max(2, sr / f - KS_DELAY_SAMPLES_OFFSET);
+  // Time for the fb^(cycles) envelope to reach ~-60 dB, capped.
+  const dur = clamp(Math.log(0.001) / (f * Math.log(fb)), 0.3, 3);
+  const N = Math.ceil(dur * sr);
+  const buf = ctx.createBuffer(1, N, sr);
+  const out = buf.getChannelData(0);
+  const lineLen = Math.ceil(delaySamples) + 4;
+  const line = new Float32Array(lineLen);
+  let widx = 0;
+  const cutoff = clamp(damping * 7000 + f * 3, 400, 16000);
+  const a = Math.exp((-2 * Math.PI * cutoff) / sr); // one-pole lowpass coeff
+  let lp = 0;
+  const burst = Math.floor(0.006 * sr); // 6 ms noise pluck
+  let peak = 0;
+  for (let n = 0; n < N; n++) {
+    const readPos = widx - delaySamples;
+    const i0 = ((Math.floor(readPos) % lineLen) + lineLen) % lineLen;
+    const i1 = (i0 + 1) % lineLen;
+    const frac = readPos - Math.floor(readPos);
+    const delayed = line[i0]! * (1 - frac) + line[i1]! * frac;
+    lp = (1 - a) * delayed + a * lp;
+    const exc = n < burst ? Math.random() * 2 - 1 : 0;
+    line[widx] = exc + fb * lp;
+    out[n] = delayed;
+    const abs = Math.abs(delayed);
+    if (abs > peak) peak = abs;
+    widx = (widx + 1) % lineLen;
+  }
+  // Normalize so velocity/gain control loudness predictably.
+  if (peak > 1e-6) {
+    const g = 0.7 / peak;
+    for (let i = 0; i < N; i++) out[i]! *= g;
+  }
+  return buf;
+}
+
+/** Build and start one note's node graph. The SOURCE stage depends on the
+ *  engine (subtractive oscs, Karplus-Strong string, or FM), feeding a common
+ *  amp-ADSR → dest tail. Works on both AudioContext (live) and
+ *  OfflineAudioContext (recorded-take render). */
 export function startVoice(
   ctx: BaseAudioContext,
   dest: AudioNode,
@@ -131,30 +219,24 @@ export function startVoice(
   when: number,
 ): VoiceHandle {
   const f = midiToFreq(midi);
-
-  const filter = ctx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.Q.value = clamp(p.filterQ, 0.0001, 20);
-  const baseCut = clamp(p.filterCutoff + p.keyTrack * f * 2, 40, 18000);
-  const peakCut = clamp(baseCut + p.filterEnv, 40, 18000);
-  filter.frequency.setValueAtTime(peakCut, when);
-  filter.frequency.setTargetAtTime(baseCut, when, Math.max(0.02, p.decay / 3));
+  const engine = p.engine ?? 'subtractive';
+  const vel = clamp(velocity, 0, 1);
 
   const amp = ctx.createGain();
-  filter.connect(amp);
   amp.connect(dest);
-
   // Velocity curve — even a soft hit stays audible (0.25 floor).
-  const peak = p.gain * (0.25 + 0.75 * clamp(velocity, 0, 1));
+  const peak = p.gain * (0.25 + 0.75 * vel);
   const atk = Math.max(0.002, p.attack);
   amp.gain.setValueAtTime(0, when);
   amp.gain.linearRampToValueAtTime(peak, when + atk);
   amp.gain.setTargetAtTime(peak * clamp(p.sustain, 0, 1), when + atk, Math.max(0.01, p.decay / 3));
 
   const sources: (OscillatorNode | AudioBufferSourceNode)[] = [];
+  const nodes: AudioNode[] = [amp];
 
+  // Optional vibrato LFO (drives osc/carrier detune in subtractive + FM).
   let lfoGain: GainNode | null = null;
-  if (p.vibratoDepth > 0 && p.vibratoRate > 0) {
+  if (p.vibratoDepth > 0 && p.vibratoRate > 0 && engine !== 'string') {
     const lfo = ctx.createOscillator();
     lfo.frequency.value = p.vibratoRate;
     lfoGain = ctx.createGain();
@@ -162,36 +244,79 @@ export function startVoice(
     lfo.connect(lfoGain);
     lfo.start(when);
     sources.push(lfo);
+    nodes.push(lfoGain);
   }
 
-  for (const o of p.oscs) {
-    if (o.level <= 0) continue;
-    const osc = ctx.createOscillator();
-    osc.type = o.type;
-    osc.frequency.value = f * Math.pow(2, o.octave);
-    osc.detune.value = o.detune;
-    if (lfoGain) lfoGain.connect(osc.detune);
-    const g = ctx.createGain();
-    g.gain.value = o.level;
-    osc.connect(g);
-    g.connect(filter);
-    osc.start(when);
-    sources.push(osc);
-  }
-
-  if (p.noise > 0) {
+  if (engine === 'string') {
+    // ── Karplus-Strong plucked/struck string (buffer-rendered) ─────────────
     const src = ctx.createBufferSource();
-    src.buffer = getNoiseBuffer(ctx);
-    src.loop = true;
-    const ng = ctx.createGain();
-    ng.gain.setValueAtTime(p.noise, when);
-    // Short decay = hammer/pluck click; >= 5s ≈ sustained (breath) — the amp
-    // ADSR still shapes it either way.
-    if (p.noiseDecay < 5) ng.gain.setTargetAtTime(0, when, Math.max(0.005, p.noiseDecay));
-    src.connect(ng);
-    ng.connect(filter);
+    src.buffer = renderStringBuffer(ctx, f, p.stringDamping ?? 0.5, p.stringDecay ?? 0.985);
+    src.connect(amp);
     src.start(when);
     sources.push(src);
+  } else if (engine === 'fm') {
+    // ── 2-operator FM ──────────────────────────────────────────────────────
+    const carrier = ctx.createOscillator();
+    carrier.type = 'sine';
+    carrier.frequency.value = f;
+    if (lfoGain) lfoGain.connect(carrier.detune);
+    const mod = ctx.createOscillator();
+    mod.type = 'sine';
+    const ratio = p.fmRatio ?? 1;
+    mod.frequency.value = f * ratio;
+    const modGain = ctx.createGain();
+    // Index → peak deviation in Hz; harder hits are brighter.
+    const idx = (p.fmIndex ?? 2) * (0.4 + 0.6 * vel);
+    const depth = idx * f * ratio;
+    modGain.gain.setValueAtTime(depth, when);
+    const fmDecay = p.fmDecay ?? 0;
+    if (fmDecay > 0) modGain.gain.setTargetAtTime(depth * 0.04, when, fmDecay);
+    mod.connect(modGain);
+    modGain.connect(carrier.frequency);
+    carrier.connect(amp);
+    mod.start(when);
+    carrier.start(when);
+    sources.push(mod, carrier);
+    nodes.push(modGain);
+  } else {
+    // ── Subtractive (oscillators → lowpass filter) ─────────────────────────
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = clamp(p.filterQ, 0.0001, 20);
+    const baseCut = clamp(p.filterCutoff + p.keyTrack * f * 2, 40, 18000);
+    const peakCut = clamp(baseCut + p.filterEnv, 40, 18000);
+    filter.frequency.setValueAtTime(peakCut, when);
+    filter.frequency.setTargetAtTime(baseCut, when, Math.max(0.02, p.decay / 3));
+    filter.connect(amp);
+    nodes.push(filter);
+
+    for (const o of p.oscs) {
+      if (o.level <= 0) continue;
+      const osc = ctx.createOscillator();
+      osc.type = o.type;
+      osc.frequency.value = f * Math.pow(2, o.octave);
+      osc.detune.value = o.detune;
+      if (lfoGain) lfoGain.connect(osc.detune);
+      const g = ctx.createGain();
+      g.gain.value = o.level;
+      osc.connect(g);
+      g.connect(filter);
+      osc.start(when);
+      sources.push(osc);
+    }
+    if (p.noise > 0) {
+      const src = ctx.createBufferSource();
+      src.buffer = getNoiseBuffer(ctx);
+      src.loop = true;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(p.noise, when);
+      if (p.noiseDecay < 5) ng.gain.setTargetAtTime(0, when, Math.max(0.005, p.noiseDecay));
+      src.connect(ng);
+      ng.connect(filter);
+      src.start(when);
+      sources.push(src);
+      nodes.push(ng);
+    }
   }
 
   let stopped = false;
@@ -200,8 +325,8 @@ export function startVoice(
       if (stopped) return;
       stopped = true;
       // Never start the release before the attack ramp completes — a
-      // setTarget(0) scheduled BEFORE a pending linearRamp would leave the
-      // ramp to win and the note stuck at full level.
+      // setTarget(0) scheduled BEFORE the pending linearRamp would let the
+      // ramp win and leave the note stuck at full level.
       const rt = Math.max(t, when + atk + 0.01);
       const rel = Math.max(0.02, p.release);
       amp.gain.setTargetAtTime(0, rt, rel / 4);
@@ -212,7 +337,7 @@ export function startVoice(
       // Tear the sub-graph down once the last source ends (live contexts only
       // — for offline renders the context is discarded wholesale).
       const last = sources[sources.length - 1];
-      if (last) last.onended = () => { try { amp.disconnect(); filter.disconnect(); } catch { /* detached */ } };
+      if (last) last.onended = () => { for (const n of nodes) { try { n.disconnect(); } catch { /* detached */ } } };
     },
   };
 }
@@ -497,6 +622,109 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     attack: 0.08, decay: 0.2, sustain: 0.85, release: 0.25,
     filterCutoff: 2600, filterQ: 0.7, filterEnv: 400, keyTrack: 0.6,
     vibratoRate: 5.2, vibratoDepth: 10, gain: 0.75,
+  },
+
+  // ── Physical-model strings (Karplus-Strong) ────────────────────────────────
+  // These are the "real instrument" plucked/struck strings. `oscs`/filter
+  // fields are ignored by the string engine but kept (defaulted) so the type
+  // and the customize panel stay uniform.
+  {
+    id: 'inst-acoustic-guitar', name: 'Acoustic Guitar', builtIn: true,
+    engine: 'string', stringDamping: 0.42, stringDecay: 0.992,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 0.9,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1.1,
+  },
+  {
+    id: 'inst-electric-guitar', name: 'Electric Guitar', builtIn: true,
+    engine: 'string', stringDamping: 0.62, stringDecay: 0.996,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 1.4,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1.05,
+  },
+  {
+    id: 'inst-nylon-guitar', name: 'Nylon Guitar', builtIn: true,
+    engine: 'string', stringDamping: 0.3, stringDecay: 0.988,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 0.7,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1.1,
+  },
+  {
+    id: 'inst-bass-guitar', name: 'Bass Guitar', builtIn: true,
+    engine: 'string', stringDamping: 0.28, stringDecay: 0.994,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 0.6,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1.2,
+  },
+  {
+    id: 'inst-harp', name: 'Harp', builtIn: true,
+    engine: 'string', stringDamping: 0.55, stringDecay: 0.997,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 2.2,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  },
+  {
+    id: 'inst-banjo', name: 'Banjo', builtIn: true,
+    engine: 'string', stringDamping: 0.8, stringDecay: 0.982,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.001, decay: 0.3, sustain: 1, release: 0.5,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  },
+  {
+    id: 'inst-pizzicato', name: 'Pizzicato', builtIn: true,
+    engine: 'string', stringDamping: 0.45, stringDecay: 0.965,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 0.25,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1.1,
+  },
+
+  // ── FM operators (realistic e-piano / bells / clav) ────────────────────────
+  {
+    id: 'inst-rhodes', name: 'Rhodes E-Piano', builtIn: true,
+    engine: 'fm', fmRatio: 1, fmIndex: 1.4, fmDecay: 0.35,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.003, decay: 1.6, sustain: 0.35, release: 0.4,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  },
+  {
+    id: 'inst-fm-piano', name: 'FM Piano', builtIn: true,
+    engine: 'fm', fmRatio: 2, fmIndex: 1.1, fmDecay: 0.5,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 2, sustain: 0, release: 0.3,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  },
+  {
+    id: 'inst-tubular-bells', name: 'Tubular Bells', builtIn: true,
+    engine: 'fm', fmRatio: 4, fmIndex: 2, fmDecay: 2.2,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 3, sustain: 0, release: 1.8,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
+  },
+  {
+    id: 'inst-clav', name: 'Clavinet', builtIn: true,
+    engine: 'fm', fmRatio: 3, fmIndex: 2.2, fmDecay: 0.12,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.4, sustain: 0, release: 0.15,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  },
+  {
+    id: 'inst-steel-drum', name: 'Steel Drum', builtIn: true,
+    engine: 'fm', fmRatio: 1, fmIndex: 3, fmDecay: 0.5,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.003, decay: 0.8, sustain: 0, release: 0.4,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
   },
 ];
 

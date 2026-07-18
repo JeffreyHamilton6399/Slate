@@ -545,7 +545,24 @@ export function InstrumentPanel() {
 
       {showEdit && (
         <div className="flex flex-col gap-1.5 rounded-md border border-border bg-bg-3 p-2">
-          {[0, 1].map((idx) => {
+          {/* Engine selector — swaps the synthesis model (and which knobs show). */}
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-mono uppercase text-text-dim">Engine</span>
+            {(['subtractive', 'string', 'fm'] as const).map((eng) => (
+              <button
+                key={eng}
+                type="button"
+                onClick={() => setP('engine', eng)}
+                title={eng === 'string' ? 'Plucked string (guitar/harp)' : eng === 'fm' ? 'FM (e-piano/bells)' : 'Subtractive synth'}
+                className={`rounded-sm border px-1.5 py-0.5 text-[9px] capitalize ${(params.engine ?? 'subtractive') === eng ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-mid hover:bg-bg-4'}`}
+              >
+                {eng === 'subtractive' ? 'Synth' : eng === 'string' ? 'String' : 'FM'}
+              </button>
+            ))}
+          </div>
+
+          {/* Oscillators — subtractive only. */}
+          {(params.engine ?? 'subtractive') === 'subtractive' && [0, 1].map((idx) => {
             const o = params.oscs[idx];
             return (
               <div key={idx} className="flex flex-col gap-1">
@@ -576,19 +593,43 @@ export function InstrumentPanel() {
             );
           })}
 
+          {/* String (Karplus-Strong) knobs. */}
+          {(params.engine ?? 'subtractive') === 'string' && (
+            <>
+              <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">String</span>
+              <Param label="Brightness" value={params.stringDamping ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => setP('stringDamping', v)} />
+              <Param label="Sustain" value={params.stringDecay ?? 0.985} min={0.9} max={0.999} step={0.001} fmt={(v) => v.toFixed(3)} onChange={(v) => setP('stringDecay', v)} />
+            </>
+          )}
+
+          {/* FM knobs. */}
+          {(params.engine ?? 'subtractive') === 'fm' && (
+            <>
+              <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">FM</span>
+              <Param label="Ratio" value={params.fmRatio ?? 1} min={0.5} max={8} step={0.5} fmt={(v) => `${v}×`} onChange={(v) => setP('fmRatio', v)} />
+              <Param label="Index" value={params.fmIndex ?? 2} min={0} max={8} step={0.1} fmt={(v) => v.toFixed(1)} onChange={(v) => setP('fmIndex', v)} />
+              <Param label="Bright decay" value={params.fmDecay ?? 0} min={0} max={3} step={0.05} fmt={(v) => `${v.toFixed(2)}s`} onChange={(v) => setP('fmDecay', v)} />
+            </>
+          )}
+
           <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">Envelope</span>
           <Param label="Attack" value={params.attack} min={0.002} max={2} step={0.002} fmt={(v) => `${(v * 1000).toFixed(0)}ms`} onChange={(v) => setP('attack', v)} />
           <Param label="Decay" value={params.decay} min={0.02} max={3} step={0.01} fmt={(v) => `${v.toFixed(2)}s`} onChange={(v) => setP('decay', v)} />
           <Param label="Sustain" value={params.sustain} min={0} max={1} step={0.01} onChange={(v) => setP('sustain', v)} />
           <Param label="Release" value={params.release} min={0.02} max={3} step={0.01} fmt={(v) => `${v.toFixed(2)}s`} onChange={(v) => setP('release', v)} />
 
-          <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">Tone</span>
-          <Param label="Cutoff" value={params.filterCutoff} min={100} max={10000} step={10} fmt={(v) => `${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}Hz`} onChange={(v) => setP('filterCutoff', v)} />
-          <Param label="Reso" value={params.filterQ} min={0.1} max={10} step={0.1} fmt={(v) => v.toFixed(1)} onChange={(v) => setP('filterQ', v)} />
-          <Param label="Env amt" value={params.filterEnv} min={0} max={6000} step={50} fmt={(v) => `${v}Hz`} onChange={(v) => setP('filterEnv', v)} />
-          <Param label="Noise" value={params.noise} min={0} max={0.5} step={0.01} onChange={(v) => setP('noise', v)} />
-          <Param label="Vib rate" value={params.vibratoRate} min={0} max={10} step={0.1} fmt={(v) => `${v.toFixed(1)}Hz`} onChange={(v) => setP('vibratoRate', v)} />
-          <Param label="Vib depth" value={params.vibratoDepth} min={0} max={50} step={1} fmt={(v) => `${v}¢`} onChange={(v) => setP('vibratoDepth', v)} />
+          {/* Tone (filter/noise/vibrato) — subtractive only. */}
+          {(params.engine ?? 'subtractive') === 'subtractive' && (
+            <>
+              <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">Tone</span>
+              <Param label="Cutoff" value={params.filterCutoff} min={100} max={10000} step={10} fmt={(v) => `${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}Hz`} onChange={(v) => setP('filterCutoff', v)} />
+              <Param label="Reso" value={params.filterQ} min={0.1} max={10} step={0.1} fmt={(v) => v.toFixed(1)} onChange={(v) => setP('filterQ', v)} />
+              <Param label="Env amt" value={params.filterEnv} min={0} max={6000} step={50} fmt={(v) => `${v}Hz`} onChange={(v) => setP('filterEnv', v)} />
+              <Param label="Noise" value={params.noise} min={0} max={0.5} step={0.01} onChange={(v) => setP('noise', v)} />
+              <Param label="Vib rate" value={params.vibratoRate} min={0} max={10} step={0.1} fmt={(v) => `${v.toFixed(1)}Hz`} onChange={(v) => setP('vibratoRate', v)} />
+              <Param label="Vib depth" value={params.vibratoDepth} min={0} max={50} step={1} fmt={(v) => `${v}¢`} onChange={(v) => setP('vibratoDepth', v)} />
+            </>
+          )}
           <Param label="Volume" value={params.gain} min={0.1} max={1.5} step={0.01} onChange={(v) => setP('gain', v)} />
 
           {/* Save as custom */}

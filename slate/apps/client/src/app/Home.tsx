@@ -32,9 +32,11 @@ import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
-import { ensureMyProfile } from '../account/friends';
+import { ensureMyProfile, type Friend } from '../account/friends';
 import { useFriends } from '../account/useFriends';
 import { useBoardInvites } from '../account/useBoardInvites';
+import { sendBoardInvite } from '../account/social';
+import { toast } from '../ui/Toast';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -317,6 +319,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const { friends, incomingCount } = useFriends(userId);
   const { invites, accept: acceptInvite, decline: declineInvite } = useBoardInvites(userId);
   const notifCount = incomingCount + invites.length;
+  /** Friend we're picking a board to invite to (null = closed). */
+  const [inviteFriend, setInviteFriend] = useState<Friend | null>(null);
 
   /** Refresh both the recents widget + the All Projects dialog list. */
   const refreshSaves = () => {
@@ -561,53 +565,15 @@ function Home({ email, userId }: { email: string; userId: string }) {
           </section>
         )}
 
-        {/* Friends — with online status; manage in Profile → Friends. */}
-        {friends.length > 0 && (
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-text">
-                Friends
-                <span className="ml-2 text-xs font-normal text-text-dim">
-                  {friends.filter((f) => f.online).length} online
-                </span>
-              </h2>
-              <button
-                type="button"
-                onClick={() => { setProfileTab('friends'); setProfileOpen(true); }}
-                className="text-xs text-accent hover:underline"
-              >
-                Manage
-              </button>
-            </div>
-            <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {[...friends]
-                .sort((a, b) => Number(b.online) - Number(a.online))
-                .map((f) => (
-                  <li key={f.userId} className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-3 py-2">
-                    <span className="relative shrink-0">
-                      <Avatar url={f.avatarUrl} name={f.displayName} size={30} />
-                      <span
-                        className={cn(
-                          'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-bg-2',
-                          f.online ? 'bg-green' : 'bg-text-dim/50',
-                        )}
-                        title={f.online ? 'Online' : 'Offline'}
-                      />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-text">{f.displayName || 'Anonymous'}</p>
-                      <p className="text-[10px] text-text-dim">{f.online ? 'Online' : 'Offline'}</p>
-                    </div>
-                  </li>
-                ))}
-            </ul>
-          </section>
-        )}
-
         {/* Live public boards */}
-        {liveRooms.length > 0 && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold text-text">Live public boards</h2>
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-text">Live public boards</h2>
+          {liveRooms.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-text-dim">
+              No public boards are live right now. Create one (set it Public) and share the link, or
+              check back later.
+            </p>
+          ) : (
             <ul className="grid max-h-[50vh] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
               {liveRooms.map((r) => (
                 <li key={r.name}>
@@ -635,6 +601,53 @@ function Home({ email, userId }: { email: string; userId: string }) {
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        {/* Friends — compact roster with online dots. Click a friend to invite
+            them to one of your boards; Manage opens the full Friends screen. */}
+        {friends.length > 0 && (
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-text">
+                Friends
+                <span className="ml-2 text-xs font-normal text-text-dim">
+                  {friends.filter((f) => f.online).length}/{friends.length} online
+                </span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => { setProfileTab('friends'); setProfileOpen(true); }}
+                className="text-xs text-accent hover:underline"
+              >
+                Manage
+              </button>
+            </div>
+            <ul className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+              {[...friends]
+                .sort((a, b) => Number(b.online) - Number(a.online))
+                .map((f) => (
+                  <li key={f.userId}>
+                    <button
+                      type="button"
+                      onClick={() => { setInviteFriend(f); }}
+                      title={`Invite ${f.displayName} to a board`}
+                      className="flex items-center gap-1.5 rounded-full border border-border bg-bg-2 py-1 pl-1 pr-2.5 text-xs transition-colors hover:border-accent/40"
+                    >
+                      <span className="relative shrink-0">
+                        <Avatar url={f.avatarUrl} name={f.displayName} size={22} />
+                        <span
+                          className={cn(
+                            'absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-bg-2',
+                            f.online ? 'bg-green' : 'bg-text-dim/50',
+                          )}
+                        />
+                      </span>
+                      <span className="max-w-[8rem] truncate text-text">{f.displayName || 'Anonymous'}</span>
+                    </button>
+                  </li>
+                ))}
+            </ul>
           </section>
         )}
 
@@ -657,6 +670,12 @@ function Home({ email, userId }: { email: string; userId: string }) {
         initialTab={profileTab}
       />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <InviteToBoardDialog
+        friend={inviteFriend}
+        userId={userId}
+        projects={allProjects}
+        onClose={() => setInviteFriend(null)}
+      />
       <AllProjectsDialog
         open={allProjectsOpen}
         onOpenChange={setAllProjectsOpen}
@@ -669,6 +688,87 @@ function Home({ email, userId }: { email: string; userId: string }) {
         }}
       />
     </div>
+  );
+}
+
+/** Pick a board to invite a friend to — one of your saved projects, or a new
+ *  board name you type. Sends a board_invite the friend sees on their Home. */
+function InviteToBoardDialog({ friend, userId, projects, onClose }: {
+  friend: Friend | null;
+  userId: string;
+  projects: RecentProject[];
+  onClose: () => void;
+}) {
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const invite = async (boardName: string, mode: '2d' | '3d' | 'audio') => {
+    if (!friend || !boardName.trim()) return;
+    setBusy(true);
+    const r = await sendBoardInvite(userId, friend.userId, sanitizeBoardName(boardName), mode);
+    setBusy(false);
+    if (r.ok) {
+      toast({ title: 'Invite sent', description: `${friend.displayName || 'Friend'} → ${boardName}` });
+      onClose();
+    } else {
+      toast({ title: 'Could not invite', description: r.error, variant: 'error' });
+    }
+  };
+
+  return (
+    <Dialog
+      open={friend !== null}
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title={friend ? `Invite ${friend.displayName || 'friend'} to a board` : 'Invite'}
+      description="They'll get a notification to join."
+    >
+      <div className="flex flex-col gap-3">
+        {projects.length > 0 && (
+          <div>
+            <FieldLabel>Your boards</FieldLabel>
+            <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto pr-1">
+              {projects.map((p) => (
+                <li key={p.boardName}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void invite(p.boardName, p.mode)}
+                    className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-2 px-3 py-2 text-left text-sm transition-colors hover:border-accent/40 disabled:opacity-50"
+                  >
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
+                        p.mode === '3d' ? 'bg-accent/15 text-accent' : p.mode === 'audio' ? 'bg-warn/15 text-warn' : 'bg-green/15 text-green',
+                      )}
+                    >
+                      {p.mode}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-text">{p.boardName}</span>
+                    <span className="text-[11px] text-accent">Invite</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div>
+          <FieldLabel>Or a new board</FieldLabel>
+          <div className="flex gap-2">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Board name"
+              maxLength={80}
+              onKeyDown={(e) => { if (e.key === 'Enter') void invite(newName, '2d'); }}
+            />
+            <Button size="sm" disabled={busy || !newName.trim()} onClick={() => void invite(newName, '2d')}>
+              Send
+            </Button>
+          </div>
+          <p className="mt-1 text-[11px] text-text-dim">A new 2D board with this name; open it yourself to start.</p>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

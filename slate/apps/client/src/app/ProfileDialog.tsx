@@ -251,8 +251,6 @@ function SettingsTabView() {
   const setPaperFollowsTheme = useAppStore((s) => s.setPaperFollowsTheme);
   const accent = useAppStore((s) => s.accent);
   const setAccent = useAppStore((s) => s.setAccent);
-  const showTransformHud = useAppStore((s) => s.showTransformHud);
-  const setShowTransformHud = useAppStore((s) => s.setShowTransformHud);
   const showOnline = useAppStore((s) => s.showOnline);
   const setShowOnline = useAppStore((s) => s.setShowOnline);
   const voiceVolume = useAppStore((s) => s.voiceVolume);
@@ -357,30 +355,6 @@ function SettingsTabView() {
         <p className="mt-1 text-xs text-text-dim">
           How loud everyone sounds to you. Per-person sliders live in the people widget while
           you&apos;re in voice.
-        </p>
-      </div>
-
-      {/* 3D viewport */}
-      <div>
-        <FieldLabel>3D viewport</FieldLabel>
-        <label className="flex items-start gap-2 text-xs text-text-mid">
-          <input
-            type="checkbox"
-            checked={showTransformHud}
-            onChange={(e) => setShowTransformHud(e.target.checked)}
-            className="mt-0.5 accent-accent"
-          />
-          <span>
-            Show transform hints
-            <span className="block text-text-dim">
-              The on-screen prompts at the bottom of the 3D viewport. Turn off once you know the
-              tools.
-            </span>
-          </span>
-        </label>
-        <p className="mt-2 text-xs text-text-dim">
-          Units, CAD snapping, and the board background are per-board — set them in File → Board
-          settings.
         </p>
       </div>
 

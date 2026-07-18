@@ -1,14 +1,15 @@
 /**
- * Pointer-locked camera drags for the 3D viewport.
+ * First-person fly navigation for the 3D viewport.
  *
- * MMB hold — first-person fly: mouse-look + WASD (Q/E down/up, Shift = fast,
- * wheel = speed), like Unity's flythrough / Blender's walk mode. Releasing
- * returns to orbit navigation with the target re-anchored ahead of the camera.
+ * MMB hold — mouse-look + WASD (Q/E down/up, Shift = fast, wheel = speed),
+ * like Unity's flythrough / Blender's walk mode. Releasing returns to orbit
+ * navigation with the target re-anchored ahead of the camera.
  *
- * RMB hold — pan. Handled here (not OrbitControls) so the cursor is
- * pointer-locked for the whole drag: an unlocked right-drag can wander onto
- * the tab strip / trigger browser mouse gestures, which for some setups
- * closes the tab mid-pan.
+ * RMB pan is intentionally NOT handled here — it's left to OrbitControls
+ * (mouseButtons.RIGHT = PAN). OrbitControls pans with the cursor VISIBLE and
+ * uses pointer capture, which is the standard, non-surprising behavior; the
+ * old pointer-locked RMB pan hid the cursor and jumped it back on release
+ * (users read that as "right-click drag is weird / broken").
  *
  * Mounted inside <Canvas>. Sets `flying` in the scene store so the keyboard
  * shortcut hook stands down while WASD is navigation, not tools.
@@ -35,7 +36,6 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
   const sizeRef = useRef(size);
   sizeRef.current = size;
   const flying = useRef(false);
-  const panning = useRef(false);
   const keys = useRef(new Set<string>());
   const shiftRef = useRef(false);
   const look = useRef({ yaw: 0, pitch: 0 });
@@ -54,8 +54,8 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
         update: () => void;
       } | null;
 
-    // Lock the cursor so drags can't wander onto browser chrome. Rejection
-    // (post-Esc cooldown) is fine — movementX/Y works unlocked too.
+    // Lock the cursor so the fly mouse-look can't wander onto browser chrome.
+    // Rejection (post-Esc cooldown) is fine — movementX/Y works unlocked too.
     const lockCursor = () => {
       try {
         const p = el.requestPointerLock?.();
@@ -68,22 +68,11 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
     };
 
     const start = (e: PointerEvent) => {
-      if (flying.current || panning.current) return;
+      if (flying.current) return;
       if (isModalActive()) return;
       if ((e.target as HTMLElement).tagName !== 'CANVAS') return;
 
-      if (e.button === 2) {
-        // RMB → pointer-locked pan (see file comment).
-        e.preventDefault();
-        useScene3DStore.getState().setViewingCamera(null);
-        const c = orbit();
-        if (c) c.enabled = false;
-        panning.current = true;
-        lockCursor();
-        return;
-      }
-
-      if (e.button !== 1 || e.shiftKey) return; // Shift+MMB = orbit-controls pan
+      if (e.button !== 1 || e.shiftKey) return; // MMB only; Shift+MMB = orbit pan
       e.preventDefault();
       const c = orbit();
       if (c) {
@@ -100,17 +89,6 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
       useScene3DStore.getState().setFlying(true);
       useScene3DStore.getState().setViewingCamera(null);
       lockCursor();
-    };
-
-    const endPan = () => {
-      if (!panning.current) return;
-      panning.current = false;
-      const c = orbit();
-      if (c) {
-        c.enabled = true;
-        c.update();
-      }
-      if (document.pointerLockElement === el) document.exitPointerLock?.();
     };
 
     const end = () => {
@@ -131,40 +109,15 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
 
     const onPointerUp = (e: PointerEvent) => {
       if (e.button === 1) end();
-      if (e.button === 2) endPan();
     };
-    // Belt & braces: gesture/mouse software can swallow pointerup, and RMB
-    // release also fires mouseup + contextmenu — any of them ends the pan so
-    // the cursor can never stay locked after letting go.
+    // Belt & braces: gesture/mouse software can swallow pointerup.
     const onMouseUp = (e: MouseEvent) => {
       if (e.button === 1) end();
-      if (e.button === 2) endPan();
     };
-    const onContextMenu = () => endPan();
     const onWindowBlur = () => {
       end();
-      endPan();
     };
     const onPointerMove = (e: PointerEvent) => {
-      if (panning.current) {
-        // Screen-plane pan: move camera + orbit target together, scaled so
-        // the point under the cursor tracks the mouse (like OrbitControls).
-        const c = orbit();
-        if (!c) return;
-        const cam = camera as THREE.PerspectiveCamera;
-        const dist = Math.max(camera.position.distanceTo(c.target), 0.5);
-        const perPx =
-          (2 * dist * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) /
-          Math.max(sizeRef.current.height, 1);
-        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-        const delta = right
-          .multiplyScalar(-e.movementX * perPx)
-          .addScaledVector(up, e.movementY * perPx);
-        camera.position.add(delta);
-        c.target.add(delta);
-        return;
-      }
       if (!flying.current) return;
       look.current.yaw -= e.movementX * LOOK_SPEED;
       look.current.pitch = THREE.MathUtils.clamp(
@@ -213,22 +166,20 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
         // locked with no drag running. The G/R/S modal owns the lock too —
         // exiting on its behalf would instantly cancel the modal (that was
         // the "every object hotkey is dead" bug).
-        if (!flying.current && !panning.current && !isModalActive()) {
+        if (!flying.current && !isModalActive()) {
           document.exitPointerLock?.();
         }
         return;
       }
       if (document.pointerLockElement) return;
-      // Browser dropped the lock (Esc, Alt-Tab): leave fly/pan too, so the
+      // Browser dropped the lock (Esc, Alt-Tab): leave fly too, so the
       // camera never keeps chasing an unlocked cursor.
       if (flying.current) end();
-      if (panning.current) endPan();
     };
 
     el.addEventListener('pointerdown', start, { capture: true });
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('mouseup', onMouseUp);
-    window.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('blur', onWindowBlur);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('keydown', onKeyDown, { capture: true });
@@ -239,7 +190,6 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
       el.removeEventListener('pointerdown', start, { capture: true });
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('keydown', onKeyDown, { capture: true });
@@ -247,7 +197,6 @@ export function FlyMode({ containerRef, isModalActive }: FlyModeProps) {
       el.removeEventListener('wheel', onWheel);
       document.removeEventListener('pointerlockchange', onLockChange);
       end();
-      endPan();
     };
   }, [camera, controls, containerRef, isModalActive]);
 

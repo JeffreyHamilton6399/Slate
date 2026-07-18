@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, FileText, User, UserCircle } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, User, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -23,7 +23,7 @@ import { cn } from '../utils/cn';
 import { sanitizeDisplayName } from '@slate/sync-protocol';
 import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
-import { ProfileDialog } from './ProfileDialog';
+import { ProfileDialog, type ProfileTab } from './ProfileDialog';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
@@ -304,9 +304,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [createMode, setCreateMode] = useState<'2d' | '3d' | 'audio'>('2d');
   const [profileOpen, setProfileOpen] = useState(false);
-  const [profileFocusFriends, setProfileFocusFriends] = useState(false);
+  const [profileTab, setProfileTab] = useState<ProfileTab>('profile');
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [termsOpen, setTermsOpen] = useState(false);
   const [cloudNote, setCloudNote] = useState('Syncing projects…');
 
   /** Refresh both the recents widget + the All Projects dialog list. */
@@ -393,9 +392,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
           <div className="flex-1" />
           <ProfileMenu
             email={email}
-            onOpenProfile={() => { setProfileFocusFriends(false); setProfileOpen(true); }}
-            onOpenFriends={() => { setProfileFocusFriends(true); setProfileOpen(true); }}
-            onOpenTerms={() => setTermsOpen(true)}
+            onOpenProfile={() => { setProfileTab('profile'); setProfileOpen(true); }}
           />
         </header>
 
@@ -544,30 +541,25 @@ function Home({ email, userId }: { email: string; userId: string }) {
           </section>
         )}
 
-        {/* Footer — version, author, About link. Terms & Privacy moved to the
-            profile dropdown so the home screen stays clean. */}
+        {/* Footer — the version/author line IS the About link (no separate
+            About button). About holds feedback, donate, and Terms & Privacy. */}
         <footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">
-          <p>
+          <button
+            type="button"
+            onClick={() => setAboutOpen(true)}
+            className="underline-offset-2 hover:text-accent hover:underline"
+            title="About Slate"
+          >
             V1 · Jeffrey Hamilton
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setAboutOpen(true)}
-              className="text-text-dim underline-offset-2 hover:text-accent hover:underline"
-            >
-              About
-            </button>
-          </div>
+          </button>
         </footer>
       </div>
       <ProfileDialog
         open={profileOpen}
         onOpenChange={setProfileOpen}
-        focusFriends={profileFocusFriends}
+        initialTab={profileTab}
       />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
-      <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
       <AllProjectsDialog
         open={allProjectsOpen}
         onOpenChange={setAllProjectsOpen}
@@ -722,22 +714,18 @@ function timeAgo(t: number): string {
 }
 
 /**
- * Circular avatar button in the top-right of the Home header. Opens a dropdown
- * with quick links (Profile, Friends, Donate, Terms, Sign out). Settings +
- * About are no longer in the dropdown — Settings is merged into Profile, and
- * About moved to the page footer. Closes on outside-click / item-select / Esc
- * — handled by Radix.
+ * Circular avatar button in the top-right of the Home header. The dropdown is
+ * intentionally minimal — Profile opens the tabbed Profile screen (which holds
+ * Friends, Settings, and Account), so those are no longer separate menu items.
+ * Donate is external and Sign out is a quick action. Closes on outside-click /
+ * item-select / Esc — handled by Radix.
  */
 function ProfileMenu({
   email,
   onOpenProfile,
-  onOpenFriends,
-  onOpenTerms,
 }: {
   email: string;
   onOpenProfile: () => void;
-  onOpenFriends: () => void;
-  onOpenTerms: () => void;
 }) {
   const initial = email ? email[0]?.toUpperCase() ?? '?' : null;
   return (
@@ -768,18 +756,12 @@ function ProfileMenu({
         <DropdownMenuItem onSelect={onOpenProfile}>
           <UserCircle size={14} /> Profile
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onOpenFriends}>
-          <Users size={14} /> Friends
-        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
         >
           <Coffee size={14} /> Donate
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onOpenTerms}>
-          <FileText size={14} /> Terms &amp; Privacy
-        </DropdownMenuItem>
         <DropdownMenuItem
           destructive
           onSelect={() => void supabase?.auth.signOut()}

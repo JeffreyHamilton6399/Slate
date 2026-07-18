@@ -1,30 +1,27 @@
 /**
- * Profile dialog — replaces SettingsDialog. Combines the existing settings
- * sections (display name, appearance, voice, 3D viewport, layout, account)
- * with a new Friends section so the user can manage everything about their
- * identity + social graph from one place.
+ * Profile screen — a real full-size screen (not a scrolling column) with a
+ * left tab rail: Profile · Friends · Settings. Everything account-shaped lives
+ * here, so the Home avatar dropdown no longer needs Friends / Settings / Terms
+ * entries — they're tabs in here.
  *
- * Sections (top to bottom):
- *   1. Profile header — avatar + email + display name
- *   2. Display name
- *   3. Friends (NEW) — add by email, pending requests, accepted friends
- *   4. Appearance — theme + accent + paper follows theme
- *   5. Voice — output volume slider
- *   6. 3D viewport — transform HUD hints
- *   7. Layout — reset dock
- *   8. Account — Supabase backup / restore / sign out
+ *   Profile  — avatar + email, display name, cloud backup / restore / sign out
+ *   Friends  — add by email, pending requests, accepted friends
+ *   Settings — appearance (theme/accent), voice, 3D viewport, layout reset
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Check,
   CloudDownload,
   CloudUpload,
   LogOut,
   Moon,
+  Settings as SettingsIcon,
   Sun,
+  User as UserIcon,
   UserMinus,
   UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 import { Dialog } from '../ui/Dialog';
@@ -40,16 +37,142 @@ import { useDockStore } from '../workspace/dockStore';
 import { useVoiceOptional } from '../voice/useVoiceOptional';
 import { toast } from '../ui/Toast';
 
+export type ProfileTab = 'profile' | 'friends' | 'settings';
+
 interface ProfileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** When true, scroll the Friends section into view on open. */
-  focusFriends?: boolean;
+  /** Which tab to show when opened. */
+  initialTab?: ProfileTab;
 }
 
-export function ProfileDialog({ open, onOpenChange, focusFriends }: ProfileDialogProps) {
+const TABS: { id: ProfileTab; label: string; Icon: typeof UserIcon }[] = [
+  { id: 'profile', label: 'Profile', Icon: UserIcon },
+  { id: 'friends', label: 'Friends', Icon: Users },
+  { id: 'settings', label: 'Settings', Icon: SettingsIcon },
+];
+
+export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: ProfileDialogProps) {
+  const displayName = useAppStore((s) => s.displayName);
+  const [tab, setTab] = useState<ProfileTab>(initialTab);
+  const { user } = useAccount();
+  const email = user?.email ?? '';
+  const initial = email ? email[0]?.toUpperCase() ?? '?' : '?';
+
+  // Jump to the requested tab each time the screen opens.
+  useEffect(() => {
+    if (open) setTab(initialTab);
+  }, [open, initialTab]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      className="max-w-4xl w-[94vw] p-0"
+    >
+      <div className="flex h-[80vh] max-h-[680px] min-h-[420px] flex-col sm:flex-row">
+        {/* Tab rail */}
+        <nav className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-52 sm:flex-col sm:border-b-0 sm:border-r">
+          <div className="mb-2 hidden items-center gap-2 px-1.5 sm:flex">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-sm font-semibold text-accent">
+              {initial}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
+              <p className="truncate text-[11px] text-text-dim" title={email}>{email || 'Not signed in'}</p>
+            </div>
+          </div>
+          {TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-current={tab === id}
+              className={
+                'flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ' +
+                (tab === id
+                  ? 'bg-accent/15 text-accent'
+                  : 'text-text-mid hover:bg-bg-3 hover:text-text')
+              }
+            >
+              <Icon size={15} />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Content */}
+        <div className="min-w-0 flex-1 overflow-y-auto p-6">
+          {tab === 'profile' && <ProfileTabView />}
+          {tab === 'friends' && (
+            <section>
+              <h3 className="mb-4 text-lg font-semibold text-text">Friends</h3>
+              <FriendsSection userId={user?.id} />
+            </section>
+          )}
+          {tab === 'settings' && <SettingsTabView />}
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Profile tab — identity + account (name, cloud backup, sign out). */
+function ProfileTabView() {
   const displayName = useAppStore((s) => s.displayName);
   const setDisplayName = useAppStore((s) => s.setDisplayName);
+  const { user } = useAccount();
+  const email = user?.email ?? '';
+  const userId = user?.id;
+  const [name, setName] = useState(displayName);
+  useEffect(() => setName(displayName), [displayName]);
+  const initial = email ? email[0]?.toUpperCase() ?? '?' : '?';
+
+  return (
+    <div className="flex flex-col gap-5">
+      <h3 className="text-lg font-semibold text-text">Profile</h3>
+      <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-2 p-3">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-xl font-semibold text-accent">
+          {initial}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
+          {email ? (
+            <p className="truncate text-xs text-text-dim" title={email}>{email}</p>
+          ) : (
+            <p className="text-xs text-text-dim">Not signed in</p>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <FieldLabel>Display name</FieldLabel>
+        <div className="flex gap-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Your name" />
+          <Button
+            size="sm"
+            onClick={() => {
+              setDisplayName(name);
+              if (userId) void upsertMyProfile(userId, name, email);
+              toast({ title: 'Display name updated' });
+            }}
+          >
+            Save
+          </Button>
+        </div>
+        <p className="mt-1 text-xs text-text-dim">How collaborators and friends see you.</p>
+      </div>
+
+      <div className="border-t border-border pt-4">
+        <FieldLabel>Account</FieldLabel>
+        <AccountSection />
+      </div>
+    </div>
+  );
+}
+
+/** Settings tab — appearance, voice, 3D viewport, layout. */
+function SettingsTabView() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
@@ -62,229 +185,143 @@ export function ProfileDialog({ open, onOpenChange, focusFriends }: ProfileDialo
   const storeSetVoiceVolume = useAppStore((s) => s.setVoiceVolume);
   const voice = useVoiceOptional();
   const setVoiceVolume = (v: number) => {
-    // Route through the live voice client when connected; store otherwise.
     if (voice) voice.setOutputVolume(v);
     else storeSetVoiceVolume(v);
   };
 
-  const { user } = useAccount();
-  const email = user?.email ?? '';
-  const userId = user?.id;
-  const [name, setName] = useState(displayName);
-  const friendsSectionRef = useRef<HTMLDivElement | null>(null);
-
-  // Sync local name input when the dialog opens / store name changes.
-  useEffect(() => {
-    if (open) setName(displayName);
-  }, [open, displayName]);
-
-  // When asked to focus the friends section (e.g. opened from "Friends" in
-  // the profile dropdown), scroll it into view shortly after open.
-  useEffect(() => {
-    if (!open || !focusFriends) return;
-    const t = setTimeout(() => {
-      friendsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-    return () => clearTimeout(t);
-  }, [open, focusFriends]);
-
-  const initial = email ? email[0]?.toUpperCase() ?? '?' : null;
-
   return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Profile"
-      description="Manage your identity, friends, and device preferences."
-      className="max-w-lg"
-    >
-      <div className="flex flex-col gap-4">
-        {/* Profile header */}
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-2 p-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-lg font-semibold text-accent">
-            {initial ?? '?'}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-text">
-              {displayName || 'Anonymous'}
-            </p>
-            {email ? (
-              <p className="truncate text-xs text-text-dim" title={email}>
-                {email}
-              </p>
-            ) : (
-              <p className="text-xs text-text-dim">Not signed in</p>
-            )}
-          </div>
-        </div>
+    <div className="flex flex-col gap-5">
+      <h3 className="text-lg font-semibold text-text">Settings</h3>
 
-        {/* Display name */}
-        <div>
-          <FieldLabel>Display name</FieldLabel>
-          <div className="flex gap-2">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={40}
-              placeholder="Your name"
-            />
-            <Button
-              size="sm"
-              onClick={() => {
-                setDisplayName(name);
-                // Mirror to the cloud profile so friends can see the new name.
-                if (userId) void upsertMyProfile(userId, name, email);
-                toast({ title: 'Display name updated' });
-              }}
+      {/* Appearance */}
+      <div>
+        <FieldLabel>Theme</FieldLabel>
+        <div className="flex w-max gap-1 rounded-sm bg-bg-3 p-0.5">
+          {(
+            [
+              ['dark', 'Dark', Moon],
+              ['light', 'Light', Sun],
+            ] as [Theme, string, typeof Moon][]
+          ).map(([value, label, Icon]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={theme === value}
+              onClick={() => setTheme(value)}
+              className={
+                'flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs ' +
+                (theme === value ? 'bg-accent/20 text-accent' : 'text-text-dim hover:text-text')
+              }
             >
-              Save
-            </Button>
-          </div>
+              <Icon size={12} />
+              {label}
+            </button>
+          ))}
         </div>
-
-        {/* Friends */}
-        <div ref={friendsSectionRef} className="border-t border-border pt-4">
-          <FriendsSection userId={userId} />
-        </div>
-
-        {/* Appearance */}
-        <div className="border-t border-border pt-4">
-          <FieldLabel>Theme</FieldLabel>
-          <div className="flex gap-1 rounded-sm bg-bg-3 p-0.5 w-max">
-            {(
-              [
-                ['dark', 'Dark', Moon],
-                ['light', 'Light', Sun],
-              ] as [Theme, string, typeof Moon][]
-            ).map(([value, label, Icon]) => (
+        <label className="mt-3 flex items-start gap-2 text-xs text-text-mid">
+          <input
+            type="checkbox"
+            checked={paperFollowsTheme}
+            onChange={(e) => setPaperFollowsTheme(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span>
+            Board canvas follows theme
+            <span className="block text-text-dim">
+              The 2D paper and 3D viewport render light or dark to match. Turn off to show the
+              board&apos;s shared background color instead.
+            </span>
+          </span>
+        </label>
+        <div className="mt-3">
+          <FieldLabel>Accent color</FieldLabel>
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={accent}
+              onChange={(e) => setAccent(e.target.value)}
+              aria-label="Accent color"
+              className="h-8 w-12 rounded-sm border border-border bg-transparent"
+            />
+            {['#7c6aff', '#38bdf8', '#22d3a5', '#fbbf24', '#f472b6', '#f87171'].map((c) => (
               <button
-                key={value}
+                key={c}
                 type="button"
-                aria-pressed={theme === value}
-                onClick={() => setTheme(value)}
+                aria-label={`Accent ${c}`}
+                onClick={() => setAccent(c)}
                 className={
-                  'flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs ' +
-                  (theme === value
-                    ? 'bg-accent/20 text-accent'
-                    : 'text-text-dim hover:text-text')
+                  'h-5 w-5 rounded-full border ' +
+                  (accent.toLowerCase() === c ? 'border-text' : 'border-text-dim/40')
                 }
-              >
-                <Icon size={12} />
-                {label}
-              </button>
+                style={{ backgroundColor: c }}
+              />
             ))}
           </div>
-          <label className="mt-3 flex items-start gap-2 text-xs text-text-mid">
-            <input
-              type="checkbox"
-              checked={paperFollowsTheme}
-              onChange={(e) => setPaperFollowsTheme(e.target.checked)}
-              className="mt-0.5 accent-accent"
-            />
-            <span>
-              Board canvas follows theme
-              <span className="block text-text-dim">
-                The 2D paper and 3D viewport render light or dark to match. Turn off to
-                show the board&apos;s shared background color set below.
-              </span>
-            </span>
-          </label>
-          <div className="mt-3">
-            <FieldLabel>Accent color</FieldLabel>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={accent}
-                onChange={(e) => setAccent(e.target.value)}
-                aria-label="Accent color"
-                className="h-8 w-12 rounded-sm border border-border bg-transparent"
-              />
-              {['#7c6aff', '#38bdf8', '#22d3a5', '#fbbf24', '#f472b6', '#f87171'].map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  aria-label={`Accent ${c}`}
-                  onClick={() => setAccent(c)}
-                  className={
-                    'h-5 w-5 rounded-full border ' +
-                    (accent.toLowerCase() === c ? 'border-text' : 'border-text-dim/40')
-                  }
-                  style={{ backgroundColor: c }}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Voice */}
-        <div className="border-t border-border pt-4">
-          <FieldLabel>Voice</FieldLabel>
-          <label className="flex items-center gap-2 text-xs text-text-mid">
-            <span className="w-24 shrink-0">Output volume</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={voiceVolume}
-              onChange={(e) => setVoiceVolume(Number(e.target.value))}
-              className="flex-1 accent-accent"
-              aria-label="Voice output volume"
-            />
-            <span className="w-8 text-right font-mono">{Math.round(voiceVolume * 100)}</span>
-          </label>
-          <p className="mt-1 text-xs text-text-dim">
-            How loud everyone sounds to you. Per-person sliders live in the people widget while
-            you&apos;re in voice.
-          </p>
-        </div>
-
-        {/* 3D viewport */}
-        <div className="border-t border-border pt-4">
-          <FieldLabel>3D viewport</FieldLabel>
-          <label className="flex items-start gap-2 text-xs text-text-mid">
-            <input
-              type="checkbox"
-              checked={showTransformHud}
-              onChange={(e) => setShowTransformHud(e.target.checked)}
-              className="mt-0.5 accent-accent"
-            />
-            <span>
-              Show transform hints
-              <span className="block text-text-dim">
-                The on-screen prompts at the bottom of the 3D viewport (e.g. “Bevel • move
-                mouse · click to confirm”). Turn off once you know the tools.
-              </span>
-            </span>
-          </label>
-          <p className="mt-2 text-xs text-text-dim">
-            Units, CAD snapping, and the board background are per-board — set them in
-            File → Board settings.
-          </p>
-        </div>
-
-        {/* Layout */}
-        <div className="border-t border-border pt-4">
-          <FieldLabel>Layout</FieldLabel>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              useDockStore.persist?.clearStorage?.();
-              location.reload();
-            }}
-          >
-            Reset dock layout
-          </Button>
-        </div>
-
-        {/* Account */}
-        <div className="border-t border-border pt-4">
-          <FieldLabel>Account</FieldLabel>
-          <AccountSection />
         </div>
       </div>
-    </Dialog>
+
+      {/* Voice */}
+      <div className="border-t border-border pt-4">
+        <FieldLabel>Voice</FieldLabel>
+        <label className="flex items-center gap-2 text-xs text-text-mid">
+          <span className="w-24 shrink-0">Output volume</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={voiceVolume}
+            onChange={(e) => setVoiceVolume(Number(e.target.value))}
+            className="flex-1 accent-accent"
+            aria-label="Voice output volume"
+          />
+          <span className="w-8 text-right font-mono">{Math.round(voiceVolume * 100)}</span>
+        </label>
+        <p className="mt-1 text-xs text-text-dim">
+          How loud everyone sounds to you. Per-person sliders live in the people widget while
+          you&apos;re in voice.
+        </p>
+      </div>
+
+      {/* 3D viewport */}
+      <div className="border-t border-border pt-4">
+        <FieldLabel>3D viewport</FieldLabel>
+        <label className="flex items-start gap-2 text-xs text-text-mid">
+          <input
+            type="checkbox"
+            checked={showTransformHud}
+            onChange={(e) => setShowTransformHud(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span>
+            Show transform hints
+            <span className="block text-text-dim">
+              The on-screen prompts at the bottom of the 3D viewport. Turn off once you know the
+              tools.
+            </span>
+          </span>
+        </label>
+        <p className="mt-2 text-xs text-text-dim">
+          Units, CAD snapping, and the board background are per-board — set them in File → Board
+          settings.
+        </p>
+      </div>
+
+      {/* Layout */}
+      <div className="border-t border-border pt-4">
+        <FieldLabel>Layout</FieldLabel>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            useDockStore.persist?.clearStorage?.();
+            location.reload();
+          }}
+        >
+          Reset dock layout
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -304,8 +341,7 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
         Accounts are not configured. Create a free Supabase project, run{' '}
         <code className="font-mono">supabase/schema.sql</code>, and set{' '}
         <code className="font-mono">VITE_SUPABASE_URL</code> +{' '}
-        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable
-        friends.
+        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable friends.
       </p>
     );
   }
@@ -348,7 +384,6 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
         <p className="text-xs text-text-dim">Loading…</p>
       ) : (
         <>
-          {/* Pending requests */}
           {pending.length > 0 && (
             <div>
               <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
@@ -361,12 +396,8 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
                     className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-text">
-                        {f.displayName || 'Anonymous'}
-                      </p>
-                      {f.email && (
-                        <p className="truncate text-[10px] text-text-dim">{f.email}</p>
-                      )}
+                      <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
+                      {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
                     </div>
                     {f.incoming ? (
                       <>
@@ -399,13 +430,12 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
             </div>
           )}
 
-          {/* Accepted friends */}
           {friends.length > 0 ? (
             <div>
               <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
                 Friends ({friends.length})
               </p>
-              <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto pr-1">
+              <ul className="flex flex-col gap-1">
                 {friends.map((f) => (
                   <li
                     key={f.userId}
@@ -415,12 +445,8 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
                       {(f.displayName || '?')[0]?.toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-text">
-                        {f.displayName || 'Anonymous'}
-                      </p>
-                      {f.email && (
-                        <p className="truncate text-[10px] text-text-dim">{f.email}</p>
-                      )}
+                      <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
+                      {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
                     </div>
                     <Button
                       size="sm"
@@ -447,8 +473,7 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
 
 /**
  * Account — Supabase-backed sign-in + cross-device save backup. Renders a
- * setup hint until VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are provided
- * (see supabase/schema.sql for the one-time project setup).
+ * setup hint until VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are provided.
  */
 function AccountSection() {
   const { user, loading } = useAccount();
@@ -461,8 +486,8 @@ function AccountSection() {
         Accounts are not configured. Create a free Supabase project, run{' '}
         <code className="font-mono">supabase/schema.sql</code>, and set{' '}
         <code className="font-mono">VITE_SUPABASE_URL</code> +{' '}
-        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable
-        sign-in and cross-device saves.
+        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable sign-in
+        and cross-device saves.
       </p>
     );
   }
@@ -471,8 +496,8 @@ function AccountSection() {
   if (!user) {
     return (
       <p className="text-xs text-text-dim">
-        You&apos;re signed out — sign in from the start screen to back up your saves and open
-        them on any device.
+        You&apos;re signed out — sign in from the start screen to back up your saves and open them
+        on any device.
       </p>
     );
   }

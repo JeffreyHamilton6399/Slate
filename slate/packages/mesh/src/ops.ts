@@ -789,15 +789,17 @@ export function bevelEdges(
       pushPoly(loop);
       continue;
     }
-    // ── Blender-style "ADJ" corner grid ─────────────────────────────────────
-    // (see the Blender manual's bevel corner illustration.) Each arc is split
-    // at its middle; a SPOKE runs from every arc middle to a center point C,
-    // and each sector between consecutive arc halves is filled with a Coons-
-    // patch quad grid. When the boundary arcs lie on a common corner sphere
-    // (they do exactly, for a beveled convex corner), all interior points are
-    // projected onto it, reproducing the true rounded corner. This replaces
-    // the earlier polar apex+rings patch, whose n·seg triangles converging on
-    // one pole read as a "weird corner" next to Blender's quads.
+    // ── Rounded corner: concentric rings + center n-gon ─────────────────────
+    // Blender's beveled corner reads as concentric rings sweeping around from
+    // one strip's segment bands into the next, closing on a small center
+    // n-gon. We reproduce that directly: inset the boundary loop toward the
+    // corner in `seg` geodesic steps along the fitted corner sphere, each step
+    // a full ring of quads, and cap the innermost ring with one n-gon face.
+    // Uniform rings (every ring keeps the boundary's vertex count) means no
+    // pole, no tapering triangles, and perfect symmetry — the messy pinwheel /
+    // pinched center of the old per-sector grid is gone. When the boundary
+    // lies on a real corner sphere (exactly true for a convex bevel) the rings
+    // ARE circles of latitude, so the corner is the true sphere octant.
     const pts = loop.map((id) => vGet(m, id));
     let cx = 0, cy = 0, cz = 0;
     for (const p of pts) { cx += p.x; cy += p.y; cz += p.z; }
@@ -805,136 +807,84 @@ export function bevelEdges(
     const V = vGet(m, v);
     const dir = sub(V, C0);
     const dl = length(dir);
-    let fit: { S: Vec3; R: number; dhat: Vec3 } | null = null;
+    let fit: { S: Vec3; R: number; pole: Vec3 } | null = null;
     if (dl > 1e-9) {
       const dhat = scale(dir, 1 / dl);
-      const spread = (t: number): { mean: number; varr: number } => {
+      const spread = (t: number): number => {
         const S = add(C0, scale(dir, t));
-        let mean = 0;
         const ds = pts.map((p) => length(sub(p, S)));
+        let mean = 0;
         for (const d of ds) mean += d;
         mean /= ds.length;
         let varr = 0;
         for (const d of ds) varr += (d - mean) * (d - mean);
-        return { mean, varr };
+        return varr;
       };
-      // Sphere center sits on the far side of the loop from the corner
-      // (t < 0); search a generous bracket.
       let lo = -8, hi = 0.5;
       for (let it = 0; it < 48; it++) {
         const t1 = lo + (hi - lo) / 3;
         const t2 = hi - (hi - lo) / 3;
-        if (spread(t1).varr <= spread(t2).varr) hi = t2;
+        if (spread(t1) <= spread(t2)) hi = t2;
         else lo = t1;
       }
       const t = (lo + hi) / 2;
-      const { mean: R, varr } = spread(t);
-      // Accept only when (a) the points genuinely fit a sphere AND (b) the
-      // sphere's size is commensurate with how far the ORIGINAL corner vertex
-      // rises above the loop (R ≲ 2·dl). A near-FLAT corner — e.g. the pole
-      // vertex of a previous bevel's corner patch when beveling a second time
-      // — has dl ≈ 0, but its surrounding loop still lies on many small
-      // "equatorial" spheres; building the cap of one of those would extrude
-      // a hemisphere BUMP through the surface. Flat corners keep flat grids.
+      const S = add(C0, scale(dir, t));
+      const ds = pts.map((p) => length(sub(p, S)));
+      let R = 0;
+      for (const d of ds) R += d;
+      R /= ds.length;
+      let varr = 0;
+      for (const d of ds) varr += (d - R) * (d - R);
+      // Accept only a genuine, corner-sized sphere (see prior notes: a nearly
+      // flat corner fits tiny "equatorial" spheres that would bulge a bump).
       if (R > 1e-9 && Math.sqrt(varr / pts.length) < R * 0.2 && R <= dl * 2) {
-        fit = { S: add(C0, scale(dir, t)), R, dhat };
+        fit = { S, R, pole: normalize(sub(add(C0, scale(dir, 1)), S)) };
       }
     }
-    // Center point C: on the fitted sphere toward the original corner, capped
-    // so it never overshoots the corner vertex; flat corners use the centroid.
-    let apexPos = C0;
-    if (fit && dl > 1e-9) {
-      const cand = add(fit.S, scale(fit.dhat, fit.R));
-      const lift = dot(sub(cand, C0), fit.dhat);
-      apexPos = add(C0, scale(fit.dhat, Math.max(0, Math.min(lift, dl * 0.95))));
-    }
-    const cId = vAdd(m, apexPos);
-    const project = (p: Vec3): Vec3 => {
-      if (!fit) return p;
-      const d = sub(p, fit.S);
-      const l = length(d);
-      return l > 1e-9 ? add(fit.S, scale(d, fit.R / l)) : p;
+    const M = loop.length;
+    // Ring at inset fraction f (0 = boundary, 1 = center pole): slerp each
+    // boundary direction toward the pole on the sphere, else linear toward the
+    // centroid-lifted apex for a flat corner.
+    const apexPos = fit
+      ? add(fit.S, scale(fit.pole, fit.R))
+      : C0;
+    const ringAt = (f: number): number[] => {
+      const out = new Array<number>(M);
+      for (let k = 0; k < M; k++) {
+        const bp = vGet(m, loop[k]!);
+        let P: Vec3;
+        if (fit) {
+          const u = normalize(sub(bp, fit.S));
+          const cosO = Math.max(-1, Math.min(1, dot(u, fit.pole)));
+          const om = Math.acos(cosO);
+          if (om < 1e-5) P = bp;
+          else {
+            const so = Math.sin(om);
+            const d = normalize(add(
+              scale(u, Math.sin((1 - f) * om) / so),
+              scale(fit.pole, Math.sin(f * om) / so),
+            ));
+            P = add(fit.S, scale(d, fit.R));
+          }
+        } else {
+          P = { x: bp.x * (1 - f) + apexPos.x * f, y: bp.y * (1 - f) + apexPos.y * f, z: bp.z * (1 - f) + apexPos.z * f };
+        }
+        out[k] = vAdd(m, P);
+      }
+      return out;
     };
-    const h = Math.floor(seg / 2); // ≥ 1 (seg ≥ 2 here)
-    // Spokes: arc-middle vertex → C, h+1 points, shared between the two
-    // sectors flanking each arc (and between grid + bridge for odd seg).
-    const spokeCache = new Map<number, number[]>();
-    const spokeOf = (midId: number): number[] => {
-      let s = spokeCache.get(midId);
-      if (!s) {
-        const A = vGet(m, midId);
-        s = [midId];
-        for (let j = 1; j < h; j++) {
-          const t = j / h;
-          s.push(vAdd(m, project({
-            x: A.x * (1 - t) + apexPos.x * t,
-            y: A.y * (1 - t) + apexPos.y * t,
-            z: A.z * (1 - t) + apexPos.z * t,
-          })));
-        }
-        s.push(cId);
-        spokeCache.set(midId, s);
+    // `seg` rings from the boundary inward; the last (innermost) is capped by a
+    // single center n-gon rather than converging to the pole, so no triangles.
+    const rings = Math.max(1, seg);
+    let prevRing = loop;
+    for (let r = 1; r < rings; r++) {
+      const ring = ringAt(r / rings);
+      for (let k = 0; k < M; k++) {
+        pushPoly([prevRing[k]!, prevRing[(k + 1) % M]!, ring[(k + 1) % M]!, ring[k]!]);
       }
-      return s;
-    };
-    const nArcs = orderedArcs.length;
-    for (let i = 0; i < nArcs; i++) {
-      const arcPrev = orderedArcs[(i - 1 + nArcs) % nArcs]!;
-      const arcCur = orderedArcs[i]!;
-      // Sector at corner point P_i = arcCur[0] (== arcPrev[seg]):
-      //   A: P_i backwards along arcPrev to its middle,
-      //   B: P_i forwards along arcCur to its middle.
-      const A: number[] = [];
-      for (let j = 0; j <= h; j++) A.push(arcPrev[seg - j]!);
-      const B: number[] = [];
-      for (let j = 0; j <= h; j++) B.push(arcCur[j]!);
-      const spokeA = spokeOf(A[h]!);
-      const spokeB = spokeOf(B[h]!);
-      // Coons grid G[u][v] (u along A, v along B), boundaries shared with
-      // the arcs and spokes; interior blended then sphere-projected.
-      const G: number[][] = Array.from({ length: h + 1 }, () => new Array<number>(h + 1));
-      for (let u = 0; u <= h; u++) G[u]![0] = A[u]!;
-      for (let vv = 0; vv <= h; vv++) G[0]![vv] = B[vv]!;
-      for (let u = 0; u <= h; u++) G[u]![h] = spokeB[u]!;
-      for (let vv = 0; vv <= h; vv++) G[h]![vv] = spokeA[vv]!;
-      const P00 = vGet(m, A[0]!);
-      const Ph0 = vGet(m, A[h]!);
-      const P0h = vGet(m, B[h]!);
-      for (let u = 1; u < h; u++) {
-        for (let vv = 1; vv < h; vv++) {
-          const s = u / h;
-          const t = vv / h;
-          const bottom = vGet(m, A[u]!);
-          const top = vGet(m, spokeB[u]!);
-          const left = vGet(m, B[vv]!);
-          const right = vGet(m, spokeA[vv]!);
-          G[u]![vv] = vAdd(m, project({
-            x: (1 - t) * bottom.x + t * top.x + (1 - s) * left.x + s * right.x
-              - ((1 - s) * (1 - t) * P00.x + s * (1 - t) * Ph0.x + (1 - s) * t * P0h.x + s * t * apexPos.x),
-            y: (1 - t) * bottom.y + t * top.y + (1 - s) * left.y + s * right.y
-              - ((1 - s) * (1 - t) * P00.y + s * (1 - t) * Ph0.y + (1 - s) * t * P0h.y + s * t * apexPos.y),
-            z: (1 - t) * bottom.z + t * top.z + (1 - s) * left.z + s * right.z
-              - ((1 - s) * (1 - t) * P00.z + s * (1 - t) * Ph0.z + (1 - s) * t * P0h.z + s * t * apexPos.z),
-          }));
-        }
-      }
-      for (let u = 0; u < h; u++) {
-        for (let vv = 0; vv < h; vv++) {
-          pushPoly([G[u]![vv]!, G[u + 1]![vv]!, G[u + 1]![vv + 1]!, G[u]![vv + 1]!]);
-        }
-      }
-      // Odd segment counts leave a middle EDGE on each arc (between indices
-      // h and h+1) not owned by either sector; bridge it to C with a ladder
-      // between the two mid spokes (the innermost rung degenerates into a
-      // triangle at C — pushPoly dedupes it).
-      if (seg % 2 === 1) {
-        const s1 = spokeOf(arcCur[h]!);
-        const s2 = spokeOf(arcCur[h + 1]!);
-        for (let j = 0; j < h; j++) {
-          pushPoly([s1[j]!, s1[j + 1]!, s2[j + 1]!, s2[j]!]);
-        }
-      }
+      prevRing = ring;
     }
+    pushPoly(prevRing); // center n-gon cap
   }
 
   return compact(m);

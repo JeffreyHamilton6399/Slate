@@ -111,38 +111,32 @@ describe('bevelEdges', () => {
     expect(cornerVerts).toBeGreaterThan(0);
   });
 
-  it('corner patch apex sits ON the octant sphere (no divot)', () => {
+  it('corner rings + center cap sit ON the octant sphere (no divot, no bump)', () => {
     const c = cube(1);
     const w = 0.15;
-    // seg=4 (even) so the corner grid has interior points to check — at odd
-    // seg the center vertex is legitimately the only interior point.
     const out = bevelEdges(c, allManifoldEdges(c), w, 4);
-    // For the corner at (.5,.5,.5): every boundary arc lies on the sphere of
-    // radius w centered at (.5-w, .5-w, .5-w). The fan apex must sit on that
-    // sphere along the corner diagonal — the flat loop centroid (the old,
-    // divot-producing apex) is measurably INSIDE it.
+    // Corner at (.5,.5,.5): the octant sphere has center S and radius w. Every
+    // corner-patch vertex (concentric rings + center n-gon) must lie ON it,
+    // and the innermost ring must climb close to the pole (1,1,1)/√3 — a flat
+    // centroid cap (the old divot) would fall short.
     const S = { x: 0.5 - w, y: 0.5 - w, z: 0.5 - w };
-    const k = w / Math.sqrt(3);
-    const expected = { x: S.x + k, y: S.y + k, z: S.z + k };
-    let best = Infinity;
-    for (let i = 0; i < vCount(out); i++) {
-      const p = vGet(out, i);
-      const d = Math.hypot(p.x - expected.x, p.y - expected.y, p.z - expected.z);
-      if (d < best) best = d;
-    }
-    expect(best).toBeLessThan(5e-3);
-    // And EVERY vertex strictly inside the corner region (the patch interior:
-    // apex + concentric rings — strip arcs sit at one coord == 0.5-w) must be
-    // ON the sphere too: a flat cone/fan interior fails this at the rings.
+    const pole = { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) };
     let interior = 0;
+    let maxPoleDot = -1;
     for (let i = 0; i < vCount(out); i++) {
       const p = vGet(out, i);
+      // interior = strictly inside the corner octant region (off all 3 planes).
       if (p.x > S.x + 0.01 && p.y > S.y + 0.01 && p.z > S.z + 0.01) {
         interior++;
-        expect(Math.abs(Math.hypot(p.x - S.x, p.y - S.y, p.z - S.z) - w)).toBeLessThan(5e-3);
+        const r = Math.hypot(p.x - S.x, p.y - S.y, p.z - S.z);
+        expect(Math.abs(r - w)).toBeLessThan(5e-3); // ON the sphere
+        const dot = ((p.x - S.x) * pole.x + (p.y - S.y) * pole.y + (p.z - S.z) * pole.z) / r;
+        if (dot > maxPoleDot) maxPoleDot = dot;
       }
     }
-    expect(interior).toBeGreaterThan(1); // apex + at least one ring point
+    expect(interior).toBeGreaterThan(3);
+    // Center cap climbs to within ~25° of the pole (cos25°≈0.906).
+    expect(maxPoleDot).toBeGreaterThan(0.9);
   });
 
   it('face bevel (top 4 edges): shared slid corners — no spike at the original corners', () => {

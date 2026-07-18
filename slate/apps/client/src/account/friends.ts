@@ -242,11 +242,49 @@ export async function upsertMyProfile(
   avatarUrl?: string | null,
 ): Promise<void> {
   if (!supabase) return;
-  const row: Record<string, unknown> = { user_id: userId, display_name: displayName, email };
+  // Store email lowercased so friend lookups (which lowercase the query) match.
+  const row: Record<string, unknown> = { user_id: userId, display_name: displayName, email: email?.toLowerCase() ?? null };
   // Only send avatar_url when provided so a name-only update never clears it.
   if (avatarUrl !== undefined) row.avatar_url = avatarUrl || null;
   const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
   if (error) console.warn('upsertMyProfile failed:', error.message);
+}
+
+/**
+ * Make sure THIS user has a profiles row so friends can find them by email —
+ * called on every sign-in. Without it, a user who signed up but never opened
+ * their Profile to save a name has no row, and "add friend by email" reports
+ * "no user with that email" even though the account exists. Creates the row
+ * (with a sensible default name) only when missing; when it already exists we
+ * just keep the email in sync (lowercased) and never clobber the saved name or
+ * avatar.
+ */
+export async function ensureMyProfile(
+  userId: string,
+  email: string | null,
+  fallbackName: string,
+): Promise<void> {
+  if (!supabase) return;
+  const lower = email?.toLowerCase() ?? null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('user_id,display_name,email')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    console.warn('ensureMyProfile lookup failed:', error.message);
+    return;
+  }
+  if (!data) {
+    const name = fallbackName.trim() || lower?.split('@')[0] || 'Anonymous';
+    const { error: insErr } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, display_name: name, email: lower });
+    if (insErr) console.warn('ensureMyProfile insert failed:', insErr.message);
+  } else if ((data as { email: string | null }).email !== lower) {
+    const { error: updErr } = await supabase.from('profiles').update({ email: lower }).eq('user_id', userId);
+    if (updErr) console.warn('ensureMyProfile email sync failed:', updErr.message);
+  }
 }
 
 /** Fetch MY profile (used on sign-in to pull the avatar synced from another

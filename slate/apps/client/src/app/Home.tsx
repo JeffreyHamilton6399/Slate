@@ -32,6 +32,7 @@ import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
+import { ensureMyProfile } from '../account/friends';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -332,6 +333,14 @@ function Home({ email, userId }: { email: string; userId: string }) {
       cancelled = true;
     };
   }, [userId]);
+
+  // Make sure this account has a profiles row on sign-in so FRIENDS can find
+  // us by email — otherwise a user who never opened Profile to save a name is
+  // invisible to "add friend by email".
+  useEffect(() => {
+    if (!userId) return;
+    void ensureMyProfile(userId, email, useAppStore.getState().displayName);
+  }, [userId, email]);
 
   useEffect(() => {
     fetchRooms().then(setRooms).catch(() => setRooms([]));

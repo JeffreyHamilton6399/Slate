@@ -14,6 +14,7 @@ import { InstallPrompt } from './InstallPrompt';
 import { ServerWakeGate } from './ServerWakeGate';
 import { useAccount } from '../account/useAccount';
 import { startCloudSaveBridge } from '../account/cloudSaves';
+import { usePresence } from '../account/useBoardInvites';
 import { sanitizeBoardName } from './Onboarding';
 import { fetchRooms } from '../sync/rooms';
 
@@ -101,6 +102,7 @@ export function App() {
           {board ? <Workspace /> : <Entry />}
         </ServerWakeGate>
         <CloudSaveBridge />
+        <PresenceBridge />
         <InstallPrompt />
       </ToastProvider>
     </TooltipProvider>
@@ -114,5 +116,15 @@ function CloudSaveBridge() {
     if (!user) return;
     return startCloudSaveBridge(user.id);
   }, [user]);
+  return null;
+}
+
+/** Heartbeat the presence timestamp app-wide (on Home AND inside a board) so
+ *  friends see us online while we're active — gated by the "show online"
+ *  setting. Mounted at the root so it survives entering/leaving boards. */
+function PresenceBridge() {
+  const { user } = useAccount();
+  const showOnline = useAppStore((s) => s.showOnline);
+  usePresence(user?.id, showOnline);
   return null;
 }

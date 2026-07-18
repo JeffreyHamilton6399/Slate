@@ -14,6 +14,9 @@ import { supabase } from './supabase';
 
 export type FriendStatus = 'pending' | 'accepted' | 'blocked';
 
+/** A friend is "online" if their heartbeat is newer than this. */
+export const ONLINE_WINDOW_MS = 90_000;
+
 export interface Friend {
   userId: string;
   displayName: string;
@@ -23,6 +26,8 @@ export interface Friend {
   status: FriendStatus;
   /** true = THEY sent the request to ME; false = I sent the request to them. */
   incoming: boolean;
+  /** Presence: true when their heartbeat is recent (and they show it). */
+  online: boolean;
 }
 
 interface ProfileRow {
@@ -30,6 +35,7 @@ interface ProfileRow {
   display_name: string;
   email: string | null;
   avatar_url: string | null;
+  last_seen: string | null;
 }
 
 /** The friends feature needs the profiles/friends tables (supabase/schema.sql).
@@ -75,7 +81,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
   );
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
-    .select('user_id,display_name,email,avatar_url')
+    .select('user_id,display_name,email,avatar_url,last_seen')
     .in('user_id', otherIds);
   if (pErr) {
     console.warn('getFriends profiles lookup failed:', pErr.message);
@@ -100,6 +106,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
     // (incoming = false) so we don't double-count.
     if (!existing) {
       const p = profileById.get(otherId);
+      const seen = p?.last_seen ? Date.parse(p.last_seen) : 0;
       byOtherId.set(otherId, {
         userId: otherId,
         displayName: p?.display_name ?? 'Anonymous',
@@ -107,6 +114,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
         avatarUrl: p?.avatar_url ?? null,
         status: r.status,
         incoming,
+        online: seen > 0 && Date.now() - seen < ONLINE_WINDOW_MS,
       });
       continue;
     }

@@ -51,9 +51,12 @@ interface AppState {
   voiceVolume: number;
   /** Show the 3D modal-transform HUD hints (bottom of the viewport). */
   showTransformHud: boolean;
+  /** Broadcast an online-presence heartbeat so friends see me online. */
+  showOnline: boolean;
 
   setDisplayName: (n: string) => void;
   setAvatarUrl: (url: string) => void;
+  setShowOnline: (v: boolean) => void;
   setTheme: (t: Theme) => void;
   setPaperFollowsTheme: (v: boolean) => void;
   setUnits: (u: LengthUnit) => void;
@@ -86,8 +89,10 @@ export const useAppStore = create<AppState>()(
       accent: '#7c6aff',
       voiceVolume: 1,
       showTransformHud: true,
+      showOnline: true,
       setDisplayName: (displayName) => set({ displayName }),
       setAvatarUrl: (avatarUrl) => set({ avatarUrl }),
+      setShowOnline: (showOnline) => set({ showOnline }),
       setTheme: (theme) => set({ theme }),
       setPaperFollowsTheme: (paperFollowsTheme) => set({ paperFollowsTheme }),
       setUnits: (units) => set({ units }),
@@ -116,6 +121,7 @@ export const useAppStore = create<AppState>()(
         accent: s.accent,
         voiceVolume: s.voiceVolume,
         showTransformHud: s.showTransformHud,
+        showOnline: s.showOnline,
       }),
     },
   ),

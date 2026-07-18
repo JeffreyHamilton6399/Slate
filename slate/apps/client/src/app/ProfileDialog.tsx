@@ -253,6 +253,8 @@ function SettingsTabView() {
   const setAccent = useAppStore((s) => s.setAccent);
   const showTransformHud = useAppStore((s) => s.showTransformHud);
   const setShowTransformHud = useAppStore((s) => s.setShowTransformHud);
+  const showOnline = useAppStore((s) => s.showOnline);
+  const setShowOnline = useAppStore((s) => s.setShowOnline);
   const voiceVolume = useAppStore((s) => s.voiceVolume);
   const storeSetVoiceVolume = useAppStore((s) => s.setVoiceVolume);
   const voice = useVoiceOptional();
@@ -380,6 +382,25 @@ function SettingsTabView() {
           Units, CAD snapping, and the board background are per-board — set them in File → Board
           settings.
         </p>
+      </div>
+
+      {/* Privacy */}
+      <div>
+        <FieldLabel>Privacy</FieldLabel>
+        <label className="flex items-start gap-2 text-xs text-text-mid">
+          <input
+            type="checkbox"
+            checked={showOnline}
+            onChange={(e) => setShowOnline(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span>
+            Show when I&apos;m online
+            <span className="block text-text-dim">
+              Friends see a green dot while you&apos;re active. Turn off to always appear offline.
+            </span>
+          </span>
+        </label>
       </div>
 
       {/* Layout */}
@@ -517,9 +538,21 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
                     key={f.userId}
                     className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
                   >
-                    <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
+                    <span className="relative shrink-0">
+                      <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
+                      <span
+                        className={
+                          'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-bg-2 ' +
+                          (f.online ? 'bg-green' : 'bg-text-dim/50')
+                        }
+                        title={f.online ? 'Online' : 'Offline'}
+                      />
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
+                      <p className="truncate text-xs font-medium text-text">
+                        {f.displayName || 'Anonymous'}
+                        {f.online && <span className="ml-1.5 text-[10px] font-normal text-green">online</span>}
+                      </p>
                       {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
                     </div>
                     <Button

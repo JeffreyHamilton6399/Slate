@@ -65,8 +65,12 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
--- Safe to re-run on an existing project that predates the avatar column.
+-- Safe to re-run on an existing project that predates these columns.
 alter table public.profiles add column if not exists avatar_url text;
+-- Presence: heartbeat timestamp for the online dot. Null / stale = offline.
+-- `show_online` lets a user hide their presence (we then stop heartbeating).
+alter table public.profiles add column if not exists last_seen timestamptz;
+alter table public.profiles add column if not exists show_online boolean not null default true;
 
 alter table public.profiles enable row level security;
 
@@ -122,3 +126,36 @@ drop policy if exists "Users can delete own friends" on public.friends;
 create policy "Users can delete own friends"
   on public.friends for delete
   using (auth.uid() = user_id or auth.uid() = friend_id);
+
+-- ============================================================================
+-- Board invites — "come join my board". One row per pending invite; the
+-- recipient sees it as a notification and joining/declining deletes it.
+-- ============================================================================
+create table if not exists public.board_invites (
+  id uuid primary key default gen_random_uuid(),
+  from_user uuid not null references auth.users(id) on delete cascade,
+  to_user uuid not null references auth.users(id) on delete cascade,
+  board_name text not null,
+  mode text not null default '2d',
+  created_at timestamptz not null default now()
+);
+
+alter table public.board_invites enable row level security;
+
+-- Sender or recipient can read the invite.
+drop policy if exists "Read own board invites" on public.board_invites;
+create policy "Read own board invites"
+  on public.board_invites for select
+  using (auth.uid() = from_user or auth.uid() = to_user);
+
+-- Only the sender can create it, and only for themselves.
+drop policy if exists "Send board invites" on public.board_invites;
+create policy "Send board invites"
+  on public.board_invites for insert
+  with check (auth.uid() = from_user);
+
+-- Either side can remove it (recipient joins/declines, sender cancels).
+drop policy if exists "Delete own board invites" on public.board_invites;
+create policy "Delete own board invites"
+  on public.board_invites for delete
+  using (auth.uid() = from_user or auth.uid() = to_user);

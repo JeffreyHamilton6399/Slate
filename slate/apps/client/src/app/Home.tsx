@@ -33,6 +33,8 @@ import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
 import { ensureMyProfile } from '../account/friends';
+import { useFriends } from '../account/useFriends';
+import { useBoardInvites } from '../account/useBoardInvites';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -310,6 +312,12 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloudNote, setCloudNote] = useState('Syncing projects…');
 
+  // Social: friends (for the online section + request badge) and incoming
+  // board invites (notifications + a join banner).
+  const { friends, incomingCount } = useFriends(userId);
+  const { invites, accept: acceptInvite, decline: declineInvite } = useBoardInvites(userId);
+  const notifCount = incomingCount + invites.length;
+
   /** Refresh both the recents widget + the All Projects dialog list. */
   const refreshSaves = () => {
     setRecents(recentsFromSaves());
@@ -402,7 +410,9 @@ function Home({ email, userId }: { email: string; userId: string }) {
           <div className="flex-1" />
           <ProfileMenu
             email={email}
+            notifCount={notifCount}
             onOpenProfile={() => { setProfileTab('profile'); setProfileOpen(true); }}
+            onOpenFriends={() => { setProfileTab('friends'); setProfileOpen(true); }}
           />
         </header>
 
@@ -516,6 +526,83 @@ function Home({ email, userId }: { email: string; userId: string }) {
             )}
           </div>
         </section>
+
+        {/* Incoming board invites — "come join my board". */}
+        {invites.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold text-text">Board invites</h2>
+            <ul className="flex flex-col gap-1.5">
+              {invites.map((inv) => (
+                <li
+                  key={inv.id}
+                  className="flex items-center gap-3 rounded-md border border-accent/40 bg-accent/10 px-3 py-2"
+                >
+                  <Avatar url={inv.fromAvatar} name={inv.fromName} size={30} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-text">
+                      <span className="font-semibold">{inv.fromName}</span> invited you to{' '}
+                      <span className="font-semibold text-accent">{inv.boardName}</span>
+                    </p>
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">{inv.mode}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => { const i = acceptInvite(inv.id); if (i) open(i.boardName, i.mode, false); }}
+                  >
+                    Join
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => declineInvite(inv.id)} aria-label="Dismiss invite">
+                    <Trash2 size={13} />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* Friends — with online status; manage in Profile → Friends. */}
+        {friends.length > 0 && (
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-text">
+                Friends
+                <span className="ml-2 text-xs font-normal text-text-dim">
+                  {friends.filter((f) => f.online).length} online
+                </span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => { setProfileTab('friends'); setProfileOpen(true); }}
+                className="text-xs text-accent hover:underline"
+              >
+                Manage
+              </button>
+            </div>
+            <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {[...friends]
+                .sort((a, b) => Number(b.online) - Number(a.online))
+                .map((f) => (
+                  <li key={f.userId} className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-3 py-2">
+                    <span className="relative shrink-0">
+                      <Avatar url={f.avatarUrl} name={f.displayName} size={30} />
+                      <span
+                        className={cn(
+                          'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-bg-2',
+                          f.online ? 'bg-green' : 'bg-text-dim/50',
+                        )}
+                        title={f.online ? 'Online' : 'Offline'}
+                      />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-text">{f.displayName || 'Anonymous'}</p>
+                      <p className="text-[10px] text-text-dim">{f.online ? 'Online' : 'Offline'}</p>
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
 
         {/* Live public boards */}
         {liveRooms.length > 0 && (
@@ -732,10 +819,14 @@ function timeAgo(t: number): string {
  */
 function ProfileMenu({
   email,
+  notifCount,
   onOpenProfile,
+  onOpenFriends,
 }: {
   email: string;
+  notifCount: number;
   onOpenProfile: () => void;
+  onOpenFriends: () => void;
 }) {
   const displayName = useAppStore((s) => s.displayName);
   const avatarUrl = useAppStore((s) => s.avatarUrl);
@@ -744,11 +835,16 @@ function ProfileMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Account menu"
-          className="rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
+          aria-label={notifCount > 0 ? `Account menu — ${notifCount} notifications` : 'Account menu'}
+          className="relative rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
           title="Account"
         >
           <Avatar url={avatarUrl} name={displayName || email} size={34} />
+          {notifCount > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white ring-2 ring-bg">
+              {notifCount > 9 ? '9+' : notifCount}
+            </span>
+          )}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[220px]">
@@ -763,6 +859,14 @@ function ProfileMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onOpenProfile}>
           <UserCircle size={14} /> Profile
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpenFriends}>
+          <Users size={14} /> Friends
+          {notifCount > 0 && (
+            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white">
+              {notifCount > 9 ? '9+' : notifCount}
+            </span>
+          )}
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}

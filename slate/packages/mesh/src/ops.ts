@@ -582,14 +582,21 @@ export function bevelEdges(
       let id: number;
       if (ePrev && eNext) {
         // Corner between two beveled edges: offset-line intersection.
+        // 1/(1+c) explodes as the corner angle collapses (c → -1, a sliver
+        // corner — common on second-generation bevels where strip edges meet
+        // at grazing angles), throwing the point far OUTSIDE the mesh. Cap
+        // the displacement at a few widths and fall back to a plain
+        // perpendicular offset beyond that.
         const t1 = inFacePerp(fi, prev, cur);
         const t2 = inFacePerp(fi, cur, next);
         const c = dot(t1, t2);
         const w = Math.min(ePrev.w, eNext.w);
-        const X = c > -0.99
-          ? add(V, scale(add(t1, t2), w / (1 + c)))
-          : add(V, scale(t1, w)); // degenerate fold-back — arbitrary but stable
-        id = vAdd(m, X);
+        let off = c > -0.99 ? scale(add(t1, t2), w / (1 + c)) : scale(t1, w);
+        if (length(off) > w * 4) {
+          const bisec = add(t1, t2);
+          off = scale(length(bisec) > 1e-6 ? normalize(bisec) : t1, w);
+        }
+        id = vAdd(m, add(V, off));
       } else {
         // One beveled edge: slide the corner along the UNBEVELED loop edge to
         // where the beveled edge's offset line crosses it. The slid vertex is
@@ -640,10 +647,14 @@ export function bevelEdges(
     const A = vGet(m, idA);
     const B = vGet(m, idB);
     // Control point: the tangent lines through A and B meet on the original
-    // edge line — project both and average for robustness.
+    // edge line — project both and average for robustness. The projection
+    // parameter is clamped to the edge SEGMENT: skewed corners (grazing-angle
+    // faces on second-generation bevels) can project past the endpoints,
+    // which would bulge the arc outside the mesh.
     const P0 = vGet(m, e.a);
+    const eLen = length(sub(vGet(m, e.b), P0));
     const d = normalize(sub(vGet(m, e.b), P0));
-    const proj = (p: Vec3) => add(P0, scale(d, dot(sub(p, P0), d)));
+    const proj = (p: Vec3) => add(P0, scale(d, Math.max(0, Math.min(eLen, dot(sub(p, P0), d)))));
     const ctrl = scale(add(proj(A), proj(B)), 0.5);
     const u1 = normalize(sub(A, ctrl));
     const u2 = normalize(sub(B, ctrl));
@@ -805,7 +816,15 @@ export function bevelEdges(
         }
         const t = (lo + hi) / 2;
         const { mean: R, varr } = spread(t);
-        if (R > 1e-9 && Math.sqrt(varr / pts.length) < R * 0.2) {
+        // Accept only when (a) the points genuinely fit a sphere AND (b) the
+        // sphere's size is commensurate with how far the ORIGINAL corner
+        // vertex rises above the loop (R ≲ 2·dl). A near-FLAT corner — e.g.
+        // the pole vertex of a previous bevel's corner patch when beveling a
+        // second time — has dl ≈ 0, but its surrounding loop still lies on
+        // many small "equatorial" spheres; building the cap of one of those
+        // extrudes a hemisphere BUMP through the surface. Flat corners take
+        // the flat fan below, which is exactly right for them.
+        if (R > 1e-9 && Math.sqrt(varr / pts.length) < R * 0.2 && R <= dl * 2) {
           fit = { S: add(C0, scale(dir, t)), R, dhat };
         }
       }

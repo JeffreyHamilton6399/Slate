@@ -133,6 +133,13 @@ describe('instrument engine', () => {
     for (const name of ['Acoustic Guitar', 'Electric Guitar', 'Bass Guitar', 'Harp', 'Rhodes E-Piano', 'Tubular Bells']) {
       expect(INSTRUMENT_PRESETS.some((p) => p.name === name)).toBe(true);
     }
-    expect(INSTRUMENT_PRESETS.find((p) => p.name === 'Grand Piano')?.engine).toBe('piano');
+    // Plain names are the sampled (recorded) instruments; the synthesized
+    // versions carry a "(synth)" suffix.
+    expect(INSTRUMENT_PRESETS.find((p) => p.name === 'Grand Piano')?.engine).toBe('sampled');
+    expect(INSTRUMENT_PRESETS.find((p) => p.name === 'Grand Piano (synth)')?.engine).toBe('piano');
+    expect(INSTRUMENT_PRESETS.find((p) => p.name === 'Acoustic Guitar')?.engine).toBe('sampled');
+    expect(INSTRUMENT_PRESETS.find((p) => p.name === 'Acoustic Guitar (synth)')?.engine).toBe('string');
+    // Every preset belongs to a picker group.
+    for (const p of INSTRUMENT_PRESETS) expect(typeof p.group).toBe('string');
   });
 });

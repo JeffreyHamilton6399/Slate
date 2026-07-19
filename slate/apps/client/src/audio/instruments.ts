@@ -43,6 +43,9 @@ export interface InstrumentParams {
   name: string;
   /** True for the factory presets (not deletable, saved-as instead of over). */
   builtIn?: boolean;
+  /** Picker grouping ("Keys", "Guitar & Bass", …). Customs show under their
+   *  own "My instruments" group regardless. */
+  group?: string;
   /** Synthesis model (default 'subtractive'). */
   engine?: SynthEngine;
   /** ── String (Karplus-Strong) params ──────────────────────────────────── */
@@ -766,7 +769,7 @@ export async function renderPerformance(
 
 export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
-    id: 'inst-grand-piano', name: 'Grand Piano', builtIn: true,
+    id: 'inst-grand-piano', name: 'Grand Piano (synth)', builtIn: true, group: 'Keys',
     engine: 'piano', reverb: 0.14,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 1.5, sustain: 1, release: 0.35,
@@ -774,7 +777,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-epiano', name: 'E-Piano', builtIn: true, reverb: 0.12,
+    id: 'inst-epiano', name: 'E-Piano', builtIn: true, group: 'Keys', reverb: 0.12,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 2, level: 0.18 },
@@ -786,7 +789,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
   },
   {
-    id: 'inst-organ', name: 'Organ', builtIn: true, reverb: 0.18,
+    id: 'inst-organ', name: 'Organ (synth)', builtIn: true, group: 'Keys', reverb: 0.18,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 1, detune: 0, level: 0.55 },
@@ -798,7 +801,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.6, vibratoDepth: 5, gain: 0.7,
   },
   {
-    id: 'inst-lead', name: 'Synth Lead', builtIn: true, reverb: 0.1,
+    id: 'inst-lead', name: 'Synth Lead', builtIn: true, group: 'Synths', reverb: 0.1,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -7, level: 0.8 },
       { type: 'square', octave: 0, detune: 7, level: 0.6 },
@@ -809,7 +812,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5, vibratoDepth: 9, gain: 0.75,
   },
   {
-    id: 'inst-bass', name: 'Synth Bass', builtIn: true, reverb: 0.04,
+    id: 'inst-bass', name: 'Synth Bass', builtIn: true, group: 'Synths', reverb: 0.04,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: 0, level: 0.75 },
       { type: 'sine', octave: -1, detune: 0, level: 1 },
@@ -820,7 +823,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-pad', name: 'Warm Pad', builtIn: true, reverb: 0.35,
+    id: 'inst-pad', name: 'Warm Pad', builtIn: true, group: 'Synths', reverb: 0.35,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -10, level: 0.6 },
       { type: 'sawtooth', octave: 0, detune: 10, level: 0.6 },
@@ -832,7 +835,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 4.5, vibratoDepth: 5, gain: 0.6,
   },
   {
-    id: 'inst-pluck', name: 'Pluck', builtIn: true, reverb: 0.15,
+    id: 'inst-pluck', name: 'Pluck', builtIn: true, group: 'Synths', reverb: 0.15,
     oscs: [
       { type: 'triangle', octave: 0, detune: 0, level: 1 },
       { type: 'sawtooth', octave: 0, detune: 3, level: 0.35 },
@@ -843,7 +846,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-bells', name: 'Music Box', builtIn: true, reverb: 0.3,
+    id: 'inst-bells', name: 'Music Box', builtIn: true, group: 'Bells & Perc', reverb: 0.3,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 1, detune: 560, level: 0.35 }, // inharmonic partial
@@ -855,7 +858,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.85,
   },
   {
-    id: 'inst-strings', name: 'Strings', builtIn: true, reverb: 0.3,
+    id: 'inst-strings', name: 'Strings (synth)', builtIn: true, group: 'Strings', reverb: 0.3,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -6, level: 0.7 },
       { type: 'sawtooth', octave: 0, detune: 6, level: 0.7 },
@@ -867,7 +870,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.5, vibratoDepth: 7, gain: 0.6,
   },
   {
-    id: 'inst-brass', name: 'Brass', builtIn: true, reverb: 0.18,
+    id: 'inst-brass', name: 'Brass', builtIn: true, group: 'Winds & Brass', reverb: 0.18,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -5, level: 0.8 },
       { type: 'sawtooth', octave: 0, detune: 5, level: 0.8 },
@@ -878,7 +881,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5, vibratoDepth: 6, gain: 0.7,
   },
   {
-    id: 'inst-marimba', name: 'Marimba', builtIn: true, reverb: 0.2,
+    id: 'inst-marimba', name: 'Marimba', builtIn: true, group: 'Bells & Perc', reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 0, level: 0.25 }, // 4x bar partial
@@ -889,7 +892,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
   },
   {
-    id: 'inst-kalimba', name: 'Kalimba', builtIn: true, reverb: 0.2,
+    id: 'inst-kalimba', name: 'Kalimba', builtIn: true, group: 'Bells & Perc', reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 30, level: 0.2 },
@@ -900,7 +903,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-choir', name: 'Choir', builtIn: true, reverb: 0.35,
+    id: 'inst-choir', name: 'Choir (synth)', builtIn: true, group: 'Voices', reverb: 0.35,
     oscs: [
       { type: 'triangle', octave: 0, detune: -8, level: 0.8 },
       { type: 'sine', octave: 0, detune: 8, level: 0.8 },
@@ -912,7 +915,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 4.8, vibratoDepth: 8, gain: 0.6,
   },
   {
-    id: 'inst-acid', name: 'Acid Lead', builtIn: true, reverb: 0.08,
+    id: 'inst-acid', name: 'Acid Lead', builtIn: true, group: 'Synths', reverb: 0.08,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: 0, level: 1 },
       { type: 'square', octave: 0, detune: 4, level: 0.4 },
@@ -923,7 +926,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.7,
   },
   {
-    id: 'inst-flute', name: 'Flute', builtIn: true, reverb: 0.2,
+    id: 'inst-flute', name: 'Flute (synth)', builtIn: true, group: 'Winds & Brass', reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'triangle', octave: 0, detune: 0, level: 0.3 },
@@ -934,25 +937,27 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.2, vibratoDepth: 10, gain: 0.75,
   },
 
-  // ── Real recorded instruments (FluidR3 GM samples, streamed + cached) ──────
-  // These play actual recordings per note — the "sounds like the real thing"
-  // set. First press of a note downloads it (~20 KB); after that it's instant.
+  // ── Recorded instruments (FluidR3 GM samples, streamed + cached) ───────────
+  // These play actual recordings per note and carry the PLAIN instrument
+  // names — they're the default pick. The synthesized/modelled versions of
+  // the same instruments keep working offline under a "(synth)" suffix.
+  // First press of a note downloads it (~20 KB); after that it's instant.
   ...([
-    ['inst-real-piano', 'Real Piano', 'acoustic_grand_piano', 0.12],
-    ['inst-real-steel-guitar', 'Real Guitar (Steel)', 'acoustic_guitar_steel', 0.14],
-    ['inst-real-nylon-guitar', 'Real Guitar (Nylon)', 'acoustic_guitar_nylon', 0.14],
-    ['inst-real-electric-guitar', 'Real Guitar (Electric)', 'electric_guitar_clean', 0.12],
-    ['inst-real-bass', 'Real Bass', 'electric_bass_finger', 0.05],
-    ['inst-real-violin', 'Real Violin', 'violin', 0.22],
-    ['inst-real-cello', 'Real Cello', 'cello', 0.22],
-    ['inst-real-trumpet', 'Real Trumpet', 'trumpet', 0.16],
-    ['inst-real-sax', 'Real Sax', 'alto_sax', 0.16],
-    ['inst-real-flute', 'Real Flute', 'flute', 0.2],
-    ['inst-real-strings', 'Real Strings', 'string_ensemble_1', 0.3],
-    ['inst-real-choir', 'Real Choir', 'choir_aahs', 0.32],
-    ['inst-real-organ', 'Real Organ', 'drawbar_organ', 0.15],
-  ] as [string, string, string, number][]).map(([id, name, sampleId, reverb]) => ({
-    id, name, builtIn: true,
+    ['inst-real-piano', 'Grand Piano', 'acoustic_grand_piano', 0.12, 'Keys'],
+    ['inst-real-steel-guitar', 'Acoustic Guitar', 'acoustic_guitar_steel', 0.14, 'Guitar & Bass'],
+    ['inst-real-nylon-guitar', 'Nylon Guitar', 'acoustic_guitar_nylon', 0.14, 'Guitar & Bass'],
+    ['inst-real-electric-guitar', 'Electric Guitar', 'electric_guitar_clean', 0.12, 'Guitar & Bass'],
+    ['inst-real-bass', 'Bass Guitar', 'electric_bass_finger', 0.05, 'Guitar & Bass'],
+    ['inst-real-violin', 'Violin', 'violin', 0.22, 'Strings'],
+    ['inst-real-cello', 'Cello', 'cello', 0.22, 'Strings'],
+    ['inst-real-trumpet', 'Trumpet', 'trumpet', 0.16, 'Winds & Brass'],
+    ['inst-real-sax', 'Alto Sax', 'alto_sax', 0.16, 'Winds & Brass'],
+    ['inst-real-flute', 'Flute', 'flute', 0.2, 'Winds & Brass'],
+    ['inst-real-strings', 'String Ensemble', 'string_ensemble_1', 0.3, 'Strings'],
+    ['inst-real-choir', 'Choir', 'choir_aahs', 0.32, 'Voices'],
+    ['inst-real-organ', 'Organ', 'drawbar_organ', 0.15, 'Keys'],
+  ] as [string, string, string, number, string][]).map(([id, name, sampleId, reverb, group]) => ({
+    id, name, builtIn: true, group,
     engine: 'sampled' as const, sampleId, reverb,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 0.3,
@@ -965,7 +970,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   // fields are ignored by the string engine but kept (defaulted) so the type
   // and the customize panel stay uniform.
   {
-    id: 'inst-acoustic-guitar', name: 'Acoustic Guitar', builtIn: true,
+    id: 'inst-acoustic-guitar', name: 'Acoustic Guitar (synth)', builtIn: true, group: 'Guitar & Bass',
     engine: 'string', stringDamping: 0.42, stringDecay: 0.992,
     stringPickPos: 0.13, stringBody: 0.8, stringDrive: 0, reverb: 0.15,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -974,7 +979,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1.1,
   },
   {
-    id: 'inst-electric-guitar', name: 'Electric Guitar', builtIn: true,
+    id: 'inst-electric-guitar', name: 'Electric Guitar (synth)', builtIn: true, group: 'Guitar & Bass',
     engine: 'string', stringDamping: 0.62, stringDecay: 0.996,
     stringPickPos: 0.09, stringBody: 0, stringDrive: 0.45, reverb: 0.12,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -983,7 +988,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1.05,
   },
   {
-    id: 'inst-nylon-guitar', name: 'Nylon Guitar', builtIn: true,
+    id: 'inst-nylon-guitar', name: 'Nylon Guitar (synth)', builtIn: true, group: 'Guitar & Bass',
     engine: 'string', stringDamping: 0.3, stringDecay: 0.988,
     stringPickPos: 0.19, stringBody: 1, stringDrive: 0, reverb: 0.16,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -992,7 +997,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1.1,
   },
   {
-    id: 'inst-bass-guitar', name: 'Bass Guitar', builtIn: true,
+    id: 'inst-bass-guitar', name: 'Bass Guitar (synth)', builtIn: true, group: 'Guitar & Bass',
     engine: 'string', stringDamping: 0.28, stringDecay: 0.994,
     stringPickPos: 0.26, stringBody: 0.15, stringDrive: 0.12, reverb: 0.05,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -1001,7 +1006,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1.2,
   },
   {
-    id: 'inst-harp', name: 'Harp', builtIn: true,
+    id: 'inst-harp', name: 'Harp', builtIn: true, group: 'Strings',
     engine: 'string', stringDamping: 0.55, stringDecay: 0.997,
     stringPickPos: 0.4, stringBody: 0.5, stringDrive: 0, reverb: 0.3,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -1010,7 +1015,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-banjo', name: 'Banjo', builtIn: true,
+    id: 'inst-banjo', name: 'Banjo', builtIn: true, group: 'Guitar & Bass',
     engine: 'string', stringDamping: 0.8, stringDecay: 0.982,
     stringPickPos: 0.07, stringBody: 0.9, stringDrive: 0, reverb: 0.1,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -1019,7 +1024,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-pizzicato', name: 'Pizzicato', builtIn: true,
+    id: 'inst-pizzicato', name: 'Pizzicato', builtIn: true, group: 'Strings',
     engine: 'string', stringDamping: 0.45, stringDecay: 0.965,
     stringPickPos: 0.31, stringBody: 0.6, stringDrive: 0, reverb: 0.25,
     oscs: [], noise: 0, noiseDecay: 0.05,
@@ -1030,7 +1035,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
 
   // ── FM operators (realistic e-piano / bells / clav) ────────────────────────
   {
-    id: 'inst-rhodes', name: 'Rhodes E-Piano', builtIn: true, reverb: 0.15,
+    id: 'inst-rhodes', name: 'Rhodes E-Piano', builtIn: true, group: 'Keys', reverb: 0.15,
     engine: 'fm', fmRatio: 1, fmIndex: 1.4, fmDecay: 0.35,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.003, decay: 1.6, sustain: 0.35, release: 0.4,
@@ -1038,7 +1043,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-fm-piano', name: 'FM Piano', builtIn: true, reverb: 0.14,
+    id: 'inst-fm-piano', name: 'FM Piano', builtIn: true, group: 'Keys', reverb: 0.14,
     engine: 'fm', fmRatio: 2, fmIndex: 1.1, fmDecay: 0.5,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 2, sustain: 0, release: 0.3,
@@ -1046,7 +1051,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-tubular-bells', name: 'Tubular Bells', builtIn: true, reverb: 0.35,
+    id: 'inst-tubular-bells', name: 'Tubular Bells', builtIn: true, group: 'Bells & Perc', reverb: 0.35,
     engine: 'fm', fmRatio: 4, fmIndex: 2, fmDecay: 2.2,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 3, sustain: 0, release: 1.8,
@@ -1054,7 +1059,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-clav', name: 'Clavinet', builtIn: true, reverb: 0.08,
+    id: 'inst-clav', name: 'Clavinet', builtIn: true, group: 'Keys', reverb: 0.08,
     engine: 'fm', fmRatio: 3, fmIndex: 2.2, fmDecay: 0.12,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.4, sustain: 0, release: 0.15,
@@ -1062,7 +1067,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-steel-drum', name: 'Steel Drum', builtIn: true, reverb: 0.25,
+    id: 'inst-steel-drum', name: 'Steel Drum', builtIn: true, group: 'Bells & Perc', reverb: 0.25,
     engine: 'fm', fmRatio: 1, fmIndex: 3, fmDecay: 0.5,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.003, decay: 0.8, sustain: 0, release: 0.4,

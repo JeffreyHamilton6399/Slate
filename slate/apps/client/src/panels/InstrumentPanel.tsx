@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Circle, Keyboard, Minus, Plus, Save, Square, Trash2, Usb } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, Keyboard, Minus, Plus, Save, Search as SearchIcon, Square, Trash2, Usb } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { toast } from '../ui/Toast';
 import { addAudioClip, addAudioTrack, readAudioClip } from '../audio/scene';
@@ -45,12 +45,22 @@ function cloneParams(p: InstrumentParams): InstrumentParams {
   return { ...p, oscs: p.oscs.map((o) => ({ ...o })) };
 }
 
+/** The default instrument: the sampled Grand Piano (real recording). */
+const DEFAULT_PRESET =
+  INSTRUMENT_PRESETS.find((p) => p.id === 'inst-real-piano') ?? INSTRUMENT_PRESETS[0]!;
+
+/** Picker group order — presets carry a `group`; anything unexpected sinks
+ *  to the end, and customs render under "My instruments". */
+const GROUP_ORDER = ['Keys', 'Guitar & Bass', 'Strings', 'Winds & Brass', 'Voices', 'Synths', 'Bells & Perc'];
+
 export function InstrumentPanel() {
   const room = useRoom();
   const slate = room.slate;
   const [customs, setCustoms] = useState<InstrumentParams[]>(loadCustomInstruments);
-  const [selectedId, setSelectedId] = useState<string>(INSTRUMENT_PRESETS[0]!.id);
-  const [params, setParams] = useState<InstrumentParams>(() => cloneParams(INSTRUMENT_PRESETS[0]!));
+  const [selectedId, setSelectedId] = useState<string>(DEFAULT_PRESET.id);
+  const [params, setParams] = useState<InstrumentParams>(() => cloneParams(DEFAULT_PRESET));
+  /** Instrument search — filters the picker to matching presets/customs. */
+  const [instQuery, setInstQuery] = useState('');
   const [baseMidi, setBaseMidi] = useState(48); // C3
   const [keysOn, setKeysOn] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -367,7 +377,7 @@ export function InstrumentPanel() {
     if (!src) return;
     const list = deleteCustomInstrument(src.id);
     setCustoms(list);
-    selectInstrument(INSTRUMENT_PRESETS[0]!.id);
+    selectInstrument(DEFAULT_PRESET.id);
     toast({ title: 'Instrument deleted', description: src.name });
   }, [customs, selectedId, selectInstrument]);
 
@@ -440,7 +450,7 @@ export function InstrumentPanel() {
 
   return (
     <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
-      {/* Header row: instrument picker + record */}
+      {/* Header row: instrument picker (grouped; searchable below) + record */}
       <div className="flex items-center gap-1">
         <select
           value={selectedId}
@@ -448,14 +458,47 @@ export function InstrumentPanel() {
           className="min-w-0 flex-1 rounded-sm border border-border bg-bg-3 px-1 py-1 text-[11px] text-text outline-none focus:border-accent"
           aria-label="Instrument"
         >
-          <optgroup label="Built-in">
-            {INSTRUMENT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </optgroup>
-          {customs.length > 0 && (
-            <optgroup label="My instruments">
-              {customs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </optgroup>
-          )}
+          {(() => {
+            const q = instQuery.trim().toLowerCase();
+            const match = (p: InstrumentParams) => q === '' || p.name.toLowerCase().includes(q);
+            const presets = INSTRUMENT_PRESETS.filter(match);
+            const myCustoms = customs.filter(match);
+            // Keep the current selection listed even when it doesn't match the
+            // search, so the select never shows a phantom value.
+            const selectedShown = presets.some((p) => p.id === selectedId) || myCustoms.some((p) => p.id === selectedId);
+            const groups = GROUP_ORDER.filter((g) => presets.some((p) => (p.group ?? 'Other') === g));
+            const rest = presets.filter((p) => !GROUP_ORDER.includes(p.group ?? 'Other'));
+            return (
+              <>
+                {!selectedShown && (() => {
+                  const cur = INSTRUMENT_PRESETS.find((p) => p.id === selectedId) ?? customs.find((p) => p.id === selectedId);
+                  return cur ? <option value={cur.id}>{cur.name}</option> : null;
+                })()}
+                {groups.map((g) => (
+                  <optgroup key={g} label={g}>
+                    {presets
+                      .filter((p) => (p.group ?? 'Other') === g)
+                      // Recorded instruments (plain names) before their
+                      // "(synth)" counterparts.
+                      .sort((a, b) => Number(a.name.includes('(synth)')) - Number(b.name.includes('(synth)')))
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                  </optgroup>
+                ))}
+                {rest.length > 0 && (
+                  <optgroup label="Other">
+                    {rest.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </optgroup>
+                )}
+                {myCustoms.length > 0 && (
+                  <optgroup label="My instruments">
+                    {myCustoms.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </optgroup>
+                )}
+              </>
+            );
+          })()}
         </select>
         <button
           type="button"
@@ -491,6 +534,19 @@ export function InstrumentPanel() {
         >
           {QUANTIZE_OPTIONS.map((q) => <option key={q} value={q}>{q === 'off' ? 'Free' : q}</option>)}
         </select>
+      </div>
+
+      {/* Instrument search — narrows the grouped picker above. */}
+      <div className="relative">
+        <SearchIcon size={11} className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-text-dim" />
+        <input
+          type="search"
+          value={instQuery}
+          onChange={(e) => setInstQuery(e.target.value)}
+          placeholder="Search instruments…"
+          aria-label="Search instruments"
+          className="w-full rounded-sm border border-border bg-bg-3 py-1 pl-6 pr-1.5 text-[10px] text-text outline-none placeholder:text-text-dim focus:border-accent"
+        />
       </div>
 
       {recInfo && (

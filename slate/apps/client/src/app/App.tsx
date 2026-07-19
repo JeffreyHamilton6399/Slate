@@ -15,6 +15,7 @@ import { ServerWakeGate } from './ServerWakeGate';
 import { useAccount } from '../account/useAccount';
 import { startCloudSaveBridge } from '../account/cloudSaves';
 import { usePresence } from '../account/useBoardInvites';
+import { BoardInviteNotifications } from './BoardInviteNotifications';
 import { sanitizeBoardName } from './Onboarding';
 import { fetchRooms } from '../sync/rooms';
 
@@ -103,6 +104,7 @@ export function App() {
         </ServerWakeGate>
         <CloudSaveBridge />
         <PresenceBridge />
+        <BoardInviteNotifications />
         <InstallPrompt />
       </ToastProvider>
     </TooltipProvider>

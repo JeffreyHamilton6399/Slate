@@ -34,7 +34,6 @@ import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
 import { ensureMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
-import { useBoardInvites } from '../account/useBoardInvites';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -314,9 +313,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
 
   // Social: friends (for the online section + request badge) and incoming
   // board invites (notifications + a join banner).
+  // Friend-request badge on the avatar. Board invites are shown as their own
+  // bottom-right notification (BoardInviteNotifications, mounted app-wide).
   const { incomingCount } = useFriends(userId);
-  const { invites, accept: acceptInvite, decline: declineInvite } = useBoardInvites(userId);
-  const notifCount = incomingCount + invites.length;
+  const notifCount = incomingCount;
 
   /** Refresh both the recents widget + the All Projects dialog list. */
   const refreshSaves = () => {
@@ -526,40 +526,6 @@ function Home({ email, userId }: { email: string; userId: string }) {
             )}
           </div>
         </section>
-
-        {/* Incoming board invites — "come join my board". */}
-        {invites.length > 0 && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold text-text">Board invites</h2>
-            <ul className="flex flex-col gap-1.5">
-              {invites.map((inv) => (
-                <li
-                  key={inv.id}
-                  className="flex items-center gap-3 rounded-md border border-accent/40 bg-accent/10 px-3 py-2"
-                >
-                  <Avatar url={inv.fromAvatar} name={inv.fromName} size={30} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-text">
-                      <span className="font-semibold">{inv.fromName}</span> invited you to{' '}
-                      <span className="font-semibold text-accent">{inv.boardName}</span>
-                    </p>
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">{inv.mode}</span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => { const i = acceptInvite(inv.id); if (i) open(i.boardName, i.mode, false); }}
-                  >
-                    Join
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => declineInvite(inv.id)} aria-label="Dismiss invite">
-                    <Trash2 size={13} />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
 
         {/* Live public boards */}
         <section>

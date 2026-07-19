@@ -444,6 +444,111 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {
       ctx.stroke();
       break;
     }
+    case 'diamond':
+    case 'pentagon':
+    case 'hexagon': {
+      // Regular polygons that fit the bounds (diamond = a 4-gon on its point).
+      tracePolygon(ctx, b, s.kind === 'diamond' ? 4 : s.kind === 'pentagon' ? 5 : 6, false);
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'parallelogram': {
+      const sl = b.w * 0.25; // top shifted right by 25%
+      ctx.beginPath();
+      ctx.moveTo(b.x + sl, b.y);
+      ctx.lineTo(b.x + b.w, b.y);
+      ctx.lineTo(b.x + b.w - sl, b.y + b.h);
+      ctx.lineTo(b.x, b.y + b.h);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'trapezoid': {
+      const ins = b.w * 0.22; // top narrower than the base
+      ctx.beginPath();
+      ctx.moveTo(b.x + ins, b.y);
+      ctx.lineTo(b.x + b.w - ins, b.y);
+      ctx.lineTo(b.x + b.w, b.y + b.h);
+      ctx.lineTo(b.x, b.y + b.h);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'cross': {
+      // Plus sign: an arm-thickness fraction of the smaller dimension.
+      const t = Math.min(b.w, b.h) * 0.34;
+      const x0 = b.x, y0 = b.y, w = b.w, h = b.h;
+      const lx = x0 + (w - t) / 2, rx = x0 + (w + t) / 2;
+      const ty = y0 + (h - t) / 2, by = y0 + (h + t) / 2;
+      ctx.beginPath();
+      ctx.moveTo(lx, y0);
+      ctx.lineTo(rx, y0);
+      ctx.lineTo(rx, ty);
+      ctx.lineTo(x0 + w, ty);
+      ctx.lineTo(x0 + w, by);
+      ctx.lineTo(rx, by);
+      ctx.lineTo(rx, y0 + h);
+      ctx.lineTo(lx, y0 + h);
+      ctx.lineTo(lx, by);
+      ctx.lineTo(x0, by);
+      ctx.lineTo(x0, ty);
+      ctx.lineTo(lx, ty);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'heart': {
+      const cx = b.x + b.w / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, b.y + b.h * 0.28);
+      ctx.bezierCurveTo(b.x + b.w * 0.5, b.y, b.x, b.y, b.x, b.y + b.h * 0.35);
+      ctx.bezierCurveTo(b.x, b.y + b.h * 0.62, cx, b.y + b.h * 0.82, cx, b.y + b.h);
+      ctx.bezierCurveTo(cx, b.y + b.h * 0.82, b.x + b.w, b.y + b.h * 0.62, b.x + b.w, b.y + b.h * 0.35);
+      ctx.bezierCurveTo(b.x + b.w, b.y, b.x + b.w * 0.5, b.y, cx, b.y + b.h * 0.28);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'cloud': {
+      const { x, y, w, h } = b;
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.25, y + h);
+      ctx.bezierCurveTo(x, y + h, x, y + h * 0.55, x + w * 0.22, y + h * 0.52);
+      ctx.bezierCurveTo(x + w * 0.12, y + h * 0.12, x + w * 0.45, y, x + w * 0.52, y + h * 0.28);
+      ctx.bezierCurveTo(x + w * 0.62, y, x + w * 0.92, y + h * 0.04, x + w * 0.82, y + h * 0.42);
+      ctx.bezierCurveTo(x + w, y + h * 0.42, x + w, y + h, x + w * 0.78, y + h);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'speech': {
+      const { x, y, w, h } = b;
+      const bodyH = h * 0.78;
+      const r = Math.min(w, bodyH) * 0.18;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + bodyH - r);
+      ctx.quadraticCurveTo(x + w, y + bodyH, x + w - r, y + bodyH);
+      ctx.lineTo(x + w * 0.34, y + bodyH); // tail base start
+      ctx.lineTo(x + w * 0.2, y + h); // tail tip
+      ctx.lineTo(x + w * 0.24, y + bodyH); // tail base end
+      ctx.lineTo(x + r, y + bodyH);
+      ctx.quadraticCurveTo(x, y + bodyH, x, y + bodyH - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+      if (s.fill) ctx.fill();
+      ctx.stroke();
+      break;
+    }
     case 'image': {
       const img = s.src ? getImage(s.src) : null;
       if (img) {

@@ -9,7 +9,7 @@
  */
 
 import { useState } from 'react';
-import { Check, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { Check, UserPlus, Users, X } from 'lucide-react';
 import { useAccount } from '../account/useAccount';
 import { useFriends } from '../account/useFriends';
 import { sendBoardInvite } from '../account/social';
@@ -151,20 +151,13 @@ export function FriendsPanel() {
                       disabled={invited.has(f.userId)}
                       onClick={() => void invite(f.userId, f.displayName || 'Friend')}
                       title={`Invite to ${board.name}`}
-                      className="rounded-sm p-1 text-text-mid hover:bg-bg-4 hover:text-accent disabled:text-green"
+                      className="flex items-center gap-1 rounded-sm px-1.5 py-1 text-[11px] text-text-mid hover:bg-bg-4 hover:text-accent disabled:text-green"
                       aria-label={`Invite ${f.displayName} to this board`}
                     >
                       {invited.has(f.userId) ? <Check size={13} /> : <UserPlus size={13} />}
+                      <span>{invited.has(f.userId) ? 'Invited' : 'Invite'}</span>
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => void remove(f.userId)}
-                    className="rounded-sm p-1 text-text-dim opacity-0 hover:bg-bg-4 hover:text-danger group-hover:opacity-100"
-                    aria-label={`Remove ${f.displayName}`}
-                  >
-                    <UserMinus size={13} />
-                  </button>
                 </li>
               ))}
           </ul>

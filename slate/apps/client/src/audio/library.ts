@@ -6,9 +6,11 @@
  * is fine — every real drum hit differs too).
  */
 
+import { fetchGmPcm } from './gmSamples';
+
 const SR = 44100;
 
-export type LibraryCategory = 'Drums' | 'Cymbals & Perc' | 'Tonal & FX';
+export type LibraryCategory = 'Drums' | 'Cymbals & Perc' | 'Tonal & FX' | 'Real Instruments';
 
 export interface LibrarySample {
   id: string;
@@ -17,7 +19,16 @@ export interface LibrarySample {
   category: LibraryCategory;
   /** Length in seconds (shown in the panel without generating). */
   duration: number;
-  generate: () => Float32Array;
+  /** Synthesized one-shots produce PCM synchronously… */
+  generate?: () => Float32Array;
+  /** …real-instrument one-shots fetch + decode a recorded sample instead.
+   *  Exactly one of generate/load is set. */
+  load?: () => Promise<Float32Array>;
+}
+
+/** PCM for a sample regardless of kind (sync synth or fetched recording). */
+export async function librarySamplePcm(sample: LibrarySample): Promise<Float32Array> {
+  return sample.load ? sample.load() : sample.generate!();
 }
 
 /** Normalize to a 0.9 peak so library clips land at a consistent level. */
@@ -334,9 +345,26 @@ export const AUDIO_LIBRARY: LibrarySample[] = [
   { id: 'lib-riser', name: 'Riser', category: 'Tonal & FX', duration: 1.2, generate: riser },
   { id: 'lib-subdrop', name: 'Sub drop', category: 'Tonal & FX', duration: 1.0, generate: subDrop },
   { id: 'lib-laser', name: 'Laser', category: 'Tonal & FX', duration: 0.25, generate: laser },
+
+  // Real recorded one-shots (FluidR3 GM), streamed on first use then cached.
+  // Durations are the samples' natural ring-out lengths (approximate).
+  { id: 'lib-real-piano-c4', name: 'Piano C4', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('acoustic_grand_piano', 60) },
+  { id: 'lib-real-piano-c2', name: 'Piano C2', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('acoustic_grand_piano', 36) },
+  { id: 'lib-real-guitar-e2', name: 'Guitar E2 (steel)', category: 'Real Instruments', duration: 2.0, load: () => fetchGmPcm('acoustic_guitar_steel', 40) },
+  { id: 'lib-real-guitar-a3', name: 'Guitar A3 (steel)', category: 'Real Instruments', duration: 2.0, load: () => fetchGmPcm('acoustic_guitar_steel', 57) },
+  { id: 'lib-real-nylon-c4', name: 'Guitar C4 (nylon)', category: 'Real Instruments', duration: 1.8, load: () => fetchGmPcm('acoustic_guitar_nylon', 60) },
+  { id: 'lib-real-eguitar-e3', name: 'E-guitar E3', category: 'Real Instruments', duration: 2.2, load: () => fetchGmPcm('electric_guitar_clean', 52) },
+  { id: 'lib-real-bass-g1', name: 'Bass G1', category: 'Real Instruments', duration: 1.8, load: () => fetchGmPcm('electric_bass_finger', 31) },
+  { id: 'lib-real-violin-a4', name: 'Violin A4', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('violin', 69) },
+  { id: 'lib-real-cello-c3', name: 'Cello C3', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('cello', 48) },
+  { id: 'lib-real-trumpet-c4', name: 'Trumpet C4', category: 'Real Instruments', duration: 2.8, load: () => fetchGmPcm('trumpet', 60) },
+  { id: 'lib-real-sax-c4', name: 'Sax C4', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('alto_sax', 60) },
+  { id: 'lib-real-flute-a5', name: 'Flute A5', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('flute', 81) },
+  { id: 'lib-real-strings-c4', name: 'Strings C4', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('string_ensemble_1', 60) },
+  { id: 'lib-real-choir-c4', name: 'Choir C4', category: 'Real Instruments', duration: 2.9, load: () => fetchGmPcm('choir_aahs', 60) },
 ];
 
-export const LIBRARY_CATEGORIES: LibraryCategory[] = ['Drums', 'Cymbals & Perc', 'Tonal & FX'];
+export const LIBRARY_CATEGORIES: LibraryCategory[] = ['Drums', 'Cymbals & Perc', 'Tonal & FX', 'Real Instruments'];
 
 export const LIBRARY_SAMPLE_RATE = SR;
 
@@ -344,18 +372,21 @@ export const LIBRARY_SAMPLE_RATE = SR;
 
 let previewCtx: AudioContext | null = null;
 
-/** Play a library sample immediately (panel click preview). */
+/** Play a library sample immediately (panel click preview). Real-instrument
+ *  samples resolve asynchronously — the first preview arrives when the fetch
+ *  lands (cached and instant thereafter). */
 export function previewLibrarySample(sample: LibrarySample): void {
   const AudioCtx =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   if (!previewCtx) previewCtx = new AudioCtx();
   if (previewCtx.state === 'suspended') void previewCtx.resume();
-  const pcm = sample.generate();
-  const buf = previewCtx.createBuffer(1, pcm.length, SR);
-  buf.getChannelData(0).set(pcm);
-  const src = previewCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(previewCtx.destination);
-  src.start();
+  void librarySamplePcm(sample).then((pcm) => {
+    const buf = previewCtx!.createBuffer(1, pcm.length, SR);
+    buf.getChannelData(0).set(pcm);
+    const src = previewCtx!.createBufferSource();
+    src.buffer = buf;
+    src.connect(previewCtx!.destination);
+    src.start();
+  }).catch(() => { /* offline / sample unavailable — preview silently skips */ });
 }

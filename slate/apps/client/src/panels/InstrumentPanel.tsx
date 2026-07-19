@@ -23,6 +23,7 @@ import {
   midiToName, renderPerformance, saveCustomInstrument,
   type InstrumentParams, type NoteEvent, type WaveType,
 } from '../audio/instruments';
+import { GM_INSTRUMENTS, preloadGmNotes } from '../audio/gmSamples';
 
 const WAVES: WaveType[] = ['sine', 'triangle', 'sawtooth', 'square'];
 const WAVE_LABEL: Record<WaveType, string> = { sine: 'Sin', triangle: 'Tri', sawtooth: 'Saw', square: 'Sqr' };
@@ -75,6 +76,15 @@ export function InstrumentPanel() {
   const pointerNoteRef = useRef<number | null>(null);
   /** Active recording take, or null. */
   const recRef = useRef<{ startPerf: number; startPos: number; notes: NoteEvent[]; held: Map<number, { t: number; v: number }> } | null>(null);
+
+  // Sampled instruments: warm the note cache around the visible keyboard the
+  // moment the instrument (or octave) changes, so keys sound on first press
+  // instead of only after their mp3 lands.
+  useEffect(() => {
+    if ((params.engine ?? 'subtractive') !== 'sampled') return;
+    const notes = Array.from({ length: 30 }, (_, i) => baseMidi + i - 2);
+    void preloadGmNotes(params.sampleId ?? 'acoustic_grand_piano', notes);
+  }, [params.engine, params.sampleId, baseMidi]);
 
   useEffect(() => {
     synthRef.current = new LiveInstrument(paramsRef.current);
@@ -548,15 +558,15 @@ export function InstrumentPanel() {
           {/* Engine selector — swaps the synthesis model (and which knobs show). */}
           <div className="flex items-center gap-1">
             <span className="text-[9px] font-mono uppercase text-text-dim">Engine</span>
-            {(['subtractive', 'string', 'fm', 'piano'] as const).map((eng) => (
+            {(['subtractive', 'string', 'fm', 'piano', 'sampled'] as const).map((eng) => (
               <button
                 key={eng}
                 type="button"
                 onClick={() => setP('engine', eng)}
-                title={eng === 'string' ? 'Plucked string (guitar/harp)' : eng === 'fm' ? 'FM (e-piano/bells)' : eng === 'piano' ? 'Modelled piano (inharmonic partials + hammer)' : 'Subtractive synth'}
+                title={eng === 'string' ? 'Plucked string (guitar/harp)' : eng === 'fm' ? 'FM (e-piano/bells)' : eng === 'piano' ? 'Modelled piano (inharmonic partials + hammer)' : eng === 'sampled' ? 'Real recorded notes (streamed samples)' : 'Subtractive synth'}
                 className={`rounded-sm border px-1.5 py-0.5 text-[9px] capitalize ${(params.engine ?? 'subtractive') === eng ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-mid hover:bg-bg-4'}`}
               >
-                {eng === 'subtractive' ? 'Synth' : eng === 'string' ? 'String' : eng === 'fm' ? 'FM' : 'Piano'}
+                {eng === 'subtractive' ? 'Synth' : eng === 'string' ? 'String' : eng === 'fm' ? 'FM' : eng === 'piano' ? 'Piano' : 'Real'}
               </button>
             ))}
           </div>
@@ -602,6 +612,26 @@ export function InstrumentPanel() {
               <Param label="Pick pos" value={params.stringPickPos ?? 0.13} min={0.02} max={0.5} step={0.01} onChange={(v) => setP('stringPickPos', v)} />
               <Param label="Body" value={params.stringBody ?? 0} min={0} max={1} step={0.01} onChange={(v) => setP('stringBody', v)} />
               <Param label="Drive" value={params.stringDrive ?? 0} min={0} max={1} step={0.01} onChange={(v) => setP('stringDrive', v)} />
+            </>
+          )}
+
+          {/* Sampled (real recording) picker. */}
+          {(params.engine ?? 'subtractive') === 'sampled' && (
+            <>
+              <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">Sample</span>
+              <select
+                value={params.sampleId ?? 'acoustic_grand_piano'}
+                onChange={(e) => setP('sampleId', e.target.value)}
+                aria-label="Sampled instrument"
+                className="rounded-sm border border-border bg-bg-4 px-1 py-1 text-[10px] text-text outline-none"
+              >
+                {GM_INSTRUMENTS.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <p className="text-[9px] leading-snug text-text-dim">
+                Real recordings, streamed per note (~20 KB each) and cached.
+              </p>
             </>
           )}
 

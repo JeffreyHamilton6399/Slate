@@ -14,6 +14,8 @@
  * Custom instruments are InstrumentParams objects persisted to localStorage.
  */
 
+import { ensureGmNote, getGmNote, preloadGmNotes } from './gmSamples';
+
 export type WaveType = 'sine' | 'square' | 'sawtooth' | 'triangle';
 
 export interface OscSpec {
@@ -31,9 +33,10 @@ export interface OscSpec {
  *  realistic guitar/harp/pizzicato path); `fm` = 2-operator FM (realistic
  *  electric piano / bells / clav); `piano` = additive damped-partial piano
  *  (inharmonic partials, per-partial decay, detuned string pairs, hammer
- *  thump). All run on plain Web Audio nodes so they render offline for
- *  recorded takes just like the subtractive path. */
-export type SynthEngine = 'subtractive' | 'string' | 'fm' | 'piano';
+ *  thump); `sampled` = real recorded notes streamed from the FluidR3 General
+ *  MIDI soundfont (see gmSamples.ts). All run on plain Web Audio nodes so
+ *  they render offline for recorded takes just like the subtractive path. */
+export type SynthEngine = 'subtractive' | 'string' | 'fm' | 'piano' | 'sampled';
 
 export interface InstrumentParams {
   id: string;
@@ -60,6 +63,9 @@ export interface InstrumentParams {
   stringDrive?: number;
   /** 0..1 room-reverb send (shared synthetic room, works live + offline). */
   reverb?: number;
+  /** ── Sampled engine ───────────────────────────────────────────────────── */
+  /** FluidR3 GM instrument folder (see GM_INSTRUMENTS in gmSamples.ts). */
+  sampleId?: string;
   /** ── FM params ────────────────────────────────────────────────────────── */
   /** Modulator : carrier frequency ratio. Integer ratios (1, 2, 3) = harmonic
    *  (e-piano, brass); non-integers (1.4, 3.5) = inharmonic (bells, metallic). */
@@ -458,7 +464,7 @@ export function startVoice(
 
   // Optional vibrato LFO (drives osc/carrier detune in subtractive + FM).
   let lfoGain: GainNode | null = null;
-  if (p.vibratoDepth > 0 && p.vibratoRate > 0 && engine !== 'string' && engine !== 'piano') {
+  if (p.vibratoDepth > 0 && p.vibratoRate > 0 && engine !== 'string' && engine !== 'piano' && engine !== 'sampled') {
     const lfo = ctx.createOscillator();
     lfo.frequency.value = p.vibratoRate;
     lfoGain = ctx.createGain();
@@ -525,6 +531,24 @@ export function startVoice(
     src.connect(amp);
     src.start(when);
     sources.push(src);
+  } else if (engine === 'sampled') {
+    // ── Real recorded note (FluidR3 GM sample) ─────────────────────────────
+    // Cache-only lookup: startVoice must stay synchronous. The nearest cached
+    // neighbour (pitch-shifted) covers a note whose exact sample is still
+    // downloading; a full miss kicks off the fetch so the NEXT press plays
+    // (same first-press behavior as the MIDI-track soundfont piano).
+    const gmId = p.sampleId ?? 'acoustic_grand_piano';
+    const hit = getGmNote(gmId, midi);
+    if (hit) {
+      const src = ctx.createBufferSource();
+      src.buffer = hit.buffer;
+      src.playbackRate.value = hit.playbackRate;
+      src.connect(amp);
+      src.start(when);
+      sources.push(src);
+    } else {
+      void ensureGmNote(gmId, midi);
+    }
   } else if (engine === 'fm') {
     // ── 2-operator FM ──────────────────────────────────────────────────────
     const carrier = ctx.createOscillator();
@@ -609,6 +633,9 @@ export function startVoice(
       // — for offline renders the context is discarded wholesale).
       const last = sources[sources.length - 1];
       if (last) last.onended = () => { for (const n of nodes) { try { n.disconnect(); } catch { /* detached */ } } };
+      // A silent sampled-engine miss has no sources — still detach the amp so
+      // repeated first-presses don't accumulate orphaned gain nodes.
+      else for (const n of nodes) { try { n.disconnect(); } catch { /* detached */ } }
     },
   };
 }
@@ -698,6 +725,11 @@ export async function renderPerformance(
   p: InstrumentParams,
 ): Promise<{ samples: Float32Array; duration: number } | null> {
   if (notes.length === 0) return null;
+  // Sampled engine: fetch every note's mp3 up front — the offline graph can't
+  // await downloads mid-render, and startVoice only reads the cache.
+  if ((p.engine ?? 'subtractive') === 'sampled') {
+    await preloadGmNotes(p.sampleId ?? 'acoustic_grand_piano', notes.map((n) => n.midi));
+  }
   const lead = 0.03; // tiny pre-roll so attack transients aren't clipped at t=0
   const rel = Math.max(0.02, p.release);
   // Leave room for the reverb tail so a wet take isn't cut off mid-decay.
@@ -901,6 +933,32 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     filterCutoff: 2600, filterQ: 0.7, filterEnv: 400, keyTrack: 0.6,
     vibratoRate: 5.2, vibratoDepth: 10, gain: 0.75,
   },
+
+  // ── Real recorded instruments (FluidR3 GM samples, streamed + cached) ──────
+  // These play actual recordings per note — the "sounds like the real thing"
+  // set. First press of a note downloads it (~20 KB); after that it's instant.
+  ...([
+    ['inst-real-piano', 'Real Piano', 'acoustic_grand_piano', 0.12],
+    ['inst-real-steel-guitar', 'Real Guitar (Steel)', 'acoustic_guitar_steel', 0.14],
+    ['inst-real-nylon-guitar', 'Real Guitar (Nylon)', 'acoustic_guitar_nylon', 0.14],
+    ['inst-real-electric-guitar', 'Real Guitar (Electric)', 'electric_guitar_clean', 0.12],
+    ['inst-real-bass', 'Real Bass', 'electric_bass_finger', 0.05],
+    ['inst-real-violin', 'Real Violin', 'violin', 0.22],
+    ['inst-real-cello', 'Real Cello', 'cello', 0.22],
+    ['inst-real-trumpet', 'Real Trumpet', 'trumpet', 0.16],
+    ['inst-real-sax', 'Real Sax', 'alto_sax', 0.16],
+    ['inst-real-flute', 'Real Flute', 'flute', 0.2],
+    ['inst-real-strings', 'Real Strings', 'string_ensemble_1', 0.3],
+    ['inst-real-choir', 'Real Choir', 'choir_aahs', 0.32],
+    ['inst-real-organ', 'Real Organ', 'drawbar_organ', 0.15],
+  ] as [string, string, string, number][]).map(([id, name, sampleId, reverb]) => ({
+    id, name, builtIn: true,
+    engine: 'sampled' as const, sampleId, reverb,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 0.3, sustain: 1, release: 0.3,
+    filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
+  })),
 
   // ── Physical-model strings (Karplus-Strong) ────────────────────────────────
   // These are the "real instrument" plucked/struck strings. `oscs`/filter

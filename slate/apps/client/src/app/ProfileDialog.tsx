@@ -234,7 +234,7 @@ function ProfileTabView() {
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
-              className="group relative shrink-0 rounded-full"
+              className="group relative flex shrink-0 rounded-full"
               title="Change photo"
               aria-label="Change profile photo"
             >

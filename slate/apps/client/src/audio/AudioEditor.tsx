@@ -24,7 +24,7 @@ import {
 } from './scene';
 import { AudioEngine, SOUNDFONT_PIANO_ID } from './engine';
 import { loadSamples } from './sampleStore';
-import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE } from './library';
+import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE, librarySamplePcm } from './library';
 import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS, INSTRUMENT_PRESETS, loadCustomInstruments } from './instruments';
 import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
@@ -1191,12 +1191,16 @@ export function AudioEditor() {
   const addLibraryToTrack = useCallback(async (libId: string, trackId: string, start: number) => {
     const sample = AUDIO_LIBRARY.find((s) => s.id === libId);
     if (!sample) return;
-    const pcm = sample.generate();
-    await addAudioClip(slate, trackId, {
-      start, samples: pcm, sampleRate: LIBRARY_SAMPLE_RATE,
-      channels: 1, duration: pcm.length / LIBRARY_SAMPLE_RATE, name: sample.name,
-    });
-    toast({ title: 'Added to track', description: sample.name });
+    try {
+      const pcm = await librarySamplePcm(sample);
+      await addAudioClip(slate, trackId, {
+        start, samples: pcm, sampleRate: LIBRARY_SAMPLE_RATE,
+        channels: 1, duration: pcm.length / LIBRARY_SAMPLE_RATE, name: sample.name,
+      });
+      toast({ title: 'Added to track', description: sample.name });
+    } catch (err) {
+      toast({ title: 'Sample unavailable', description: (err as Error).message, variant: 'error' });
+    }
   }, [slate]);
 
   /** Handle a drop on the timeline area — hit-tests the track row and computes the time. */

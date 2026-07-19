@@ -764,7 +764,7 @@ function ProfileMenu({
         <button
           type="button"
           aria-label={notifCount > 0 ? `Account menu — ${notifCount} notifications` : 'Account menu'}
-          className="relative rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
+          className="relative flex rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
           title="Account"
         >
           <Avatar url={avatarUrl} name={displayName || email} size={34} />

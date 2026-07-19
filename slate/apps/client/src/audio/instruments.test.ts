@@ -124,6 +124,10 @@ describe('instrument engine', () => {
       if (engine === 'subtractive') {
         expect(p.oscs.some((o) => o.level > 0)).toBe(true);
       }
+      if (engine === 'sampled') {
+        expect(typeof p.sampleId).toBe('string');
+        expect(p.sampleId!.length).toBeGreaterThan(0);
+      }
     }
     // We shipped the realistic set (and the modelled piano).
     for (const name of ['Acoustic Guitar', 'Electric Guitar', 'Bass Guitar', 'Harp', 'Rhodes E-Piano', 'Tubular Bells']) {

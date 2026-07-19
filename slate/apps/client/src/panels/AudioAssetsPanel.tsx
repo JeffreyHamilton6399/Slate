@@ -15,6 +15,7 @@ import {
   AUDIO_LIBRARY,
   LIBRARY_CATEGORIES,
   LIBRARY_SAMPLE_RATE,
+  librarySamplePcm,
   previewLibrarySample,
   type LibraryCategory,
   type LibrarySample,
@@ -76,17 +77,21 @@ export function AudioAssetsPanel() {
 
   /** Add a built-in library sample to a new track at t=0. */
   const addLibrary = async (sample: LibrarySample) => {
-    const pcm = sample.generate();
-    const trackId = addAudioTrack(slate, { name: sample.name });
-    await addAudioClip(slate, trackId, {
-      start: 0,
-      samples: pcm,
-      sampleRate: LIBRARY_SAMPLE_RATE,
-      channels: 1,
-      duration: pcm.length / LIBRARY_SAMPLE_RATE,
-      name: sample.name,
-    });
-    toast({ title: 'Added to new track', description: sample.name });
+    try {
+      const pcm = await librarySamplePcm(sample);
+      const trackId = addAudioTrack(slate, { name: sample.name });
+      await addAudioClip(slate, trackId, {
+        start: 0,
+        samples: pcm,
+        sampleRate: LIBRARY_SAMPLE_RATE,
+        channels: 1,
+        duration: pcm.length / LIBRARY_SAMPLE_RATE,
+        name: sample.name,
+      });
+      toast({ title: 'Added to new track', description: sample.name });
+    } catch (err) {
+      toast({ title: 'Sample unavailable', description: (err as Error).message, variant: 'error' });
+    }
   };
 
   return (

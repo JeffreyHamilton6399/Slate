@@ -546,6 +546,13 @@ export function startVoice(
       const src = ctx.createBufferSource();
       src.buffer = hit.buffer;
       src.playbackRate.value = hit.playbackRate;
+      // Sustained instruments (bowed/blown/sung) loop their baked sustain
+      // region while held — the release fade in stop() ends the note.
+      if (hit.loopStart !== undefined && hit.loopEnd !== undefined) {
+        src.loop = true;
+        src.loopStart = hit.loopStart;
+        src.loopEnd = hit.loopEnd;
+      }
       src.connect(amp);
       src.start(when);
       sources.push(src);

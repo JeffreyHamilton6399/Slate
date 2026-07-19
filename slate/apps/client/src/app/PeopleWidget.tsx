@@ -7,19 +7,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, PhoneOff, Crown, GripHorizontal, PencilOff, UserX, UserPlus, Check } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Crown, GripHorizontal, PencilOff, UserX } from 'lucide-react';
 import type { AwarenessState } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { useVoiceOptional } from '../voice/useVoiceOptional';
 import { useServerStatus } from '../sync/serverStatus';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../utils/cn';
-import { useAccount } from '../account/useAccount';
-import { useFriends } from '../account/useFriends';
-import { sendBoardInvite } from '../account/social';
-import { useAppStore } from './store';
-import { Avatar } from './Avatar';
-import { toast } from '../ui/Toast';
 
 const STORE_KEY = 'slate.people.v2';
 const WIDTH = 224;
@@ -258,8 +252,6 @@ export function PeopleWidget({
             ))}
           </ul>
 
-          <InviteFriends />
-
           {voice && (
             <div className="border-t border-border p-1.5">
               {!voice.connected ? (
@@ -361,70 +353,6 @@ function AvatarStack({
           {(m.name || '?').slice(0, 1).toUpperCase()}
         </span>
       ))}
-    </div>
-  );
-}
-
-/**
- * Invite friends to THIS board. Lists your accepted friends inside the People
- * widget (in-board, so the board name/mode are in scope); clicking one sends a
- * board_invite they'll see as a notification on Home. Renders nothing when
- * you're signed out or have no friends yet.
- */
-function InviteFriends() {
-  const { user } = useAccount();
-  const { friends } = useFriends(user?.id);
-  const board = useAppStore((s) => s.currentBoard);
-  const [invited, setInvited] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState(false);
-
-  if (!user?.id || !board || friends.length === 0) return null;
-
-  const invite = async (friendId: string, name: string) => {
-    setInvited((s) => new Set(s).add(friendId));
-    const r = await sendBoardInvite(user.id, friendId, board.name, board.mode);
-    if (r.ok) toast({ title: 'Invite sent', description: `${name} was invited to this board` });
-    else {
-      toast({ title: 'Could not invite', description: r.error, variant: 'error' });
-      setInvited((s) => { const n = new Set(s); n.delete(friendId); return n; });
-    }
-  };
-
-  return (
-    <div className="border-t border-border p-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 rounded-sm px-1 py-1 text-xs font-medium text-text-mid hover:bg-bg-3 hover:text-text"
-      >
-        <UserPlus size={12} />
-        Invite a friend
-        <span className="ml-auto text-[10px] text-text-dim">{friends.length}</span>
-      </button>
-      {open && (
-        <ul className="mt-1 max-h-40 overflow-y-auto">
-          {[...friends]
-            .sort((a, b) => Number(b.online) - Number(a.online))
-            .map((f) => (
-              <li key={f.userId} className="flex items-center gap-2 rounded-sm px-1 py-1">
-                <span className="relative shrink-0">
-                  <Avatar url={f.avatarUrl} name={f.displayName} size={22} />
-                  {f.online && <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green ring-2 ring-bg-2" />}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-xs text-text">{f.displayName || 'Anonymous'}</span>
-                <button
-                  type="button"
-                  disabled={invited.has(f.userId)}
-                  onClick={() => void invite(f.userId, f.displayName || 'Friend')}
-                  className="rounded-sm p-0.5 text-text-dim hover:bg-bg-4 hover:text-accent disabled:text-green"
-                  aria-label={`Invite ${f.displayName}`}
-                >
-                  {invited.has(f.userId) ? <Check size={12} /> : <UserPlus size={12} />}
-                </button>
-              </li>
-            ))}
-        </ul>
-      )}
     </div>
   );
 }

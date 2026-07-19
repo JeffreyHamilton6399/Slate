@@ -282,12 +282,48 @@ export function persistSave(snapshot: SavedSnapshot, label?: string, id?: string
     mode: snapshot.data.meta.mode,
     approxBytes: serialized.length,
   };
-  const list = listSaves();
-  const next = [entry, ...list.filter((e) => e.id !== saveId)].slice(0, 50);
-  localStorage.setItem(`${KEY}.index`, JSON.stringify(next));
-  localStorage.setItem(`${KEY}.${saveId}`, serialized);
+  const next = [entry, ...listSaves().filter((e) => e.id !== saveId)].slice(0, 50);
+  // localStorage has a ~5-10MB origin cap. A big board's snapshot can push it
+  // over, and a naive setItem then THROWS — which the autosave loop swallowed,
+  // so saving silently stopped working. Write the blob with quota eviction:
+  // drop the OLDEST other saves and retry until it fits (or we're out of
+  // victims). The index is written last, reflecting whatever survived.
+  const survived = writeBlobWithEviction(`${KEY}.${saveId}`, serialized, next, saveId);
+  localStorage.setItem(`${KEY}.index`, JSON.stringify(survived));
   for (const cb of saveListeners) cb(entry, snapshot);
   return entry;
+}
+
+/** Try to write `serialized`; on QuotaExceeded, evict the oldest OTHER saves
+ *  (mutating a copy of `index`) and retry. Returns the surviving index. Throws
+ *  only if the blob can't fit even with every other save gone. */
+function writeBlobWithEviction(
+  blobKey: string,
+  serialized: string,
+  index: SaveIndexEntry[],
+  keepId: string,
+): SaveIndexEntry[] {
+  const idx = [...index];
+  const isQuota = (e: unknown) =>
+    e instanceof DOMException &&
+    (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22);
+  for (;;) {
+    try {
+      localStorage.setItem(blobKey, serialized);
+      return idx;
+    } catch (e) {
+      if (!isQuota(e)) throw e;
+      // Evict the single oldest save that isn't the one we're writing.
+      let victimAt = Infinity;
+      let victimI = -1;
+      for (let i = 0; i < idx.length; i++) {
+        if (idx[i]!.id !== keepId && idx[i]!.savedAt < victimAt) { victimAt = idx[i]!.savedAt; victimI = i; }
+      }
+      if (victimI < 0) throw e; // nothing left to evict — genuinely too big
+      const victim = idx.splice(victimI, 1)[0]!;
+      try { localStorage.removeItem(`${KEY}.${victim.id}`); } catch { /* ignore */ }
+    }
+  }
 }
 
 export function deleteSave(id: string): void {

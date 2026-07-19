@@ -19,6 +19,7 @@ import { AudioEditorPanel } from './AudioEditorPanel';
 import { AudioAssetsPanel } from './AudioAssetsPanel';
 import { AudioSettingsPanel } from './AudioSettingsPanel';
 import { InstrumentPanel } from './InstrumentPanel';
+import { FriendsPanel } from './FriendsPanel';
 
 let registered = false;
 
@@ -94,6 +95,15 @@ export function registerBuiltInPanels(): void {
     defaultSide: 'right-bottom',
     render: NotesPanel,
     order: 11,
+    mode: 'both',
+  });
+  // Friends — bottom-right tab: roster + online status + invite to this board.
+  registerPanel({
+    id: 'friends',
+    title: 'Friends',
+    defaultSide: 'right-bottom',
+    render: FriendsPanel,
+    order: 12,
     mode: 'both',
   });
   // Members panel retired — the People widget covers roster + voice + host controls.

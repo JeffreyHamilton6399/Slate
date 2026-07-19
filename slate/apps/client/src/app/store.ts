@@ -25,6 +25,12 @@ interface AppState {
   displayName: string;
   /** Cropped avatar as a small JPEG data URL ('' = none, show initial). */
   avatarUrl: string;
+  /** Short about-me shown on the profile ('' = none). */
+  bio: string;
+  /** One-line status shown next to the name ('' = none). Emoji welcome. */
+  statusText: string;
+  /** Profile banner color (hex). */
+  bannerColor: string;
   /** Current board, or null if user is on the boards list. */
   currentBoard: JoinedBoard | null;
   /** UI flag for command palette / overlays. */
@@ -56,6 +62,9 @@ interface AppState {
 
   setDisplayName: (n: string) => void;
   setAvatarUrl: (url: string) => void;
+  setBio: (b: string) => void;
+  setStatusText: (s: string) => void;
+  setBannerColor: (c: string) => void;
   setShowOnline: (v: boolean) => void;
   setTheme: (t: Theme) => void;
   setPaperFollowsTheme: (v: boolean) => void;
@@ -77,6 +86,9 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       displayName: '',
       avatarUrl: '',
+      bio: '',
+      statusText: '',
+      bannerColor: '#7c6aff',
       currentBoard: null,
       shortcutsOpen: false,
       settingsOpen: false,
@@ -92,6 +104,9 @@ export const useAppStore = create<AppState>()(
       showOnline: true,
       setDisplayName: (displayName) => set({ displayName }),
       setAvatarUrl: (avatarUrl) => set({ avatarUrl }),
+      setBio: (bio) => set({ bio }),
+      setStatusText: (statusText) => set({ statusText }),
+      setBannerColor: (bannerColor) => set({ bannerColor }),
       setShowOnline: (showOnline) => set({ showOnline }),
       setTheme: (theme) => set({ theme }),
       setPaperFollowsTheme: (paperFollowsTheme) => set({ paperFollowsTheme }),
@@ -113,6 +128,9 @@ export const useAppStore = create<AppState>()(
       partialize: (s) => ({
         displayName: s.displayName,
         avatarUrl: s.avatarUrl,
+        bio: s.bio,
+        statusText: s.statusText,
+        bannerColor: s.bannerColor,
         currentBoard: s.currentBoard,
         theme: s.theme,
         paperFollowsTheme: s.paperFollowsTheme,

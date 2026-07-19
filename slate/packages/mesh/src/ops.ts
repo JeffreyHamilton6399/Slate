@@ -499,7 +499,23 @@ export function bevelEdges(
   amount: number,
   segments = 1,
 ): Mesh {
-  if (amount <= 0 || edgePairsFlat.length < 2) return cloneMesh(mesh);
+  return bevelEdgesDetailed(mesh, edgePairsFlat, amount, segments).mesh;
+}
+
+/**
+ * `bevelEdges` plus the indices of the faces the bevel created (strips, end
+ * caps and corner patches — everything appended after the rewritten boundary
+ * faces). Editors keep these selected after the tool confirms, matching
+ * Blender's highlighted bevel result.
+ */
+export function bevelEdgesDetailed(
+  mesh: Mesh,
+  edgePairsFlat: number[],
+  amount: number,
+  segments = 1,
+): { mesh: Mesh; newFaces: number[] } {
+  if (amount <= 0 || edgePairsFlat.length < 2)
+    return { mesh: cloneMesh(mesh), newFaces: [] };
   const seg = Math.max(1, Math.round(segments));
   const m = cloneMesh(mesh);
   const ekey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -533,7 +549,10 @@ export function bevelEdges(
     selected.set(key, e);
     bedges.push(e);
   }
-  if (bedges.length === 0) return cloneMesh(mesh);
+  if (bedges.length === 0) return { mesh: cloneMesh(mesh), newFaces: [] };
+  // Boundary faces are rewritten in place below; every face the bevel CREATES
+  // is appended after this index (compact() preserves face order).
+  const origFaceCount = m.faces.length;
 
   // Face normals + centroids from the ORIGINAL mesh (faces get rewritten below).
   const N = m.faces.map((f) => faceNormal(m, f));
@@ -887,7 +906,9 @@ export function bevelEdges(
     pushPoly(prevRing); // center n-gon cap
   }
 
-  return compact(m);
+  const newFaces: number[] = [];
+  for (let i = origFaceCount; i < m.faces.length; i++) newFaces.push(i);
+  return { mesh: compact(m), newFaces };
 }
 
 /** Merge selected verts to their centroid (Blender 'M' → At Center). */

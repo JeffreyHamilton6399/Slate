@@ -9,7 +9,7 @@
  *   Settings — appearance (theme/accent), voice, 3D viewport, layout reset
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Camera,
   Check,
@@ -17,6 +17,7 @@ import {
   CloudUpload,
   LogOut,
   Moon,
+  Search,
   Settings as SettingsIcon,
   Sun,
   Trash2,
@@ -35,6 +36,7 @@ import { useAccount } from '../account/useAccount';
 import { useFriends } from '../account/useFriends';
 import { upsertMyProfile, fetchMyProfile } from '../account/friends';
 import { backupSavesToCloud, restoreSavesFromCloud } from '../account/cloudSaves';
+import { listSaves } from '../files/snapshot';
 import { useDockStore } from '../workspace/dockStore';
 import { useVoiceOptional } from '../voice/useVoiceOptional';
 import { toast } from '../ui/Toast';
@@ -70,15 +72,19 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
     if (open) setTab(initialTab);
   }, [open, initialTab]);
 
-  // On open, pull the avatar/name synced from another device (if the local
-  // store hasn't got one yet). Keeps the pic following the account.
+  // On open, pull the profile synced from another device (if the local store
+  // hasn't got the fields yet). Keeps the pic/bio/status following the account.
   useEffect(() => {
     if (!open || !user?.id) return;
     let cancelled = false;
     void fetchMyProfile(user.id).then((prof) => {
       if (cancelled || !prof) return;
-      if (prof.avatarUrl && !useAppStore.getState().avatarUrl) setAvatarUrl(prof.avatarUrl);
-      if (prof.displayName && !useAppStore.getState().displayName) setDisplayName(prof.displayName);
+      const s = useAppStore.getState();
+      if (prof.avatarUrl && !s.avatarUrl) setAvatarUrl(prof.avatarUrl);
+      if (prof.displayName && !s.displayName) setDisplayName(prof.displayName);
+      if (prof.bio && !s.bio) s.setBio(prof.bio);
+      if (prof.status && !s.statusText) s.setStatusText(prof.status);
+      if (prof.bannerColor) s.setBannerColor(prof.bannerColor);
     });
     return () => { cancelled = true; };
   }, [open, user?.id, setAvatarUrl, setDisplayName]);
@@ -134,17 +140,38 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
   );
 }
 
-/** Profile tab — identity + account (avatar, name, cloud backup, sign out). */
+const BANNER_COLORS = ['#7c6aff', '#38bdf8', '#22d3a5', '#fbbf24', '#f472b6', '#f87171', '#64748b'];
+
+/** Profile tab — a social-style profile card: banner, big avatar, status line,
+ *  bio, stats, then the account plumbing (cloud backup, sign out). */
 function ProfileTabView() {
   const displayName = useAppStore((s) => s.displayName);
   const setDisplayName = useAppStore((s) => s.setDisplayName);
   const avatarUrl = useAppStore((s) => s.avatarUrl);
   const setAvatarUrl = useAppStore((s) => s.setAvatarUrl);
+  const bio = useAppStore((s) => s.bio);
+  const setBio = useAppStore((s) => s.setBio);
+  const statusText = useAppStore((s) => s.statusText);
+  const setStatusText = useAppStore((s) => s.setStatusText);
+  const bannerColor = useAppStore((s) => s.bannerColor);
+  const setBannerColor = useAppStore((s) => s.setBannerColor);
   const { user } = useAccount();
   const email = user?.email ?? '';
   const userId = user?.id;
+  const { friends } = useFriends(userId);
   const [name, setName] = useState(displayName);
+  const [bioDraft, setBioDraft] = useState(bio);
+  const [statusDraft, setStatusDraft] = useState(statusText);
   useEffect(() => setName(displayName), [displayName]);
+  useEffect(() => setBioDraft(bio), [bio]);
+  useEffect(() => setStatusDraft(statusText), [statusText]);
+
+  const boardsCount = useMemo(() => listSaves().length, []);
+  const memberSince = useMemo(() => {
+    const t = user?.created_at ? Date.parse(user.created_at) : NaN;
+    if (!Number.isFinite(t)) return null;
+    return new Date(t).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }, [user?.created_at]);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
@@ -160,72 +187,168 @@ function ProfileTabView() {
     reader.readAsDataURL(file);
   };
 
+  /** Push the full local profile to the cloud row (partial-safe). */
+  const syncProfile = (patch?: { avatar?: string | null; bio?: string; status?: string; bannerColor?: string }) => {
+    if (!userId) return;
+    const s = useAppStore.getState();
+    void upsertMyProfile(userId, s.displayName || name, email, patch?.avatar, {
+      bio: patch?.bio ?? s.bio,
+      status: patch?.status ?? s.statusText,
+      bannerColor: patch?.bannerColor ?? s.bannerColor,
+    });
+  };
+
   const saveAvatar = (dataUrl: string | null) => {
     setAvatarUrl(dataUrl ?? '');
-    if (userId) void upsertMyProfile(userId, useAppStore.getState().displayName || name, email, dataUrl ?? null);
+    syncProfile({ avatar: dataUrl ?? null });
   };
 
   return (
     <div className="flex flex-col gap-5">
-      <h3 className="text-lg font-semibold text-text">Profile</h3>
-      <div className="flex items-center gap-4 rounded-lg border border-border bg-bg-2 p-4">
-        {/* Avatar with hover camera overlay (Google-style). */}
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          className="group relative shrink-0 rounded-full"
-          title="Change photo"
-          aria-label="Change profile photo"
+      {/* ── Profile card: banner + avatar + identity ── */}
+      <div className="overflow-hidden rounded-xl border border-border bg-bg-2">
+        {/* Banner (choose a color on hover). */}
+        <div
+          className="group/banner relative h-24"
+          style={{ background: `linear-gradient(135deg, ${bannerColor} 0%, ${bannerColor}55 70%, transparent 130%)` }}
         >
-          <Avatar url={avatarUrl} name={displayName || email} size={72} className="ring-2 ring-border" />
-          <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
-            <Camera size={20} className="text-white" />
-          </span>
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = ''; }}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
-          {email ? (
-            <p className="truncate text-xs text-text-dim" title={email}>{email}</p>
-          ) : (
-            <p className="text-xs text-text-dim">Not signed in</p>
-          )}
-          <div className="mt-2 flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
-              <Camera size={13} />
-              <span className="ml-1.5">{avatarUrl ? 'Change photo' : 'Upload photo'}</span>
-            </Button>
-            {avatarUrl && (
-              <Button variant="ghost" size="sm" onClick={() => saveAvatar(null)} aria-label="Remove photo">
-                <Trash2 size={13} />
+          <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/35 px-2 py-1 opacity-0 backdrop-blur transition-opacity group-hover/banner:opacity-100">
+            {BANNER_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                aria-label={`Banner color ${c}`}
+                onClick={() => { setBannerColor(c); syncProfile({ bannerColor: c }); }}
+                className={
+                  'h-4 w-4 rounded-full border transition-transform hover:scale-110 ' +
+                  (bannerColor.toLowerCase() === c ? 'border-white' : 'border-white/30')
+                }
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="px-5 pb-4">
+          {/* Avatar overlaps the banner like every social profile. */}
+          <div className="-mt-10 mb-2 flex items-end justify-between">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="group relative shrink-0 rounded-full"
+              title="Change photo"
+              aria-label="Change profile photo"
+            >
+              <Avatar url={avatarUrl} name={displayName || email} size={88} className="ring-4 ring-bg-2" />
+              <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+                <Camera size={20} className="text-white" />
+              </span>
+            </button>
+            <div className="flex gap-2">
+              <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
+                <Camera size={13} />
+                <span className="ml-1.5">{avatarUrl ? 'Change photo' : 'Upload photo'}</span>
               </Button>
-            )}
+              {avatarUrl && (
+                <Button variant="ghost" size="sm" onClick={() => saveAvatar(null)} aria-label="Remove photo">
+                  <Trash2 size={13} />
+                </Button>
+              )}
+            </div>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = ''; }}
+          />
+          <p className="truncate text-xl font-bold text-text">{displayName || 'Anonymous'}</p>
+          {statusText && <p className="mt-0.5 truncate text-sm text-text-mid">{statusText}</p>}
+          <p className="mt-0.5 truncate text-xs text-text-dim" title={email}>
+            {email || 'Not signed in'}
+          </p>
+          {bio && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-mid">{bio}</p>}
+          {/* Stats row. */}
+          <div className="mt-3 flex flex-wrap gap-4 border-t border-border pt-3 text-xs text-text-dim">
+            <span>
+              <span className="font-semibold text-text">{friends.length}</span> friend{friends.length === 1 ? '' : 's'}
+            </span>
+            <span>
+              <span className="font-semibold text-text">{boardsCount}</span> saved board{boardsCount === 1 ? '' : 's'}
+            </span>
+            {memberSince && <span>Member since <span className="font-semibold text-text">{memberSince}</span></span>}
           </div>
         </div>
       </div>
 
+      {/* ── Edit fields ── */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <FieldLabel>Display name</FieldLabel>
+          <div className="flex gap-2">
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Your name" />
+            <Button
+              size="sm"
+              onClick={() => {
+                setDisplayName(name);
+                if (userId) void upsertMyProfile(userId, name, email, useAppStore.getState().avatarUrl || null);
+                toast({ title: 'Display name updated' });
+              }}
+            >
+              Save
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-text-dim">How collaborators and friends see you.</p>
+        </div>
+        <div>
+          <FieldLabel>Status</FieldLabel>
+          <div className="flex gap-2">
+            <Input
+              value={statusDraft}
+              onChange={(e) => setStatusDraft(e.target.value)}
+              maxLength={60}
+              placeholder="🎨 What are you up to?"
+            />
+            <Button
+              size="sm"
+              onClick={() => {
+                setStatusText(statusDraft.trim());
+                syncProfile({ status: statusDraft.trim() });
+                toast({ title: 'Status updated' });
+              }}
+            >
+              Save
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-text-dim">A one-liner friends see next to your name.</p>
+        </div>
+      </div>
+
       <div>
-        <FieldLabel>Display name</FieldLabel>
-        <div className="flex gap-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Your name" />
+        <FieldLabel>About me</FieldLabel>
+        <textarea
+          value={bioDraft}
+          onChange={(e) => setBioDraft(e.target.value)}
+          maxLength={280}
+          rows={3}
+          placeholder="Tell people what you make…"
+          className="w-full resize-none rounded-md border border-border bg-bg-2 px-3 py-2 text-sm text-text outline-none placeholder:text-text-dim focus:border-accent"
+        />
+        <div className="mt-1 flex items-center justify-between">
+          <p className="text-xs text-text-dim">{bioDraft.length}/280</p>
           <Button
             size="sm"
+            variant="outline"
+            disabled={bioDraft === bio}
             onClick={() => {
-              setDisplayName(name);
-              if (userId) void upsertMyProfile(userId, name, email, useAppStore.getState().avatarUrl || null);
-              toast({ title: 'Display name updated' });
+              setBio(bioDraft.trim());
+              syncProfile({ bio: bioDraft.trim() });
+              toast({ title: 'Bio updated' });
             }}
           >
-            Save
+            Save bio
           </Button>
         </div>
-        <p className="mt-1 text-xs text-text-dim">How collaborators and friends see you.</p>
       </div>
 
       <div className="border-t border-border pt-4">
@@ -434,6 +557,16 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
     setEmail('');
   };
 
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const matches = (f: { displayName: string; email: string | null; statusText?: string | null }) =>
+    q === '' ||
+    f.displayName.toLowerCase().includes(q) ||
+    (f.email ?? '').toLowerCase().includes(q) ||
+    (f.statusText ?? '').toLowerCase().includes(q);
+  const online = friends.filter((f) => f.online && matches(f));
+  const offline = friends.filter((f) => !f.online && matches(f));
+
   return (
     <div className="flex flex-col gap-3">
       <form onSubmit={submit} className="flex gap-2">
@@ -451,6 +584,20 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
         </Button>
       </form>
 
+      {friends.length > 3 && (
+        <div className="relative">
+          <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search friends…"
+            aria-label="Search friends"
+            className="w-full rounded-md border border-border bg-bg-2 py-1.5 pl-8 pr-3 text-xs text-text outline-none placeholder:text-text-dim focus:border-accent"
+          />
+        </div>
+      )}
+
       {loading ? (
         <p className="text-xs text-text-dim">Loading…</p>
       ) : (
@@ -466,6 +613,7 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
                     key={f.userId}
                     className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
                   >
+                    <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
                       {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
@@ -502,45 +650,13 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
           )}
 
           {friends.length > 0 ? (
-            <div>
-              <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
-                Friends ({friends.length})
-              </p>
-              <ul className="flex flex-col gap-1">
-                {friends.map((f) => (
-                  <li
-                    key={f.userId}
-                    className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
-                  >
-                    <span className="relative shrink-0">
-                      <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
-                      <span
-                        className={
-                          'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-bg-2 ' +
-                          (f.online ? 'bg-green' : 'bg-text-dim/50')
-                        }
-                        title={f.online ? 'Online' : 'Offline'}
-                      />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-text">
-                        {f.displayName || 'Anonymous'}
-                        {f.online && <span className="ml-1.5 text-[10px] font-normal text-green">online</span>}
-                      </p>
-                      {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void remove(f.userId)}
-                      aria-label={`Remove friend ${f.displayName}`}
-                    >
-                      <UserMinus size={12} />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <>
+              {online.length > 0 && <FriendList label={`Online — ${online.length}`} friends={online} onRemove={remove} />}
+              {offline.length > 0 && <FriendList label={`Offline — ${offline.length}`} friends={offline} onRemove={remove} />}
+              {online.length === 0 && offline.length === 0 && (
+                <p className="text-xs text-text-dim">No friends match “{query}”.</p>
+              )}
+            </>
           ) : pending.length === 0 ? (
             <p className="text-xs text-text-dim">
               No friends yet — add someone by their email above to start collaborating.
@@ -548,6 +664,59 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+/** One group of friend cards (Online / Offline), Discord-style. */
+function FriendList({
+  label,
+  friends,
+  onRemove,
+}: {
+  label: string;
+  friends: ReturnType<typeof useFriends>['friends'];
+  onRemove: (friendId: string) => Promise<void>;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">{label}</p>
+      <ul className="flex flex-col gap-1">
+        {friends.map((f) => (
+          <li
+            key={f.userId}
+            className="group flex items-center gap-2.5 rounded-md border border-border bg-bg-2 px-2.5 py-2"
+          >
+            <span className="relative shrink-0">
+              <Avatar url={f.avatarUrl} name={f.displayName} size={34} className={f.online ? '' : 'opacity-60 saturate-50'} />
+              <span
+                className={
+                  'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
+                  (f.online ? 'bg-green' : 'bg-text-dim/50')
+                }
+                title={f.online ? 'Online' : 'Offline'}
+              />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className={'truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')}>
+                {f.displayName || 'Anonymous'}
+              </p>
+              <p className="truncate text-[10px] text-text-dim">
+                {f.statusText || f.bio || f.email || (f.online ? 'Online' : 'Offline')}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="opacity-0 transition-opacity group-hover:opacity-100"
+              onClick={() => void onRemove(f.userId)}
+              aria-label={`Remove friend ${f.displayName}`}
+            >
+              <UserMinus size={12} />
+            </Button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

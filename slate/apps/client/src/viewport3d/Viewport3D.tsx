@@ -538,6 +538,21 @@ export function Viewport3D({ room }: Viewport3DProps) {
             mesh.lockDir && mesh.lockDir.x === axis.x && mesh.lockDir.y === axis.y && mesh.lockDir.z === axis.z;
           mesh.lockDir = same ? null : axis;
           setModalLabelText(meshModalLabel(mesh));
+        } else if (
+          mesh.scalar &&
+          mesh.scalar.op !== 'loop-cut' &&
+          (/^[0-9]$/.test(e.key) || e.key === '.' || e.key === 'Backspace')
+        ) {
+          // Blender numeric entry: type an exact width (in the board's display
+          // unit) during the bevel/inset modal. Backspace edits; emptying the
+          // buffer hands control back to the mouse.
+          e.preventDefault();
+          const s = mesh.scalar;
+          if (e.key === 'Backspace') s.typed = s.typed.slice(0, -1);
+          else if (e.key === '.') { if (!s.typed.includes('.')) s.typed = (s.typed || '0') + '.'; }
+          else s.typed = (s.typed === '0' ? '' : s.typed) + e.key;
+          applyMeshScalar(room, mesh);
+          setModalLabelText(meshModalLabel(mesh));
         }
         return;
       }
@@ -553,7 +568,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onConfirmModal, onCancelModal]);
+  }, [onConfirmModal, onCancelModal, room]);
 
   // Track mouse for modal pixel delta + LMB to confirm / RMB to cancel.
   // Writes are throttled to ~30 Hz (pixel deltas keep accumulating, so
@@ -584,15 +599,20 @@ export function Viewport3D({ room }: Viewport3DProps) {
           if (mesh.scalar.op === 'loop-cut') {
             // Move left/right to slide the cut along the ring (Blender-style).
             mesh.scalar.slide = Math.max(-1, Math.min(1, mesh.pixelDelta.x * 0.004));
-          } else {
+          } else if (mesh.scalar.typed === '') {
+            // (A typed exact width overrides the mouse — Blender's numeric
+            // entry — so mouse motion is ignored while the buffer is active.)
             const drag = mesh.pixelDelta.x + -mesh.pixelDelta.y;
-            // ~half the diagonal at a full-screen drag; clamp to a sane range.
+            // ~a third of the diagonal at a full-screen drag; clamp to a sane
+            // range. The old 0.0015 gain blew a cube into the clamp-limit ball
+            // within a small wrist flick — Blender's bevel needs far more mouse
+            // travel per unit width, which is what makes it feel controllable.
             // Bevel starts from the 5% baseline set on entry — computing the
             // amount from raw pixel delta (which starts at 0) collapsed the
             // bevel flat on the first mouse twitch, so scrolling segments
             // right after pressing the shortcut looked like it did nothing.
             const base = mesh.scalar.op === 'bevel' ? 0.05 : 0;
-            mesh.scalar.amount = Math.max(0, Math.min(0.5, base + drag * 0.0015));
+            mesh.scalar.amount = Math.max(0, Math.min(0.5, base + drag * 0.0005));
           }
           applyMeshScalar(room, mesh);
           setModalLabelText(meshModalLabel(mesh));

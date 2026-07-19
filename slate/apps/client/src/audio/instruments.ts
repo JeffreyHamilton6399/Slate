@@ -29,9 +29,11 @@ export interface OscSpec {
 /** Synthesis model. `subtractive` = the classic oscillator+filter synth;
  *  `string` = Karplus-Strong physical modelling (a plucked/struck string — the
  *  realistic guitar/harp/pizzicato path); `fm` = 2-operator FM (realistic
- *  electric piano / bells / clav). All three run on plain Web Audio nodes so
- *  they render offline for recorded takes just like the subtractive path. */
-export type SynthEngine = 'subtractive' | 'string' | 'fm';
+ *  electric piano / bells / clav); `piano` = additive damped-partial piano
+ *  (inharmonic partials, per-partial decay, detuned string pairs, hammer
+ *  thump). All run on plain Web Audio nodes so they render offline for
+ *  recorded takes just like the subtractive path. */
+export type SynthEngine = 'subtractive' | 'string' | 'fm' | 'piano';
 
 export interface InstrumentParams {
   id: string;
@@ -47,6 +49,17 @@ export interface InstrumentParams {
   /** Loop feedback 0.8..0.999 — how long the string sustains before it decays
    *  to silence. 0.99 ≈ an acoustic guitar; 0.999 ≈ a long-ringing harp. */
   stringDecay?: number;
+  /** Where the string is plucked, as a fraction of its length (0.02..0.5).
+   *  Near the bridge (small) = thin/twangy; near the middle = hollow/round.
+   *  The classic guitar pick sits around 0.13. */
+  stringPickPos?: number;
+  /** 0..1 acoustic-body resonance amount (low-mid peaking EQ modelled on a
+   *  guitar box). 0 = a bare string (solid-body electric). */
+  stringBody?: number;
+  /** 0..1 amp overdrive for the electric path (soft-clip + cab-ish lowpass). */
+  stringDrive?: number;
+  /** 0..1 room-reverb send (shared synthetic room, works live + offline). */
+  reverb?: number;
   /** ── FM params ────────────────────────────────────────────────────────── */
   /** Modulator : carrier frequency ratio. Integer ratios (1, 2, 3) = harmonic
    *  (e-piano, brass); non-integers (1.4, 3.5) = inharmonic (bells, metallic). */
@@ -151,39 +164,61 @@ function getNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
  *  instruments.test.ts to land within a few cents across the range). */
 const KS_DELAY_SAMPLES_OFFSET = 1.0;
 
-/** Render a plucked/struck string (Karplus-Strong) into an AudioBuffer.
+/** Compute one plucked string (Karplus-Strong) as raw samples — pure DSP so
+ *  the pitch tests exercise the exact shipping loop.
  *
  *  A Web Audio DelayNode feedback loop is the "obvious" way to do this, but in
  *  practice the loop DIVERGES (RMS blows up) — feedback DelayNodes are
  *  unreliable, especially offline. So we compute the sample loop directly in JS
- *  (one delay line + a one-pole lowpass in the feedback path, exactly the
- *  algorithm the pitch test validates) and hand the result back as a buffer the
- *  voice plays through its amp envelope. Deterministic, always stable, in tune,
- *  and identical on live and offline contexts. The buffer length is the string's
- *  natural decay time (to ~-60 dB) capped at 3 s — holding a key longer than the
- *  string rings just goes quiet, like a real plucked string. */
-function renderStringBuffer(
-  ctx: BaseAudioContext,
+ *  (one delay line + a one-pole lowpass in the feedback path). Deterministic,
+ *  always stable, in tune, and identical on live and offline contexts. The
+ *  buffer length is the string's natural decay time (to ~-60 dB) capped at 3 s.
+ *
+ *  Realism over the naive KS loop:
+ *   - the excitation noise is lowpassed by VELOCITY (soft touch = dull pluck,
+ *     hard pick = bright attack), and
+ *   - comb-filtered at the PICK POSITION (subtracting a copy delayed by
+ *     pickPos·period cancels the harmonics with a node at the pluck point —
+ *     the difference between a "synth pluck" and a guitar's twang), and
+ *   - a DC blocker keeps the comb from parking offset in the loop.
+ */
+export function renderStringSamples(
+  sr: number,
   f: number,
   damping: number,
   decay: number,
-): AudioBuffer {
-  const sr = ctx.sampleRate;
+  velocity = 1,
+  pickPos = 0.13,
+): Float32Array {
   const fb = clamp(decay, 0.8, 0.9995);
   const delaySamples = Math.max(2, sr / f - KS_DELAY_SAMPLES_OFFSET);
   // Time for the fb^(cycles) envelope to reach ~-60 dB, capped.
   const dur = clamp(Math.log(0.001) / (f * Math.log(fb)), 0.3, 3);
   const N = Math.ceil(dur * sr);
-  const buf = ctx.createBuffer(1, N, sr);
-  const out = buf.getChannelData(0);
+  const out = new Float32Array(N);
   const lineLen = Math.ceil(delaySamples) + 4;
   const line = new Float32Array(lineLen);
   let widx = 0;
   const cutoff = clamp(damping * 7000 + f * 3, 400, 16000);
   const a = Math.exp((-2 * Math.PI * cutoff) / sr); // one-pole lowpass coeff
   let lp = 0;
+  // ── Excitation: velocity-lowpassed noise, comb-filtered at the pick point.
   const burst = Math.floor(0.006 * sr); // 6 ms noise pluck
+  const pick = Math.max(1, Math.round(delaySamples * clamp(pickPos, 0.02, 0.5)));
+  const excLen = burst + pick;
+  const exc = new Float32Array(excLen);
+  const vel = clamp(velocity, 0, 1);
+  const excCut = clamp(1200 + 9000 * vel * vel, 800, sr * 0.45);
+  const ea = Math.exp((-2 * Math.PI * excCut) / sr);
+  let elp = 0;
+  for (let n = 0; n < burst; n++) {
+    elp = (1 - ea) * (Math.random() * 2 - 1) + ea * elp;
+    exc[n]! += elp;
+    exc[n + pick]! -= elp; // pick-position comb (node at the pluck point)
+  }
   let peak = 0;
+  let dcX = 0;
+  let dcY = 0;
   for (let n = 0; n < N; n++) {
     const readPos = widx - delaySamples;
     const i0 = ((Math.floor(readPos) % lineLen) + lineLen) % lineLen;
@@ -191,10 +226,12 @@ function renderStringBuffer(
     const frac = readPos - Math.floor(readPos);
     const delayed = line[i0]! * (1 - frac) + line[i1]! * frac;
     lp = (1 - a) * delayed + a * lp;
-    const exc = n < burst ? Math.random() * 2 - 1 : 0;
-    line[widx] = exc + fb * lp;
-    out[n] = delayed;
-    const abs = Math.abs(delayed);
+    line[widx] = (n < excLen ? exc[n]! : 0) + fb * lp;
+    // DC blocker: y[n] = x[n] - x[n-1] + 0.995 y[n-1].
+    dcY = delayed - dcX + 0.995 * dcY;
+    dcX = delayed;
+    out[n] = dcY;
+    const abs = Math.abs(dcY);
     if (abs > peak) peak = abs;
     widx = (widx + 1) % lineLen;
   }
@@ -203,7 +240,192 @@ function renderStringBuffer(
     const g = 0.7 / peak;
     for (let i = 0; i < N; i++) out[i]! *= g;
   }
+  return out;
+}
+
+/** Two slightly detuned strings (±1.2 cents) summed into an AudioBuffer — the
+ *  unison shimmer of a real instrument where no two strings (or two plucks)
+ *  are ever perfectly identical. */
+function renderStringBuffer(
+  ctx: BaseAudioContext,
+  f: number,
+  damping: number,
+  decay: number,
+  velocity: number,
+  pickPos: number,
+): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const d = 0.0007; // ±1.2 cents
+  const s1 = renderStringSamples(sr, f * (1 - d), damping, decay, velocity, pickPos);
+  const s2 = renderStringSamples(sr, f * (1 + d), damping, decay, velocity, pickPos);
+  const N = Math.max(s1.length, s2.length);
+  const buf = ctx.createBuffer(1, N, sr);
+  const out = buf.getChannelData(0);
+  for (let i = 0; i < N; i++) out[i] = 0.5 * ((s1[i] ?? 0) + (s2[i] ?? 0));
   return buf;
+}
+
+/** Additive damped-partial piano — pure DSP, exported for the pitch tests.
+ *
+ *  What makes it read as "piano" instead of "organ tone with an envelope":
+ *   - INHARMONIC partials: fₙ = n·f·√(1+B·n²) — real strings are stiff, so
+ *     upper partials run progressively sharp (B grows toward the treble),
+ *   - per-partial decay: highs die fast, the fundamental sings on,
+ *   - hammer-position comb: partial amplitudes follow sin(π·n·x) with the
+ *     hammer at x ≈ 0.12 of the string,
+ *   - velocity → spectrum: soft notes lose their upper partials (felt hammer),
+ *   - detuned string PAIRS per note (real pianos have 2-3): the slow beating
+ *     between them is the familiar "singing" warble of a held piano note,
+ *   - a felt-hammer thump (lowpassed noise, ~20 ms) under the attack.
+ *  Partials run on complex-rotation oscillators (no Math.sin in the loop) so a
+ *  4-second note renders in a few milliseconds. */
+export function renderPianoSamples(sr: number, f: number, velocity = 1): Float32Array {
+  const vel = clamp(velocity, 0, 1);
+  const dur = clamp(5 * Math.pow(220 / f, 0.6), 0.9, 4.5);
+  const N = Math.ceil(dur * sr);
+  const out = new Float32Array(N);
+  const nyq = sr * 0.45;
+  const maxP = Math.max(4, Math.min(22, Math.floor(nyq / f)));
+  const B = 0.00008 + 0.00035 * (f / 1000); // stiffness inharmonicity
+  const hammerX = 0.12;
+  const baseTau = clamp(4.2 * Math.pow(220 / f, 0.7), 0.5, 6);
+  interface Partial { c: number; s: number; dc: number; ds: number; amp: number; k: number }
+  const parts: Partial[] = [];
+  for (let p = 1; p <= maxP; p++) {
+    const fn = p * f * Math.sqrt(1 + B * p * p);
+    if (fn >= nyq) break;
+    // Hammer comb + rolloff + velocity brightness.
+    const amp =
+      (Math.abs(Math.sin(Math.PI * p * hammerX)) / Math.pow(p, 1.1)) *
+      Math.exp(-(p - 1) * (1 - vel) * 0.55);
+    if (amp < 1e-4) continue;
+    const tau = baseTau / (1 + 0.03 * p * p);
+    const k = Math.exp(-1 / (tau * sr)); // per-sample decay
+    // A detuned pair per partial (two strings): beat rate grows gently with p.
+    for (const det of [1 - 0.00035, 1 + 0.00035]) {
+      const w = (2 * Math.PI * fn * det) / sr;
+      parts.push({ c: 1, s: 0, dc: Math.cos(w), ds: Math.sin(w), amp: amp * 0.5, k });
+    }
+  }
+  // Per-partial rotation with per-partial exponential decay folded into amp.
+  for (const pt of parts) {
+    let { c, s, amp } = pt;
+    const { dc, ds, k } = pt;
+    for (let n = 0; n < N; n++) {
+      out[n]! += s * amp;
+      const nc = c * dc - s * ds;
+      s = c * ds + s * dc;
+      c = nc;
+      amp *= k;
+      if (amp < 1e-6) break;
+    }
+  }
+  // Felt-hammer thump: 20 ms of 250 Hz-lowpassed noise under the attack.
+  const thump = Math.floor(0.02 * sr);
+  const ta = Math.exp((-2 * Math.PI * 250) / sr);
+  let tlp = 0;
+  for (let n = 0; n < thump && n < N; n++) {
+    tlp = (1 - ta) * (Math.random() * 2 - 1) + ta * tlp;
+    out[n]! += tlp * 0.9 * vel * (1 - n / thump);
+  }
+  let peak = 0;
+  for (let i = 0; i < N; i++) {
+    const a = Math.abs(out[i]!);
+    if (a > peak) peak = a;
+  }
+  if (peak > 1e-6) {
+    const g = 0.7 / peak;
+    for (let i = 0; i < N; i++) out[i]! *= g;
+  }
+  return out;
+}
+
+/** Piano buffers are cached per (sampleRate, note, velocity-bucket) — piano
+ *  renders are ~10× costlier than the string loop and notes repeat constantly
+ *  while playing. FIFO-capped so a long session can't hoard memory. */
+const pianoCache = new Map<string, Float32Array>();
+function renderPianoBuffer(ctx: BaseAudioContext, f: number, velocity: number): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const vb = Math.round(clamp(velocity, 0, 1) * 8);
+  const key = `${sr}|${f.toFixed(2)}|${vb}`;
+  let samples = pianoCache.get(key);
+  if (!samples) {
+    samples = renderPianoSamples(sr, f, vb / 8);
+    pianoCache.set(key, samples);
+    if (pianoCache.size > 96) {
+      const first = pianoCache.keys().next().value;
+      if (first !== undefined) pianoCache.delete(first);
+    }
+  }
+  const buf = ctx.createBuffer(1, samples.length, sr);
+  buf.getChannelData(0).set(samples);
+  return buf;
+}
+
+// ── Room reverb (shared synthetic impulse response) ─────────────────────────
+
+/** ~1.8 s decaying-noise stereo IR with progressive high-frequency damping —
+ *  a believable small hall, generated per context (works offline too). */
+const reverbIRCache = new WeakMap<BaseAudioContext, AudioBuffer>();
+function getReverbIR(ctx: BaseAudioContext): AudioBuffer {
+  let buf = reverbIRCache.get(ctx);
+  if (buf) return buf;
+  const sr = ctx.sampleRate;
+  const dur = 1.8;
+  const N = Math.ceil(dur * sr);
+  buf = ctx.createBuffer(2, N, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    // One-pole lowpass whose cutoff falls as the tail decays (air absorption).
+    let lp = 0;
+    for (let i = 0; i < N; i++) {
+      const t = i / N;
+      const cut = 6000 * Math.pow(1 - t, 1.5) + 400;
+      const a = Math.exp((-2 * Math.PI * cut) / sr);
+      lp = (1 - a) * (Math.random() * 2 - 1) + a * lp;
+      d[i] = lp * Math.pow(1 - t, 2.1);
+    }
+    // 12 ms pre-delay gap keeps the direct sound distinct.
+    const gap = Math.floor(0.012 * sr);
+    for (let i = 0; i < gap; i++) d[i] = 0;
+  }
+  reverbIRCache.set(ctx, buf);
+  return buf;
+}
+
+/** Master graph: dry pass-through + convolver wet send. Returns the node
+ *  voices connect to and a gain that sets the wet amount. */
+export function buildInstrumentBus(
+  ctx: BaseAudioContext,
+  dest: AudioNode,
+): { input: GainNode; wet: GainNode } {
+  const input = ctx.createGain();
+  input.connect(dest);
+  const conv = ctx.createConvolver();
+  conv.buffer = getReverbIR(ctx);
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+  input.connect(conv);
+  conv.connect(wet);
+  wet.connect(dest);
+  return { input, wet };
+}
+
+/** Soft-clip curves for the electric-guitar drive, cached per amount. */
+const driveCurveCache = new Map<number, Float32Array<ArrayBuffer>>();
+function getDriveCurve(drive: number): Float32Array<ArrayBuffer> {
+  const key = Math.round(clamp(drive, 0, 1) * 20);
+  let curve = driveCurveCache.get(key);
+  if (!curve) {
+    const k = 1 + (key / 20) * 14;
+    curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      curve[i] = Math.tanh(k * x) / Math.tanh(k);
+    }
+    driveCurveCache.set(key, curve);
+  }
+  return curve;
 }
 
 /** Build and start one note's node graph. The SOURCE stage depends on the
@@ -236,7 +458,7 @@ export function startVoice(
 
   // Optional vibrato LFO (drives osc/carrier detune in subtractive + FM).
   let lfoGain: GainNode | null = null;
-  if (p.vibratoDepth > 0 && p.vibratoRate > 0 && engine !== 'string') {
+  if (p.vibratoDepth > 0 && p.vibratoRate > 0 && engine !== 'string' && engine !== 'piano') {
     const lfo = ctx.createOscillator();
     lfo.frequency.value = p.vibratoRate;
     lfoGain = ctx.createGain();
@@ -250,7 +472,56 @@ export function startVoice(
   if (engine === 'string') {
     // ── Karplus-Strong plucked/struck string (buffer-rendered) ─────────────
     const src = ctx.createBufferSource();
-    src.buffer = renderStringBuffer(ctx, f, p.stringDamping ?? 0.5, p.stringDecay ?? 0.985);
+    src.buffer = renderStringBuffer(
+      ctx,
+      f,
+      p.stringDamping ?? 0.5,
+      p.stringDecay ?? 0.985,
+      vel,
+      p.stringPickPos ?? 0.13,
+    );
+    // src → [drive (soft-clip + cab lowpass)] → [body resonance EQ] → amp
+    let head: AudioNode = src;
+    const drive = clamp(p.stringDrive ?? 0, 0, 1);
+    if (drive > 0.01) {
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = getDriveCurve(drive);
+      shaper.oversample = '2x';
+      const cab = ctx.createBiquadFilter();
+      cab.type = 'lowpass';
+      cab.frequency.value = 5200 - drive * 1800; // hotter drive = darker cab
+      cab.Q.value = 0.7;
+      head.connect(shaper);
+      shaper.connect(cab);
+      head = cab;
+      nodes.push(shaper, cab);
+    }
+    const body = clamp(p.stringBody ?? 0, 0, 1);
+    if (body > 0.01) {
+      // Guitar-box low-mid resonances (main air + top-plate modes).
+      const modes: [number, number, number][] = [
+        [105, 1.6, 6 * body],
+        [220, 2.2, 4 * body],
+        [420, 2.5, 2.8 * body],
+      ];
+      for (const [freq, q, gainDb] of modes) {
+        const peak = ctx.createBiquadFilter();
+        peak.type = 'peaking';
+        peak.frequency.value = freq;
+        peak.Q.value = q;
+        peak.gain.value = gainDb;
+        head.connect(peak);
+        head = peak;
+        nodes.push(peak);
+      }
+    }
+    head.connect(amp);
+    src.start(when);
+    sources.push(src);
+  } else if (engine === 'piano') {
+    // ── Additive damped-partial piano (buffer-rendered, cached) ────────────
+    const src = ctx.createBufferSource();
+    src.buffer = renderPianoBuffer(ctx, f, vel);
     src.connect(amp);
     src.start(when);
     sources.push(src);
@@ -354,6 +625,7 @@ export class LiveInstrument {
   private voices = new Map<number, VoiceHandle>();
   private order: number[] = [];
   private master: GainNode | null = null;
+  private bus: { input: GainNode; wet: GainNode } | null = null;
   private static readonly MAX_VOICES = 16;
 
   constructor(params: InstrumentParams) {
@@ -362,6 +634,7 @@ export class LiveInstrument {
 
   setParams(p: InstrumentParams): void {
     this.params = p;
+    if (this.bus) this.bus.wet.gain.value = clamp(p.reverb ?? 0, 0, 1);
   }
 
   private ensure(): AudioContext {
@@ -374,6 +647,9 @@ export class LiveInstrument {
       this.master = liveCtx.createGain();
       this.master.gain.value = 0.85;
       this.master.connect(liveCtx.destination);
+      // Voices feed the bus; the bus splits into the dry path + reverb send.
+      this.bus = buildInstrumentBus(liveCtx, this.master);
+      this.bus.wet.gain.value = clamp(this.params.reverb ?? 0, 0, 1);
     }
     return liveCtx;
   }
@@ -390,7 +666,7 @@ export class LiveInstrument {
         this.voices.delete(oldest);
       }
     }
-    this.voices.set(midi, startVoice(ctx, this.master!, this.params, midi, velocity, ctx.currentTime));
+    this.voices.set(midi, startVoice(ctx, this.bus!.input, this.params, midi, velocity, ctx.currentTime));
     this.order = this.order.filter((m) => m !== midi);
     this.order.push(midi);
   }
@@ -424,14 +700,20 @@ export async function renderPerformance(
   if (notes.length === 0) return null;
   const lead = 0.03; // tiny pre-roll so attack transients aren't clipped at t=0
   const rel = Math.max(0.02, p.release);
-  const end = Math.max(...notes.map((n) => n.start + n.duration)) + rel * 1.5 + 0.25;
+  // Leave room for the reverb tail so a wet take isn't cut off mid-decay.
+  const tail = (p.reverb ?? 0) > 0.01 ? 1.6 : 0;
+  const end = Math.max(...notes.map((n) => n.start + n.duration)) + rel * 1.5 + 0.25 + tail;
   const length = Math.ceil((end + lead) * RENDER_SAMPLE_RATE);
   const ctx = new OfflineAudioContext(1, length, RENDER_SAMPLE_RATE);
   const master = ctx.createGain();
   master.gain.value = 1;
   master.connect(ctx.destination);
+  // Same dry+reverb bus as live playing, so the take sounds like what the
+  // player heard.
+  const bus = buildInstrumentBus(ctx, master);
+  bus.wet.gain.value = clamp(p.reverb ?? 0, 0, 1);
   for (const n of notes) {
-    const v = startVoice(ctx, master, p, n.midi, n.velocity, lead + n.start);
+    const v = startVoice(ctx, bus.input, p, n.midi, n.velocity, lead + n.start);
     v.stop(lead + n.start + Math.max(0.02, n.duration));
   }
   const buf = await ctx.startRendering();
@@ -453,18 +735,14 @@ export async function renderPerformance(
 export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-grand-piano', name: 'Grand Piano', builtIn: true,
-    oscs: [
-      { type: 'triangle', octave: 0, detune: 0, level: 1 },
-      { type: 'sawtooth', octave: 0, detune: 4, level: 0.3 },
-      { type: 'triangle', octave: 1, detune: -3, level: 0.22 },
-    ],
-    noise: 0.14, noiseDecay: 0.05,
-    attack: 0.003, decay: 1.5, sustain: 0, release: 0.25,
+    engine: 'piano', reverb: 0.14,
+    oscs: [], noise: 0, noiseDecay: 0.05,
+    attack: 0.002, decay: 1.5, sustain: 1, release: 0.35,
     filterCutoff: 750, filterQ: 0.6, filterEnv: 2800, keyTrack: 0.7,
-    vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
+    vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-epiano', name: 'E-Piano', builtIn: true,
+    id: 'inst-epiano', name: 'E-Piano', builtIn: true, reverb: 0.12,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 2, level: 0.18 },
@@ -476,7 +754,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
   },
   {
-    id: 'inst-organ', name: 'Organ', builtIn: true,
+    id: 'inst-organ', name: 'Organ', builtIn: true, reverb: 0.18,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 1, detune: 0, level: 0.55 },
@@ -488,7 +766,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.6, vibratoDepth: 5, gain: 0.7,
   },
   {
-    id: 'inst-lead', name: 'Synth Lead', builtIn: true,
+    id: 'inst-lead', name: 'Synth Lead', builtIn: true, reverb: 0.1,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -7, level: 0.8 },
       { type: 'square', octave: 0, detune: 7, level: 0.6 },
@@ -499,7 +777,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5, vibratoDepth: 9, gain: 0.75,
   },
   {
-    id: 'inst-bass', name: 'Synth Bass', builtIn: true,
+    id: 'inst-bass', name: 'Synth Bass', builtIn: true, reverb: 0.04,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: 0, level: 0.75 },
       { type: 'sine', octave: -1, detune: 0, level: 1 },
@@ -510,7 +788,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-pad', name: 'Warm Pad', builtIn: true,
+    id: 'inst-pad', name: 'Warm Pad', builtIn: true, reverb: 0.35,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -10, level: 0.6 },
       { type: 'sawtooth', octave: 0, detune: 10, level: 0.6 },
@@ -522,7 +800,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 4.5, vibratoDepth: 5, gain: 0.6,
   },
   {
-    id: 'inst-pluck', name: 'Pluck', builtIn: true,
+    id: 'inst-pluck', name: 'Pluck', builtIn: true, reverb: 0.15,
     oscs: [
       { type: 'triangle', octave: 0, detune: 0, level: 1 },
       { type: 'sawtooth', octave: 0, detune: 3, level: 0.35 },
@@ -533,7 +811,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-bells', name: 'Music Box', builtIn: true,
+    id: 'inst-bells', name: 'Music Box', builtIn: true, reverb: 0.3,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 1, detune: 560, level: 0.35 }, // inharmonic partial
@@ -545,7 +823,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.85,
   },
   {
-    id: 'inst-strings', name: 'Strings', builtIn: true,
+    id: 'inst-strings', name: 'Strings', builtIn: true, reverb: 0.3,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -6, level: 0.7 },
       { type: 'sawtooth', octave: 0, detune: 6, level: 0.7 },
@@ -557,7 +835,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5.5, vibratoDepth: 7, gain: 0.6,
   },
   {
-    id: 'inst-brass', name: 'Brass', builtIn: true,
+    id: 'inst-brass', name: 'Brass', builtIn: true, reverb: 0.18,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: -5, level: 0.8 },
       { type: 'sawtooth', octave: 0, detune: 5, level: 0.8 },
@@ -568,7 +846,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 5, vibratoDepth: 6, gain: 0.7,
   },
   {
-    id: 'inst-marimba', name: 'Marimba', builtIn: true,
+    id: 'inst-marimba', name: 'Marimba', builtIn: true, reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 0, level: 0.25 }, // 4x bar partial
@@ -579,7 +857,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.95,
   },
   {
-    id: 'inst-kalimba', name: 'Kalimba', builtIn: true,
+    id: 'inst-kalimba', name: 'Kalimba', builtIn: true, reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'sine', octave: 2, detune: 30, level: 0.2 },
@@ -590,7 +868,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-choir', name: 'Choir', builtIn: true,
+    id: 'inst-choir', name: 'Choir', builtIn: true, reverb: 0.35,
     oscs: [
       { type: 'triangle', octave: 0, detune: -8, level: 0.8 },
       { type: 'sine', octave: 0, detune: 8, level: 0.8 },
@@ -602,7 +880,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 4.8, vibratoDepth: 8, gain: 0.6,
   },
   {
-    id: 'inst-acid', name: 'Acid Lead', builtIn: true,
+    id: 'inst-acid', name: 'Acid Lead', builtIn: true, reverb: 0.08,
     oscs: [
       { type: 'sawtooth', octave: 0, detune: 0, level: 1 },
       { type: 'square', octave: 0, detune: 4, level: 0.4 },
@@ -613,7 +891,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.7,
   },
   {
-    id: 'inst-flute', name: 'Flute', builtIn: true,
+    id: 'inst-flute', name: 'Flute', builtIn: true, reverb: 0.2,
     oscs: [
       { type: 'sine', octave: 0, detune: 0, level: 1 },
       { type: 'triangle', octave: 0, detune: 0, level: 0.3 },
@@ -631,6 +909,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-acoustic-guitar', name: 'Acoustic Guitar', builtIn: true,
     engine: 'string', stringDamping: 0.42, stringDecay: 0.992,
+    stringPickPos: 0.13, stringBody: 0.8, stringDrive: 0, reverb: 0.15,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 0.9,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -639,6 +918,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-electric-guitar', name: 'Electric Guitar', builtIn: true,
     engine: 'string', stringDamping: 0.62, stringDecay: 0.996,
+    stringPickPos: 0.09, stringBody: 0, stringDrive: 0.45, reverb: 0.12,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 1.4,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -647,6 +927,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-nylon-guitar', name: 'Nylon Guitar', builtIn: true,
     engine: 'string', stringDamping: 0.3, stringDecay: 0.988,
+    stringPickPos: 0.19, stringBody: 1, stringDrive: 0, reverb: 0.16,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 0.7,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -655,6 +936,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-bass-guitar', name: 'Bass Guitar', builtIn: true,
     engine: 'string', stringDamping: 0.28, stringDecay: 0.994,
+    stringPickPos: 0.26, stringBody: 0.15, stringDrive: 0.12, reverb: 0.05,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 0.6,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -663,6 +945,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-harp', name: 'Harp', builtIn: true,
     engine: 'string', stringDamping: 0.55, stringDecay: 0.997,
+    stringPickPos: 0.4, stringBody: 0.5, stringDrive: 0, reverb: 0.3,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 2.2,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -671,6 +954,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-banjo', name: 'Banjo', builtIn: true,
     engine: 'string', stringDamping: 0.8, stringDecay: 0.982,
+    stringPickPos: 0.07, stringBody: 0.9, stringDrive: 0, reverb: 0.1,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.001, decay: 0.3, sustain: 1, release: 0.5,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -679,6 +963,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
   {
     id: 'inst-pizzicato', name: 'Pizzicato', builtIn: true,
     engine: 'string', stringDamping: 0.45, stringDecay: 0.965,
+    stringPickPos: 0.31, stringBody: 0.6, stringDrive: 0, reverb: 0.25,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.3, sustain: 1, release: 0.25,
     filterCutoff: 6000, filterQ: 0.5, filterEnv: 0, keyTrack: 0,
@@ -687,7 +972,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
 
   // ── FM operators (realistic e-piano / bells / clav) ────────────────────────
   {
-    id: 'inst-rhodes', name: 'Rhodes E-Piano', builtIn: true,
+    id: 'inst-rhodes', name: 'Rhodes E-Piano', builtIn: true, reverb: 0.15,
     engine: 'fm', fmRatio: 1, fmIndex: 1.4, fmDecay: 0.35,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.003, decay: 1.6, sustain: 0.35, release: 0.4,
@@ -695,7 +980,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-fm-piano', name: 'FM Piano', builtIn: true,
+    id: 'inst-fm-piano', name: 'FM Piano', builtIn: true, reverb: 0.14,
     engine: 'fm', fmRatio: 2, fmIndex: 1.1, fmDecay: 0.5,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 2, sustain: 0, release: 0.3,
@@ -703,7 +988,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-tubular-bells', name: 'Tubular Bells', builtIn: true,
+    id: 'inst-tubular-bells', name: 'Tubular Bells', builtIn: true, reverb: 0.35,
     engine: 'fm', fmRatio: 4, fmIndex: 2, fmDecay: 2.2,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 3, sustain: 0, release: 1.8,
@@ -711,7 +996,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 0.9,
   },
   {
-    id: 'inst-clav', name: 'Clavinet', builtIn: true,
+    id: 'inst-clav', name: 'Clavinet', builtIn: true, reverb: 0.08,
     engine: 'fm', fmRatio: 3, fmIndex: 2.2, fmDecay: 0.12,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.002, decay: 0.4, sustain: 0, release: 0.15,
@@ -719,7 +1004,7 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
     vibratoRate: 0, vibratoDepth: 0, gain: 1,
   },
   {
-    id: 'inst-steel-drum', name: 'Steel Drum', builtIn: true,
+    id: 'inst-steel-drum', name: 'Steel Drum', builtIn: true, reverb: 0.25,
     engine: 'fm', fmRatio: 1, fmIndex: 3, fmDecay: 0.5,
     oscs: [], noise: 0, noiseDecay: 0.05,
     attack: 0.003, decay: 0.8, sustain: 0, release: 0.4,
@@ -732,15 +1017,26 @@ export const INSTRUMENT_PRESETS: InstrumentParams[] = [
 
 const LS_KEY = 'slate:custom-instruments';
 
+/** Neutral defaults saved customs are merged over so params added in future
+ *  versions get sane values instead of undefined. Deliberately NOT a factory
+ *  preset: preset[0] is now the piano engine, and inheriting `engine` would
+ *  silently re-voice every old custom synth. */
+const CUSTOM_DEFAULTS: InstrumentParams = {
+  id: '', name: '', engine: 'subtractive',
+  oscs: [{ type: 'sawtooth', octave: 0, detune: 0, level: 1 }],
+  noise: 0, noiseDecay: 0.05,
+  attack: 0.01, decay: 0.3, sustain: 0.7, release: 0.2,
+  filterCutoff: 2000, filterQ: 0.7, filterEnv: 0, keyTrack: 0.5,
+  vibratoRate: 0, vibratoDepth: 0, gain: 0.8, reverb: 0,
+};
+
 export function loadCustomInstruments(): InstrumentParams[] {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return [];
     const list = JSON.parse(raw) as InstrumentParams[];
     if (!Array.isArray(list)) return [];
-    // Merge over a factory preset so params added in future versions get
-    // sane defaults instead of undefined.
-    return list.map((p) => ({ ...INSTRUMENT_PRESETS[0]!, ...p, builtIn: false }));
+    return list.map((p) => ({ ...CUSTOM_DEFAULTS, ...p, builtIn: false }));
   } catch {
     return [];
   }

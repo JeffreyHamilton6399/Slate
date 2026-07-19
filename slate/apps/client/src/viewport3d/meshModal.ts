@@ -13,7 +13,7 @@
 
 import {
   allManifoldEdges,
-  bevelEdges,
+  bevelEdgesDetailed,
   bevelVerts,
   extrudeFaces,
   faceNormalOp,
@@ -23,6 +23,7 @@ import {
   type Mesh as MeshTopology,
 } from '@slate/mesh';
 import { setMeshData } from './scene';
+import { formatLength, unitToMeters, type LengthUnit } from './units';
 import type { SlateRoom } from '../sync/provider';
 import type { Vec3 } from './modalTools';
 
@@ -70,6 +71,12 @@ export interface MeshModalState {
      *  to the vertex bevel. */
     edges: number[];
     loopFace: number;
+    /** Numeric entry buffer (Blender: type an exact width during the modal).
+     *  Non-empty overrides the mouse-driven amount; value is in the board's
+     *  display unit. */
+    typed: string;
+    /** Board display unit for the width readout. */
+    unit: LengthUnit;
   };
 }
 
@@ -184,8 +191,20 @@ export function startMeshScalar(
       verts,
       edges,
       loopFace,
+      typed: '',
+      unit: ((room.slate.meta().get('units') as LengthUnit | undefined) ?? 'm'),
     },
   };
+}
+
+/** Effective amount (fraction of the mesh diagonal) — the typed exact width
+ *  wins over the mouse-driven amount, like Blender's numeric input. */
+export function scalarAmount(s: NonNullable<MeshModalState['scalar']>): number {
+  if (s.typed !== '') {
+    const parsed = Number.parseFloat(s.typed);
+    if (Number.isFinite(parsed) && parsed >= 0) return unitToMeters(parsed, s.unit) / s.diag;
+  }
+  return Math.max(0, s.amount);
 }
 
 /** Recompute a scalar op from the base mesh at the current amount/cuts. */
@@ -193,15 +212,23 @@ export function applyMeshScalar(room: SlateRoom, state: MeshModalState): void {
   const s = state.scalar;
   if (!s) return;
   const base = state.baseMesh;
+  const amount = scalarAmount(s);
   let next: MeshTopology | null = null;
   if (s.op === 'bevel') {
     // Edge bevel (Blender's Ctrl+B, rounded-arc profile) whenever we have
     // target edges; vertex bevel only as the fallback (e.g. one lone vertex).
-    next = s.edges.length >= 2
-      ? bevelEdges(base, s.edges, Math.max(0, s.amount) * s.diag, Math.max(1, Math.round(s.cuts ?? 1)))
-      : bevelVerts(base, s.verts, Math.max(0, s.amount) * s.diag, Math.max(1, Math.round(s.cuts ?? 1)));
+    if (s.edges.length >= 2) {
+      const det = bevelEdgesDetailed(base, s.edges, amount * s.diag, Math.max(1, Math.round(s.cuts ?? 1)));
+      next = det.mesh;
+      // Keep the bevel's strips/corners selected after confirm (Blender
+      // leaves the new faces highlighted).
+      state.resultFaces = det.newFaces;
+    } else {
+      next = bevelVerts(base, s.verts, amount * s.diag, Math.max(1, Math.round(s.cuts ?? 1)));
+      state.resultFaces = [];
+    }
   } else if (s.op === 'inset') {
-    next = insetFaces(base, s.faces, Math.max(0, s.amount) * s.diag);
+    next = insetFaces(base, s.faces, amount * s.diag);
   } else if (s.op === 'loop-cut') {
     next = loopCut(base, s.loopFace, Math.max(1, Math.round(s.cuts)), s.slide);
   }
@@ -375,9 +402,16 @@ export function meshModalLabel(state: MeshModalState): string {
       const pos = Math.round(s.slide * 100);
       return `Loop cut • ${Math.max(1, Math.round(s.cuts))} cuts • slide ${pos > 0 ? '+' : ''}${pos}% • scroll = count · move = slide · click to confirm`;
     }
-    const pct = Math.round(Math.max(0, s.amount) * 100);
+    // Width in real units (Blender shows the offset, not a percentage). While
+    // the user is typing an exact width, echo the raw buffer.
+    const width =
+      s.typed !== ''
+        ? `${s.typed}${/[0-9]$/.test(s.typed) ? '' : '0'} ${s.unit}⌨`
+        : formatLength(scalarAmount(s) * s.diag, s.unit);
     const segs = Math.max(1, Math.round(s.cuts ?? 1));
-    return `${s.op === 'bevel' ? 'Bevel' : 'Inset'} • ${pct}% • ${s.op === 'bevel' ? `${segs} seg` : ''} • scroll = segments · move = size · click to confirm`.replace('  •', ' •');
+    return s.op === 'bevel'
+      ? `Bevel • ${width} • ${segs} seg • scroll = segments · move or type = width · click to confirm`
+      : `Inset • ${width} • move or type = depth · click to confirm`;
   }
   const verb =
     state.kind === 'extrude'

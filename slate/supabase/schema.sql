@@ -71,6 +71,11 @@ alter table public.profiles add column if not exists avatar_url text;
 -- `show_online` lets a user hide their presence (we then stop heartbeating).
 alter table public.profiles add column if not exists last_seen timestamptz;
 alter table public.profiles add column if not exists show_online boolean not null default true;
+-- Social profile fields: short about-me, a one-line status ("🎨 sketching"),
+-- and the profile banner color shown behind the avatar.
+alter table public.profiles add column if not exists bio text;
+alter table public.profiles add column if not exists status text;
+alter table public.profiles add column if not exists banner_color text;
 
 alter table public.profiles enable row level security;
 

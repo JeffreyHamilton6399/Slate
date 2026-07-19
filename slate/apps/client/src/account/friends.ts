@@ -28,6 +28,10 @@ export interface Friend {
   incoming: boolean;
   /** Presence: true when their heartbeat is recent (and they show it). */
   online: boolean;
+  /** Their one-line status ("🎨 sketching"), or null. */
+  statusText: string | null;
+  /** Their short about-me, or null. */
+  bio: string | null;
 }
 
 interface ProfileRow {
@@ -36,6 +40,9 @@ interface ProfileRow {
   email: string | null;
   avatar_url: string | null;
   last_seen: string | null;
+  status?: string | null;
+  bio?: string | null;
+  banner_color?: string | null;
 }
 
 /** The friends feature needs the profiles/friends tables (supabase/schema.sql).
@@ -81,7 +88,7 @@ export async function getFriends(userId: string): Promise<Friend[]> {
   );
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
-    .select('user_id,display_name,email,avatar_url,last_seen')
+    .select('user_id,display_name,email,avatar_url,last_seen,status,bio')
     .in('user_id', otherIds);
   if (pErr) {
     console.warn('getFriends profiles lookup failed:', pErr.message);
@@ -115,6 +122,8 @@ export async function getFriends(userId: string): Promise<Friend[]> {
         status: r.status,
         incoming,
         online: seen > 0 && Date.now() - seen < ONLINE_WINDOW_MS,
+        statusText: p?.status ?? null,
+        bio: p?.bio ?? null,
       });
       continue;
     }
@@ -248,14 +257,19 @@ export async function upsertMyProfile(
   displayName: string,
   email: string | null,
   avatarUrl?: string | null,
+  social?: { bio?: string; status?: string; bannerColor?: string },
 ): Promise<void> {
   if (!supabase) return;
   // Store email lowercased so friend lookups (which lowercase the query) match.
   const row: Record<string, unknown> = { user_id: userId, display_name: displayName, email: email?.toLowerCase() ?? null };
-  // Only send avatar_url when provided so a name-only update never clears it.
+  // Only send optional fields when provided so a partial update never clears
+  // the others.
   if (avatarUrl !== undefined) row.avatar_url = avatarUrl || null;
+  if (social?.bio !== undefined) row.bio = social.bio || null;
+  if (social?.status !== undefined) row.status = social.status || null;
+  if (social?.bannerColor !== undefined) row.banner_color = social.bannerColor || null;
   const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
-  if (error) console.warn('upsertMyProfile failed:', error.message);
+  if (error) console.warn('upsertMyProfile failed:', friendlyError(error.message));
 }
 
 /**
@@ -295,16 +309,37 @@ export async function ensureMyProfile(
   }
 }
 
-/** Fetch MY profile (used on sign-in to pull the avatar synced from another
- *  device). Returns null if unconfigured / not found. */
-export async function fetchMyProfile(userId: string): Promise<{ displayName: string; avatarUrl: string | null } | null> {
+/** Fetch MY profile (used on sign-in to pull the avatar/bio/status synced from
+ *  another device). Returns null if unconfigured / not found. */
+export async function fetchMyProfile(userId: string): Promise<{
+  displayName: string;
+  avatarUrl: string | null;
+  bio: string | null;
+  status: string | null;
+  bannerColor: string | null;
+  createdAt: number | null;
+} | null> {
   if (!supabase) return null;
   const { data, error } = await supabase
     .from('profiles')
-    .select('display_name,avatar_url')
+    .select('display_name,avatar_url,bio,status,banner_color,created_at')
     .eq('user_id', userId)
     .maybeSingle();
   if (error || !data) return null;
-  const row = data as { display_name: string; avatar_url: string | null };
-  return { displayName: row.display_name, avatarUrl: row.avatar_url };
+  const row = data as {
+    display_name: string;
+    avatar_url: string | null;
+    bio: string | null;
+    status: string | null;
+    banner_color: string | null;
+    created_at: string | null;
+  };
+  return {
+    displayName: row.display_name,
+    avatarUrl: row.avatar_url,
+    bio: row.bio ?? null,
+    status: row.status ?? null,
+    bannerColor: row.banner_color ?? null,
+    createdAt: row.created_at ? Date.parse(row.created_at) : null,
+  };
 }

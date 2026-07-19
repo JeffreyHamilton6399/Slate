@@ -548,15 +548,15 @@ export function InstrumentPanel() {
           {/* Engine selector — swaps the synthesis model (and which knobs show). */}
           <div className="flex items-center gap-1">
             <span className="text-[9px] font-mono uppercase text-text-dim">Engine</span>
-            {(['subtractive', 'string', 'fm'] as const).map((eng) => (
+            {(['subtractive', 'string', 'fm', 'piano'] as const).map((eng) => (
               <button
                 key={eng}
                 type="button"
                 onClick={() => setP('engine', eng)}
-                title={eng === 'string' ? 'Plucked string (guitar/harp)' : eng === 'fm' ? 'FM (e-piano/bells)' : 'Subtractive synth'}
+                title={eng === 'string' ? 'Plucked string (guitar/harp)' : eng === 'fm' ? 'FM (e-piano/bells)' : eng === 'piano' ? 'Modelled piano (inharmonic partials + hammer)' : 'Subtractive synth'}
                 className={`rounded-sm border px-1.5 py-0.5 text-[9px] capitalize ${(params.engine ?? 'subtractive') === eng ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-mid hover:bg-bg-4'}`}
               >
-                {eng === 'subtractive' ? 'Synth' : eng === 'string' ? 'String' : 'FM'}
+                {eng === 'subtractive' ? 'Synth' : eng === 'string' ? 'String' : eng === 'fm' ? 'FM' : 'Piano'}
               </button>
             ))}
           </div>
@@ -599,6 +599,9 @@ export function InstrumentPanel() {
               <span className="mt-1 text-[9px] font-mono uppercase text-text-dim">String</span>
               <Param label="Brightness" value={params.stringDamping ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => setP('stringDamping', v)} />
               <Param label="Sustain" value={params.stringDecay ?? 0.985} min={0.9} max={0.999} step={0.001} fmt={(v) => v.toFixed(3)} onChange={(v) => setP('stringDecay', v)} />
+              <Param label="Pick pos" value={params.stringPickPos ?? 0.13} min={0.02} max={0.5} step={0.01} onChange={(v) => setP('stringPickPos', v)} />
+              <Param label="Body" value={params.stringBody ?? 0} min={0} max={1} step={0.01} onChange={(v) => setP('stringBody', v)} />
+              <Param label="Drive" value={params.stringDrive ?? 0} min={0} max={1} step={0.01} onChange={(v) => setP('stringDrive', v)} />
             </>
           )}
 
@@ -630,6 +633,7 @@ export function InstrumentPanel() {
               <Param label="Vib depth" value={params.vibratoDepth} min={0} max={50} step={1} fmt={(v) => `${v}¢`} onChange={(v) => setP('vibratoDepth', v)} />
             </>
           )}
+          <Param label="Reverb" value={params.reverb ?? 0} min={0} max={1} step={0.01} onChange={(v) => setP('reverb', v)} />
           <Param label="Volume" value={params.gain} min={0.1} max={1.5} step={0.01} onChange={(v) => setP('gain', v)} />
 
           {/* Save as custom */}

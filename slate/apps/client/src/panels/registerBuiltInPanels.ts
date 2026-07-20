@@ -21,9 +21,9 @@ import { AudioSettingsPanel } from './AudioSettingsPanel';
 import { InstrumentPanel } from './InstrumentPanel';
 import { FriendsPanel } from './FriendsPanel';
 import { DocOutlinePanel } from './DocOutlinePanel';
-import { DocStatsPanel } from './DocStatsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodeSearchPanel } from './CodeSearchPanel';
+import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
 
@@ -151,16 +151,6 @@ export function registerBuiltInPanels(): void {
     order: 0,
     mode: 'doc',
   });
-  // Doc Stats — word/character/paragraph/heading counts + reading time.
-  // Right dock opposite the outline.
-  registerPanel({
-    id: 'doc-stats',
-    title: 'Stats',
-    defaultSide: 'right',
-    render: DocStatsPanel,
-    order: 1,
-    mode: 'doc',
-  });
   // Code Files — dockable file tree for code-mode boards. Mirrors the editor's
   // left rail as a navigable folder tree; clicks open files in the editor.
   registerPanel({
@@ -179,5 +169,16 @@ export function registerBuiltInPanels(): void {
     render: CodeSearchPanel,
     order: 1,
     mode: 'code',
+  });
+  // AI Assistant — context-aware AI chat available in ALL modes. Reads the
+  // current doc/code content and sends it as context to the LLM. The AI
+  // backend runs server-side via the Next.js API route at /api/ai-chat.
+  registerPanel({
+    id: 'ai-chat',
+    title: 'AI Assistant',
+    defaultSide: 'right',
+    render: AiChatPanel,
+    order: 2,
+    mode: 'both',
   });
 }

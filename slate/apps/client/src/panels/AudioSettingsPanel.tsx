@@ -162,12 +162,12 @@ export function AudioSettingsPanel() {
               format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
             />
           </div>
-          {/* Speed + Pitch — two separate rotary knobs.
-              • Speed: 0.25×..4×, sets clip.speed (timeline rate; Web Audio
-                playbackRate — naturally shifts pitch as a side effect).
-              • Pitch: -12..+12 semitones, sets clip.pitch (stored in Yjs as
-                cents = semitones × 100). Applied via the buffer source's
-                `detune` AudioParam. */}
+          {/* Speed + Pitch — fully independent, like Audition's Stretch &
+              Pitch (the engine cancels Web Audio's playbackRate pitch side
+              effect with a granular pitch-shift worklet).
+              • Speed: 0.25×..4× time-stretch — changes duration, keeps pitch.
+              • Pitch: -12..+12 semitones — shifts pitch, keeps duration
+                (stored in Yjs as cents = semitones × 100). */}
           <div className="grid grid-cols-2 gap-2">
             <RotaryKnob
               label="Speed"

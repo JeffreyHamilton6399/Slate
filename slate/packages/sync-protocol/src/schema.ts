@@ -354,11 +354,14 @@ export interface AudioClip {
   pan?: number;
   /** Mute just this clip without affecting the rest of the track. Default false. */
   mute?: boolean;
-  /** Playback speed (also shifts pitch), 0.25..4. Default 1. */
+  /** Playback speed 0.25..4 — a pitch-preserving time-stretch (the engine
+   *  cancels the playbackRate pitch side effect with a pitch-shift worklet).
+   *  Default 1. */
   speed?: number;
   /** Pitch shift in cents (-1200..+1200). 0 = original pitch, +1200 = one
-   *  octave up, -1200 = one octave down. Stored in cents so the Yjs value is
-   *  the same unit the Web Audio `detune` AudioParam expects. Default 0. */
+   *  octave up, -1200 = one octave down. Duration-preserving (applied via a
+   *  granular pitch shifter, not detune). Stored in cents = semitones × 100.
+   *  Default 0. */
   pitch?: number;
   /** High-pass filter cutoff in Hz. 20 (= bottom of hearing) means OFF.
    *  Default 20. */

@@ -13,11 +13,15 @@ import { loadSamples } from './sampleStore';
 import { toast } from '../ui/Toast';
 import { INSTRUMENT_PRESETS, loadCustomInstruments, startVoice, type InstrumentParams } from './instruments';
 import { SoundfontInstrument } from './soundfont';
+import { createPitchShifter, ensurePitchWorklet, releasePitchShifter, PITCH_SHIFT_LATENCY } from './pitchShift';
 
 interface PlayingClip {
   source: AudioBufferSourceNode;
   gain: GainNode;
   clipId: string;
+  /** Pitch-shift worklet node, present when speed ≠ 1 or pitch ≠ 0 —
+   *  released (tail ring-out, then processor self-terminates) on stop. */
+  shifter?: AudioWorkletNode;
 }
 
 /** A scheduled MIDI note voice — has a `stop(when)` method (like the
@@ -412,6 +416,17 @@ export class AudioEngine {
     );
     if (!this.playing) return; // stopped while buffers were loading
 
+    // Register the pitch-shift worklet if any clip needs time-stretch or
+    // pitch-shift (speed ≠ 1 or pitch ≠ 0). One addModule per context —
+    // memoized, so this is a cheap await after the first play(). Resolves
+    // false where AudioWorklet is unavailable; scheduling then falls back to
+    // the old coupled detune behaviour.
+    const needsShift = clips.some(
+      (c) => !c.mute && c.kind !== 'midi' && ((c.pitch ?? 0) !== 0 || (c.speed != null && c.speed > 0 && c.speed !== 1)),
+    );
+    const shiftReady = needsShift ? await ensurePitchWorklet(ctx) : false;
+    if (!this.playing) return; // stopped while the worklet was loading
+
     // Pre-warm the soundfont for MIDI clips that use it. Without this the
     // first note of each clip would silently fetch its sample and miss its
     // scheduled start time (noteOn returns null while loading). We collect
@@ -468,16 +483,33 @@ export class AudioEngine {
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
+      // Speed and pitch, DECOUPLED like a real editor (Audition's Stretch &
+      // Pitch / Premiere's "maintain pitch"):
+      //   - playbackRate = speed sets the timeline duration (and would shift
+      //     pitch by ×speed as a Web Audio side effect);
+      //   - a granular pitch-shift worklet after the source scales frequency
+      //     by 2^(cents/1200) / speed — cancelling the varispeed side effect
+      //     and applying the user's pitch knob on top.
+      // Net: Speed changes duration but keeps pitch; Pitch shifts semitones
+      // but keeps duration. Unity ratio bypasses the shifter entirely (the
+      // common path stays two nodes). If the worklet isn't available, fall
+      // back to the old coupled detune.
       source.playbackRate.value = speed;
-      // Pitch shift (in cents) via the buffer source's `detune` AudioParam.
-      // NOTE: Web Audio's AudioBufferSourceNode couples pitch and speed —
-      // `detune` shifts pitch AND scales the effective playback rate
-      // (effectiveRate = playbackRate * 2^(detune/1200)). True pitch-
-      // independent-of-speed requires offline time-stretching, which is out
-      // of scope here. The two knobs still give the user independent CONTROL:
-      // to hold timeline speed constant while shifting pitch, set
-      // speed = 1 / 2^(pitch/1200) to compensate.
-      if (pitchCents !== 0) source.detune.value = pitchCents;
+      const shiftRatio = Math.pow(2, pitchCents / 1200) / speed;
+      let shifter: AudioWorkletNode | undefined;
+      let clipHead: AudioNode = source;
+      if (shiftReady && Math.abs(shiftRatio - 1) > 0.0005) {
+        shifter = createPitchShifter(ctx, shiftRatio);
+        source.connect(shifter);
+        clipHead = shifter;
+        // Let the shifter ring out its buffered tail and self-terminate when
+        // the source ends (naturally or via stop()) — worklet nodes whose
+        // process() keeps returning true are never GC'd.
+        const s = shifter;
+        source.onended = () => releasePitchShifter(s);
+      } else if (!shiftReady && pitchCents !== 0) {
+        source.detune.value = pitchCents; // legacy coupled fallback
+      }
 
       // Per-clip gain (fades + clip volume) → per-clip panner → optional
       // HP/LP filters → track chain. Filters are only inserted when engaged
@@ -486,7 +518,7 @@ export class AudioEngine {
       const clipGain = ctx.createGain();
       const clipPan = ctx.createStereoPanner();
       clipPan.pan.value = Math.max(-1, Math.min(1, clip.pan ?? 0));
-      source.connect(clipGain);
+      clipHead.connect(clipGain);
       clipGain.connect(clipPan);
       let clipTail: AudioNode = clipPan;
       const hp = clip.hpCutoff ?? 20;
@@ -517,7 +549,14 @@ export class AudioEngine {
       const bufStart = clipOffset + skipTo * speed;
       const bufDuration = playDuration * speed;
 
-      source.start(whenToStart, bufStart, bufDuration);
+      // Latency compensation: the shifter's granular window delays audio by
+      // ~45ms on average, so shifted clips would land late against unshifted
+      // ones. Start the SOURCE early by that amount when there's headroom —
+      // the audio emerges from the shifter on time. (Fades below stay
+      // anchored to whenToStart: the gain node sits after the shifter, in
+      // timeline time.)
+      const srcStart = shifter ? Math.max(ctx.currentTime, whenToStart - PITCH_SHIFT_LATENCY) : whenToStart;
+      source.start(srcStart, bufStart, bufDuration);
 
       // Fades (real-time). Base level is the clip gain.
       clipGain.gain.setValueAtTime(clip.fadeIn > 0 ? 0 : clipVol, whenToStart);
@@ -529,7 +568,7 @@ export class AudioEngine {
         clipGain.gain.linearRampToValueAtTime(0, whenToStart + playDuration);
       }
 
-      this.playingClips.push({ source, gain: clipGain, clipId: clip.id });
+      this.playingClips.push({ source, gain: clipGain, clipId: clip.id, shifter });
     }
 
     // Loop region: getPosition() wraps the PLAYHEAD at the loop end, but the
@@ -552,8 +591,9 @@ export class AudioEngine {
   stop(): void {
     this.playing = false;
     if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
-    for (const { source } of this.playingClips) {
+    for (const { source, shifter } of this.playingClips) {
       try { source.stop(); } catch { /* already stopped */ }
+      if (shifter) releasePitchShifter(shifter); // idempotent (onended also fires)
     }
     this.playingClips = [];
     // Release every live MIDI voice too — without this, oscillator-based
@@ -585,8 +625,9 @@ export class AudioEngine {
     }
     // Stop + forget current sources, but keep `playing` true so getPosition()
     // continues to track. play() will reset startTime/startOffset.
-    for (const { source } of this.playingClips) {
+    for (const { source, shifter } of this.playingClips) {
       try { source.stop(); } catch { /* already stopped */ }
+      if (shifter) releasePitchShifter(shifter); // idempotent (onended also fires)
     }
     this.playingClips = [];
     // Release live MIDI voices too (see stop()).

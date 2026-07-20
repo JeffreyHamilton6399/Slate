@@ -48,8 +48,11 @@ export class ErrorBoundary extends Component<Props, State> {
             Slate hit an unexpected error. Your boards are stored safely on this
             device — reloading usually fixes it.
           </div>
-          <pre className="max-h-32 w-full overflow-auto rounded-md border border-border bg-bg-2 p-2 text-left font-mono text-[11px] text-text-dim">
+          <pre className="max-h-48 w-full overflow-auto rounded-md border border-border bg-bg-2 p-2 text-left font-mono text-[11px] text-text-dim">
             {this.state.error.message}
+            {this.state.error.stack && (
+              '\n\n' + this.state.error.stack.split('\n').slice(0, 8).join('\n')
+            )}
           </pre>
           <button
             type="button"

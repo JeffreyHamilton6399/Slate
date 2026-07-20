@@ -145,12 +145,16 @@ function safeDocTextToJson(slate: SlateRoom['slate']): PmJsonNode {
 function snapshotCodeFiles(slate: SlateRoom['slate']): { files: { id: string; name: string }[]; contents: Record<string, string> } {
   const files: { id: string; name: string }[] = [];
   const contents: Record<string, string> = {};
-  slate.codeFiles().forEach((m, id) => {
-    const name = m.get('name');
+  try {
+    slate.codeFiles().forEach((m, id) => {
+      const name = m.get('name');
     if (typeof name !== 'string' || name.length === 0) return;
     files.push({ id, name });
     contents[id] = slate.codeText(id).toString();
-  });
+    });
+  } catch {
+    // ignore — return what we have
+  }
   return { files, contents };
 }
 
@@ -202,21 +206,25 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     for (const n of snapshot.data.notes) notes.push([toYMap(n)]);
     for (const c of snapshot.data.chat) chat.push([toYMap(c)]);
     // Rich-text document (absent on snapshots from older clients).
-    if (snap.docText !== undefined) jsonToDocText(slate.docText(), snap.docText);
+    try {
+      if (snap.docText !== undefined) jsonToDocText(slate.docText(), snap.docText);
+    } catch { /* fragment not ready */ }
     // Code files: reset the map, then re-point each id at restored content.
-    if (snap.codeFiles) {
-      const codeFiles = slate.codeFiles();
-      codeFiles.forEach((_, k) => codeFiles.delete(k));
-      for (const f of snap.codeFiles.files) {
-        const m = new Y.Map<unknown>();
-        m.set('name', f.name);
-        codeFiles.set(f.id, m);
-        const text = slate.codeText(f.id);
-        if (text.length > 0) text.delete(0, text.length);
-        const restored = snap.codeFiles.contents[f.id];
-        if (restored) text.insert(0, restored);
+    try {
+      if (snap.codeFiles) {
+        const codeFiles = slate.codeFiles();
+        codeFiles.forEach((_, k) => codeFiles.delete(k));
+        for (const f of snap.codeFiles.files) {
+          const m = new Y.Map<unknown>();
+          m.set('name', f.name);
+          codeFiles.set(f.id, m);
+          const text = slate.codeText(f.id);
+          if (text.length > 0) text.delete(0, text.length);
+          const restored = snap.codeFiles.contents[f.id];
+          if (restored) text.insert(0, restored);
+        }
       }
-    }
+    } catch { /* code files not ready */ }
   });
 }
 

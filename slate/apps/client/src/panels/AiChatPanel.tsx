@@ -82,18 +82,25 @@ export function AiChatPanel() {
 
     try {
       const context = gatherContext();
-      // Try relative URL first (works when served from the same origin as the
-      // Next.js API route). If that fails with 405/404, show a helpful error.
-      const resp = await fetch('/api/ai-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-          context,
-        }),
-      });
+      // The AI chat API route lives in the Next.js app. When the Slate SPA is
+      // served from the same origin (e.g., via the /slate/ redirect on
+      // localhost:3000 or Vercel), a relative fetch works. On standalone
+      // deployments the route may not exist — show a clear error.
+      let resp: Response;
+      try {
+        resp = await fetch('/api/ai-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+            context,
+          }),
+        });
+      } catch (fetchErr) {
+        throw new Error('Cannot reach the AI server. If you\'re running Slate standalone, the AI chat requires the Next.js backend.');
+      }
       if (resp.status === 405 || resp.status === 404) {
-        throw new Error('AI chat is not available on this deployment. Make sure the Next.js API routes are deployed.');
+        throw new Error('AI chat is not available on this deployment. The Next.js API route at /api/ai-chat was not found.');
       }
       if (!resp.ok) {
         const errText = await resp.text().catch(() => 'Request failed');

@@ -86,7 +86,7 @@ export function DocEditor() {
     {
       extensions: [
         StarterKit.configure({
-          // TipTap v3 splits history out of StarterKit as `undoRedo`. The
+          // TipTap v3 splits history out of StarterKit as `undoRedu`. The
           // Collaboration extension brings its own (Yjs-based) history;
           // two histories fight over Ctrl+Z, so the local one must be off.
           undoRedo: false,
@@ -97,7 +97,25 @@ export function DocEditor() {
           // self-documenting and lets us extend it later if needed).
           underline: false,
         }),
-        Collaboration.configure({ fragment: room.slate.docText() }),
+        // Guard: the Y.XmlFragment returned by doc.getXmlFragment() is
+        // auto-created but may not be integrated into the doc on very fresh
+        // boards. The Collaboration extension accesses fragment.doc internally
+        // — if it's undefined, the editor crashes. Force-integrate by touching
+        // the fragment's parent doc.
+        Collaboration.configure({
+          fragment: (() => {
+            const frag = room.slate.docText();
+            // Accessing the doc property forces Yjs to integrate the fragment
+            // if it hasn't been yet. If doc is null, the fragment is detached
+            // — we can't use Collaboration, so return a new integrated one.
+            if (!frag.doc) {
+              // Create a new fragment and integrate it into the doc
+              room.slate.doc.getXmlFragment('doc:text');
+              return room.slate.docText();
+            }
+            return frag;
+          })(),
+        }),
         CollaborationCursor.configure({ provider: room.provider, user }),
         TaskList,
         TaskItem.configure({ nested: true }),

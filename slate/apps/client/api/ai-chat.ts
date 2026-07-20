@@ -1,48 +1,30 @@
 /**
- * Vercel Serverless Function — AI Chat
+ * Vercel Serverless Function — AI Chat (Z.AI)
  *
- * Uses z-ai-web-dev-sdk. The SDK normally reads /etc/.z-ai-config or
- * ~/.z-ai-config, but on Vercel those don't exist. We pass the config
- * explicitly via ZAI.create({ baseUrl, apiKey, token }) using env vars
- * set in the Vercel project settings.
+ * Calls Z.AI's HTTP API directly instead of going through z-ai-web-dev-sdk.
+ * The SDK's `ZAI.create()` takes NO arguments and ALWAYS reads a `.z-ai-config`
+ * file from cwd / home / /etc — it ignores any config object passed to it. That
+ * file doesn't exist on Vercel, so every request failed with "Configuration
+ * file not found or invalid", no matter how the env vars were set.
  *
- * Required Vercel env vars:
- *   ZAI_BASE_URL  — e.g. "https://internal-api.z.ai/v1"
- *   ZAI_API_KEY   — e.g. "Z.ai"
- *   ZAI_TOKEN     — the JWT token from .z-ai-config
- *   ZAI_USER_ID   — user id from .z-ai-config
- *   ZAI_CHAT_ID   — chat id from .z-ai-config
+ * This handler reproduces the exact request the SDK makes (same URL, headers,
+ * and body — see z-ai-web-dev-sdk/dist/index.js `createChatCompletion`), driven
+ * entirely by env vars, so there is no config file to find.
+ *
+ * Vercel Environment Variables (Project Settings → Environment Variables):
+ *   ZAI_BASE_URL  (required) e.g. "https://internal-api.z.ai/v1"
+ *   ZAI_API_KEY   (required) bearer value from your .z-ai-config (e.g. "Z.ai")
+ *   ZAI_TOKEN     (usually required) JWT from .z-ai-config — sent as X-Token
+ *   ZAI_USER_ID   (optional) sent as X-User-Id
+ *   ZAI_CHAT_ID   (optional) sent as X-Chat-Id
+ *   ZAI_MODEL     (optional) only sent when set (the SDK omits model by default)
  */
 
-import ZAI from "z-ai-web-dev-sdk";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-let cachedZai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
-
-async function getZai() {
-  if (cachedZai) return cachedZai;
-
-  // On Vercel, read config from env vars (set in Project Settings → Environment Variables)
-  const baseUrl = process.env.ZAI_BASE_URL;
-  const apiKey = process.env.ZAI_API_KEY;
-  const token = process.env.ZAI_TOKEN;
-  const userId = process.env.ZAI_USER_ID;
-  const chatId = process.env.ZAI_CHAT_ID;
-
-  if (baseUrl && apiKey && token) {
-    // Pass config explicitly — bypasses the file lookup
-    cachedZai = await ZAI.create({
-      baseUrl,
-      apiKey,
-      token,
-      userId: userId || undefined,
-      chatId: chatId || undefined,
-    });
-  } else {
-    // Fallback: let the SDK find /etc/.z-ai-config (works locally, not on Vercel)
-    cachedZai = await ZAI.create();
-  }
-  return cachedZai;
+interface ChatMessage {
+  role: string;
+  content: string;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -54,46 +36,96 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(204).end();
     return;
   }
-
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed — use POST" });
     return;
   }
 
-  try {
-    const { messages, context } = req.body;
+  const baseUrl = process.env.ZAI_BASE_URL?.replace(/\/+$/, "");
+  const apiKey = process.env.ZAI_API_KEY;
+  const token = process.env.ZAI_TOKEN;
+  const userId = process.env.ZAI_USER_ID;
+  const chatId = process.env.ZAI_CHAT_ID;
+  const model = process.env.ZAI_MODEL;
 
+  if (!baseUrl || !apiKey) {
+    res.status(503).json({
+      error:
+        "AI is not configured. Set ZAI_BASE_URL and ZAI_API_KEY (and usually ZAI_TOKEN) in the Vercel project's Environment Variables, then redeploy.",
+    });
+    return;
+  }
+
+  try {
+    const { messages, context } = (req.body ?? {}) as {
+      messages?: ChatMessage[];
+      context?: string;
+    };
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       res.status(400).json({ error: "Messages array is required" });
       return;
     }
 
-    const zai = await getZai();
-
     const systemContent = context
       ? `You are Slate AI, a helpful assistant integrated into the Slate collaborative editor. You help with writing, coding, brainstorming, and creative work. Here is the user's current document/code context:\n\n---\n${context}\n---\n\nUse this context to give relevant, specific answers. If the context is empty, just help generally.`
       : "You are Slate AI, a helpful assistant integrated into the Slate collaborative editor. You help with writing, coding, brainstorming, and creative work. Be concise and helpful.";
 
-    const allMessages = [
-      { role: "assistant", content: systemContent },
-      ...messages,
-    ];
+    // Exact header set z-ai-web-dev-sdk sends (Authorization is the apiKey; the
+    // JWT rides in X-Token; chat/user ids are optional routing headers).
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "X-Z-AI-From": "Z",
+    };
+    if (chatId) headers["X-Chat-Id"] = chatId;
+    if (userId) headers["X-User-Id"] = userId;
+    if (token) headers["X-Token"] = token;
 
-    const completion = await zai.chat.completions.create({
-      messages: allMessages,
+    const body: Record<string, unknown> = {
+      messages: [{ role: "system", content: systemContent }, ...messages],
       thinking: { type: "disabled" },
-    });
+    };
+    if (model) body.model = model;
 
-    const reply = completion.choices?.[0]?.message?.content;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
-    if (!reply || reply.trim().length === 0) {
-      res.status(500).json({ error: "Empty response from AI" });
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => "");
+      res
+        .status(502)
+        .json({ error: `AI provider error (${upstream.status}). ${detail.slice(0, 300)}`.trim() });
+      return;
+    }
+
+    const data = (await upstream.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const reply = data.choices?.[0]?.message?.content?.trim();
+    if (!reply) {
+      res.status(502).json({ error: "Empty response from AI" });
       return;
     }
 
     res.status(200).json({ reply });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ error: message });
+    const aborted = error instanceof Error && error.name === "AbortError";
+    const message = aborted
+      ? "AI request timed out."
+      : error instanceof Error
+        ? error.message
+        : "Unknown error";
+    res.status(aborted ? 504 : 500).json({ error: message });
   }
 }

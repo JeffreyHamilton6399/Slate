@@ -1,0 +1,500 @@
+  • WaveformImg's own `onChanged` listener (lines ~99-113): matches the event by `clipId` OR `sampleKey`, invalidates its PNG cache entries for the clipId, resets `retryRef.current = 0`, and bumps `bust` to re-trigger the load effect → `loadSamples(sampleKey)` re-attempts immediately.
+- End-to-end flow for a remote peer importing audio:
+  1. Peer A imports `song.mp3` → `addAudioClip` writes metadata to Yjs `audioClips()` map + `storeSamples` writes to IndexedDB + `publishToSyncMap` writes base64 to `audioSampleSync` Y.Map.
+  2. Peer B's Yjs provider receives the clip metadata → `clips.observe(onClipsAdded)` fires → `onClipsAdded` dispatches `slate:audio-clip-changed` for the new clipId → AudioEditor re-renders + mounts a new ClipBlock + WaveformImg → WaveformImg calls `loadSamples` (returns empty — samples not yet arrived) → starts the 10s retry loop.
+  3. Peer B's Yjs provider receives the sample blob → `registerSampleSyncMap`'s `syncMap.observe` callback decodes + stores to IndexedDB + dispatches `slate:audio-clip-changed` with `detail: sampleKey` → WaveformImg's listener matches by `sampleKey`, resets `retryRef` to 0, bumps `bust` → `loadSamples` re-attempts → finds the now-stored Float32Array → renders the PNG waveform.
+  4. If Peer B is playing, `scheduleRestart()` (called by both `onClipsAdded` and the `onChanged` listener) debounces a `restartPlayback` that picks up the new clip atomically.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → EXIT 0, zero output. No type errors. The `moveRafRef = useRef(0)` typed as `useRef<number>` (inferred); `requestAnimationFrame` returns `number` so the assignment `moveRafRef.current = requestAnimationFrame(applyMove)` type-checks. `cancelAnimationFrame(moveRafRef.current)` accepts `number`. `moveXRef = useRef<number | null>(null)` — the null-vs-number branching in `applyMove` and `onUp` is exhaustive (early-return on null).
+- The `Y.YMapEvent<Y.Map<unknown>>` annotation on `onClipsAdded` (unchanged from ROUND5-B) still compiles — `event.keysChanged` and `event.changes.keys.get(key)` are correctly typed.
+- The `CustomEvent<string>` cast in the existing `onChanged` listener (line 552) accepts the `detail: id` (string) dispatched by `onClipsAdded` — no type widening needed.
+
+Stage Summary:
+- 1 file modified: `slate/apps/client/src/audio/AudioEditor.tsx` (~80 line delta across 3 regions).
+- **Task 1 (drag smoothness)**: pointermove handling is now rAF-throttled via `moveXRef` + `moveRafRef`. Multiple moves within one animation frame coalesce into a single `applyMove` call (was: full neighbours-overlap scan + style writes on every pointermove at 60-120Hz). A no-op skip (`lastProcessedX === clientX`) avoids redundant work for stationary pointers. `onUp` cancels pending rAF and processes the final position synchronously so the committed Yjs value matches the exact pointer-up location. Trim modes (trimL/trimR) benefit identically.
+- **Task 2 (live cross-peer waveform)**: `WaveformImg` retry budget 5 × 500ms (2.5s) → 20 × 500ms (10s) so a slow cross-peer sample sync has time to land. `onClipsAdded` Yjs observer now dispatches `slate:audio-clip-changed` for each newly-added clip and clears the engine's `bufferCache` for that clipId, which (via the existing AudioEditor + WaveformImg event listeners) immediately resets the WaveformImg's retry counter and re-attempts `loadSamples`. Combined with the existing `registerSampleSyncMap` observer (which dispatches the same event with the `sampleKey` when samples arrive), a remote peer's imported clip now appears with its waveform live — no page refresh needed. If playing, `scheduleRestart()` picks up the new clip atomically.
+- TypeScript clean (0 errors). No new dependencies. No API changes.
+
+---
+Task ID: ROUND6-A
+Agent: main (Z.ai Code)
+Task: 2 fixes — (1) smooth eraser (no clipping/deleting weirdly); (2) track header sliders — only one works, laggy
+
+Work Log:
+- Read worklog (latest ROUND5-B) + all 3 target files fully: canvas2d/tools.ts (EraserTool class, lines 248–364), audio/engine.ts (trackGains/trackPanners maps + setupTrackNodes + updateTracks), audio/AudioEditor.tsx (TrackHeader component, lines 682–724). Also read canvas2d/engine.ts (splitStroke/deleteIds/snapshot) and canvas2d/types.ts (BoardPoint) to confirm the EraserTool's engine API surface and that no new imports were needed (requestAnimationFrame / cancelAnimationFrame are globals).
+
+Task 1 — Smooth eraser (canvas2d/tools.ts EraserTool):
+1. Throttle to one erase per animation frame — added `pendingPoint: BoardPoint | null`, `rafScheduled: boolean`, `rafId: number | null`. `move()` stashes the latest point in `pendingPoint` and schedules a single `requestAnimationFrame` (only if one isn't already scheduled); the rAF callback reads + clears `pendingPoint` and calls `eraseAt` once. Coalesces the 4–8 pointermove events that fire per frame into one erase pass — previously each move snapshot the whole scene + iterated all strokes + opened a Yjs transaction, stacking work the browser couldn't keep up with (the "eraser deletes weirdly" symptom). `end()` flushes any pending point immediately (no waiting a frame for an already-over gesture); `cancel()` cancels the rAF.
+2. Track already-erased stroke IDs — added `erasedThisGesture: Set<string>`, cleared in `start()` and `cancel()`. In `eraseAt`, strokes whose id is in this set are skipped. In `eraseStrokePartial`, the original stroke id is added to the set right before `deleteIds` (full-erase) or `splitStroke` (partial) — so subsequent erase passes within the same gesture don't re-process the same id. Split fragments have new ids and are picked up naturally if the cursor is still over them. Prevents re-splitting the same stroke on every move event (which generated tiny fragments and stacked transactions).
+3. Decouple eraser size from brush width — changed `Math.max(6, ctx.strokeWidth * 2)` to `Math.min(40, Math.max(8, ctx.strokeWidth))`. The `* 2` previously meant a size-50 brush gave the eraser a 100px radius (nuking a huge area). Now: 8px floor, 40px ceiling, `* 1` (not `* 2`).
+4. Assume stride 3 always — replaced `const stride = points.length % 3 === 0 ? 3 : 2` with `if (points.length % 3 !== 0) return; const stride = 3;`. InkTool always writes 3 values per point `[x, y, pressure]`; the old guess-and-check could read garbage coordinates from a malformed stroke. Malformed strokes are now skipped entirely.
+5. Drop tiny fragments — replaced per-sub-stroke minimum from `stride * 2` (2 points) to `stride * 3` (3 points) in all three commit sites. Extracted `const minLen = stride * 3` for clarity. 2-point dots were creating tiny fragments that stacked up in Yjs without adding visible ink.
+
+Task 2 — Track header sliders (audio/AudioEditor.tsx + audio/engine.ts):
+- Root cause confirmed: `onVol`/`onPan` called `engineRef.current?.updateTracks(slate)` on every `onChange`. `updateTracks` re-reads ALL tracks from Yjs + calls `setupTrackNodes` which iterates the entire trackGains/trackPanners maps — O(tracks²) per slider tick (the lag source). The shared `isDraggingRef` between both sliders also meant starting a volume drag blocked the pan prop-sync effect (and vice versa).
+- Fix in audio/engine.ts: added two public methods next to `updateTracks`:
+  • `setTrackVolume(trackId, volume, audible)` — O(1) direct write to `GainNode.gain.value`. No-op if AudioContext not created or gain node doesn't exist (playback hasn't started — next play() reads committed Yjs value). `audible` mirrors setupTrackNodes' mute/solo logic so dragging volume on a muted track doesn't briefly un-mute it (gain forced to 0 if not audible).
+  • `setTrackPan(trackId, pan)` — O(1) direct write to `StereoPannerNode.pan.value`, clamped to [-1, 1] (legal range; outside throws NotSupportedError).
+  • Added clarifying JSDoc on `updateTracks` explaining when to use it (track set changed / mute-solo toggled) vs the new direct setters (single-track volume/pan drag).
+- Fix in audio/AudioEditor.tsx TrackHeader:
+  1. Split shared `isDraggingRef` into `isDraggingVolRef` + `isDraggingPanRef`. Each prop-sync useEffect gates on its own flag → the two sliders' prop-sync is independent.
+  2. `onVol(v)` → `setVol(v)` + `engineRef.current?.setTrackVolume(track.id, v, audible)` (O(1), no Yjs read, no graph rebuild). `onPan(p)` → `setPan(p)` + `engineRef.current?.setTrackPan(track.id, p)`. Both track the cursor with zero lag.
+  3. `onVolEnd` / `onPanEnd` unchanged in structure: clear drag flag, then `updateAudioTrack(...)` commits to Yjs once on pointerup. The next Yjs echo re-syncs local state via the prop-sync effect (drag flag is false by then).
+  4. Added `const audible = hasSolo ? track.solo : !track.muted;` (same formula as setupTrackNodes).
+  5. Made sliders clearly functional and labelled: Volume slider `flex-1` (primary, bigger) + Volume2 icon + aria-label/title="Volume"; Pan slider `w-10` (secondary, bumped from `w-8`) flanked by `L` / `R` text labels + aria-label/title="Pan". Both slider tracks bumped `h-0.5` → `h-1` for visibility. Labels marked `aria-hidden` (the input's aria-label is the accessible name).
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → EXIT 0, zero output, zero errors. (Confirmed tsc actually ran via `--listFiles`: 1649 files processed, including the vite-plugin-pwa type defs that previous rounds reported as missing — the env issue is now resolved.)
+- dev.log: dev server running cleanly, `GET / 200`, no errors related to the modified files.
+
+Stage Summary:
+- 3 files modified: canvas2d/tools.ts (EraserTool rewritten), audio/engine.ts (+ setTrackVolume/setTrackPan), audio/AudioEditor.tsx (TrackHeader: split drag refs + direct node writes + labels).
+- Eraser now erases smoothly: one erase pass per animation frame (coalesced from many pointermove events), already-erased strokes skipped within a gesture (no re-splitting / tiny fragments), radius decoupled from brush width (8–40px range), stride fixed at 3 (malformed strokes skipped), sub-strokes need ≥ 3 points (no 2-point dot fragments).
+- Track header volume + pan sliders both work and are no longer laggy: each onChange does an O(1) direct write to the Web Audio gain/panner node (no Yjs read, no graph rebuild); Yjs committed once on pointerup. Independent drag refs; clearly labelled (Volume2 icon for volume, L/R text for pan).
+- TypeScript clean (exit 0, zero errors). No new dependencies. No API breakage (new engine methods are additive; updateTracks unchanged and still used by the non-slider update path for name/mute/solo/arm edits).
+
+---
+Task ID: ROUND7-B
+Agent: Audio-playhead-awareness
+Task: Add audio playhead awareness line (like 3D camera and 2D cursor)
+
+Work Log:
+- Read worklog (latest ROUND6-B), awareness.ts, provider.ts, AudioEditor.tsx (full, 918 lines), RemoteCursors.tsx (pattern reference), and the relevant slice of Viewport3D.tsx (lines 180–260, 1320–1360) to match the existing awareness-subscribe + remote-presence pattern.
+- Confirmed React 18.3 / @types/react 18.3 → `useRef(number)` returns `MutableRefObject<number>`; used `{ current: number }` for the RemotePlayheads pxRef prop so it's structurally compatible regardless of React types version.
+
+Files modified (4) + created (1):
+
+1. `packages/sync-protocol/src/awareness.ts`
+   - Added `audio: { pos: number; playing: boolean } | null;` to `AwarenessState`.
+   - Added `audio: partial.audio ?? null,` to `makeAwarenessState`.
+
+2. `apps/client/src/sync/provider.ts`
+   - Added `audio: null,` to the initial `publishLocalAwareness` call in the constructor (line 106).
+
+3. `apps/client/src/audio/AudioEditor.tsx` (edits)
+   - Imports: added `AwarenessState` to the `@slate/sync-protocol` type import; added `import { RemotePlayheads } from './RemotePlayheads';`.
+   - Added `lastAudioPublishRef = useRef(0)` for the 7 Hz throttle stamp.
+   - Added `const [peerStates, setPeerStates] = useState<AwarenessState[]>([]);`.
+   - New useEffect: subscribes to `room.onAwarenessChange` with a diffing `setPeerStates` — only updates React state when the peer SET changes (id/name/color/audio-presence), so high-frequency `audio.pos` updates don't re-render AudioEditor at 7 Hz.
+   - New useEffect `[playing, room]`: publishes `{ audio: { pos: positionRef.current, playing } }` on every play/pause transition, and resets `lastAudioPublishRef` so the rAF tick doesn't double-publish.
+   - New useEffect `[room]` cleanup: `room.setLocalAwareness({ audio: null })` on unmount so peers stop seeing us in the audio editor.
+   - Modified the `tick` rAF callback (inside the `[playing]` playhead effect): throttled publish at ~7 Hz (150 ms) via `performance.now() - lastAudioPublishRef.current >= 150`, publishing `{ audio: { pos, playing: true } }`.
+   - Modified `seek`: now publishes `{ audio: { pos, playing: playingRef.current } }` immediately (so peers see the seek without waiting for the next tick), and resets `lastAudioPublishRef`. `seek` deps changed from `[]` to `[room]`.
+   - Mounted `<RemotePlayheads room={peerStates={peerStates} pxRef={pxRef} selfId={room.identity.peerId} />` inside the timeline `<div className="relative flex-1">` (after the clips, before the closing `</div>`), so remote playheads overlay on top of clips.
+
+4. `apps/client/src/audio/RemotePlayheads.tsx` (NEW, ~140 lines)
+   - `RemotePlayheadsBase`: derives `audioPeers` from `peerStates` prop (filter to non-self peers with `audio != null`). Maintains `elsRef` (peerId → root div) and `targetsRef` (peerId → latest pos in seconds).
+   - Internal `room.onAwarenessChange` subscription writes positions to `targetsRef` (refs only — no React state mutation), so the 7 Hz position stream never re-renders.
+   - rAF loop reads `pxRef.current` every frame and writes `el.style.transform = translateX(${pos*px}px)` for each peer — picks up zoom changes without a re-render.
+   - Renders one absolute `top-0 bottom-0 z-20 opacity-60` container per peer containing: a 1px-wide vertical line in the peer's color (full timeline height), and a small colored name-label pill at `top-7` (just below the 28 px ruler) so it doesn't fight the ruler's tick labels.
+   - `memo` wrapper with a custom `areEqual` comparator: returns true (skip render) when the peer SET and each peer's id/name/color/audio-presence are unchanged — so position-only awareness updates (which change the `peerStates` prop reference at 7 Hz) don't trigger a React re-render. The comparator builds a Map from prev and walks next, comparing the four stable fields.
+
+Design notes:
+- The 7 Hz throttle (150 ms) was chosen to match the user's spec (~7 Hz). Peers render at display rate via their own rAF, so 7 Hz is plenty for smooth remote-playhead motion.
+- The diffing `setPeerStates` in AudioEditor + the `memo` comparator in RemotePlayheads are belt-and-suspenders: either alone would prevent 7 Hz re-renders, but both together keep the parent (AudioEditor) AND the child (RemotePlayheads) from re-rendering on position-only updates.
+- The publish-on-playing useEffect runs on initial mount too (playing=false), which correctly advertises "I'm in the audio editor, paused at 0" — so peers see our playhead even before we hit play.
+- `audio: null` is the explicit "not in the audio editor" sentinel; `audio: { pos, playing: false }` means "in the editor, paused". The unmount cleanup publishes `null` so we disappear from peers' timelines when we navigate away.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → 0 errors in changed files. (46 pre-existing errors in `canvas2d/{Canvas2D,Timeline2D,engine,renderer}.ts(x)` from prior-round merge-conflict markers; filtered out, none touch audio/sync-protocol/awareness.)
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → only a pre-existing `vitest` import error in `validators.test.ts` (unrelated dev-dep issue); awareness.ts clean.
+
+Stage Summary:
+- The audio editor now has a visible playhead line that syncs across peers, mirroring the 3D camera (`cam` field) and 2D cursor (`cursor` field) awareness channels.
+- Local user: their playhead is the existing yellow `bg-warn` line (unchanged).
+- Remote peers: each gets a 1 px line in their assigned peer color with a name pill, opacity 0.6, overlaying the clips. Position updates at 7 Hz from awareness, rendered at display rate via rAF + refs (no React re-renders).
+- The line disappears for a peer when they leave the audio editor (unmount → `audio: null`).
+
+---
+Task ID: ROUND7-A
+Agent: main (Z.ai Code)
+Task: Fix audio not playable for other users — 4 root-cause fixes (autoplay policy, sync-map registration timing, retry budget, pre-warm)
+
+Work Log:
+- Read worklog (latest ROUND6-A) + all 4 target files fully: audio/engine.ts, audio/sampleStore.ts, sync/useSlateRoom.ts, audio/AudioEditor.tsx. Confirmed SlateRoom has slate.doc (provider.ts:44, doc.ts:42), toast exported from ../ui/Toast, AudioSettingsPanel dispatches slate:audio-clip-changed (lines 190, 200) so the new engine listener picks those up too.
+
+Issue 1 — AudioContext autoplay policy (audio/engine.ts):
+- ensureContext() rewritten: no longer void this.ctx.resume() on suspended; instead console.warn + attachGestureListener().
+- attachGestureListener() (new private): single handler on pointerdown+keydown+touchstart; on fire calls ctx.resume() (now in gesture stack so it succeeds) and removes itself from all three. Idempotent via gestureHandler field.
+- resumeOnGesture() (new public): sync resume from a known gesture handler; also tears down the pending gesture listener.
+- play() bails with toast "Click anywhere to enable audio" when ctx.state === 'suspended' (before setting this.playing = true or scheduling sources).
+- togglePlay (AudioEditor.tsx): calls eng.resumeOnGesture() before play() and guards setPlaying(true) with if (eng.isPlaying()) so the Play button doesn't flip to Pause when play() bailed.
+
+Issue 2 — registerSampleSyncMap only from AudioEditor:
+- useSlateRoom.ts: imported registerSampleSyncMap, called it inside attach(r) right after setRoom(r). Now runs the moment ANY consumer's room resolves, regardless of editor mode. Idempotent so multiple consumers are safe.
+- AudioEditor.tsx: removed registerSampleSyncMap(room) call from Yjs subscription useEffect; removed from ./sampleStore import (kept loadSamples); left comment pointing to useSlateRoom.ts.
+
+Issue 3 — getBuffer retry budget too short:
+- Retry budget increased 10×300ms (3s) → 20×500ms (10s), matching WaveformImg.
+- New retryAttempts: Map<string, number> field; loop reads it fresh per iteration.
+- New constructor on AudioEngine wires up a slate:audio-clip-changed window listener (clipChangedHandler) that resets retryAttempts to 0 for any clip in retryingClips — so when samples arrive mid-retry, the in-flight loop wins on its next iteration.
+- dispose() updated: removes clipChangedHandler + gestureHandler listeners; clears retryingClips + retryAttempts.
+
+Issue 4 — Pre-warm buffers when samples arrive while paused:
+- preloadBuffer(slate, clipId) (new public) on AudioEngine: looks up the clip, calls getBuffer(clip) to decode + cache without scheduling. No-op if !this.ctx or clip missing.
+- AudioEditor.tsx slate:audio-clip-changed listener: after clearCache(id), calls void engineRef.current?.preloadBuffer(slateRef.current, id) to pre-warm the cache. Safe when ctx doesn't exist yet (preloadBuffer no-ops).
+
+Verification:
+- cd /home/z/my-project/slate/apps/client && npx tsc --noEmit → 0 errors in my 3 modified files. The 46 reported errors are ALL pre-existing merge conflict markers (TS1185) in canvas2d/{Canvas2D,Timeline2D,engine,renderer}.{ts,tsx} from Round 6 commit b642fba — verified by grepping for <<<<<<< / >>>>>>> markers. None of my changes touch canvas2d.
+- ESLint can't run (missing eslint-config-prettier dep — pre-existing env issue).
+- dev.log is for the root Next.js sandbox, not Slate's Vite client; tsc clean + additive changes (new methods, new fields, new listener with cleanup, moved call site) → no runtime regressions expected.
+
+Files Modified (3):
+1. slate/apps/client/src/audio/engine.ts — toast import; 4 new private fields (retryAttempts, gestureHandler, clipChangedHandler + existing retryingClips); constructor with slate:audio-clip-changed listener; ensureContext rewritten to attachGestureListener; attachGestureListener (private); resumeOnGesture (public); preloadBuffer (public); getBuffer retry loop rewritten (20×500ms, reads retryAttempts fresh); play() suspended bail + toast; dispose() cleans up listeners + maps.
+2. slate/apps/client/src/sync/useSlateRoom.ts — registerSampleSyncMap import; called inside attach(r).
+3. slate/apps/client/src/audio/AudioEditor.tsx — registerSampleSyncMap removed from import + Yjs subscription useEffect (comment left pointing to useSlateRoom); preloadBuffer call added to slate:audio-clip-changed listener; togglePlay calls resumeOnGesture + guards setPlaying(true) with eng.isPlaying().
+
+Stage Summary:
+- Autoplay policy: suspended-context peer sees actionable toast + first gesture anywhere resumes ctx; Play button itself initiates resume via resumeOnGesture; UI doesn't lie about playing state.
+- Sync map: registers at room-open time (via useSlateRoom attach) for every peer, regardless of editor mode — closes the silent-clips window for 2D/3D users.
+- Retry budget: 10s (was 3s) AND resets on the sample-arrival signal — large multi-MB samples arriving as 512KB Yjs chunks over slow links now make it.
+- Pre-warm: samples arriving while paused are decoded + cached immediately → first play() has zero sample-load latency.
+- TypeScript clean for modified files; no new dependencies; no API breakage (additive only; play() signature unchanged; registerSampleSyncMap function unchanged, just moved call site).
+
+---
+Task ID: ROUND9-B
+Agent: Main
+Task: Add 2D animation export as MP4 (port the 3D viewport's MediaRecorder + canvas.captureStream pattern to the 2D timeline).
+
+Work Log:
+- Read /home/z/my-project/worklog.md (previous rounds) and the 3D reference pattern at viewport3d/Viewport3D.tsx:852-936 (`onRenderAnimation`).
+- Read the 2D side: canvas2d/Timeline2D.tsx (header layout + hasAnimation logic), canvas2d/store.ts (setAnimFrame/setAnimPreview/animFps/animDuration), canvas2d/engine.ts (`loop` guard: only repaints when `dirty || live.stroke || live.shape || animPreview`), canvas2d/Canvas2D.tsx (canvasRef + the single `<canvas className="block h-full w-full" />` at line 910), canvas2d/Minimap.tsx (the only other <canvas>, identified by `aria-label="Minimap"`), files/export2d.ts (PNG/JPG/WebP/SVG export for reference), ui/Toast.tsx (toast API — push-only, no update).
+- Created `/home/z/my-project/slate/apps/client/src/files/export2dVideo.ts` exporting `export2dVideo({ canvas, fps, duration, onProgress })`:
+  - MIME negotiation: tries `video/mp4;codecs=avc1.640028` → `video/mp4;codecs=avc1` → `video/mp4` → `video/webm;codecs=vp9` → `video/webm;codecs=vp8` → `video/webm` (matches the 3D viewport list exactly).
+  - `canvas.captureStream(fps)` + `new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 })`.
+  - Sets `animPlaying=false`, `animFrame=0`, then `animPreview=true` (in that order — `setAnimFrame(0)` clears animPreview, so we re-flip it on; the engine's render loop only repaints when animPreview is true).
+  - Steps frames `i = 0..totalFrames-1`, calling `setAnimFrame(i)` + `setAnimPreview(true)` + waiting `1000 / fps` ms (setTimeout) per frame so `captureStream` has time to sample each distinct frame (one rAF alone is too fast — multiple frames collapse into a single recorder sample).
+  - `onProgress((i+1) / totalFrames)` after each frame.
+  - `recorder.onstop` builds a Blob, triggers download as `slate-animation.{mp4|webm}`, then restores `animFrame=0` + `animPreview=false`.
+  - One rAF wait before `recorder.start()` so the canvas repaints at frame 0 first; one rAF wait before `recorder.stop()` so the final frame paints.
+- Modified `/home/z/my-project/slate/apps/client/src/canvas2d/Timeline2D.tsx`:
+  - Added imports: `useCallback`, `Clapperboard` (lucide), `export2dVideo`, `toast`.
+  - Added `exporting` + `exportPct` state and an `onExportVideo` async callback that:
+    1. Bails + toasts if `!hasAnimation` (no cel frames on >1 frame AND no motion keyframes).
+    2. Finds the canvas via `document.querySelector('canvas:not([aria-label])')` (skips the Minimap canvas which carries `aria-label="Minimap"`) with a fallback to `document.querySelector('canvas')`.
+    3. Bails + toasts `error` if the canvas/MediaRecorder/captureStream are unavailable.
+    4. Sets `animPlaying=false`, calls `export2dVideo`, drives `setExportPct` via `onProgress`.
+    5. Toasts `success` "Animation exported" on resolve, `error` "Export failed" on throw, resets state in `finally`.
+  - Added an "MP4" button (Clapperboard icon) at the end of the timeline header, after the Frames input. Disabled while exporting or when there's no animation. While exporting it shows `bg-warn/20 text-warn` and the live percent; otherwise it shows the "MP4" label. Title/aria-label included.
+- Verified with `npx tsc --noEmit` from `apps/client`: only 2 pre-existing errors (`Cannot find type definition file for 'vite-plugin-pwa/client'` and `'vite/client'`) — both environment-level config issues unrelated to this task; no errors in export2dVideo.ts or Timeline2D.tsx. (ESLint couldn't run — `eslint-config-prettier` isn't installed in this sandbox, also pre-existing.)
+- Checked dev.log tail: only `GET /health 404` heartbeats, no compile errors from the new code.
+
+Stage Summary:
+- New file: `files/export2dVideo.ts` — standalone MP4/WebM video exporter for the 2D canvas, mirrors the 3D viewport's `onRenderAnimation` but uses frame-stepped setTimeout waits instead of rAF timing so `captureStream` reliably samples every cel frame.
+- Modified file: `canvas2d/Timeline2D.tsx` — added an "MP4" export button to the open-timeline header with live progress, animation-presence guard, unsupported-browser guard, and success/failure toasts.
+- No changes to the engine, store, or renderer — the exporter just drives the existing `animFrame`/`animPreview` store state and lets the engine's render loop repaint naturally.
+
+---
+Task ID: ROUND9-A
+Agent: main (Z.ai Code)
+Task: Add Donate, About, Terms, Privacy pages + Profile dropdown (Home + Onboarding)
+
+Work Log:
+- Read worklog (latest ROUND7-A) + the 2 target files fully: app/Home.tsx, app/Onboarding.tsx. Also read ui/Dialog.tsx, ui/DropdownMenu.tsx, ui/Button.tsx, app/Settings.tsx (for the SettingsDialog API pattern), and the Entry component flow.
+- Confirmed Radix DropdownMenu primitives already wrapped in ../ui/DropdownMenu (DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator) — reused them.
+- Confirmed Home.tsx had a LOCAL TermsDialog function (lines 277-303 in original) used by SignIn; replaced it with the shared one to avoid a name clash after importing from ./TermsDialog.
+
+Files Created (2):
+1. slate/apps/client/src/app/TermsDialog.tsx — shared Terms of Service + Privacy Policy dialog. Three sections (Terms of Service, Privacy Policy, Data Retention) per task spec. Uses existing `Dialog` (z-1100, renders above the z-1000 entry gates). Scrollable up to 50vh. Close button.
+2. slate/apps/client/src/app/AboutDialog.tsx — exports `AboutDialog({ open, onOpenChange })`. Title "Slate is free forever". Body paragraph: "Slate is a real-time collaborative 2D whiteboard, 3D editor, and audio DAW. It's free forever, open for everyone, and works in your browser." Four sections, each separated by a border-top:
+   - Give Feedback: ghost button with Mail icon → opens mailto:jeffreyhamilton6399@gmail.com?subject=Slate%20Feedback with body template via window.open('_blank').
+   - Support Slate: Buy me a coffee anchor (not Button — uses an <a> so target=_blank works without JS) with Coffee icon → https://buymeacoffee.com/jeffreyscof.
+   - Terms & Privacy: ghost button with FileText icon → opens nested TermsDialog (separate `termsOpen` state held inside AboutDialog).
+   - Close button at the bottom.
+   Renders `<TermsDialog>` as a sibling so it can stack on top.
+
+Files Modified (2):
+3. slate/apps/client/src/app/Home.tsx:
+   - Imports: added Coffee, Info, FileText, User from lucide-react; added DropdownMenu primitives from ../ui/DropdownMenu; added AboutDialog from ./AboutDialog; added TermsDialog from ./TermsDialog.
+   - Removed the local TermsDialog function (was 27 lines, used by SignIn). The `<TermsDialog open={termsOpen} ...>` call inside SignIn now resolves to the shared import.
+   - Added `aboutOpen` + `termsOpen` useState hooks in Home (next to the existing `settingsOpen`).
+   - Replaced the header's three widgets (email span + Settings icon button + Sign out icon button) with a single `<ProfileMenu>` component (defined at bottom of file).
+   - ProfileMenu: a 32×32 circular avatar button (accent-tinted) showing the user's first letter (or User icon if no email). Opens a Radix DropdownMenu (align=end, min-w 220px) with:
+     • Account info block: "Signed in as" + email (truncated, title attr for full text)
+     • Settings (SettingsIcon) → setSettingsOpen(true)
+     • About (Info) → setAboutOpen(true)
+     • Terms & Privacy (FileText) → setTermsOpen(true)
+     • Donate (Coffee) → window.open(buymeacoffee, '_blank', 'noopener,noreferrer')
+     • separator
+     • Sign out (LogOut, destructive) → supabase?.auth.signOut()
+   - Rendered `<AboutDialog open={aboutOpen} ...>` and `<TermsDialog open={termsOpen} ...>` at the bottom of Home, next to the existing `<SettingsDialog>` and `<AllProjectsDialog>`.
+   - All dialogs share the existing z-1100 Radix Dialog overlay; profile dropdown is z-1102 (DropdownMenu.tsx default), so the dropdown closes (Radix auto-close on item select / outside click / Esc) BEFORE the dialog opens — no focus-trap conflict.
+
+4. slate/apps/client/src/app/Onboarding.tsx:
+   - Imports: added Coffee, Info, FileText, User from lucide-react; added DropdownMenu primitives; added AboutDialog + TermsDialog imports.
+   - Added `aboutOpen` + `termsOpen` useState hooks.
+   - Modified the header to add a flex-1 spacer, a small Donate text link (Coffee icon + "Donate" in 11px text-text-dim → hover:text-accent), then a Guest profile dropdown. The link and dropdown sit in the top-right corner of the onboarding card.
+   - Guest dropdown: 32×32 circular button with border-border-2 bg-bg-3 (subdued, since there's no account) showing a User icon. Opens DropdownMenu (align=end, min-w 200px) with:
+     • Account block: "Account" / "Guest"
+     • About (Info) → setAboutOpen(true)
+     • Terms & Privacy (FileText) → setTermsOpen(true)
+     • Donate (Coffee) → window.open(buymeacoffee)
+     NO Settings item (onboarding mode has no settings dialog), NO Sign-in/out (accounts disabled in onboarding mode).
+   - Rendered `<AboutDialog>` and `<TermsDialog>` after the All Projects dialog at the bottom of Onboarding.
+
+Verification:
+- `bun install` at the slate workspace root (deps weren't installed in this env) → 1744 packages installed cleanly.
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, 0 lines of output. Clean across all 4 files (2 new, 2 modified) plus the rest of the codebase. (The previous round's "46 pre-existing canvas2d errors" appear to have been from a different env state — they're not present in this run.)
+- All Radix DropdownMenu items auto-close the menu on select; the dialogs open via separate useState hooks so the close-then-open sequence works without focus-trap deadlock.
+- The Buy me a coffee link in AboutDialog uses a raw `<a target="_blank">` (not a Button onClick) so middle-click / cmd-click work as users expect for external links.
+- mailto: link uses window.open with a body template (URL-encoded) so the user's email client opens with subject + body pre-filled.
+
+Stage Summary:
+- Home header is now a single circular avatar in the top-right; click it for Settings / About / Terms / Donate / Sign out.
+- Onboarding header has both a small "Donate" text link AND a Guest avatar dropdown (About / Terms / Donate) in the top-right.
+- About dialog explains Slate, links to feedback email, donate page, and the Terms dialog.
+- Terms dialog is a single shared component used by: SignIn (sign-up ToS link), Home profile menu, Onboarding profile menu, and About dialog. Three sections: Terms of Service, Privacy Policy, Data Retention.
+- All z-index stacking preserved (Radix Dialog z-1100/1101 > entry gates z-1000; DropdownMenu z-1102 > Dialog content).
+- No new dependencies added; only reused existing Radix primitives + lucide icons already in package.json.
+
+---
+Task ID: ROUND10-A
+Agent: Main (Z.ai Code)
+Task: Add friending system + reorganize profile (Supabase friends schema, friends API client + hook, ProfileDialog merging Settings + Friends, ProfileMenu dropdown reorganization, footer with About + Terms, Onboarding guest dropdown reorder)
+
+Work Log:
+- Read worklog (latest ROUND9-A) and all relevant existing files: supabase/schema.sql, account/{supabase,useAccount,cloudSaves}.ts, app/{Settings,Home,Onboarding,AboutDialog,TermsDialog,store}.tsx, ui/{Dialog,DropdownMenu,Button,Input,Toast}.{tsx,ts}, workspace/dockStore.ts, voice/useVoiceOptional.tsx.
+- Confirmed SettingsDialog was still imported by Workspace.tsx (in-board header entry point) — left it untouched so that path still works; only Home's profile dropdown switched to ProfileDialog.
+
+Files Created (3):
+1. `slate/apps/client/src/account/friends.ts` — Friends API client.
+   - Exports `Friend`, `FriendStatus`, `getFriends`, `sendFriendRequest`, `acceptFriendRequest`, `removeFriend`, `upsertMyProfile`.
+   - `getFriends(userId)`: queries `friends` where `user_id=uid OR friend_id=uid`, then a single batched `profiles.in('user_id', otherIds)` lookup; de-duplicates by other-user-id (accepted friendships have 2 rows; picks the row where we are `user_id` so the incoming flag is consistent); returns `Friend[]` (excludes blocked from UI automatically since the hook filters by status).
+   - `sendFriendRequest(userId, friendEmail)`: lowercases+trims email; blocks self-friending (compares against `supabase.auth.getUser()`); looks up `profiles` by email with `.maybeSingle()`; checks existing rows in both directions and short-circuits with a clear error ('already friends' / 'request already sent'); if the OTHER side already sent us a pending request, auto-accepts it instead of duplicating. Returns `{ ok, error? }`.
+   - `acceptFriendRequest(userId, friendId)`: updates the (friend→me) row to `accepted` AND upserts the reverse (me→friend, accepted) so both sides see it with one query. `onConflict: 'user_id,friend_id'` guards against races.
+   - `removeFriend(userId, friendId)`: deletes BOTH rows (self→friend AND friend→self); ignores errors silently (logs to console.warn).
+   - `upsertMyProfile(userId, displayName, email)`: bonus helper so display-name changes in ProfileDialog mirror to the cloud profile, making the user findable by email + showing the new name to friends.
+   - All functions early-return `[]` / `{ ok:false, error:'Accounts are not configured.' }` / `void` when `supabase === null`.
+
+2. `slate/apps/client/src/account/useFriends.ts` — `useFriends(userId)` hook.
+   - State: `all` (combined list), `loading`; `reqIdRef` guards against out-of-order responses (drops stale results when a newer refresh fired).
+   - `refresh()` re-fetches; bails to empty when userId is undefined or supabase is null.
+   - `sendRequest/accept/remove` call the API client, then `refresh()` + appropriate toast (success/error).
+   - Returns `{ friends: accepted[], pending: pending[], loading, refresh, sendRequest, accept, remove }` — splits `all` into accepted + pending on every render (cheap, N small).
+
+3. `slate/apps/client/src/app/ProfileDialog.tsx` — `ProfileDialog({ open, onOpenChange, focusFriends? })`.
+   - Title "Profile", description "Manage your identity, friends, and device preferences." — `className="max-w-lg"` overrides Dialog's default `max-w-md` so the friends list has room.
+   - Section 1 — Profile header: 48px circular avatar (initial or '?') + display name + email, in a bordered card.
+   - Section 2 — Display name: Input + Save button. Save writes to the store AND mirrors to the cloud profile via `upsertMyProfile` (so friends see the new name).
+   - Section 3 — Friends (NEW): `FriendsSection` sub-component using `useFriends(userId)`.
+     • Add-by-email form (Input + Send button with UserPlus icon).
+     • Pending requests list: shows display name + email; for incoming requests shows Accept (Check icon) + Decline (X icon); for outgoing shows a "Sent" badge.
+     • Accepted friends list: avatar (initial circle) + name + email + Remove (UserMinus icon). `max-h-48 overflow-y-auto` for long lists.
+     • Empty-state hints: "Sign in to add friends" when not signed in; "Accounts are not configured" hint with the env var names when Supabase is null; "No friends yet" when both lists empty.
+   - Section 4 — Appearance: theme toggle (Dark/Light) + paper-follows-theme checkbox + accent color picker with 6 preset swatches (verbatim from Settings.tsx).
+   - Section 5 — Voice: output volume slider 0–1 + percentage readout (verbatim from Settings.tsx).
+   - Section 6 — 3D viewport: show transform HUD hints checkbox (verbatim from Settings.tsx).
+   - Section 7 — Layout: Reset dock layout button (verbatim from Settings.tsx).
+   - Section 8 — Account: `AccountSection` sub-component — Supabase backup/restore/sign-out buttons + status note (verbatim from Settings.tsx).
+   - `focusFriends` prop: when true, scrolls the Friends section into view ~80ms after open (lets the dropdown's "Friends" item land the user on the right section).
+
+Files Modified (3):
+4. `slate/supabase/schema.sql` — appended `public.profiles` + `public.friends` tables and RLS policies per the task spec (verbatim block). Profiles: PK `user_id` FK→auth.users, public read, owner insert/update. Friends: PK `(user_id, friend_id)` both FK→auth.users on-delete cascade; either side can read/update/delete; only the sender can insert (so request forgery is impossible). Comments explain the bidirectional-on-accepted pattern.
+
+5. `slate/apps/client/src/app/Home.tsx`:
+   - Imports: removed `Settings as SettingsIcon` + `Info` from lucide-react (no longer used); added `UserCircle`; replaced `SettingsDialog` import with `ProfileDialog`.
+   - Home component state: replaced `settingsOpen` with `profileOpen` + `profileFocusFriends` (boolean). About/terms state unchanged.
+   - ProfileMenu call site: now passes `onOpenProfile` (sets focusFriends=false), `onOpenFriends` (sets focusFriends=true), `onOpenTerms`. Both open ProfileDialog (Friends item just lands you on the friends section).
+   - Dialog mount: replaced `<SettingsDialog>` with `<ProfileDialog open={profileOpen} focusFriends={profileFocusFriends} ...>`.
+   - Added a `<footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">` after the Live public boards section, containing "V1 · Jeffrey Hamilton" centered + "About" + "·" + "Terms & Privacy" text links. The outer div is already `min-h-full flex flex-col`, so `mt-auto` on the footer sticks it to the bottom when content is short and pushes it down naturally when content overflows.
+   - ProfileMenu component: avatar button now `h-9 w-9` (was `h-8 w-8`) — perfectly circular via `rounded-full`. Dropdown reorganized to: account-info block → separator → **Profile** (UserCircle icon) → **Friends** (Users icon) → **Donate** (Coffee icon, external link) → separator → **Terms & Privacy** (FileText icon, at the BOTTOM) → **Sign out** (LogOut icon, destructive). Removed the **Settings** and **About** items from the dropdown — Settings is now merged into Profile, and About moved to the footer.
+
+6. `slate/apps/client/src/app/Onboarding.tsx`:
+   - Guest dropdown reordered per task spec: account-info block → separator → **About** (Info) → **Donate** (Coffee, external link) → separator → **Terms & Privacy** (FileText, at the bottom). No Profile/Friends items (guest mode). The separate "Donate" text link in the header (next to the dropdown) is kept — task didn't ask to remove it and it's a useful always-visible affordance.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, zero errors across all files (changed + unchanged).
+- `npx eslint src/app/Home.tsx src/app/ProfileDialog.tsx src/app/Onboarding.tsx src/account/friends.ts src/account/useFriends.ts` → 0 errors, only 2 pre-existing unused-eslint-disable warnings in Onboarding.tsx (lines 51 + 63 — both predate this round).
+- Checked Home.tsx for leftover Settings refs via `grep -n 'settingsOpen\|SettingsDialog\|SettingsIcon\|Info'` → no matches (clean).
+
+Design notes:
+- The friends schema deliberately stores accepted friendships as TWO rows so a single `.or('user_id.eq.X,friend_id.eq.X')` query returns the full list (incoming + outgoing + accepted) without a union. Pending requests have ONE row (sender→recipient), and `incoming` is computed as `r.user_id !== userId && r.status === 'pending'`.
+- `getFriends` does ONE batched `profiles.in('user_id', otherIds)` lookup rather than N per-friend queries — important since the hook re-fetches after every mutation.
+- The `useFriends` hook's `reqIdRef` prevents a slow `getFriends` from overwriting the result of a faster refresh that fired later (e.g. user spams the Accept button).
+- `ProfileDialog.focusFriends` lets the dropdown's "Friends" item behave like a deep link — opens the dialog and scrolls the friends section into view — without needing a separate dialog or route.
+- The AccountSection in ProfileDialog is a copy of the one in Settings.tsx (not a shared import) to keep the two dialogs independently evolvable; if Settings.tsx is later removed entirely, ProfileDialog's copy stands on its own.
+- Workspace.tsx still imports SettingsDialog (the in-board header entry point opens it via the `settingsOpen` global store flag). The task scope was only the Home profile dropdown, so I left that path intact rather than rip out a working entry point and risk breaking the in-board settings shortcut.
+
+Stage Summary:
+- Friends system end-to-end: schema + RLS → API client → React hook → UI section. Adding a friend by email sends a pending request; the recipient sees it in their ProfileDialog with Accept/Decline; accepting flips both rows to `accepted` and inserts the reverse so both sides see it; removing deletes both rows.
+- The Home profile dropdown is now leaner — Profile (all settings + friends), Friends (deep-link), Donate, Terms & Privacy, Sign out. The avatar is a true 9×9 circle.
+- About + Terms & Privacy are now always reachable from the page footer (no longer hidden behind the avatar menu).
+- The Onboarding guest dropdown follows the same Terms-at-the-bottom convention.
+- TypeScript clean (exit 0); no new dependencies added.
+
+---
+Task ID: ROUND11-A
+Agent: Code (Slate client fixes)
+Task: Three fixes — (1) remove Terms & Privacy from Home footer, (2) show armed-track indicator next to the Record button in the audio transport bar, (3) mode-specific exports (audio WAV/MP4, 2D MP4, 3D MP4).
+
+Work Log:
+- Read worklog and the three target files (Home.tsx, AudioEditor.tsx, ExportDialog.tsx) plus their dependencies (sync/doc.ts, audio/scene.ts, audio/sampleStore.ts, files/export2d.ts, files/export2dVideo.ts, files/export3d.ts, viewport3d/Viewport3D.tsx, canvas2d/Timeline2D.tsx, canvas2d/store.ts, packages/sync-protocol/src/schema.ts).
+
+Task 1 — Home footer:
+- Home.tsx (footer at ~line 547): removed the "Terms & Privacy" button + the "·" separator. Footer now shows only "V1 · Jeffrey Hamilton" + the "About" text link. The `termsOpen` state and `<TermsDialog>` rendering are untouched — they're still driven by the profile dropdown's `onOpenTerms` callback (Home.tsx:398).
+
+Task 2 — Recording button armed-track indicator:
+- AudioEditor.tsx: added `const armedTrack = tracks.find((t) => t.armed) ?? null;` immediately after the `tracks` useMemo (line ~764).
+- Transport bar Record button (line ~1142): kept the button exactly where it was (right next to Play), added a dynamic title (`Record (R) → {armedTrack.name}` when armed), and inserted a small badge right after the button showing the armed track name (or "no armed track" hint) so the user always sees where the next take will land. The toggleRecord logic already routes onto the armed track (AudioEditor.tsx:864 — `tracks.find((t) => t.armed)?.id`), so no behaviour change was needed beyond the visual.
+
+Task 3 — Mode-specific exports:
+- Created `files/exportAudio.ts` with two functions:
+  - `exportAudioWav({ slate, duration, onProgress })`: renders every clip offline via `OfflineAudioContext` (honouring per-track volume/pan/mute/solo and per-clip gain/pan/speed), then encodes the rendered AudioBuffer as 16-bit PCM WAV (44-byte header + interleaved samples) and downloads it. Fast (not realtime), bit-exact.
+  - `exportAudioMp4({ slate, duration, onProgress })`: offline-renders the mix first (same path as WAV), then plays the rendered buffer through a `MediaStreamAudioDestinationNode` on a fresh AudioContext while a `MediaRecorder` captures it. MP4/AAC is preferred (`video/mp4;codecs=mp4a.40.2` → `audio/mp4`); browsers without MP4 encoding fall back to WebM/Opus with the matching extension. Also routes to `ctx.destination` so the user hears the bounce.
+  - Both functions share `collectClips(slate)` (loads PCM from IndexedDB via `loadSamples`, skipping muted/solo-excluded clips) and `scheduleClips(ctx, clips, dest)` (creates a BufferSource → Gain → StereoPanner → dest chain per clip, calls `source.start(clip.start, clip.offset, clip.duration)`).
+- Rewrote `files/ExportDialog.tsx` to handle three modes:
+  - Mode is derived once: `mode = board?.mode ?? '2d'`; `is3d`, `isAudio` booleans.
+  - Format lists: audio → `['wav','mp4']`; 3D → `['glb','gltf','obj','stl','ply','fbx','mp4']`; 2D → `['png','jpg','webp','svg','mp4']`.
+  - Added `wav` and `mp4` entries to `FORMAT_INFO`.
+  - Added a `useEffect` that resets the selected format when the board mode changes (so a stale `glb` from a 3D board doesn't persist into an audio board).
+  - onExport branches by mode:
+    - audio/wav → `exportAudioWav`; audio/mp4 → `exportAudioMp4` (duration computed from the latest clip end via `computeAudioDuration(slate)`).
+    - 3D/mp4 → dispatches a `slate:export-3d-animation` CustomEvent (Viewport3D listens for it and forwards to its existing `onRenderAnimation`, which owns the canvas-capture logic). Other 3D formats keep the existing `export3D` path.
+    - 2D/mp4 → grabs the live 2D canvas (`document.querySelector('canvas:not([aria-label])')`, same trick Timeline2D uses to skip the minimap canvas) and calls `export2dVideo` with `animFps`/`animDuration` from `useCanvasStore`. svg/png/jpg/webp keep the existing paths.
+  - Added a progress bar (0–100 %) that appears while an export with `onProgress` is running, and the Export button label flips to `Exporting {n}%…`.
+- Viewport3D.tsx: added a `useEffect` (right after `onRenderAnimation`'s useCallback) that listens for the `slate:export-3d-animation` window event and calls `onRenderAnimation()`, so the ExportDialog can kick off the 3D animation render without owning the canvas.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0 (no type errors).
+- `npx eslint` on the five touched files → exit 0, 2 pre-existing warnings unrelated to these changes (AudioEditor:1114 pxPerSec useCallback dep, Viewport3D:1544 lookThroughRef useEffect dep).
+
+Stage Summary:
+- All three fixes done. Home footer is now just "V1 · Jeffrey Hamilton" + "About" (Terms moved to profile dropdown only). Audio transport bar shows a live "→ {armedTrackName}" badge next to the Record button (or "no armed track" hint), so recording always lands on a visible target. Export dialog handles audio (WAV mixdown + MP4 timeline capture), 2D (png/jpg/webp/svg + mp4 animation), and 3D (glb/gltf/obj/stl/ply/fbx + mp4 animation render) — audio mode no longer falls through to the 2D branch and produces blank files.
+
+---
+Task ID: ROUND11-B
+Agent: main (Z.ai Code)
+Task: Add MIDI support, soundfonts, quantization, fix remote mute
+
+Work Log:
+- Read worklog (latest ROUND11-A parallel agent) + all target files: schema.ts, validators.ts, scene.ts, engine.ts, AudioEditor.tsx, InstrumentPanel.tsx, instruments.ts.
+
+Task 1 — MIDI support in schema (schema.ts):
+- Added `NoteEvent` interface (midi/velocity/start/duration) — exported from @slate/sync-protocol.
+- Added 3 optional fields to AudioClip: `kind?: 'audio' | 'midi'`, `notes?: NoteEvent[]`, `instrumentId?: string`.
+
+Task 2 — AudioTrack updates (schema.ts):
+- Added `instrumentId?: string` to AudioTrack.
+- Changed `input` to `'mic' | 'midi' | 'none'` so MIDI tracks can arm for instrument-take recording.
+
+Task 3 — Validators (validators.ts):
+- Added `noteEventSchema`, `audioTrackSchema`, `audioClipSchema` zod validators (the audio schemas weren't previously defined).
+- All new fields optional or backward-compatible; existing clips continue to parse.
+
+Task 4 — Soundfont (soundfont.ts — NEW):
+- `SoundfontInstrument` class: lazily fetches individual note WAVs from `https://freepats.zenvoid.org/Piano/acoustic-grand-piano/{name}-{octave}.wav` and caches as AudioBuffers.
+- Filename convention: sharps use `-` instead of `#` (freepats), octave = floor(midi/12) - 1.
+- `ensureNote(midi)` — fetch + decode + cache one note; failed fetches remembered in module-level `failedMidis` set so we don't re-fetch.
+- `noteOn(midi, velocity, when)` — schedules BufferSource → Gain → dest; returns handle with `stop(when)` for short release. Returns null if sample not loaded (lazy-loads in background).
+- `preloadNotes(midis)` — bulk pre-load for warming cache before scheduling.
+
+Task 5 — MIDI playback in engine (engine.ts):
+- New exports: `SOUNDFONT_PIANO_ID = 'soundfont-piano'`.
+- New fields: `playingMidiVoices: PlayingMidiVoice[]`, `soundfont: SoundfontInstrument | null`.
+- New private methods: `ensureSoundfont()`, `resolveInstrumentId()`, `resolveSynthParams()`, `scheduleMidiClip()`.
+- `play()`: audio-buffer preload loop skips MIDI clips; NEW soundfont preload pass collects every distinct midi across all soundfont-piano MIDI clips and preloads in parallel; scheduling loop branches on `clip.kind === 'midi'` → calls `scheduleMidiClip()`.
+- `stop()` and `restartPlayback()` also release all live MIDI voices.
+- `dispose()` calls `soundfont?.dispose()`.
+
+Task 6 — Track kind selector (AudioEditor.tsx TrackHeader):
+- Added Piano icon import; added SOUNDFONT_PIANO_ID, INSTRUMENT_PRESETS, loadCustomInstruments imports.
+- TrackHeader: kind toggle button (Volume2 ↔ Piano icon, highlighted when MIDI), arm button sets `input: 'midi'` on MIDI tracks, instrument picker `<select>` row replaces pan-slider row on MIDI tracks (Soundfont Piano + synth presets + custom instruments optgroups).
+- Audio tracks keep the original volume + pan slider row.
+- Preserved ROUND11-A's armed-track badge in the transport bar.
+
+Task 7 — Remote mute fix (AudioEditor.tsx):
+- Verified the fix is already in place from a prior round: `tracks.observeDeep(applyTracks)` at line 417, where `applyTracks = () => { engineRef.current?.updateTracks(slateRef.current); }`.
+- `updateTracks` calls `setupTrackNodes`, which writes `gain.gain.value = audible ? volume : 0` per track (audible = solo ? track.solo : !track.muted). So remote mute/solo edits land in Yjs and immediately re-apply to the local audio graph.
+- Added a detailed comment explaining WHY this fixes the "can't mute others" bug.
+
+Bonus — MIDI clip helpers (scene.ts):
+- `addMidiClip(slate, trackId, { start, notes, name?, color?, duration?, instrumentId? })` — creates a MIDI clip in Yjs (no IndexedDB blob).
+- `splitAudioClip` now has a MIDI branch: splits the note list at the boundary (notes before keep full duration on left; notes at/after move to right with start times shifted back).
+- `duplicateAudioClip` now has a MIDI branch: deep-copies notes, calls `addMidiClip`. No sample I/O.
+- `readAudioTrack` reads `instrumentId`; `readAudioClip` reads `kind`, `notes`, `instrumentId`.
+
+Bonus — Quantize (InstrumentPanel.tsx):
+- New `QuantizeOption` type + `QUANTIZE_OPTIONS` array ('off', '1/4', '1/8', '1/16', '1/32').
+- New `quantize` state + `quantizeRef` (so long-lived `placeTake` callback reads latest value).
+- `placeTake` quantize pass before renderPerformance: reads BPM from Yjs audio map; step = (60/bpm)/(division/4) seconds; `qNotes = notes.map(n => ({ ...n, start: Math.round(n.start / step) * step }))`. Duration preserved.
+- New compact `<select>` in InstrumentPanel header (next to Record + Keyboard buttons): "Free" for off, else grid value. Highlighted accent when active.
+
+Verification:
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → exit 0, no errors.
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, no errors across all 7 modified/created files plus the rest of the codebase.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx vitest run --passWithNoTests` → 11/11 tests pass.
+- `npx eslint` on 5 touched client files → 0 errors, 2 pre-existing warnings (AudioEditor:1127 useCallback pxPerSec dep; engine:134 unused no-console eslint-disable — both predate this round).
+
+Stage Summary:
+- MIDI clips are first-class: schema + validators + scene helpers (addMidiClip, MIDI-aware split/duplicate) + engine playback (soundfont + synth-preset branching with pre-warm) + TrackHeader UI (kind toggle, instrument picker, MIDI-aware arm).
+- Soundfont: freepats acoustic-grand-piano samples fetched lazily per note, cached, pre-warmed before playback. Failed notes remembered so we don't re-fetch.
+- Quantize: 1/4 to 1/32 grid options in the InstrumentPanel header, applied to recorded takes before offline render.
+- Remote mute: verified the `applyTracks` subscription is in place (re-applies Yjs track values to the audio graph on every track change, local OR remote). Added a comment explaining the fix.
+- TypeScript clean (exit 0). No new dependencies. Backward compatible (all new schema fields optional; existing audio clips continue to work as `kind: 'audio'` by default).
+
+---
+Task ID: ROUND12-A
+Agent: Code (Slate client fixes, 5 tasks)
+Task: (1) Multi-select clip drag moves ALL selected clips together, (2) plain drag on empty timeline = marquee select (no modifier needed), (3) export MP3 instead of MP4 for audio, (4) MIDI file import via @tonejs/midi, (5) "MIDI Track" button in transport bar.
+
+Work Log:
+- Read worklog (latest ROUND11-B) + all target files: AudioEditor.tsx (1494→1661 lines), scene.ts, exportAudio.ts, ExportDialog.tsx, sync-protocol schema.ts (NoteEvent, AudioClip, AudioTrack).
+- Installed packages via `npx pnpm add lamejs @tonejs/midi --filter @slate/client` (lamejs@1.2.1, @tonejs/midi@2.0.28). lamejs ships no types; @tonejs/midi ships types but `notes` lives on Track, not Midi — flatten in decodeMidiFile.
+
+Files Created (1):
+1. `slate/apps/client/src/lamejs.d.ts` — ambient module declaration for lamejs. Declares the `Mp3Encoder` class with `constructor(channels, sampleRate, kbps)`, `encodeBuffer(left: Int16Array, right?: Int16Array): Int8Array`, `flush(): Int8Array`. Minimal — only the symbols we use.
+
+Files Modified (4):
+2. `slate/apps/client/src/audio/AudioEditor.tsx` (Tasks 1, 2, 4, 5):
+   - dragRef type extended with optional `origins?: Map<string, {el, waveEl, os, od, oo, trackId}>`.
+   - New module-level helper `clampGroupDt(dt, origins, byTrack)` near `nearestFreeStart`: per-clip × blocker constraints (lower/upper bounds on dt) intersected into one clamp range. Returns 0 if constraints conflict.
+   - `dragGeometry(clip, excludeIds?)` now optionally takes a Set of ids to skip when building neighbour bounds (multi-drag passes the full selection so the group's own members don't block it).
+   - `startDrag`: detects `multiDrag = !additive && selectedRef.current.has(clip.id) && selectedRef.current.size > 1` BEFORE calling selectClip (so plain-clicking an already-multi-selected clip preserves the group). Populates `origins` for every selected clip via `document.querySelector('[data-clip-id="..."]')`. The dragged clip's own element is reused directly (no DOM lookup).
+   - Added `data-clip-id={clip.id}` to ClipBlock's root div for the DOM lookup.
+   - `applyMove` (rAF callback): when `d.origins` is populated, snaps based on the dragged clip's edges then moves EVERY selected clip's `el.style.left` by the same delta. Vertical rowDelta is bypassed for the group (each clip stays on its origin track). Group's elements are elevated to z-40 while in transit, same as the dragged clip.
+   - `onUp`: when committing a multi-drag, computes `dt = left - draggedOrigin.os`, clamps it via `clampGroupDt`, writes resolved positions to all group elements' DOM, then commits each clip's `start` to Yjs inside a single `slate.doc.transact()` (atomic for peers).
+   - `marqueeRef` type extended with `seekTime`, `additive`, `moved`.
+   - Seek layer's `onPointerDown` now ALWAYS starts a potential marquee — no modifier-key gate. Stashes `seekTime = sx / pxRef.current` for the click fallback.
+   - `onPointerMove` keeps a 3px dead zone; once exceeded, sets `moved = true` and starts updating the marquee rect + hit-testing clips. Before the dead zone, the pointer is still treated as a potential click.
+   - `onPointerUp`: if `!moved` → seek to `seekTime` and (if non-additive) clear the selection. If `moved` → marquee selection was already finalised incrementally in pointermove, nothing to do.
+   - Shift/Cmd+drag stays additive (origin = current selection). Plain drag now starts a fresh marquee with no modifier needed.
+   - Imported `addMidiClip, decodeMidiFile` from `./scene`.
+   - `handleFileImport` branches on file extension: `/\.midi?$/i` → MIDI path (creates a MIDI track with `instrumentId: SOUNDFONT_PIANO_ID` + a MIDI clip via `addMidiClip`; also adopts the file's tempo as the board BPM if in [20, 300]); other audio files keep the existing `decodeAudioFile` → audio track + audio clip path.
+   - Drag-drop regex updated to `/\.(mp3|wav|ogg|m4a|flac|aac|mid|midi)$/i`.
+   - Import button's `accept` attribute: `"audio/*,.mid,.midi"`.
+   - Added a "MIDI" track button next to the existing "+Track" button in the transport bar: `addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })`. `Piano` was already imported from lucide-react; `SOUNDFONT_PIANO_ID` was already imported from `./engine`.
+
+3. `slate/apps/client/src/audio/scene.ts` (Task 4):
+   - Imports: added `import { Midi } from '@tonejs/midi'` and `NoteEvent` to the `@slate/sync-protocol` type import.
+   - Added `decodeMidiFile(file: File)` — reads file as ArrayBuffer, parses with `new Midi(arrayBuffer)`, flattens `midi.tracks[].notes` into one `NoteEvent[]` (each note's `start` is the absolute time in seconds from the start of the file). Returns `{notes, duration, tempo}` where tempo comes from `midi.header.tempos[0]?.bpm ?? 120`.
+   - Note: the @tonejs/midi TypeScript definitions put `notes` on `Track`, not `Midi` (even though some docs use `midi.notes`). The implementation correctly iterates `midi.tracks[].notes` to flatten across all tracks.
+
+4. `slate/apps/client/src/files/exportAudio.ts` (Task 3):
+   - Imports: added `import { Mp3Encoder } from 'lamejs'`.
+   - Updated module doc-comment to describe WAV + MP3 (removed MP4 description).
+   - Removed the old `exportAudioMp4` (MediaRecorder realtime capture).
+   - Added `encodeMp3(buffer: AudioBuffer): ArrayBuffer` helper — converts Float32 channels → Int16 PCM, feeds lamejs 1152-sample blocks via `encodeBuffer(left, right?)`, drains with `flush()`, concatenates chunks into one ArrayBuffer. 192 kbps stereo (or mono if the source is mono).
+   - Added `exportAudioMp3({slate, duration, onProgress})` — same offline mixdown path as WAV (collectClips → scheduleClips → OfflineAudioContext.startRendering), then `encodeMp3(rendered)`, downloads `slate-mix.mp3` (MIME `audio/mpeg`). Fast (not realtime).
+
+5. `slate/apps/client/src/files/ExportDialog.tsx` (Task 3):
+   - Import switched from `exportAudioMp4` to `exportAudioMp3`.
+   - FORMAT_INFO: added `mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.'`.
+   - `ExportFormat` union: added `'mp3'`.
+   - onExport audio branch: `format === 'mp3'` calls `exportAudioMp3` (was `mp4` → `exportAudioMp4`).
+   - `formats` array: audio mode now `['wav', 'mp3']` (was `['wav', 'mp4']`).
+   - Audio-mode description text updated to mention lamejs 192 kbps MP3 (was MediaRecorder realtime capture).
+   - Dialog header comment updated.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, 0 errors across all 5 modified/created files plus the rest of the codebase.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → exit 0 (no schema changes needed; NoteEvent + AudioClip.notes already added in ROUND11-B).
+- `npx eslint src/audio/AudioEditor.tsx src/audio/scene.ts src/files/exportAudio.ts src/files/ExportDialog.tsx src/lamejs.d.ts` → 0 errors, 1 pre-existing warning (AudioEditor line 1293 useCallback pxPerSec dep — line number shifted due to added helpers/comments, was line 1127 before this round).
+
+Stage Summary:
+- Multi-select clip drag: a plain click-and-drag on any clip in a multi-selection moves the WHOLE group together, with per-track overlap resolution (clampGroupDt intersects every clip's non-overlap range to find a single dt that keeps the whole group free of non-selected neighbours). Committed atomically via one Yjs transaction.
+- Plain drag on empty timeline = marquee select (no modifier needed). Plain click on empty timeline = seek (preserved behaviour). Shift/Cmd+drag = additive marquee (adds to existing selection).
+- Audio export is now WAV (lossless 16-bit PCM) or MP3 (192 kbps lamejs-encoded) — MP4 (MediaRecorder realtime capture) removed. Both modes render the mix offline via OfflineAudioContext, so MP3 export is fast and not realtime.
+- MIDI files (.mid / .midi) can be imported via the Import button or drag-drop. Each imported MIDI file creates a new MIDI track (with the soundfont piano as default instrument) and a MIDI clip containing the flattened note list. The file's tempo is adopted as the board BPM if the board is fresh.
+- Transport bar has a dedicated "MIDI" button next to "+Track" — adds a pre-configured MIDI track (kind=midi, instrumentId=SOUNDFONT_PIANO_ID, name='MIDI Track') in one click.
+- TypeScript clean (exit 0). New deps: lamejs + @tonejs/midi (both pure-JS, no native bindings). Backward compatible — all schema fields used were already optional from ROUND11-B.

@@ -1,0 +1,763 @@
+     1→/**
+     2→ * Pure helpers to read the 3D scene out of Y.Doc into plain-JS arrays and
+     3→ * to commit primitives / transforms / mesh data back via Yjs transactions.
+     4→ *
+     5→ * The renderer (R3F components) listens to Y.Doc observers and rebuilds
+     6→ * scene snapshots; the commit helpers below are used by tools/panels.
+     7→ */
+     8→
+     9→import * as Y from 'yjs';
+    10→import * as THREE from 'three';
+    11→import {
+    12→  materialSchema,
+    13→  meshDataSchema,
+    14→  object3DSchema,
+    15→  type LightData,
+    16→  type LightKind,
+    17→  type Material,
+    18→  type MeshData,
+    19→  type Object3D,
+    20→  type Object3DType,
+    21→  type Transform,
+    22→} from '@slate/sync-protocol';
+    23→import type { Mesh as MeshTopology } from '@slate/mesh';
+    24→import { cube, sphere, cylinder, cone, plane, torus, joinMeshes, mirrorMesh } from '@slate/mesh';
+    25→import type { SlateDoc } from '../sync/doc';
+    26→import { makeId } from '../utils/id';
+    27→import { withKey, withoutKey, sampleAnim } from './animation';
+    28→
+    29→export interface SceneSnapshot {
+    30→  objects: Object3D[];
+    31→  meshes: Map<string, MeshData>;
+    32→  materials: Map<string, Material>;
+    33→}
+    34→
+    35→export function readSceneSnapshot(slate: SlateDoc): SceneSnapshot {
+    36→  const objects: Object3D[] = [];
+    37→  slate.scene3dObjects().forEach((m, id) => {
+    38→    const o = readObject(m, id);
+    39→    if (o) objects.push(o);
+    40→  });
+    41→  objects.sort((a, b) => a.name.localeCompare(b.name));
+    42→
+    43→  const meshes = new Map<string, MeshData>();
+    44→  slate.scene3dMeshes().forEach((m, id) => {
+    45→    const md = readMesh(m, id);
+    46→    if (md) meshes.set(md.id, md);
+    47→  });
+    48→
+    49→  const materials = new Map<string, Material>();
+    50→  slate.scene3dMaterials().forEach((m, id) => {
+    51→    const mat = readMaterial(m, id);
+    52→    if (mat) materials.set(mat.id, mat);
+    53→  });
+    54→
+    55→  return { objects, meshes, materials };
+    56→}
+    57→
+    58→export function readObject(m: Y.Map<unknown>, id: string): Object3D | null {
+    59→  const candidate = {
+    60→    id: m.get('id') ?? id,
+    61→    parentId: m.get('parentId') ?? null,
+    62→    type: m.get('type'),
+    63→    name: m.get('name'),
+    64→    visible: m.get('visible'),
+    65→    transform: m.get('transform'),
+    66→    meshId: m.get('meshId') ?? null,
+    67→    materialId: m.get('materialId') ?? null,
+    68→    collapsed: m.get('collapsed'),
+    69→    smooth: m.get('smooth'),
+    70→    light: m.get('light'),
+    71→    camera: m.get('camera'),
+    72→    anim: m.get('anim'),
+    73→  };
+    74→  const parsed = object3DSchema.safeParse(candidate);
+    75→  return parsed.success ? parsed.data : null;
+    76→}
+    77→
+    78→// Validating a mesh (thousands of vertices) with zod is expensive, and the
+    79→// snapshot is rebuilt on EVERY scene change — including 30 Hz transform-gizmo
+    80→// commits that never touch mesh data. Cache the parsed result per Y.Map and
+    81→// reuse it while the underlying vertices/faces arrays are the same reference
+    82→// (Yjs hands back a stable reference until the field is re-set). This makes
+    83→// object drags skip full-scene mesh revalidation, killing the gizmo lag.
+    84→const meshParseCache = new WeakMap<
+    85→  Y.Map<unknown>,
+    86→  { v: unknown; f: unknown; parsed: MeshData | null }
+    87→>();
+    88→
+    89→export function readMesh(m: Y.Map<unknown>, id: string): MeshData | null {
+    90→  const v = m.get('vertices');
+    91→  const f = m.get('faces');
+    92→  const cached = meshParseCache.get(m);
+    93→  if (cached && cached.v === v && cached.f === f) return cached.parsed;
+    94→  const parsed = meshDataSchema.safeParse({ id: m.get('id') ?? id, vertices: v, faces: f });
+    95→  const result = parsed.success ? parsed.data : null;
+    96→  meshParseCache.set(m, { v, f, parsed: result });
+    97→  return result;
+    98→}
+    99→
+   100→export function readMaterial(m: Y.Map<unknown>, id: string): Material | null {
+   101→  const candidate = {
+   102→    id: m.get('id') ?? id,
+   103→    kind: m.get('kind') ?? 'pbr',
+   104→    color: m.get('color'),
+   105→    metalness: m.get('metalness'),
+   106→    roughness: m.get('roughness'),
+   107→    emissive: m.get('emissive') ?? '#000000',
+   108→    emissiveIntensity: m.get('emissiveIntensity') ?? 0,
+   109→    opacity: m.get('opacity'),
+   110→    texture: m.get('texture'),
+   111→  };
+   112→  const parsed = materialSchema.safeParse(candidate);
+   113→  return parsed.success ? parsed.data : null;
+   114→}
+   115→
+   116→// ── Commit helpers ──────────────────────────────────────────────────────────
+   117→
+   118→export function defaultMaterial(): Material {
+   119→  return {
+   120→    id: makeId('mat'),
+   121→    kind: 'pbr',
+   122→    // Default material color is white so new objects read as neutral clay
+   123→    // (Blender's default), taking their color from lighting + the accent grid.
+   124→    color: '#ffffff',
+   125→    metalness: 0,
+   126→    roughness: 0.5,
+   127→    emissive: '#000000',
+   128→    emissiveIntensity: 0,
+   129→    opacity: 1,
+   130→  };
+   131→}
+   132→
+   133→export function ensureDefaultMaterial(slate: SlateDoc): string {
+   134→  let foundId: string | null = null;
+   135→  slate.scene3dMaterials().forEach((_, id) => {
+   136→    if (foundId === null) foundId = id;
+   137→  });
+   138→  if (foundId) return foundId;
+   139→  const def = defaultMaterial();
+   140→  const m = new Y.Map<unknown>();
+   141→  for (const [k, v] of Object.entries(def)) m.set(k, v);
+   142→  slate.scene3dMaterials().set(def.id, m);
+   143→  return def.id;
+   144→}
+   145→
+   146→const PRIMITIVE_BUILDERS: Record<
+   147→  Exclude<Object3DType, 'folder' | 'mesh' | 'empty' | 'light' | 'camera'>,
+   148→  () => MeshTopology
+   149→> = {
+   150→  cube: () => cube(1),
+   151→  sphere: () => sphere(0.6),
+   152→  cylinder: () => cylinder(0.5, 1.2),
+   153→  cone: () => cone(0.6, 1.2),
+   154→  plane: () => plane(1.5, 1),
+   155→  torus: () => torus(0.5, 0.18),
+   156→};
+   157→
+   158→export interface AddPrimitiveOptions {
+   159→  type: Exclude<Object3DType, 'folder' | 'mesh' | 'empty' | 'light' | 'camera'>;
+   160→  position?: Transform['position'];
+   161→}
+   162→
+   163→/** Add a primitive at world origin (or specified position) and return its id. */
+   164→export function addPrimitive(
+   165→  slate: SlateDoc,
+   166→  opts: AddPrimitiveOptions,
+   167→): { id: string; meshId: string; materialId: string } {
+   168→  const id = makeId('obj');
+   169→  const meshId = makeId('mesh');
+   170→  const materialId = ensureDefaultMaterial(slate);
+   171→  const topology = PRIMITIVE_BUILDERS[opts.type]();
+   172→  const meshData: MeshData = {
+   173→    id: meshId,
+   174→    vertices: topology.vertices.slice(),
+   175→    faces: topology.faces.map((f) => ({ v: f.v.slice() })),
+   176→  };
+   177→  const obj: Object3D = {
+   178→    id,
+   179→    parentId: null,
+   180→    type: opts.type,
+   181→    name: capitalize(opts.type),
+   182→    visible: true,
+   183→    transform: {
+   184→      position: opts.position ?? { x: 0, y: 0, z: 0 },
+   185→      rotation: { x: 0, y: 0, z: 0 },
+   186→      scale: { x: 1, y: 1, z: 1 },
+   187→    },
+   188→    meshId,
+   189→    materialId,
+   190→  };
+   191→  slate.doc.transact(() => {
+   192→    const ym = new Y.Map<unknown>();
+   193→    for (const [k, v] of Object.entries(meshData)) ym.set(k, v);
+   194→    slate.scene3dMeshes().set(meshId, ym);
+   195→    const yo = new Y.Map<unknown>();
+   196→    for (const [k, v] of Object.entries(obj)) yo.set(k, v);
+   197→    slate.scene3dObjects().set(id, yo);
+   198→  });
+   199→  return { id, meshId, materialId };
+   200→}
+   201→
+   202→// Point/spot use physically-correct inverse-square falloff, so intensities
+   203→// need to be high enough to survive a few units of distance.
+   204→const LIGHT_DEFAULTS: Record<LightKind, LightData> = {
+   205→  point: { kind: 'point', color: '#ffffff', intensity: 60, distance: 0, angle: 0 },
+   206→  sun: { kind: 'sun', color: '#fff4e0', intensity: 3.2, distance: 0, angle: 0 },
+   207→  spot: { kind: 'spot', color: '#ffffff', intensity: 80, distance: 0, angle: Math.PI / 6 },
+   208→  // Sky/ground ambient fill — no position needed, but we give it height.
+   209→  hemisphere: { kind: 'hemisphere', color: '#bcd4ff', intensity: 2.4, distance: 0, angle: 0 },
+   210→  // Soft rectangular panel (RectAreaLight) — angle stores the half-size.
+   211→  area: { kind: 'area', color: '#ffffff', intensity: 25, distance: 0, angle: 1 },
+   212→};
+   213→
+   214→/**
+   215→ * Rotation that aims a light's local -Y axis from `from` toward `to`, so a
+   216→ * freshly added sun/spot already illuminates the scene center. After that
+   217→ * the light's own rotation (R / properties panel) steers it, like Blender.
+   218→ */
+   219→function aimRotation(from: Transform['position'], to = { x: 0, y: 0, z: 0 }) {
+   220→  const dir = new THREE.Vector3(to.x - from.x, to.y - from.y, to.z - from.z);
+   221→  if (dir.lengthSq() < 1e-6) return { x: 0, y: 0, z: 0 };
+   222→  const q = new THREE.Quaternion().setFromUnitVectors(
+   223→    new THREE.Vector3(0, -1, 0),
+   224→    dir.normalize(),
+   225→  );
+   226→  const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+   227→  return { x: e.x, y: e.y, z: e.z };
+   228→}
+   229→
+   230→/** Add a light. Sun and spot lights shine along their rotated -Y axis. */
+   231→export function addLight(
+   232→  slate: SlateDoc,
+   233→  kind: LightKind,
+   234→  position?: Transform['position'],
+   235→): { id: string } {
+   236→  const id = makeId('obj');
+   237→  const pos = position ?? { x: 2, y: 3, z: 2 };
+   238→  const obj: Object3D = {
+   239→    id,
+   240→    parentId: null,
+   241→    type: 'light',
+   242→    name: `${capitalize(kind)} Light`,
+   243→    visible: true,
+   244→    transform: {
+   245→      position: pos,
+   246→      // Point + hemisphere are omni/world-oriented, so no aim needed.
+   247→      rotation:
+   248→        kind === 'point' || kind === 'hemisphere' ? { x: 0, y: 0, z: 0 } : aimRotation(pos),
+   249→      scale: { x: 1, y: 1, z: 1 },
+   250→    },
+   251→    meshId: null,
+   252→    materialId: null,
+   253→    light: { ...LIGHT_DEFAULTS[kind] },
+   254→  };
+   255→  slate.doc.transact(() => {
+   256→    const yo = new Y.Map<unknown>();
+   257→    for (const [k, v] of Object.entries(obj)) yo.set(k, v);
+   258→    slate.scene3dObjects().set(id, yo);
+   259→  });
+   260→  return { id };
+   261→}
+   262→
+   263→/** Add a scene camera, pre-aimed at the origin (looks along local -Y). */
+   264→export function addCamera(
+   265→  slate: SlateDoc,
+   266→  position?: Transform['position'],
+   267→): { id: string } {
+   268→  const id = makeId('obj');
+   269→  const pos = position ?? { x: 5, y: 4, z: 5 };
+   270→  const obj: Object3D = {
+   271→    id,
+   272→    parentId: null,
+   273→    type: 'camera',
+   274→    name: 'Camera',
+   275→    visible: true,
+   276→    transform: {
+   277→      position: pos,
+   278→      rotation: aimRotation(pos),
+   279→      scale: { x: 1, y: 1, z: 1 },
+   280→    },
+   281→    meshId: null,
+   282→    materialId: null,
+   283→    camera: { fov: 50 },
+   284→  };
+   285→  slate.doc.transact(() => {
+   286→    const yo = new Y.Map<unknown>();
+   287→    for (const [k, v] of Object.entries(obj)) yo.set(k, v);
+   288→    slate.scene3dObjects().set(id, yo);
+   289→  });
+   290→  return { id };
+   291→}
+   292→
+   293→/** Add an empty (null object) — a transform-only marker, like Blender's Empty. */
+   294→export function addEmpty(slate: SlateDoc, position?: Transform['position']): { id: string } {
+   295→  const id = makeId('obj');
+   296→  const obj: Object3D = {
+   297→    id,
+   298→    parentId: null,
+   299→    type: 'empty',
+   300→    name: 'Empty',
+   301→    visible: true,
+   302→    transform: {
+   303→      position: position ?? { x: 0, y: 0, z: 0 },
+   304→      rotation: { x: 0, y: 0, z: 0 },
+   305→      scale: { x: 1, y: 1, z: 1 },
+   306→    },
+   307→    meshId: null,
+   308→    materialId: null,
+   309→  };
+   310→  slate.doc.transact(() => {
+   311→    const yo = new Y.Map<unknown>();
+   312→    for (const [k, v] of Object.entries(obj)) yo.set(k, v);
+   313→    slate.scene3dObjects().set(id, yo);
+   314→  });
+   315→  return { id };
+   316→}
+   317→
+   318→/** Patch a light object's parameters. */
+   319→export function editObjectLight(slate: SlateDoc, objectId: string, patch: Partial<LightData>): void {
+   320→  const yo = slate.scene3dObjects().get(objectId);
+   321→  if (!yo) return;
+   322→  const cur = (yo.get('light') as LightData | undefined) ?? LIGHT_DEFAULTS.point;
+   323→  yo.set('light', { ...cur, ...patch });
+   324→}
+   325→
+   326→/**
+   327→ * Duplicate objects (own copies of their mesh data too, so deleting one
+   328→ * never breaks the other). Returns the new object ids.
+   329→ */
+   330→export function duplicateObjects(slate: SlateDoc, ids: Iterable<string>): string[] {
+   331→  const newIds: string[] = [];
+   332→  slate.doc.transact(() => {
+   333→    const objs = slate.scene3dObjects();
+   334→    const meshes = slate.scene3dMeshes();
+   335→    for (const id of ids) {
+   336→      const yo = objs.get(id);
+   337→      if (!yo) continue;
+   338→      const src = readObject(yo, id);
+   339→      if (!src) continue;
+   340→      let meshId: string | null = null;
+   341→      if (src.meshId) {
+   342→        const ym = meshes.get(src.meshId);
+   343→        const srcMesh = ym ? readMesh(ym, src.meshId) : null;
+   344→        if (srcMesh) {
+   345→          meshId = makeId('mesh');
+   346→          const copy = new Y.Map<unknown>();
+   347→          copy.set('id', meshId);
+   348→          copy.set('vertices', srcMesh.vertices.slice());
+   349→          copy.set(
+   350→            'faces',
+   351→            srcMesh.faces.map((f) => ({ v: f.v.slice() })),
+   352→          );
+   353→          meshes.set(meshId, copy);
+   354→        }
+   355→      }
+   356→      const newId = makeId('obj');
+   357→      const dup: Object3D = {
+   358→        ...src,
+   359→        id: newId,
+   360→        name: `${src.name} Copy`,
+   361→        meshId,
+   362→        transform: {
+   363→          position: { ...src.transform.position },
+   364→          rotation: { ...src.transform.rotation },
+   365→          scale: { ...src.transform.scale },
+   366→        },
+   367→      };
+   368→      const target = new Y.Map<unknown>();
+   369→      for (const [k, v] of Object.entries(dup)) target.set(k, v);
+   370→      objs.set(newId, target);
+   371→      newIds.push(newId);
+   372→    }
+   373→  });
+   374→  return newIds;
+   375→}
+   376→
+   377→/** Bake an object's transform into its mesh vertices (world space). */
+   378→function bakeVertices(mesh: MeshData, t: Transform): number[] {
+   379→  const m = new THREE.Matrix4().compose(
+   380→    new THREE.Vector3(t.position.x, t.position.y, t.position.z),
+   381→    new THREE.Quaternion().setFromEuler(new THREE.Euler(t.rotation.x, t.rotation.y, t.rotation.z)),
+   382→    new THREE.Vector3(t.scale.x, t.scale.y, t.scale.z),
+   383→  );
+   384→  const out: number[] = [];
+   385→  const p = new THREE.Vector3();
+   386→  for (let i = 0; i < mesh.vertices.length; i += 3) {
+   387→    p.set(mesh.vertices[i]!, mesh.vertices[i + 1]!, mesh.vertices[i + 2]!).applyMatrix4(m);
+   388→    out.push(p.x, p.y, p.z);
+   389→  }
+   390→  return out;
+   391→}
+   392→
+   393→/**
+   394→ * Join objects into one (Blender Ctrl+J): every mesh is baked to world space
+   395→ * and merged into the first id; the others are deleted. Returns the joined
+   396→ * object's id, or null when fewer than two mesh objects were given.
+   397→ */
+   398→export function joinObjects(slate: SlateDoc, ids: string[]): string | null {
+   399→  const objs = slate.scene3dObjects();
+   400→  const meshesMap = slate.scene3dMeshes();
+   401→  const parts: { id: string; meshId: string; baked: MeshTopology }[] = [];
+   402→  for (const id of ids) {
+   403→    const yo = objs.get(id);
+   404→    const obj = yo ? readObject(yo, id) : null;
+   405→    if (!obj?.meshId) continue;
+   406→    const ym = meshesMap.get(obj.meshId);
+   407→    const mesh = ym ? readMesh(ym, obj.meshId) : null;
+   408→    if (!mesh) continue;
+   409→    parts.push({
+   410→      id,
+   411→      meshId: obj.meshId,
+   412→      baked: { vertices: bakeVertices(mesh, obj.transform), faces: mesh.faces.map((f) => ({ v: f.v.slice() })) },
+   413→    });
+   414→  }
+   415→  if (parts.length < 2) return null;
+   416→  const combined = parts.map((p) => p.baked).reduce((a, b) => joinMeshes(a, b));
+   417→  const first = parts[0]!;
+   418→  slate.doc.transact(() => {
+   419→    setMeshData(slate, first.meshId, combined);
+   420→    // The verts are world-space now; the survivor sits at the identity.
+   421→    setTransform(slate, first.id, {
+   422→      position: { x: 0, y: 0, z: 0 },
+   423→      rotation: { x: 0, y: 0, z: 0 },
+   424→      scale: { x: 1, y: 1, z: 1 },
+   425→    });
+   426→    for (const p of parts.slice(1)) {
+   427→      meshesMap.delete(p.meshId);
+   428→      objs.delete(p.id);
+   429→    }
+   430→  });
+   431→  return first.id;
+   432→}
+   433→
+   434→/** Mirror each object's mesh across a local axis (winding kept outward). */
+   435→export function mirrorObjects(slate: SlateDoc, ids: Iterable<string>, axis: 'x' | 'y' | 'z'): void {
+   436→  const objs = slate.scene3dObjects();
+   437→  const meshesMap = slate.scene3dMeshes();
+   438→  slate.doc.transact(() => {
+   439→    for (const id of ids) {
+   440→      const yo = objs.get(id);
+   441→      const meshId = yo?.get('meshId') as string | null | undefined;
+   442→      if (!meshId) continue;
+   443→      const ym = meshesMap.get(meshId);
+   444→      const mesh = ym ? readMesh(ym, meshId) : null;
+   445→      if (!mesh) continue;
+   446→      setMeshData(slate, meshId, mirrorMesh({ vertices: mesh.vertices, faces: mesh.faces }, axis));
+   447→    }
+   448→  });
+   449→}
+   450→
+   451→/** Drop objects so their lowest point rests on the ground plane (y = 0). */
+   452→export function dropToFloor(slate: SlateDoc, ids: Iterable<string>): void {
+   453→  const objs = slate.scene3dObjects();
+   454→  const meshesMap = slate.scene3dMeshes();
+   455→  slate.doc.transact(() => {
+   456→    for (const id of ids) {
+   457→      const yo = objs.get(id);
+   458→      const obj = yo ? readObject(yo, id) : null;
+   459→      if (!obj?.meshId) continue;
+   460→      const ym = meshesMap.get(obj.meshId);
+   461→      const mesh = ym ? readMesh(ym, obj.meshId) : null;
+   462→      if (!mesh || mesh.vertices.length === 0) continue;
+   463→      const world = bakeVertices(mesh, obj.transform);
+   464→      let minY = Infinity;
+   465→      for (let i = 1; i < world.length; i += 3) minY = Math.min(minY, world[i]!);
+   466→      if (!Number.isFinite(minY) || Math.abs(minY) < 1e-9) continue;
+   467→      setTransform(slate, id, { position: { ...obj.transform.position, y: obj.transform.position.y - minY } });
+   468→    }
+   469→  });
+   470→}
+   471→
+   472→/** Reset selected objects to the identity transform — location 0, rotation 0,
+   473→ *  scale 1 (Blender's Alt+G / Alt+R / Alt+S rolled into one button). */
+   474→export function resetTransform(slate: SlateDoc, ids: Iterable<string>): void {
+   475→  slate.doc.transact(() => {
+   476→    for (const id of ids) {
+   477→      setTransform(slate, id, {
+   478→        position: { x: 0, y: 0, z: 0 },
+   479→        rotation: { x: 0, y: 0, z: 0 },
+   480→        scale: { x: 1, y: 1, z: 1 },
+   481→      });
+   482→    }
+   483→  });
+   484→}
+   485→
+   486→export function deleteObjects(slate: SlateDoc, ids: Iterable<string>): void {
+   487→  slate.doc.transact(() => {
+   488→    const objs = slate.scene3dObjects();
+   489→    const meshes = slate.scene3dMeshes();
+   490→    for (const id of ids) {
+   491→      const yo = objs.get(id);
+   492→      if (!yo) continue;
+   493→      const meshId = yo.get('meshId') as string | null;
+   494→      if (meshId) meshes.delete(meshId);
+   495→      objs.delete(id);
+   496→    }
+   497→  });
+   498→}
+   499→
+   500→/** Auto-key (Blender's Auto Keying): after transforming an object that is
+   501→ *  ALREADY animated, record its new pose at the playhead so scrubbing/playback
+   502→ *  reflects the edit instead of snapping back to the nearest existing key.
+   503→ *  Objects with no keyframes are left untouched — animation only starts once
+   504→ *  you insert the first key by hand. Returns how many objects were keyed. */
+   505→export function autoKeyframe(slate: SlateDoc, ids: Iterable<string>, t: number): number {
+   506→  const objs = slate.scene3dObjects();
+   507→  let keyed = 0;
+   508→  slate.doc.transact(() => {
+   509→    for (const id of ids) {
+   510→      const yo = objs.get(id);
+   511→      const obj = yo ? readObject(yo, id) : null;
+   512→      if (!yo || !obj || (obj.anim?.length ?? 0) === 0) continue;
+   513→      // Use the SAMPLED transform at time t (what the user sees), not the
+   514→      // base transform — otherwise keyframing at a scrubbed position stores
+   515→      // the wrong pose. If sampling returns null (t outside track), use base.
+   516→      const sampled = sampleAnim(obj.anim, t);
+   517→      const transform = sampled ?? obj.transform;
+   518→      yo.set('anim', withKey(obj.anim, t, transform));
+   519→      keyed++;
+   520→    }
+   521→  });
+   522→  return keyed;
+   523→}
+   524→
+   525→/** Key the object's CURRENT transform at time `t` (Blender's I). */
+   526→export function insertKeyframe(slate: SlateDoc, ids: Iterable<string>, t: number): number {
+   527→  const objs = slate.scene3dObjects();
+   528→  let keyed = 0;
+   529→  slate.doc.transact(() => {
+   530→    for (const id of ids) {
+   531→      const yo = objs.get(id);
+   532→      const obj = yo ? readObject(yo, id) : null;
+   533→      if (!yo || !obj) continue;
+   534→      // Use the SAMPLED transform at time t (what the user sees), not the
+   535→      // base transform — so keyframing at a scrubbed position captures the
+   536→      // visible pose. If no animation yet, use the base transform.
+   537→      const sampled = obj.anim && obj.anim.length > 0 ? sampleAnim(obj.anim, t) : null;
+   538→      const transform = sampled ?? obj.transform;
+   539→      yo.set('anim', withKey(obj.anim, t, transform));
+   540→      keyed++;
+   541→    }
+   542→  });
+   543→  return keyed;
+   544→}
+   545→
+   546→/** Remove the keyframe nearest `t` on each object (within tolerance). */
+   547→export function deleteKeyframe(slate: SlateDoc, ids: Iterable<string>, t: number): void {
+   548→  const objs = slate.scene3dObjects();
+   549→  slate.doc.transact(() => {
+   550→    for (const id of ids) {
+   551→      const yo = objs.get(id);
+   552→      const obj = yo ? readObject(yo, id) : null;
+   553→      if (!yo || !obj?.anim?.length) continue;
+   554→      const next = withoutKey(obj.anim, t);
+   555→      if (next.length === 0) yo.delete('anim');
+   556→      else if (next !== obj.anim) yo.set('anim', next);
+   557→    }
+   558→  });
+   559→}
+   560→
+   561→/** Retime the keyframe nearest `fromT` to `toT` (drag to move a key, Blender-style).
+   562→ *  `fromT` is the key's CURRENT time (updated each drag tick by the caller) so
+   563→ *  the key can be tracked across the whole drag, not just the first move. */
+   564→export function moveKeyframe(
+   565→  slate: SlateDoc,
+   566→  id: string,
+   567→  fromT: number,
+   568→  toT: number,
+   569→): void {
+   570→  const objs = slate.scene3dObjects();
+   571→  const yo = objs.get(id);
+   572→  const obj = yo ? readObject(yo, id) : null;
+   573→  if (!yo || !obj?.anim?.length) return;
+   574→  // Find the nearest key to fromT — use a generous tolerance so the key stays
+   575→  // grabbable across the whole drag (the key moves with the cursor each tick).
+   576→  let bestIdx = -1;
+   577→  let bestDist = Infinity;
+   578→  for (let i = 0; i < obj.anim.length; i++) {
+   579→    const d = Math.abs(obj.anim[i]!.t - fromT);
+   580→    if (d < bestDist) {
+   581→      bestDist = d;
+   582→      bestIdx = i;
+   583→    }
+   584→  }
+   585→  // Only move if we found a key reasonably close (avoids grabbing a distant
+   586→  // key on a stray event).
+   587→  if (bestIdx < 0 || bestDist > 1.0) return;
+   588→  const key = obj.anim[bestIdx]!;
+   589→  // No-op if the key is already at the target time.
+   590→  if (Math.abs(key.t - Math.max(0, toT)) < 1e-4) return;
+   591→  const next = obj.anim.filter((_, i) => i !== bestIdx);
+   592→  next.push({ t: Math.max(0, toT), transform: key.transform });
+   593→  next.sort((a, b) => a.t - b.t);
+   594→  slate.doc.transact(() => {
+   595→    yo.set('anim', next);
+   596→  });
+   597→}
+   598→
+   599→/** Delete objects plus all their descendants (folders), including mesh data. */
+   600→export function deleteObjectsWithChildren(slate: SlateDoc, rootIds: Iterable<string>): void {
+   601→  const objs = slate.scene3dObjects();
+   602→  const doomed = new Set<string>(rootIds);
+   603→  // Fixed-point sweep: keep absorbing children of doomed parents.
+   604→  let grew = true;
+   605→  while (grew) {
+   606→    grew = false;
+   607→    objs.forEach((m, id) => {
+   608→      if (doomed.has(id)) return;
+   609→      const pid = m.get('parentId') as string | null;
+   610→      if (pid && doomed.has(pid)) {
+   611→        doomed.add(id);
+   612→        grew = true;
+   613→      }
+   614→    });
+   615→  }
+   616→  deleteObjects(slate, doomed);
+   617→}
+   618→
+   619→export function setTransform(
+   620→  slate: SlateDoc,
+   621→  id: string,
+   622→  patch: Partial<Transform>,
+   623→): void {
+   624→  const yo = slate.scene3dObjects().get(id);
+   625→  if (!yo) return;
+   626→  const cur = yo.get('transform') as Transform | undefined;
+   627→  if (!cur) return;
+   628→  const next: Transform = {
+   629→    position: { ...cur.position, ...(patch.position ?? {}) },
+   630→    rotation: { ...cur.rotation, ...(patch.rotation ?? {}) },
+   631→    scale: { ...cur.scale, ...(patch.scale ?? {}) },
+   632→  };
+   633→  // Wrap in a transaction so the Y.UndoManager treats this as one undoable
+   634→  // op (gizmo drags commit at ~30Hz inside one transact → one undo step).
+   635→  slate.doc.transact(() => {
+   636→    yo.set('transform', next);
+   637→  });
+   638→}
+   639→
+   640→/**
+   641→ * Edit an object's material. New primitives share one default material, so a
+   642→ * naive write would recolor every object that references it. This forks the
+   643→ * material into a private copy the first time a *shared* material is edited
+   644→ * (copy-on-write), then applies the patch.
+   645→ */
+   646→export function editObjectMaterial(
+   647→  slate: SlateDoc,
+   648→  objectId: string,
+   649→  patch: Partial<Omit<Material, 'id' | 'kind'>>,
+   650→): void {
+   651→  slate.doc.transact(() => {
+   652→    const objs = slate.scene3dObjects();
+   653→    const mats = slate.scene3dMaterials();
+   654→    const yo = objs.get(objectId);
+   655→    if (!yo) return;
+   656→    let matId = yo.get('materialId') as string | null;
+   657→
+   658→    // Count how many objects reference this material.
+   659→    let refs = 0;
+   660→    if (matId) objs.forEach((m) => { if ((m.get('materialId') as string | null) === matId) refs++; });
+   661→
+   662→    const existing = matId ? mats.get(matId) : undefined;
+   663→    const needsFork = !existing || refs > 1;
+   664→    if (needsFork) {
+   665→      const src = existing ? readMaterial(existing, matId!) : null;
+   666→      const base = src ?? defaultMaterial();
+   667→      const newId = makeId('mat');
+   668→      const copy: Material = { ...base, ...patch, id: newId, kind: 'pbr' };
+   669→      const nm = new Y.Map<unknown>();
+   670→      for (const [k, v] of Object.entries(copy)) nm.set(k, v);
+   671→      mats.set(newId, nm);
+   672→      yo.set('materialId', newId);
+   673→      matId = newId;
+   674→      return;
+   675→    }
+   676→
+   677→    const nm = mats.get(matId!);
+   678→    if (!nm) return;
+   679→    for (const [k, v] of Object.entries(patch)) nm.set(k, v);
+   680→  });
+   681→}
+   682→
+   683→/**
+   684→ * Instantiate a library asset (from slate.assets()) into the scene at an
+   685→ * optional world position. Mesh assets become a new object; material assets
+   686→ * apply to the given selection. Returns the new object id (mesh) or null.
+   687→ */
+   688→export function instantiateAsset(
+   689→  slate: SlateDoc,
+   690→  assetId: string,
+   691→  opts: { position?: Transform['position']; selection?: string[] } = {},
+   692→): string | null {
+   693→  const asset = slate.assets().get(assetId);
+   694→  if (!asset) return null;
+   695→  const kind = asset.get('kind');
+   696→
+   697→  if (kind === 'mesh') {
+   698→    const mesh = asset.get('mesh') as { vertices: number[]; faces: { v: number[] }[] } | undefined;
+   699→    if (!mesh) return null;
+   700→    const meshId = makeId('mesh');
+   701→    const objId = makeId('obj');
+   702→    slate.doc.transact(() => {
+   703→      const ym = new Y.Map<unknown>();
+   704→      ym.set('id', meshId);
+   705→      ym.set('vertices', mesh.vertices.slice());
+   706→      ym.set('faces', mesh.faces.map((f) => ({ v: f.v.slice() })));
+   707→      slate.scene3dMeshes().set(meshId, ym);
+   708→      const obj: Object3D = {
+   709→        id: objId,
+   710→        parentId: null,
+   711→        type: 'mesh',
+   712→        name: (asset.get('name') as string) ?? 'Asset',
+   713→        visible: true,
+   714→        transform: {
+   715→          position: opts.position ?? { x: 0, y: 0, z: 0 },
+   716→          rotation: { x: 0, y: 0, z: 0 },
+   717→          scale: { x: 1, y: 1, z: 1 },
+   718→        },
+   719→        meshId,
+   720→        materialId: null,
+   721→      };
+   722→      const yo = new Y.Map<unknown>();
+   723→      for (const [k, v] of Object.entries(obj)) yo.set(k, v);
+   724→      slate.scene3dObjects().set(objId, yo);
+   725→    });
+   726→    return objId;
+   727→  }
+   728→
+   729→  if (kind === 'material') {
+   730→    const mat = asset.get('material') as Material | undefined;
+   731→    const targets = opts.selection ?? [];
+   732→    if (!mat || targets.length === 0) return null;
+   733→    const matId = makeId('mat');
+   734→    slate.doc.transact(() => {
+   735→      const nm = new Y.Map<unknown>();
+   736→      for (const [k, v] of Object.entries({ ...mat, id: matId })) nm.set(k, v);
+   737→      slate.scene3dMaterials().set(matId, nm);
+   738→      for (const id of targets) {
+   739→        const yo = slate.scene3dObjects().get(id);
+   740→        if (yo && yo.get('meshId')) yo.set('materialId', matId);
+   741→      }
+   742→    });
+   743→    return null;
+   744→  }
+   745→  return null;
+   746→}
+   747→
+   748→export function setMeshData(slate: SlateDoc, meshId: string, data: MeshTopology): void {
+   749→  const m = slate.scene3dMeshes().get(meshId);
+   750→  if (!m) return;
+   751→  slate.doc.transact(() => {
+   752→    m.set('vertices', data.vertices.slice());
+   753→    m.set(
+   754→      'faces',
+   755→      data.faces.map((f) => ({ v: f.v.slice() })),
+   756→    );
+   757→  });
+   758→}
+   759→
+   760→function capitalize(s: string): string {
+   761→  return s.charAt(0).toUpperCase() + s.slice(1);
+   762→}
+   763→

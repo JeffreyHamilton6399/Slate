@@ -1,0 +1,735 @@
+     1→/**
+     2→ * Tool implementations for the 2D canvas.
+     3→ *
+     4→ * Each tool returns a small object with start / move / end pointer handlers,
+     5→ * plus a getter for the in-progress "live" preview that the engine paints
+     6→ * on top of the committed scene. Tools never write to Yjs directly; they
+     7→ * call back into the engine via the CommitAPI.
+     8→ */
+     9→
+    10→import type { Shape, ShapeKind, Stroke, StrokeKind } from '@slate/sync-protocol';
+    11→import type { BoardPoint, Rect } from './types';
+    12→import type { CanvasEngine } from './engine';
+    13→import {
+    14→  pointInShape,
+    15→  pointNearStroke,
+    16→  pointToSegmentDistance,
+    17→  rectIntersects,
+    18→  rotatedShapeAABB,
+    19→  shapeBounds,
+    20→  strokeBounds,
+    21→} from './geometry';
+    22→import { makeId } from '../utils/id';
+    23→
+    24→export interface ToolContext {
+    25→  engine: CanvasEngine;
+    26→  authorId: string;
+    27→  layerId: string;
+    28→  stroke: string;
+    29→  fill: string | null;
+    30→  strokeWidth: number;
+    31→  strokeOpacity: number;
+    32→  fontSize: number;
+    33→  /** Multi-select toggle? Set when Shift is held during a click. */
+    34→  additive: boolean;
+    35→}
+    36→
+    37→export interface PointerInput {
+    38→  /** In board space. */
+    39→  point: BoardPoint;
+    40→  /** Normalized 0..1 (pressure-or-1 if mouse). */
+    41→  pressure: number;
+    42→  /** Monotonic ms. */
+    43→  t: number;
+    44→  /** Constrain (Shift). */
+    45→  constrain: boolean;
+    46→  /** Snap to grid (Ctrl). */
+    47→  snap?: boolean;
+    48→}
+    49→
+    50→export interface ToolHandlers {
+    51→  start(input: PointerInput): void;
+    52→  move(input: PointerInput): void;
+    53→  end(input: PointerInput): void;
+    54→  cancel(): void;
+    55→}
+    56→
+    57→export interface ToolPreview {
+    58→  stroke: Stroke | null;
+    59→  shape: Shape | null;
+    60→  marquee: Rect | null;
+    61→  selection: Set<string> | null;
+    62→}
+    63→
+    64→export interface Tool extends ToolHandlers {
+    65→  readonly id: string;
+    66→  preview(): ToolPreview;
+    67→}
+    68→
+    69→// ── Pen / Highlighter / Eraser ───────────────────────────────────────────────
+    70→class InkTool implements Tool {
+    71→  readonly id: string;
+    72→  private points: number[] = [];
+    73→  private live: Stroke | null = null;
+    74→  private kind: StrokeKind;
+    75→  constructor(
+    76→    id: string,
+    77→    kind: StrokeKind,
+    78→    private ctx: ToolContext,
+    79→  ) {
+    80→    this.id = id;
+    81→    this.kind = kind;
+    82→  }
+    83→  preview(): ToolPreview {
+    84→    return { stroke: this.live, shape: null, marquee: null, selection: null };
+    85→  }
+    86→  start(input: PointerInput): void {
+    87→    this.points = [input.point.x, input.point.y, input.pressure];
+    88→    this.live = this.draft();
+    89→  }
+    90→  move(input: PointerInput): void {
+    91→    if (!this.live) return;
+    92→    const last = this.points.length - 3;
+    93→    const lx = this.points[last] ?? 0;
+    94→    const ly = this.points[last + 1] ?? 0;
+    95→    // Fine sample threshold so the stroke tracks the cursor smoothly — larger
+    96→    // brushes still benefit from dense sampling because perfect-freehand
+    97→    // builds a smoother outline from more points (sparse sampling reads as
+    98→    // "connected circles"). Capped so extremely fast drags don't flood Yjs.
+    99→    const minDist = Math.max(0.4, this.ctx.strokeWidth * 0.12);
+   100→    if (Math.hypot(input.point.x - lx, input.point.y - ly) < minDist) return;
+   101→    this.points.push(input.point.x, input.point.y, input.pressure);
+   102→    this.live = this.draft();
+   103→  }
+   104→  end(input: PointerInput): void {
+   105→    if (!this.live) return;
+   106→    // A tap with no drag (one point) should still leave a dot — perfect-freehand
+   107→    // renders a round cap from a two-point stroke, so duplicate the point.
+   108→    if (this.points.length < 6) {
+   109→      this.points.push(input.point.x + 0.01, input.point.y + 0.01, input.pressure);
+   110→      this.live = this.draft();
+   111→    }
+   112→    if (this.points.length >= 6) {
+   113→      this.ctx.engine.commitStroke(this.live);
+   114→    }
+   115→    this.live = null;
+   116→    this.points = [];
+   117→  }
+   118→  cancel(): void {
+   119→    this.live = null;
+   120→    this.points = [];
+   121→  }
+   122→  private draft(): Stroke {
+   123→    // Brush-variant size/opacity profiles (Photoshop/Procreate-style):
+   124→    //  - pencil: thin, slightly transparent (textured feel)
+   125→    //  - marker: bold, full opacity (solid marker)
+   126→    //  - calligraphy: varies with pressure (broad strokes)
+   127→    //  - airbrush: soft, low opacity (spray)
+   128→    //  - pen: the default balanced brush
+   129→    let size = this.ctx.strokeWidth;
+   130→    let opacity = this.ctx.strokeOpacity;
+   131→    if (this.kind === 'highlighter') {
+   132→      size = this.ctx.strokeWidth * 4;
+   133→      opacity = 0.35;
+   134→    } else if (this.kind === 'pencil') {
+   135→      size = Math.max(0.5, this.ctx.strokeWidth * 0.6);
+   136→      opacity = this.ctx.strokeOpacity * 0.8;
+   137→    } else if (this.kind === 'marker') {
+   138→      size = this.ctx.strokeWidth * 1.5;
+   139→      opacity = 1;
+   140→    } else if (this.kind === 'calligraphy') {
+   141→      // Calligraphy: broader, pressure-driven (the renderer applies tapering)
+   142→      size = this.ctx.strokeWidth * 1.2;
+   143→    } else if (this.kind === 'airbrush') {
+   144→      size = this.ctx.strokeWidth * 2;
+   145→      opacity = this.ctx.strokeOpacity * 0.3;
+   146→    }
+   147→    return {
+   148→      id: this.id,
+   149→      kind: this.kind,
+   150→      layerId: this.ctx.layerId,
+   151→      color: this.ctx.stroke,
+   152→      size,
+   153→      opacity,
+   154→      points: this.points.slice(),
+   155→      createdAt: Date.now(),
+   156→      authorId: this.ctx.authorId,
+   157→    };
+   158→  }
+   159→}
+   160→
+   161→// ── Shape drag-out tools (rect / ellipse / triangle / line / arrow) ─────────
+   162→class ShapeDragTool implements Tool {
+   163→  readonly id: string;
+   164→  private origin: BoardPoint | null = null;
+   165→  private live: Shape | null = null;
+   166→  private kind: ShapeKind;
+   167→  constructor(
+   168→    id: string,
+   169→    kind: ShapeKind,
+   170→    private ctx: ToolContext,
+   171→    private sides?: number,
+   172→  ) {
+   173→    this.id = id;
+   174→    this.kind = kind;
+   175→  }
+   176→  preview(): ToolPreview {
+   177→    return { stroke: null, shape: this.live, marquee: null, selection: null };
+   178→  }
+   179→  start(input: PointerInput): void {
+   180→    this.origin = input.point;
+   181→    this.live = this.draft(input.point, input.point, input.constrain);
+   182→  }
+   183→  move(input: PointerInput): void {
+   184→    if (!this.origin) return;
+   185→    this.live = this.draft(this.origin, input.point, input.constrain);
+   186→  }
+   187→  end(input: PointerInput): void {
+   188→    if (!this.live) return;
+   189→    const b = shapeBounds(this.live);
+   190→    const isLine = this.live.kind === 'line' || this.live.kind === 'arrow';
+   191→    if (b.w * b.h >= 4 || (isLine && Math.hypot(this.live.w, this.live.h) >= 2)) {
+   192→      this.ctx.engine.commitShape(this.live);
+   193→    } else if (this.origin) {
+   194→      // A click with no real drag places a default-sized shape at the point,
+   195→      // instead of the shape flashing and vanishing. Centered on the click.
+   196→      const DEF = 80;
+   197→      const o = this.origin;
+   198→      const shape = isLine
+   199→        ? { ...this.live, x: o.x - DEF / 2, y: o.y, w: DEF, h: 0 }
+   200→        : { ...this.live, x: o.x - DEF / 2, y: o.y - DEF / 2, w: DEF, h: DEF };
+   201→      this.ctx.engine.commitShape(shape);
+   202→    }
+   203→    this.live = null;
+   204→    this.origin = null;
+   205→    void input;
+   206→  }
+   207→  cancel(): void {
+   208→    this.live = null;
+   209→    this.origin = null;
+   210→  }
+   211→  private draft(a: BoardPoint, b: BoardPoint, constrain: boolean): Shape {
+   212→    let w = b.x - a.x;
+   213→    let h = b.y - a.y;
+   214→    if (constrain) {
+   215→      if (this.kind === 'line' || this.kind === 'arrow') {
+   216→        const a45 = Math.round(Math.atan2(h, w) / (Math.PI / 4)) * (Math.PI / 4);
+   217→        const len = Math.hypot(w, h);
+   218→        w = Math.cos(a45) * len;
+   219→        h = Math.sin(a45) * len;
+   220→      } else {
+   221→        const m = Math.max(Math.abs(w), Math.abs(h));
+   222→        w = Math.sign(w || 1) * m;
+   223→        h = Math.sign(h || 1) * m;
+   224→      }
+   225→    }
+   226→    return {
+   227→      id: this.id,
+   228→      kind: this.kind,
+   229→      layerId: this.ctx.layerId,
+   230→      x: a.x,
+   231→      y: a.y,
+   232→      w,
+   233→      h,
+   234→      rotation: 0,
+   235→      stroke: this.ctx.stroke,
+   236→      fill: this.ctx.fill,
+   237→      strokeWidth: this.ctx.strokeWidth,
+   238→      strokeOpacity: this.ctx.strokeOpacity,
+   239→      ...(this.sides !== undefined ? { sides: this.sides } : {}),
+   240→      createdAt: Date.now(),
+   241→      authorId: this.ctx.authorId,
+   242→    };
+   243→  }
+   244→}
+   245→
+   246→// ── Stroke eraser: erases the part of each stroke under the cursor (like a
+   247→// pen), splitting the stroke into pieces. Shapes are still deleted whole. ──
+   248→class EraserTool implements Tool {
+   249→  readonly id = 'eraser';
+   250→  private erasing = false;
+   251→  /** Latest pointer position not yet consumed by an erase pass. pointermove
+   252→   *  events fire much faster than rAF (often 4–8× per frame on a fast
+   253→   *  pointer), so we coalesce all moves within a frame into a single erase
+   254→   *  at the latest point — without this, each move snapshots the whole scene
+   255→   *  + iterates all strokes + opens a Yjs transaction, stacking work that
+   256→   *  the browser can't keep up with (the "eraser deletes weirdly" symptom). */
+   257→  private pendingPoint: BoardPoint | null = null;
+   258→  private rafScheduled = false;
+   259→  private rafId: number | null = null;
+   260→  /** Stroke ids already erased/split during the current gesture. Once a
+   261→   *  stroke has been split, its fragments have new ids — re-running the
+   262→   *  split on the (now-deleted) original id is a no-op, but re-running it
+   263→   *  on a fragment that hasn't been re-touched wastes a transaction and
+   264→   *  can shave off another tiny piece. Tracking the original id lets us
+   265→   *  skip it on subsequent erase passes; new fragment ids are picked up
+   266→   *  naturally if the cursor is still over them. */
+   267→  private erasedThisGesture = new Set<string>();
+   268→  constructor(private ctx: ToolContext) {}
+   269→  preview(): ToolPreview {
+   270→    return { stroke: null, shape: null, marquee: null, selection: null };
+   271→  }
+   272→  start(input: PointerInput): void {
+   273→    this.erasing = true;
+   274→    this.erasedThisGesture.clear();
+   275→    // Drop any leftover pending point from a previous gesture (shouldn't
+   276→    // normally happen, but cancel() may not have fired).
+   277→    this.cancelRaf();
+   278→    this.pendingPoint = null;
+   279→    this.eraseAt(input.point);
+   280→  }
+   281→  move(input: PointerInput): void {
+   282→    if (!this.erasing) return;
+   283→    // Stash the latest point and schedule ONE erase for the next frame.
+   284→    // Subsequent moves within the same frame just overwrite pendingPoint,
+   285→    // so we always erase at the most recent cursor position.
+   286→    this.pendingPoint = input.point;
+   287→    if (!this.rafScheduled) {
+   288→      this.rafScheduled = true;
+   289→      this.rafId = requestAnimationFrame(() => {
+   290→        this.rafScheduled = false;
+   291→        this.rafId = null;
+   292→        const p = this.pendingPoint;
+   293→        this.pendingPoint = null;
+   294→        if (p && this.erasing) this.eraseAt(p);
+   295→      });
+   296→    }
+   297→  }
+   298→  end(_input: PointerInput): void {
+   299→    // Flush the last pending point immediately so the final cursor position
+   300→    // is included in the erase — don't wait a frame for a gesture that's
+   301→    // already over (the user expects the eraser to have reached where they
+   302→    // released).
+   303→    this.cancelRaf();
+   304→    if (this.pendingPoint) {
+   305→      const p = this.pendingPoint;
+   306→      this.pendingPoint = null;
+   307→      this.eraseAt(p);
+   308→    }
+   309→    this.erasing = false;
+   310→  }
+   311→  cancel(): void {
+   312→    this.erasing = false;
+   313→    this.cancelRaf();
+   314→    this.pendingPoint = null;
+   315→    this.erasedThisGesture.clear();
+   316→  }
+   317→  private cancelRaf(): void {
+   318→    if (this.rafId !== null) {
+   319→      cancelAnimationFrame(this.rafId);
+   320→      this.rafId = null;
+   321→      this.rafScheduled = false;
+   322→    }
+   323→  }
+   324→  private eraseAt(p: BoardPoint): void {
+   325→    const snap = this.ctx.engine.snapshot();
+   326→    // Fixed eraser radius — DECOUPLED from the brush width. The previous
+   327→    // `Math.max(6, strokeWidth * 2)` meant a size-50 brush gave the eraser a
+   328→    // 100px radius, nuking a huge area. Now: 8px floor (usable on small
+   329→    // strokes), 40px ceiling (a huge brush setting doesn't erase an entire
+   330→    // board region in one tap), and `* 1` (not `* 2`) so the eraser feels
+   331→    // like the same size as the brush, not twice as aggressive.
+   332→    const radius = Math.min(40, Math.max(8, this.ctx.strokeWidth));
+   333→    const deadShapes: string[] = [];
+   334→    for (const layer of snap.layers) {
+   335→      if (!layer.visible || layer.locked) continue;
+   336→      // Strokes get partial erasure — split into sub-strokes at the erased
+   337→      // segments so only the part under the cursor disappears. Skip any
+   338→      // stroke we've already processed this gesture (see erasedThisGesture).
+   339→      for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+   340→        if (this.erasedThisGesture.has(st.id)) continue;
+   341→        this.eraseStrokePartial(st, p, radius);
+   342→      }
+   343→      // Shapes are erased whole (point-in-shape test).
+   344→      for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
+   345→        if (pointInShape(sh, p)) deadShapes.push(sh.id);
+   346→      }
+   347→    }
+   348→    if (deadShapes.length) this.ctx.engine.deleteIds(deadShapes);
+   349→  }
+   350→
+   351→  /** Erase the portion of `stroke` within `radius` of `p`. Splits the stroke
+   352→   *  at the erased segments and commits the remaining sub-strokes via
+   353→   *  `engine.splitStroke`. No-op if the cursor isn't over any segment. */
+   354→  private eraseStrokePartial(stroke: Stroke, p: BoardPoint, radius: number): void {
+   355→    const points = stroke.points;
+   356→    // InkTool always writes 3 values per point [x, y, pressure]. If the
+   357→    // points array isn't a multiple of 3, the stroke is malformed (a future
+   358→    // tool writing a different format, or corrupted data) — skip it rather
+   359→    // than guessing the stride and reading garbage coordinates.
+   360→    if (points.length % 3 !== 0) return;
+   361→    const stride = 3;
+   362→    const numPts = points.length / stride;
+   363→    if (numPts < 2) return; // single-point stroke — can't split, leave alone
+   364→
+   365→    // Effective erase radius mirrors pointNearStroke so the partial erasure
+   366→    // matches the visual hit-test: thick strokes get a little extra slack.
+   367→    const effRadius = Math.max(stroke.size / 2 + 2, radius);
+   368→
+   369→    // Mark which segments (between consecutive points) fall under the cursor.
+   370→    const erased = new Array<boolean>(numPts - 1).fill(false);
+   371→    let anyErased = false;
+   372→    for (let i = 0; i < numPts - 1; i++) {
+   373→      const ax = points[i * stride] ?? 0;
+   374→      const ay = points[i * stride + 1] ?? 0;
+   375→      const bx = points[(i + 1) * stride] ?? 0;
+   376→      const by = points[(i + 1) * stride + 1] ?? 0;
+   377→      if (pointToSegmentDistance(p.x, p.y, ax, ay, bx, by) < effRadius) {
+   378→        erased[i] = true;
+   379→        anyErased = true;
+   380→      }
+   381→    }
+   382→    if (!anyErased) return; // cursor not over this stroke — leave it alone
+   383→
+   384→    // Build sub-strokes from contiguous runs of non-erased segments. A point
+   385→    // touched by an erased segment on either side ends the current run; an
+   386→    // isolated point (both neighbours erased) is dropped because a single
+   387→    // point can't form a stroke. Require ≥ 3 points (stride*3 values) per
+   388→    // sub-stroke — 2-point dots were creating tiny fragments that stacked up
+   389→    // in Yjs and cluttered the scene without adding visible ink.
+   390→    const minLen = stride * 3;
+   391→    const subStrokes: number[][] = [];
+   392→    let current: number[] = [];
+   393→    for (let i = 0; i < numPts; i++) {
+   394→      if (i > 0 && erased[i - 1]) {
+   395→        // Segment before this point was erased — close out the current run.
+   396→        if (current.length >= minLen) subStrokes.push(current);
+   397→        current = [];
+   398→      }
+   399→      if (i < numPts - 1 && erased[i]) {
+   400→        // Segment after this point is erased — include this point as the
+   401→        // tail of the current run, then close it out.
+   402→        for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
+   403→        if (current.length >= minLen) subStrokes.push(current);
+   404→        current = [];
+   405→      } else {
+   406→        for (let j = 0; j < stride; j++) current.push(points[i * stride + j] ?? 0);
+   407→      }
+   408→    }
+   409→    if (current.length >= minLen) subStrokes.push(current);
+   410→
+   411→    // Untouched — the only erased segments were at the very ends, so the
+   412→    // resulting single sub-stroke is identical to the original. Skip the
+   413→    // delete+recommit round-trip.
+   414→    if (subStrokes.length === 1 && subStrokes[0]!.length === points.length) return;
+   415→
+   416→    // Mark the original stroke as processed for this gesture — whether we
+   417→    // delete it outright or split it, we don't want to re-process the same
+   418→    // id on the next erase pass (the split fragments have new ids and will
+   419→    // be picked up naturally if the cursor is still over them).
+   420→    this.erasedThisGesture.add(stroke.id);
+   421→
+   422→    if (subStrokes.length === 0) {
+   423→      // Entire stroke was under the cursor — delete it outright.
+   424→      this.ctx.engine.deleteIds([stroke.id]);
+   425→      return;
+   426→    }
+   427→
+   428→    // Split into multiple sub-strokes. Reuse the original's createdAt so the
+   429→    // new pieces keep the same z-order slot as the original (the engine sorts
+   430→    // by createdAt with a stable sort, and Yjs Map iteration puts new keys
+   431→    // after existing ones — so visually the pieces stay at the original's
+   432→    // stacking position).
+   433→    const newStrokes: Stroke[] = subStrokes.map((pts) => ({
+   434→      ...stroke,
+   435→      id: makeId('stroke'),
+   436→      points: pts,
+   437→    }));
+   438→    this.ctx.engine.splitStroke(stroke.id, newStrokes);
+   439→  }
+   440→}
+   441→
+   442→// ── Text insertion — placement is delegated to the canvas so it can show an
+   443→// inline editor at the click point instead of a blocking prompt. ────────────
+   444→class TextTool implements Tool {
+   445→  readonly id = 'text';
+   446→  preview(): ToolPreview {
+   447→    return { stroke: null, shape: null, marquee: null, selection: null };
+   448→  }
+   449→  constructor(private onPlace: (p: BoardPoint) => void) {}
+   450→  start(_input: PointerInput): void {}
+   451→  move(_input: PointerInput): void {}
+   452→  end(input: PointerInput): void {
+   453→    this.onPlace(input.point);
+   454→  }
+   455→  cancel(): void {}
+   456→}
+   457→
+   458→// ── Marquee select / move ──────────────────────────────────────────────────
+   459→class SelectTool implements Tool {
+   460→  readonly id = 'select';
+   461→  private dragOrigin: BoardPoint | null = null;
+   462→  private moveOrigin: BoardPoint | null = null;
+   463→  private moveShapes = new Map<string, { x: number; y: number }>();
+   464→  private moveStrokes = new Map<string, number[]>();
+   465→  private marquee: Rect | null = null;
+   466→  private liveSelection: Set<string> | null = null;
+   467→  constructor(
+   468→    private ctx: ToolContext,
+   469→    private getSelected: () => Set<string>,
+   470→    private setSelection: (ids: string[]) => void,
+   471→  ) {}
+   472→  preview(): ToolPreview {
+   473→    return {
+   474→      stroke: null,
+   475→      shape: null,
+   476→      marquee: this.marquee,
+   477→      selection: this.liveSelection,
+   478→    };
+   479→  }
+   480→  start(input: PointerInput): void {
+   481→    const hit = this.hit(input.point);
+   482→    if (hit) {
+   483→      const cur = new Set(this.getSelected());
+   484→      if (this.ctx.additive) {
+   485→        if (cur.has(hit)) cur.delete(hit);
+   486→        else cur.add(hit);
+   487→      } else if (!cur.has(hit)) {
+   488→        cur.clear();
+   489→        cur.add(hit);
+   490→      }
+   491→      this.setSelection([...cur]);
+   492→      this.beginMove([...cur], input.point);
+   493→    } else {
+   494→      if (!this.ctx.additive) this.setSelection([]);
+   495→      this.dragOrigin = input.point;
+   496→      this.marquee = { x: input.point.x, y: input.point.y, w: 0, h: 0 };
+   497→    }
+   498→  }
+   499→  move(input: PointerInput): void {
+   500→    if (this.moveOrigin) {
+   501→      let dx = input.point.x - this.moveOrigin.x;
+   502→      let dy = input.point.y - this.moveOrigin.y;
+   503→      if (input.snap) {
+   504→        // Ctrl: snap movement to the 10-unit grid.
+   505→        dx = Math.round(dx / 10) * 10;
+   506→        dy = Math.round(dy / 10) * 10;
+   507→      }
+   508→      for (const [id, base] of this.moveShapes) {
+   509→        this.ctx.engine.updateShape(id, { x: base.x + dx, y: base.y + dy });
+   510→      }
+   511→      for (const [id, basePoints] of this.moveStrokes) {
+   512→        const next = basePoints.slice();
+   513→        for (let i = 0; i < next.length; i += 3) {
+   514→          next[i] = (next[i] ?? 0) + dx;
+   515→          next[i + 1] = (next[i + 1] ?? 0) + dy;
+   516→        }
+   517→        this.ctx.engine.updateStroke(id, { points: next });
+   518→      }
+   519→      return;
+   520→    }
+   521→    if (!this.dragOrigin) return;
+   522→    const x = Math.min(this.dragOrigin.x, input.point.x);
+   523→    const y = Math.min(this.dragOrigin.y, input.point.y);
+   524→    const w = Math.abs(input.point.x - this.dragOrigin.x);
+   525→    const h = Math.abs(input.point.y - this.dragOrigin.y);
+   526→    this.marquee = { x, y, w, h };
+   527→    const snap = this.ctx.engine.snapshot();
+   528→    const hits = new Set<string>();
+   529→    for (const layer of snap.layers) {
+   530→      if (!layer.visible) continue;
+   531→      for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
+   532→        if (rectIntersects(this.marquee, rotatedShapeAABB(sh))) hits.add(sh.id);
+   533→      }
+   534→      for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+   535→        if (rectIntersects(this.marquee, strokeBounds(st))) hits.add(st.id);
+   536→      }
+   537→    }
+   538→    this.liveSelection = hits;
+   539→  }
+   540→  end(_input: PointerInput): void {
+   541→    if (this.moveOrigin) {
+   542→      this.moveOrigin = null;
+   543→      this.moveShapes.clear();
+   544→      this.moveStrokes.clear();
+   545→      return;
+   546→    }
+   547→    if (this.liveSelection) {
+   548→      const cur = this.ctx.additive ? new Set(this.getSelected()) : new Set<string>();
+   549→      for (const id of this.liveSelection) cur.add(id);
+   550→      this.setSelection([...cur]);
+   551→    }
+   552→    this.marquee = null;
+   553→    this.liveSelection = null;
+   554→    this.dragOrigin = null;
+   555→  }
+   556→  cancel(): void {
+   557→    this.marquee = null;
+   558→    this.liveSelection = null;
+   559→    this.dragOrigin = null;
+   560→    this.moveOrigin = null;
+   561→    this.moveShapes.clear();
+   562→    this.moveStrokes.clear();
+   563→  }
+   564→  private hit(p: BoardPoint): string | null {
+   565→    const snap = this.ctx.engine.snapshot();
+   566→    for (let i = snap.layers.length - 1; i >= 0; i--) {
+   567→      const layer = snap.layers[i]!;
+   568→      if (!layer.visible || layer.locked) continue;
+   569→      const shapes = snap.shapesByLayer.get(layer.id) ?? [];
+   570→      for (let j = shapes.length - 1; j >= 0; j--) {
+   571→        const sh = shapes[j]!;
+   572→        if (pointInShape(sh, p)) return sh.id;
+   573→      }
+   574→      const strokes = snap.strokesByLayer.get(layer.id) ?? [];
+   575→      for (let j = strokes.length - 1; j >= 0; j--) {
+   576→        const st = strokes[j]!;
+   577→        if (pointNearStroke(st, p)) return st.id;
+   578→      }
+   579→    }
+   580→    return null;
+   581→  }
+   582→  private beginMove(ids: string[], origin: BoardPoint): void {
+   583→    this.moveOrigin = origin;
+   584→    this.moveShapes.clear();
+   585→    this.moveStrokes.clear();
+   586→    const snap = this.ctx.engine.snapshot();
+   587→    const idToShape = new Map<string, Shape>();
+   588→    const idToStroke = new Map<string, Stroke>();
+   589→    for (const layer of snap.layers) {
+   590→      for (const sh of snap.shapesByLayer.get(layer.id) ?? []) idToShape.set(sh.id, sh);
+   591→      for (const st of snap.strokesByLayer.get(layer.id) ?? []) idToStroke.set(st.id, st);
+   592→    }
+   593→    for (const id of ids) {
+   594→      const sh = idToShape.get(id);
+   595→      if (sh) {
+   596→        this.moveShapes.set(id, { x: sh.x, y: sh.y });
+   597→        continue;
+   598→      }
+   599→      const st = idToStroke.get(id);
+   600→      if (st) this.moveStrokes.set(id, st.points.slice());
+   601→    }
+   602→  }
+   603→}
+   604→
+   605→// ── Eyedropper / fill / pan (minor) ─────────────────────────────────────────
+   606→class EyedropperTool implements Tool {
+   607→  readonly id = 'eyedropper';
+   608→  preview(): ToolPreview {
+   609→    return { stroke: null, shape: null, marquee: null, selection: null };
+   610→  }
+   611→  constructor(
+   612→    private ctx: ToolContext,
+   613→    private onSample: (color: string) => void,
+   614→  ) {}
+   615→  start(input: PointerInput): void {
+   616→    const snap = this.ctx.engine.snapshot();
+   617→    for (let i = snap.layers.length - 1; i >= 0; i--) {
+   618→      const layer = snap.layers[i]!;
+   619→      for (let j = (snap.shapesByLayer.get(layer.id) ?? []).length - 1; j >= 0; j--) {
+   620→        const sh = snap.shapesByLayer.get(layer.id)![j]!;
+   621→        if (pointInShape(sh, input.point)) {
+   622→          this.onSample(sh.stroke);
+   623→          return;
+   624→        }
+   625→      }
+   626→      for (let j = (snap.strokesByLayer.get(layer.id) ?? []).length - 1; j >= 0; j--) {
+   627→        const st = snap.strokesByLayer.get(layer.id)![j]!;
+   628→        if (pointNearStroke(st, input.point)) {
+   629→          this.onSample(st.color);
+   630→          return;
+   631→        }
+   632→      }
+   633→    }
+   634→  }
+   635→  move(): void {}
+   636→  end(): void {}
+   637→  cancel(): void {}
+   638→}
+   639→
+   640→class FillTool implements Tool {
+   641→  readonly id = 'fill';
+   642→  preview(): ToolPreview {
+   643→    return { stroke: null, shape: null, marquee: null, selection: null };
+   644→  }
+   645→  constructor(private ctx: ToolContext) {}
+   646→  start(input: PointerInput): void {
+   647→    const snap = this.ctx.engine.snapshot();
+   648→    for (let i = snap.layers.length - 1; i >= 0; i--) {
+   649→      const layer = snap.layers[i]!;
+   650→      const shapes = snap.shapesByLayer.get(layer.id) ?? [];
+   651→      for (let j = shapes.length - 1; j >= 0; j--) {
+   652→        const sh = shapes[j]!;
+   653→        if (pointInShape(sh, input.point)) {
+   654→          this.ctx.engine.updateShape(sh.id, { fill: this.ctx.stroke });
+   655→          return;
+   656→        }
+   657→      }
+   658→    }
+   659→  }
+   660→  move(): void {}
+   661→  end(): void {}
+   662→  cancel(): void {}
+   663→}
+   664→
+   665→// ── Factory ────────────────────────────────────────────────────────────────
+   666→export type ToolFactoryOptions = {
+   667→  toolId: string;
+   668→  context: ToolContext;
+   669→  getSelected: () => Set<string>;
+   670→  setSelection: (ids: string[]) => void;
+   671→  onSampleColor: (c: string) => void;
+   672→  onTextInsert: (p: BoardPoint) => void;
+   673→  /** Polygon vertex / star point count for the polygon + star tools. */
+   674→  polySides?: number;
+   675→};
+   676→
+   677→export function createTool(opts: ToolFactoryOptions): Tool | null {
+   678→  const { toolId, context } = opts;
+   679→  const id = makeId(toolId);
+   680→  switch (toolId) {
+   681→    case 'pen':
+   682→    case 'pencil':
+   683→    case 'marker':
+   684→    case 'calligraphy':
+   685→    case 'airbrush':
+   686→      return new InkTool(id, toolId, context);
+   687→    case 'highlighter':
+   688→      return new InkTool(id, 'highlighter', context);
+   689→    case 'eraser':
+   690→      return new EraserTool(context);
+   691→    case 'rect':
+   692→      return new ShapeDragTool(id, 'rect', context);
+   693→    case 'ellipse':
+   694→      return new ShapeDragTool(id, 'ellipse', context);
+   695→    case 'triangle':
+   696→      return new ShapeDragTool(id, 'triangle', context);
+   697→    case 'line':
+   698→      return new ShapeDragTool(id, 'line', context);
+   699→    case 'arrow':
+   700→      return new ShapeDragTool(id, 'arrow', context);
+   701→    case 'polygon':
+   702→      return new ShapeDragTool(id, 'polygon', context, opts.polySides ?? 6);
+   703→    case 'star':
+   704→      return new ShapeDragTool(id, 'star', context, opts.polySides ?? 5);
+   705→    case 'heart':
+   706→      return new ShapeDragTool(id, 'heart', context);
+   707→    case 'cloud':
+   708→      return new ShapeDragTool(id, 'cloud', context);
+   709→    case 'speech':
+   710→      return new ShapeDragTool(id, 'speech', context);
+   711→    case 'diamond':
+   712→      return new ShapeDragTool(id, 'diamond', context);
+   713→    case 'pentagon':
+   714→      return new ShapeDragTool(id, 'pentagon', context);
+   715→    case 'hexagon':
+   716→      return new ShapeDragTool(id, 'hexagon', context);
+   717→    case 'parallelogram':
+   718→      return new ShapeDragTool(id, 'parallelogram', context);
+   719→    case 'trapezoid':
+   720→      return new ShapeDragTool(id, 'trapezoid', context);
+   721→    case 'cross':
+   722→      return new ShapeDragTool(id, 'cross', context);
+   723→    case 'text':
+   724→      return new TextTool(opts.onTextInsert);
+   725→    case 'select':
+   726→      return new SelectTool(context, opts.getSelected, opts.setSelection);
+   727→    case 'eyedropper':
+   728→      return new EyedropperTool(context, opts.onSampleColor);
+   729→    case 'fill':
+   730→      return new FillTool(context);
+   731→    default:
+   732→      return null;
+   733→  }
+   734→}
+   735→

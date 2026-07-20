@@ -1,0 +1,558 @@
+     1→/**
+     2→ * AudioSettingsPanel — real audio-editor settings for the selected clip or
+     3→ * track, DAW channel-strip style.
+     4→ *
+     5→ * Clip: gain (dB) / pan, fades, speed / pitch, high-pass & low-pass filters,
+     6→ * mute, split/duplicate/normalize/reverse, move-to-track.
+     7→ * Track: volume (dB) / pan, 3-band EQ (low shelf 200 Hz, mid peak 1 kHz,
+     8→ * high shelf 4 kHz), reverb & delay sends, mute/solo/arm.
+     9→ *
+    10→ * All numeric parameters use the RotaryKnob component below — a circular DAW
+    11→ * knob (Ableton/FL Studio style) with a coloured value arc + indicator line,
+    12→ * drag-to-adjust (vertical), mouse-wheel, and keyboard arrow support.
+    13→ * Track EQ/send edits are audible live: the AudioEditor re-applies track
+    14→ * values to the audio graph on every Yjs track change.
+    15→ */
+    16→
+    17→import { useCallback, useEffect, useRef, useState } from 'react';
+    18→import { Trash2, Wand2, FlipHorizontal2, Scissors, Copy } from 'lucide-react';
+    19→import { useRoom } from '../sync/RoomContext';
+    20→import { toast } from '../ui/Toast';
+    21→import {
+    22→  deleteAudioClip, duplicateAudioClip, readAudioClip, readAudioTrack, updateAudioClip,
+    23→  updateAudioTrack, splitAudioClip, deleteAudioTrack,
+    24→} from '../audio/scene';
+    25→import { loadSamples, storeSamples } from '../audio/sampleStore';
+    26→import { audioPlayheadPos, nearestFreeStart } from '../audio/AudioEditor';
+    27→
+    28→/** Linear amplitude → decibels for display (0 → -∞). */
+    29→function fmtDb(v: number): string {
+    30→  if (v <= 0.001) return '-∞ dB';
+    31→  const db = 20 * Math.log10(v);
+    32→  return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+    33→}
+    34→
+    35→/** EQ band gain formatting: flat reads "0.0", boosts get a +. */
+    36→function fmtBandDb(v: number): string {
+    37→  return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
+    38→}
+    39→
+    40→/** Filter cutoff formatting: Hz below 1k, kHz above. */
+    41→function fmtHz(v: number): string {
+    42→  return v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`;
+    43→}
+    44→
+    45→export function AudioSettingsPanel() {
+    46→  const room = useRoom();
+    47→  const slate = room.slate;
+    48→  const [version, setVersion] = useState(0);
+    49→  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+    50→  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+    51→
+    52→  // Subscribe to Yjs changes.
+    53→  useEffect(() => {
+    54→    const tracks = slate.audioTracks();
+    55→    const clips = slate.audioClips();
+    56→    const bump = () => setVersion((v) => v + 1);
+    57→    tracks.observeDeep(bump);
+    58→    clips.observeDeep(bump);
+    59→    bump();
+    60→    return () => { tracks.unobserveDeep(bump); clips.unobserveDeep(bump); };
+    61→  }, [slate]);
+    62→
+    63→  // Listen for clip selection events from the AudioEditor.
+    64→  useEffect(() => {
+    65→    const onSelect = (e: Event) => {
+    66→      const detail = (e as CustomEvent<string>).detail;
+    67→      setSelectedClipId(detail);
+    68→      // Find the track for this clip.
+    69→      const clip = slate.audioClips().get(detail);
+    70→      if (clip) setSelectedTrackId(clip.get('trackId') as string);
+    71→    };
+    72→    window.addEventListener('slate:audio-clip-select', onSelect as EventListener);
+    73→    return () => window.removeEventListener('slate:audio-clip-select', onSelect as EventListener);
+    74→  }, [slate]);
+    75→
+    76→  // Read selected clip.
+    77→  const clip = selectedClipId ? (() => {
+    78→    const m = slate.audioClips().get(selectedClipId);
+    79→    return m ? readAudioClip(m, selectedClipId) : null;
+    80→  })() : null;
+    81→
+    82→  // Read selected track (or the track of the selected clip).
+    83→  const track = (selectedTrackId ?? clip?.trackId) ? (() => {
+    84→    const id = selectedTrackId ?? clip?.trackId;
+    85→    if (!id) return null;
+    86→    const m = slate.audioTracks().get(id);
+    87→    return m ? readAudioTrack(m, id) : null;
+    88→  })() : null;
+    89→
+    90→  // All tracks for the track selector.
+    91→  const allTracks: { id: string; name: string; color: string }[] = [];
+    92→  slate.audioTracks().forEach((m, id) => {
+    93→    const t = readAudioTrack(m, id);
+    94→    if (t) allTracks.push({ id, name: t.name, color: t.color });
+    95→  });
+    96→
+    97→  const setClip = (patch: Parameters<typeof updateAudioClip>[2]) => {
+    98→    if (selectedClipId) updateAudioClip(slate, selectedClipId, patch);
+    99→  };
+   100→  const setTrack = (patch: Parameters<typeof updateAudioTrack>[2]) => {
+   101→    const id = selectedTrackId ?? clip?.trackId;
+   102→    if (id) updateAudioTrack(slate, id, patch);
+   103→  };
+   104→
+   105→  return (
+   106→    <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
+   107→      {/* Clip properties */}
+   108→      {clip ? (
+   109→        <div className="flex flex-col gap-2">
+   110→          <h5 className="panel-title text-[10px] font-mono uppercase tracking-wider text-text-dim">Clip Settings</h5>
+   111→          {/* Name + Color */}
+   112→          <div className="grid grid-cols-2 gap-2">
+   113→            <div className="flex flex-col gap-1">
+   114→              <label className="field-label">Name</label>
+   115→              <input type="text" value={clip.name} onChange={(e) => setClip({ name: e.target.value })} className="w-full rounded border border-border bg-bg-3 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
+   116→            </div>
+   117→            <div className="flex flex-col gap-1">
+   118→              <label className="field-label">Color</label>
+   119→              <input type="color" value={clip.color} onChange={(e) => setClip({ color: e.target.value })} className="h-7 w-full rounded border border-border bg-transparent" />
+   120→            </div>
+   121→          </div>
+   122→          {/* Fades — rotary knobs */}
+   123→          <div className="grid grid-cols-2 gap-2">
+   124→            <RotaryKnob
+   125→              label="Fade In"
+   126→              value={clip.fadeIn}
+   127→              min={0}
+   128→              max={Math.max(0.1, clip.duration / 2)}
+   129→              step={0.05}
+   130→              onChange={(v) => setClip({ fadeIn: v })}
+   131→              format={(v) => `${v.toFixed(2)}s`}
+   132→            />
+   133→            <RotaryKnob
+   134→              label="Fade Out"
+   135→              value={clip.fadeOut}
+   136→              min={0}
+   137→              max={Math.max(0.1, clip.duration / 2)}
+   138→              step={0.05}
+   139→              onChange={(v) => setClip({ fadeOut: v })}
+   140→              format={(v) => `${v.toFixed(2)}s`}
+   141→            />
+   142→          </div>
+   143→          {/* Gain + Pan — rotary knobs. Gain is stored linear (0..1.5 ≈
+   144→              -∞..+3.5 dB) but displayed in dB like a real channel strip. */}
+   145→          <div className="grid grid-cols-2 gap-2">
+   146→            <RotaryKnob
+   147→              label="Gain"
+   148→              value={clip.gain ?? 1}
+   149→              min={0}
+   150→              max={1.5}
+   151→              step={0.01}
+   152→              onChange={(v) => setClip({ gain: v })}
+   153→              format={fmtDb}
+   154→            />
+   155→            <RotaryKnob
+   156→              label="Pan"
+   157→              value={clip.pan ?? 0}
+   158→              min={-1}
+   159→              max={1}
+   160→              step={0.01}
+   161→              onChange={(v) => setClip({ pan: v })}
+   162→              format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
+   163→            />
+   164→          </div>
+   165→          {/* Speed + Pitch — fully independent, like Audition's Stretch &
+   166→              Pitch (the engine cancels Web Audio's playbackRate pitch side
+   167→              effect with a granular pitch-shift worklet).
+   168→              • Speed: 0.25×..4× time-stretch — changes duration, keeps pitch.
+   169→              • Pitch: -12..+12 semitones — shifts pitch, keeps duration
+   170→                (stored in Yjs as cents = semitones × 100). */}
+   171→          <div className="grid grid-cols-2 gap-2">
+   172→            <RotaryKnob
+   173→              label="Speed"
+   174→              value={clip.speed ?? 1}
+   175→              min={0.25}
+   176→              max={4}
+   177→              step={0.05}
+   178→              onChange={(v) => setClip({ speed: v })}
+   179→              format={(v) => `${v.toFixed(2)}×`}
+   180→            />
+   181→            <RotaryKnob
+   182→              label="Pitch"
+   183→              value={(clip.pitch ?? 0) / 100}
+   184→              min={-12}
+   185→              max={12}
+   186→              step={1}
+   187→              onChange={(v) => setClip({ pitch: v * 100 })}
+   188→              format={(v) => {
+   189→                const n = Math.round(v);
+   190→                return n > 0 ? `+${n} st` : `${n} st`;
+   191→              }}
+   192→            />
+   193→          </div>
+   194→          {/* Filters — high-pass cuts rumble/mud, low-pass tames hiss or
+   195→              makes the "muffled" telephone/underwater effect. At the extreme
+   196→              ends (20 Hz / 20 kHz) the filter is bypassed entirely. */}
+   197→          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">Filters</p>
+   198→          <div className="grid grid-cols-2 gap-2">
+   199→            <RotaryKnob
+   200→              label="High-pass"
+   201→              value={clip.hpCutoff ?? 20}
+   202→              min={20}
+   203→              max={1000}
+   204→              step={5}
+   205→              onChange={(v) => setClip({ hpCutoff: v })}
+   206→              format={(v) => (v <= 22 ? 'Off' : fmtHz(v))}
+   207→            />
+   208→            <RotaryKnob
+   209→              label="Low-pass"
+   210→              value={clip.lpCutoff ?? 20000}
+   211→              min={500}
+   212→              max={20000}
+   213→              step={100}
+   214→              onChange={(v) => setClip({ lpCutoff: v })}
+   215→              format={(v) => (v >= 19500 ? 'Off' : fmtHz(v))}
+   216→            />
+   217→          </div>
+   218→          {/* Mute + source info */}
+   219→          <div className="flex items-center justify-between">
+   220→            <button onClick={() => setClip({ mute: !clip.mute })} className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${clip.mute ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{clip.mute ? 'Muted' : 'Mute clip'}</button>
+   221→            <span className="font-mono text-[9px] text-text-dim">{clip.sampleRate} Hz · {clip.channels === 2 ? 'stereo' : 'mono'}</span>
+   222→          </div>
+   223→          {/* Quick actions — Split + Duplicate first (matching the D hotkey), then the sample-processing ops. */}
+   224→          <div className="grid grid-cols-2 gap-1">
+   225→            <button onClick={() => splitAudioClip(slate, clip.id, clip.start + clip.duration / 2)} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><Scissors size={10} />Split</button>
+   226→            <button onClick={() => {
+   227→              // Duplicate AT THE PLAYHEAD (matching the timeline's D key),
+   228→              // resolved to the nearest free gap on the clip's track.
+   229→              const blockers: { start: number; end: number }[] = [];
+   230→              slate.audioClips().forEach((m, cid) => {
+   231→                const c = readAudioClip(m, cid);
+   232→                if (c && c.trackId === clip.trackId) blockers.push({ start: c.start, end: c.start + c.duration });
+   233→              });
+   234→              const start = nearestFreeStart(audioPlayheadPos.current, clip.duration, blockers);
+   235→              void duplicateAudioClip(slate, clip.id, start).then(() => toast({ title: 'Duplicated at playhead' }));
+   236→            }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent" title="Duplicate this clip at the playhead"><Copy size={10} />Duplicate</button>
+   237→            <button onClick={async () => {
+   238→              const samples = await loadSamples(clip.sampleKey);
+   239→              let max = 0;
+   240→              for (let i = 0; i < samples.length; i += clip.channels) for (let ch = 0; ch < clip.channels; ch++) max = Math.max(max, Math.abs(samples[i + ch] ?? 0));
+   241→              if (max < 1e-6) return;
+   242→              const g = 1 / max;
+   243→              const normed = new Float32Array(samples.length);
+   244→              for (let i = 0; i < samples.length; i++) normed[i] = samples[i]! * g;
+   245→              await storeSamples(clip.sampleKey, normed, { sampleRate: clip.sampleRate, channels: clip.channels });
+   246→              window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
+   247→              toast({ title: 'Normalized' });
+   248→            }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><Wand2 size={10} />Normalize</button>
+   249→            <button onClick={async () => {
+   250→              const samples = await loadSamples(clip.sampleKey);
+   251→              const ch = clip.channels;
+   252→              const frames = samples.length / ch;
+   253→              const out = new Float32Array(samples.length);
+   254→              for (let i = 0; i < frames; i++) { const s = (frames - 1 - i) * ch; const d = i * ch; for (let c = 0; c < ch; c++) out[d + c] = samples[s + c] ?? 0; }
+   255→              await storeSamples(clip.sampleKey, out, { sampleRate: clip.sampleRate, channels: clip.channels });
+   256→              window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: clip.id }));
+   257→              toast({ title: 'Reversed' });
+   258→            }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-accent"><FlipHorizontal2 size={10} />Reverse</button>
+   259→          </div>
+   260→          <button onClick={() => { deleteAudioClip(slate, clip.id); setSelectedClipId(null); }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-danger"><Trash2 size={10} />Delete Clip</button>
+   261→          {/* Move to track */}
+   262→          <div className="flex flex-col gap-1">
+   263→            <label className="field-label">Move to track</label>
+   264→            <select value={clip.trackId} onChange={(e) => setClip({ trackId: e.target.value })} className="w-full rounded border border-border bg-bg-3 px-1 py-1 text-xs text-text outline-none focus:border-accent">
+   265→              {allTracks.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+   266→            </select>
+   267→          </div>
+   268→        </div>
+   269→      ) : track ? (
+   270→        <div className="flex flex-col gap-2">
+   271→          <h5 className="panel-title text-[10px] font-mono uppercase tracking-wider text-text-dim">Track Settings</h5>
+   272→          <div>
+   273→            <label className="field-label">Name</label>
+   274→            <input type="text" value={track.name} onChange={(e) => setTrack({ name: e.target.value })} className="w-full rounded border border-border bg-bg-3 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
+   275→          </div>
+   276→          <div>
+   277→            <label className="field-label">Color</label>
+   278→            <input type="color" value={track.color} onChange={(e) => setTrack({ color: e.target.value })} className="h-7 w-full rounded border border-border bg-transparent" />
+   279→          </div>
+   280→          {/* Volume + Pan — rotary knobs. Volume stored linear, shown in dB. */}
+   281→          <div className="grid grid-cols-2 gap-2">
+   282→            <RotaryKnob
+   283→              label="Volume"
+   284→              value={track.volume}
+   285→              min={0}
+   286→              max={1}
+   287→              step={0.01}
+   288→              onChange={(v) => setTrack({ volume: v })}
+   289→              format={fmtDb}
+   290→            />
+   291→            <RotaryKnob
+   292→              label="Pan"
+   293→              value={track.pan}
+   294→              min={-1}
+   295→              max={1}
+   296→              step={0.01}
+   297→              onChange={(v) => setTrack({ pan: v })}
+   298→              format={(v) => (v > 0.005 ? `R${Math.round(v * 100)}` : v < -0.005 ? `L${Math.round(-v * 100)}` : 'C')}
+   299→            />
+   300→          </div>
+   301→          {/* 3-band channel EQ — low shelf 200 Hz, mid peak 1 kHz, high shelf
+   302→              4 kHz. ±12 dB like a console strip. Audible live during playback. */}
+   303→          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">EQ</p>
+   304→          <div className="grid grid-cols-3 gap-1">
+   305→            <RotaryKnob
+   306→              label="Low"
+   307→              value={track.eqLow ?? 0}
+   308→              min={-12}
+   309→              max={12}
+   310→              step={0.5}
+   311→              onChange={(v) => setTrack({ eqLow: v })}
+   312→              format={fmtBandDb}
+   313→              size={42}
+   314→            />
+   315→            <RotaryKnob
+   316→              label="Mid"
+   317→              value={track.eqMid ?? 0}
+   318→              min={-12}
+   319→              max={12}
+   320→              step={0.5}
+   321→              onChange={(v) => setTrack({ eqMid: v })}
+   322→              format={fmtBandDb}
+   323→              size={42}
+   324→            />
+   325→            <RotaryKnob
+   326→              label="High"
+   327→              value={track.eqHigh ?? 0}
+   328→              min={-12}
+   329→              max={12}
+   330→              step={0.5}
+   331→              onChange={(v) => setTrack({ eqHigh: v })}
+   332→              format={fmtBandDb}
+   333→              size={42}
+   334→            />
+   335→          </div>
+   336→          {/* FX sends — shared room reverb + tempo-synced echo, per-track
+   337→              send level (0 = dry). */}
+   338→          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">Sends</p>
+   339→          <div className="grid grid-cols-2 gap-2">
+   340→            <RotaryKnob
+   341→              label="Reverb"
+   342→              value={track.reverbSend ?? 0}
+   343→              min={0}
+   344→              max={1}
+   345→              step={0.01}
+   346→              onChange={(v) => setTrack({ reverbSend: v })}
+   347→              format={(v) => `${Math.round(v * 100)}%`}
+   348→            />
+   349→            <RotaryKnob
+   350→              label="Delay"
+   351→              value={track.delaySend ?? 0}
+   352→              min={0}
+   353→              max={1}
+   354→              step={0.01}
+   355→              onChange={(v) => setTrack({ delaySend: v })}
+   356→              format={(v) => `${Math.round(v * 100)}%`}
+   357→            />
+   358→          </div>
+   359→          <div className="flex gap-1">
+   360→            <button onClick={() => setTrack({ muted: !track.muted })} className={`flex-1 rounded border py-1 text-[10px] ${track.muted ? 'border-warn/50 bg-warn/15 text-warn' : 'border-border text-text-mid hover:bg-bg-3'}`}>{track.muted ? 'Muted' : 'Mute'}</button>
+   361→            <button onClick={() => setTrack({ solo: !track.solo })} className={`flex-1 rounded border py-1 text-[10px] ${track.solo ? 'border-accent/50 bg-accent/15 text-accent' : 'border-border text-text-mid hover:bg-bg-3'}`}>{track.solo ? 'Solo' : 'Solo'}</button>
+   362→            <button onClick={() => setTrack({ armed: !track.armed, input: !track.armed ? 'mic' : 'none' })} className={`flex-1 rounded border py-1 text-[10px] ${track.armed ? 'border-danger/50 bg-danger/15 text-danger' : 'border-border text-text-mid hover:bg-bg-3'}`}>{track.armed ? 'Armed' : 'Arm'}</button>
+   363→          </div>
+   364→          <button onClick={() => { deleteAudioTrack(slate, track.id); setSelectedTrackId(null); }} className="flex items-center justify-center gap-1 rounded border border-border py-1 text-[10px] text-text-mid hover:bg-bg-3 hover:text-danger"><Trash2 size={10} />Delete Track</button>
+   365→        </div>
+   366→      ) : (
+   367→        <div className="rounded-md border border-dashed border-border p-4 text-center text-xs text-text-dim">
+   368→          Select a clip in the timeline to edit its settings.
+   369→        </div>
+   370→      )}
+   371→    </div>
+   372→  );
+   373→}
+   374→
+   375→// ── RotaryKnob ──────────────────────────────────────────────────────────────
+   376→
+   377→/** Convert polar (angle in degrees, measured CLOCKWISE from 3 o'clock — i.e.
+   378→ *  SVG-friendly since y grows downward) to cartesian coordinates. */
+   379→function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
+   380→  const rad = (angleDeg * Math.PI) / 180;
+   381→  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+   382→}
+   383→
+   384→/** Arc path: clockwise from startAngle to endAngle (degrees, SVG convention). */
+   385→function arcPath(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
+   386→  const start = polarToCartesian(cx, cy, r, startAngle);
+   387→  const end = polarToCartesian(cx, cy, r, endAngle);
+   388→  const sweep = endAngle - startAngle;
+   389→  const largeArc = Math.abs(sweep) > 180 ? 1 : 0;
+   390→  // sweepFlag = 1 → clockwise (SVG visual, since y is down and angles increase
+   391→  // clockwise visually).
+   392→  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`;
+   393→}
+   394→
+   395→/**
+   396→ * DAW-style rotary knob (Ableton / FL Studio inspired).
+   397→ *
+   398→ * Visual: a 270° value arc (gap at the bottom) with a coloured fill from min
+   399→ * to the current value, a circular knob body, and an indicator line pointing
+   400→ * to the current position. ~48px diameter.
+   401→ *
+   402→ * Interaction:
+   403→ *  - Drag up = increase, drag down = decrease (Shift = 3× finer).
+   404→ *  - Mouse wheel up = increase, down = decrease.
+   405→ *  - Arrow Up/Right = +step, Arrow Down/Left = -step (keyboard accessible).
+   406→ *
+   407→ * The `onChange` callback fires on every adjustment tick — same semantics as
+   408→ * the old `<input type="range">` it replaces, so the Yjs update logic is
+   409→ * unchanged.
+   410→ */
+   411→function RotaryKnob({ value, min, max, step, label, onChange, format, size = 48 }: {
+   412→  value: number;
+   413→  min: number;
+   414→  max: number;
+   415→  step: number;
+   416→  label: string;
+   417→  onChange: (v: number) => void;
+   418→  format?: (v: number) => string;
+   419→  size?: number;
+   420→}) {
+   421→  const svgRef = useRef<SVGSVGElement | null>(null);
+   422→  const dragRef = useRef<{ startY: number; startVal: number; fine: boolean } | null>(null);
+   423→
+   424→  // Latest value + onChange held in refs so the native (non-passive) wheel
+   425→  // listener — attached ONCE — can read the freshest value without re-binding
+   426→  // on every drag tick.
+   427→  const valueRef = useRef(value);
+   428→  valueRef.current = value;
+   429→  const onChangeRef = useRef(onChange);
+   430→  onChangeRef.current = onChange;
+   431→
+   432→  const range = max - min;
+   433→  const clamp = useCallback((v: number) => Math.max(min, Math.min(max, v)), [min, max]);
+   434→  // Snap a free value to the step grid (with float-drift fix via toFixed).
+   435→  const snap = useCallback((v: number) => {
+   436→    if (step <= 0) return clamp(v);
+   437→    const steps = Math.round((v - min) / step);
+   438→    const snapped = min + steps * step;
+   439→    const decimals = step < 0.001 ? 5 : step < 0.01 ? 4 : step < 0.1 ? 3 : step < 1 ? 2 : 1;
+   440→    return clamp(parseFloat(snapped.toFixed(decimals)));
+   441→  }, [min, step, clamp]);
+   442→
+   443→  // Geometry: 270° sweep starting at 135° (lower-left, ~7:30) going clockwise
+   444→  // to 45° (lower-right, ~4:30). Normalised 0..1 maps across that arc.
+   445→  const cx = size / 2;
+   446→  const cy = size / 2;
+   447→  const rRing = size / 2 - 3;       // outer arc radius
+   448→  const rBody = size / 2 - 9;       // knob body radius
+   449→  const rInd = rBody - 1;           // indicator line length
+   450→
+   451→  const ARC_START = 135;
+   452→  const ARC_END = 135 + 270;        // 405 (= 45)
+   453→  const normalized = range > 0 ? (value - min) / range : 0;
+   454→  const valAngle = ARC_START + normalized * 270;
+   455→  const valRad = (valAngle * Math.PI) / 180;
+   456→
+   457→  const bgPath = arcPath(cx, cy, rRing, ARC_START, ARC_END);
+   458→  // Skip the value arc when at min (zero-length path is invalid).
+   459→  const valPath = normalized > 0.001 ? arcPath(cx, cy, rRing, ARC_START, valAngle) : '';
+   460→  // Indicator line: from a small inner radius out to the body edge, pointing
+   461→  // at the current value angle.
+   462→  const indStart = { x: cx + 4 * Math.cos(valRad), y: cy + 4 * Math.sin(valRad) };
+   463→  const indEnd = { x: cx + rInd * Math.cos(valRad), y: cy + rInd * Math.sin(valRad) };
+   464→
+   465→  // ── Pointer drag (vertical: up = increase) ──────────────────────────────
+   466→  // We attach pointermove/pointerup to WINDOW during a drag instead of
+   467→  // relying on `setPointerCapture` — pointer capture is flaky on some
+   468→  // browsers/setups (the capture can be silently lost mid-drag, leaving the
+   469→  // knob stuck following the cursor or not following at all). Window-level
+   470→  // listeners always receive the events regardless of where the pointer goes.
+   471→  const onPointerDown = (e: React.PointerEvent) => {
+   472→    e.preventDefault();
+   473→    e.stopPropagation();
+   474→    dragRef.current = { startY: e.clientY, startVal: valueRef.current, fine: e.shiftKey };
+   475→    const onMove = (ev: PointerEvent) => {
+   476→      const d = dragRef.current; if (!d) return;
+   477→      // 150px of drag = full range (400px with Shift for fine control).
+   478→      // Lower denominator = more sensitive (less movement needed).
+   479→      const sensitivity = d.fine ? 400 : 150;
+   480→      const delta = ((d.startY - ev.clientY) / sensitivity) * range;
+   481→      onChangeRef.current(clamp(d.startVal + delta));
+   482→    };
+   483→    const onUp = () => {
+   484→      dragRef.current = null;
+   485→      window.removeEventListener('pointermove', onMove);
+   486→      window.removeEventListener('pointerup', onUp);
+   487→    };
+   488→    window.addEventListener('pointermove', onMove);
+   489→    window.addEventListener('pointerup', onUp);
+   490→  };
+   491→
+   492→  // ── Native non-passive wheel listener (so preventDefault works) ─────────
+   493→  useEffect(() => {
+   494→    const el = svgRef.current; if (!el) return;
+   495→    const onWheel = (e: WheelEvent) => {
+   496→      e.preventDefault();
+   497→      e.stopPropagation();
+   498→      const dir = e.deltaY < 0 ? 1 : -1;
+   499→      // Each notch = max(step, range/50) so a full sweep takes ~50 notches
+   500→      // even for fine-grained knobs (e.g. gain has 150 single-steps).
+   501→      const wheelStep = Math.max(step, range / 50);
+   502→      onChangeRef.current(snap(valueRef.current + dir * wheelStep));
+   503→    };
+   504→    el.addEventListener('wheel', onWheel, { passive: false });
+   505→    return () => el.removeEventListener('wheel', onWheel);
+   506→  }, [step, range, snap]);
+   507→
+   508→  // ── Keyboard: arrows nudge by one step ──────────────────────────────────
+   509→  const onKeyDown = (e: React.KeyboardEvent) => {
+   510→    let next: number | null = null;
+   511→    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = value + step;
+   512→    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next = value - step;
+   513→    else if (e.key === 'Home') next = min;
+   514→    else if (e.key === 'End') next = max;
+   515→    if (next !== null) {
+   516→      e.preventDefault();
+   517→      e.stopPropagation(); // don't trigger the AudioEditor's seek hotkeys
+   518→      onChange(snap(next));
+   519→    }
+   520→  };
+   521→
+   522→  const display = format ? format(value) : String(value);
+   523→
+   524→  return (
+   525→    <div className="flex select-none flex-col items-center gap-0.5">
+   526→      <svg
+   527→        ref={svgRef}
+   528→        width={size}
+   529→        height={size}
+   530→        viewBox={`0 0 ${size} ${size}`}
+   531→        className="touch-none cursor-ns-resize"
+   532→        onPointerDown={onPointerDown}
+   533→        onKeyDown={onKeyDown}
+   534→        role="slider"
+   535→        aria-label={label}
+   536→        aria-valuemin={min}
+   537→        aria-valuemax={max}
+   538→        aria-valuenow={value}
+   539→        aria-valuetext={display}
+   540→        tabIndex={0}
+   541→      >
+   542→        {/* Background track — full 270° arc (dim) */}
+   543→        <path d={bgPath} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="text-text-dim/30" />
+   544→        {/* Value arc — min → current (accent) */}
+   545→        {valPath && (
+   546→          <path d={valPath} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="text-accent" />
+   547→        )}
+   548→        {/* Knob body */}
+   549→        <circle cx={cx} cy={cy} r={rBody} className="fill-bg-3 stroke-border" strokeWidth={1} />
+   550→        {/* Indicator line — points to the current value angle */}
+   551→        <line x1={indStart.x} y1={indStart.y} x2={indEnd.x} y2={indEnd.y} stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" className="text-accent" />
+   552→      </svg>
+   553→      <span className="font-mono text-[9px] text-text-dim">{display}</span>
+   554→      <span className="field-label text-center leading-tight">{label}</span>
+   555→    </div>
+   556→  );
+   557→}
+   558→

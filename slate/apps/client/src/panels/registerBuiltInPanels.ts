@@ -20,6 +20,10 @@ import { AudioAssetsPanel } from './AudioAssetsPanel';
 import { AudioSettingsPanel } from './AudioSettingsPanel';
 import { InstrumentPanel } from './InstrumentPanel';
 import { FriendsPanel } from './FriendsPanel';
+import { DocOutlinePanel } from './DocOutlinePanel';
+import { DocStatsPanel } from './DocStatsPanel';
+import { CodeFilesPanel } from './CodeFilesPanel';
+import { CodeSearchPanel } from './CodeSearchPanel';
 
 let registered = false;
 
@@ -135,5 +139,45 @@ export function registerBuiltInPanels(): void {
     render: InstrumentPanel,
     order: 1,
     mode: 'audio',
+  });
+  // Doc Outline — table of contents from the doc's headings. Left dock so it
+  // stays visible while writing; the central editor keeps the focus, the
+  // outline is just navigation.
+  registerPanel({
+    id: 'doc-outline',
+    title: 'Outline',
+    defaultSide: 'left',
+    render: DocOutlinePanel,
+    order: 0,
+    mode: 'doc',
+  });
+  // Doc Stats — word/character/paragraph/heading counts + reading time.
+  // Right dock opposite the outline.
+  registerPanel({
+    id: 'doc-stats',
+    title: 'Stats',
+    defaultSide: 'right',
+    render: DocStatsPanel,
+    order: 1,
+    mode: 'doc',
+  });
+  // Code Files — dockable file tree for code-mode boards. Mirrors the editor's
+  // left rail as a navigable folder tree; clicks open files in the editor.
+  registerPanel({
+    id: 'code-files',
+    title: 'Files',
+    defaultSide: 'left',
+    render: CodeFilesPanel,
+    order: 0,
+    mode: 'code',
+  });
+  // Code Search — project-wide text search across every file on the board.
+  registerPanel({
+    id: 'code-search',
+    title: 'Search',
+    defaultSide: 'right',
+    render: CodeSearchPanel,
+    order: 1,
+    mode: 'code',
   });
 }

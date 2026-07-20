@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "pnpm install && cd slate && pnpm install && pnpm --filter @slate/client run build",
   "outputDirectory": "slate/apps/client/dist",
+  "functions": {
+    "slate/apps/client/api/ai-chat.ts": {
+      "runtime": "@vercel/node@5"
+    }
+  },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

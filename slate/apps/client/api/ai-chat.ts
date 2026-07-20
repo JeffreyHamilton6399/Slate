@@ -1,32 +1,28 @@
 /**
  * Vercel Serverless Function — AI Chat
  *
- * This runs server-side (so z-ai-web-dev-sdk stays safe) but deploys
- * alongside the static Slate files in the same Vercel project. No extra
- * repo needed.
+ * Lives in the Slate client's /api/ directory so Vercel detects it
+ * when the project root is set to slate/apps/client.
  *
- * The Slate client calls this via fetch('/api/ai-chat') — same origin,
- * no CORS issues.
+ * Uses z-ai-web-dev-sdk (server-side only).
  */
 
 import ZAI from "z-ai-web-dev-sdk";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-// Vercel auto-detects files in /api/ as serverless functions.
-// The handler receives the standard Node.js req/res.
-export default async function handler(req, res) {
-  // Only accept POST
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
-
-  // Handle CORS preflight (in case the Slate app is on a different domain)
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // CORS (in case the Slate app is on a different domain)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed — use POST" });
     return;
   }
 

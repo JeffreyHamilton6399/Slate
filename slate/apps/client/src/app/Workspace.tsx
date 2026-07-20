@@ -28,9 +28,10 @@ import { Canvas2D } from '../canvas2d/Canvas2D';
 import { Viewport3D } from '../viewport3d/Viewport3D';
 import { AudioEditor } from '../audio/AudioEditor';
 
-// Doc mode is the only surface that pulls in TipTap/ProseMirror — lazy-load
-// it so whiteboard/3D/audio boards don't pay the bundle cost.
+// Doc/code modes are the only surfaces that pull in TipTap/ProseMirror and
+// CodeMirror respectively — lazy-load them so other boards skip the cost.
 const DocEditor = lazy(() => import('../docs/DocEditor'));
+const CodeEditor = lazy(() => import('../code/CodeEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -336,6 +337,10 @@ export function Workspace() {
             ) : board.mode === 'doc' ? (
               <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
                 <DocEditor />
+              </Suspense>
+            ) : board.mode === 'code' ? (
+              <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                <CodeEditor />
               </Suspense>
             ) : (
               <Canvas2D room={room} />

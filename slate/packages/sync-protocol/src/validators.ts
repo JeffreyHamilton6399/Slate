@@ -30,7 +30,7 @@ export const boardMetaSchema = z.object({
   name: z.string().min(1).max(MAX_BOARD_NAME_LEN),
   topic: z.string().max(MAX_TOPIC_LEN),
   visibility: z.enum(['public', 'private']),
-  mode: z.enum(['2d', '3d', 'audio', 'doc']),
+  mode: z.enum(['2d', '3d', 'audio', 'doc', 'code']),
   paper: colorString,
   hostId: idSchema,
 });

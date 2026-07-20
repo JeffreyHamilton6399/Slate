@@ -93,3 +93,12 @@ export const AUDIO_KEYS = {
  *  Top-level (doc.getXmlFragment) for the same reason as the scene/audio
  *  containers: globally keyed = every client resolves the same shared type. */
 export const DOC_TEXT_KEY = 'doc:text';
+
+/** Top-level Y.Map for 'code' boards: file id → Y.Map { name }. Each file's
+ *  CONTENT is its own top-level Y.Text named by codeTextKey(id) — top-level
+ *  so every client resolves the same shared type with no create conflict
+ *  (see the doc.ts container doctrine). Deleting a file only removes its map
+ *  entry; the orphaned Y.Text stays in the doc (Yjs can't delete top-level
+ *  types) but costs only its retained text. */
+export const CODE_FILES_KEY = 'code:files';
+export const codeTextKey = (fileId: string): string => `code:text:${fileId}`;

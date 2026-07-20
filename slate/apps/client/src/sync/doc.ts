@@ -24,6 +24,8 @@ import {
   SCENE3D_KEYS,
   AUDIO_KEYS,
   DOC_TEXT_KEY,
+  CODE_FILES_KEY,
+  codeTextKey,
   type BoardMeta,
   type DocMode,
 } from '@slate/sync-protocol';
@@ -57,6 +59,10 @@ export interface SlateDoc {
   assets: () => Y.Map<Y.Map<unknown>>;
   /** Rich-text document for 'doc' boards (bound to TipTap via y-prosemirror). */
   docText: () => Y.XmlFragment;
+  /** 'code' boards: file id → Y.Map { name }. */
+  codeFiles: () => Y.Map<Y.Map<unknown>>;
+  /** A code file's shared text content (top-level Y.Text keyed by file id). */
+  codeText: (fileId: string) => Y.Text;
 }
 
 export function createSlateDoc(): SlateDoc {
@@ -80,6 +86,8 @@ export function createSlateDoc(): SlateDoc {
     chat: () => doc.getArray<Y.Map<unknown>>(DOC_KEYS.chat),
     assets: () => doc.getMap<Y.Map<unknown>>('assets'),
     docText: () => doc.getXmlFragment(DOC_TEXT_KEY),
+    codeFiles: () => doc.getMap<Y.Map<unknown>>(CODE_FILES_KEY),
+    codeText: (fileId: string) => doc.getText(codeTextKey(fileId)),
   };
 }
 

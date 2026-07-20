@@ -28,6 +28,7 @@ import { useScene3DStore } from '../viewport3d/store';
 import { useCanvasStore } from '../canvas2d/store';
 import { readAudioClip } from '../audio/scene';
 import { docFragmentToMarkdown, docFragmentToText } from '../docs/exportMarkdown';
+import { codeZipBlob } from '../code/exportCode';
 import { toast } from '../ui/Toast';
 import type { DocMode } from '@slate/sync-protocol';
 import {
@@ -62,9 +63,10 @@ const FORMAT_INFO: Record<string, string> = {
   mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.',
   md: 'Markdown — headings, lists, code blocks; opens in any text editor.',
   txt: 'Plain text — formatting stripped, maximum compatibility.',
+  zip: 'ZIP archive — every file on the board, ready to unzip anywhere.',
 };
 
-type ExportFormat = RasterFormat | 'svg' | 'mp4' | 'wav' | 'mp3' | 'md' | 'txt' | ThreeDFormat;
+type ExportFormat = RasterFormat | 'svg' | 'mp4' | 'wav' | 'mp3' | 'md' | 'txt' | 'zip' | ThreeDFormat;
 
 /** Default format per board mode — used when the dialog opens or the mode
  *  changes so a stale format from another mode is never selected. */
@@ -72,6 +74,7 @@ function defaultFormatForMode(mode: DocMode | undefined): ExportFormat {
   if (mode === '3d') return 'glb';
   if (mode === 'audio') return 'wav';
   if (mode === 'doc') return 'md';
+  if (mode === 'code') return 'zip';
   return 'png';
 }
 
@@ -82,6 +85,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const is3d = mode === '3d';
   const isAudio = mode === 'audio';
   const isDoc = mode === 'doc';
+  const isCode = mode === 'code';
   const [format, setFormat] = useState<ExportFormat>(defaultFormatForMode(mode));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -103,7 +107,10 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     setBusy(true);
     setProgress(0);
     try {
-      if (isDoc) {
+      if (isCode) {
+        // Code mode — all files as one stored (uncompressed) zip.
+        downloadBlob(codeZipBlob(room.slate), `${board?.name ?? 'slate'}.zip`);
+      } else if (isDoc) {
         // Doc mode — serialize the shared rich-text fragment directly.
         const fragment = room.slate.docText();
         if (format === 'md') {
@@ -199,22 +206,26 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     }
   };
 
-  const formats: readonly ExportFormat[] = isDoc
-    ? (['md', 'txt'] as const)
-    : isAudio
-      ? (['wav', 'mp3'] as const)
-      : is3d
-        ? (['glb', 'gltf', 'obj', 'stl', 'ply', 'fbx', 'mp4'] as const)
-        : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
-  const raster = !is3d && !isAudio && !isDoc && format !== 'svg' && format !== 'mp4';
+  const formats: readonly ExportFormat[] = isCode
+    ? (['zip'] as const)
+    : isDoc
+      ? (['md', 'txt'] as const)
+      : isAudio
+        ? (['wav', 'mp3'] as const)
+        : is3d
+          ? (['glb', 'gltf', 'obj', 'stl', 'ply', 'fbx', 'mp4'] as const)
+          : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
+  const raster = !is3d && !isAudio && !isDoc && !isCode && format !== 'svg' && format !== 'mp4';
 
-  const description = isDoc
-    ? 'Export the document to a file.'
-    : isAudio
-      ? 'Export the audio mix to a file.'
-      : is3d
-        ? 'Export this 3D scene to a file.'
-        : 'Export this canvas to a file.';
+  const description = isCode
+    ? 'Export every code file as a zip.'
+    : isDoc
+      ? 'Export the document to a file.'
+      : isAudio
+        ? 'Export the audio mix to a file.'
+        : is3d
+          ? 'Export this 3D scene to a file.'
+          : 'Export this canvas to a file.';
 
   return (
     <Dialog

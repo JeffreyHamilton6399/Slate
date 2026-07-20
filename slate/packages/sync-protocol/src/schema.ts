@@ -5,7 +5,7 @@
  * the two.
  */
 
-export type DocMode = '2d' | '3d' | 'audio' | 'doc';
+export type DocMode = '2d' | '3d' | 'audio' | 'doc' | 'code';
 export type BoardVisibility = 'public' | 'private';
 
 export interface BoardMeta {
@@ -418,4 +418,10 @@ export interface SlateDocSnapshot {
    *  y-prosemirror encoding of the doc:text fragment. Optional: absent on
    *  snapshots from older clients and non-doc boards. */
   docText?: unknown;
+  /** 'code' boards: file list + per-file plain-text contents keyed by file
+   *  id. Optional: absent on snapshots from older clients. */
+  codeFiles?: {
+    files: { id: string; name: string }[];
+    contents: Record<string, string>;
+  };
 }

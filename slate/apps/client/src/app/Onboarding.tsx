@@ -48,7 +48,7 @@ export function Onboarding() {
       }
     }
     return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 3);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   })();
 
   const allProjects = (() => {
@@ -60,7 +60,7 @@ export function Onboarding() {
       }
     }
     return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   })();
 
   const refreshSaves = () => setSavesVersion((v) => v + 1);

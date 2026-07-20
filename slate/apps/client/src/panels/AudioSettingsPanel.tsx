@@ -45,7 +45,7 @@ function fmtHz(v: number): string {
 export function AudioSettingsPanel() {
   const room = useRoom();
   const slate = room.slate;
-  const [version, setVersion] = useState(0);
+  const [, setVersion] = useState(0);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 

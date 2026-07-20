@@ -28,7 +28,6 @@ import {
   Slash,
   ArrowUpRight,
   Shapes,
-  ChevronDown,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Button } from '../ui/Button';

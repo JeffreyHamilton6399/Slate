@@ -528,6 +528,9 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
   const { friends, pending, loading, sendRequest, accept, remove } = useFriends(userId);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  // Must be declared with the other hooks (before any early return) so the hook
+  // order stays constant whether or not accounts are enabled / the user is in.
+  const [query, setQuery] = useState('');
 
   if (!accountsEnabled) {
     return (
@@ -557,7 +560,6 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
     setEmail('');
   };
 
-  const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const matches = (f: { displayName: string; email: string | null; statusText?: string | null }) =>
     q === '' ||

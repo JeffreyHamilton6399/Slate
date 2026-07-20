@@ -128,7 +128,7 @@ export function ensurePitchWorklet(ctx: BaseAudioContext): Promise<boolean> {
         await ctx.audioWorklet.addModule(url);
         return true;
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[slate-audio] pitch-shift worklet unavailable, falling back to coupled detune', err);
         return false;
       } finally {

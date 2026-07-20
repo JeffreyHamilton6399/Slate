@@ -13,17 +13,21 @@
  * separate from the room-level UndoManager which tracks the other modes'
  * containers.
  *
+ * There is NO top toolbar — every formatting/insert/export action lives in the
+ * left dock's DocToolsPanel, which dispatches `slate:doc-command` window events
+ * this component listens for (see the command handler below). The AI assistant
+ * likewise rewrites the document via a `slate:doc-apply` event.
+ *
  * Node set: headings 1-3, bold/italic/strike/underline/inline code, links,
  * text color + highlight, bullet/ordered/task lists, blockquote, syntax-
- * highlighted code blocks (lowlight/common grammars), images (downscaled to
- * a data URL small enough for a single Yjs update — same importer the 2D
- * canvas uses), horizontal rule, alignment (left/center/right), tables
- * (insert/add-row/add-col/delete). Export to Markdown from the toolbar
- * (and the Export dialog). Find via prompt + ProseMirror text search.
+ * highlighted code blocks (lowlight/common grammars), images (offloaded to a
+ * Supabase bucket when configured, else a downscaled data URL — same importer
+ * the 2D canvas uses), horizontal rule, alignment (left/center/right), tables.
+ * Export to Markdown/HTML; Find via prompt + ProseMirror text search.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { useEffect, useMemo, useRef } from 'react';
+import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
@@ -46,15 +50,6 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { TextSelection } from '@tiptap/pm/state';
 import { createLowlight, common } from 'lowlight';
-import {
-  Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3,
-  List, ListOrdered, ListTodo, TextQuote, SquareCode, ImagePlus, Link2,
-  Minus, Undo2, Redo2, FileDown, FileCode2,
-  Underline as UnderlineIcon, Highlighter, Palette, AlignLeft, AlignCenter,
-  AlignRight, Table as TableIcon, Plus, Trash2, Search, X,
-  Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer,
-  Indent, Outdent, ChevronDown, Type,
-} from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
@@ -72,12 +67,6 @@ export function DocEditor() {
   const room = useRoom();
   const boardName = useAppStore((s) => s.currentBoard?.name) ?? 'document';
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const [colorOpen, setColorOpen] = useState(false);
-  const [fontSizeOpen, setFontSizeOpen] = useState(false);
-
-  // Font size presets (in px). The first option (default) clears the inline
-  // style so the doc falls back to the page CSS — picks the rest by hand.
-  const FONT_SIZES = [12, 14, 16, 18, 24, 32];
 
   const user = useMemo(
     () => ({ name: room.identity.name, color: colorForPeerId(room.identity.peerId) }),
@@ -228,6 +217,10 @@ export function DocEditor() {
     };
     window.addEventListener(DOC_COMMAND_EVENT, handler as EventListener);
     return () => window.removeEventListener(DOC_COMMAND_EVENT, handler as EventListener);
+    // findInDoc/exportMarkdown/exportHtml close over `editor`, which is in the
+    // deps — rebinding on their identity alone would needlessly re-add the
+    // listener every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
   const addImage = async (file: File) => {
@@ -241,16 +234,6 @@ export function DocEditor() {
     } catch (err) {
       toast({ title: 'Image import failed', description: err instanceof Error ? err.message : String(err) });
     }
-  };
-
-  const setLink = () => {
-    if (!editor) return;
-    const prev = (editor.getAttributes('link').href as string | undefined) ?? '';
-    // eslint-disable-next-line no-alert
-    const url = window.prompt('Link URL (empty to remove)', prev);
-    if (url === null) return;
-    if (url === '') editor.chain().focus().extendMarkRange('link').unsetLink().run();
-    else editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   };
 
   const exportMarkdown = () => {
@@ -309,30 +292,11 @@ ${body}
     setTimeout(() => URL.revokeObjectURL(a.href), 500);
   };
 
-  // Print: hand the page to the browser's print dialog. The doc lives in
-  // `.slate-doc .ProseMirror`, so a print stylesheet scopes the output to it
-  // (added in docEditor.css under @media print — strips the toolbar, file
-  // rail, and other chrome so only the page body lands on paper).
-  const printDoc = () => window.print();
-
-  // Clear formatting: drop every mark + reset every block to a plain
-  // paragraph. Useful for pasting in styled content and stripping it back.
-  const clearFormatting = () => {
-    if (!editor) return;
-    editor.chain().focus().unsetAllMarks().clearNodes().run();
-  };
-
-  // Indent/Outdent: in lists, sink/lift the list item. Outside lists TipTap
-  // has no built-in paragraph indent — these no-op gracefully there.
-  const indent = () => editor?.chain().focus().sinkListItem('listItem').run();
-  const outdent = () => editor?.chain().focus().liftListItem('listItem').run();
-
   // Minimal Find: prompt for a term, walk every text node in the doc, select
   // the first occurrence (case-insensitive) so the browser highlights it and
   // scrolls it into view. A "no matches" toast covers the empty case.
   const findInDoc = () => {
     if (!editor) return;
-    // eslint-disable-next-line no-alert
     const term = window.prompt('Find in document');
     if (term === null || term === '') return;
     const needle = term.toLowerCase();
@@ -363,7 +327,6 @@ ${body}
   if (!editor) return null;
 
   const words = editor.state.doc.textContent.trim().split(/\s+/).filter(Boolean).length;
-  const inTable = editor.isActive('table');
 
   return (
     <div className="flex h-full flex-col bg-bg">

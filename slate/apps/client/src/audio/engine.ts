@@ -135,7 +135,7 @@ export class AudioEngine {
       this.masterGain.connect(this.ctx.destination);
     }
     if (this.ctx.state === 'suspended') {
-      // eslint-disable-next-line no-console
+       
       console.warn('[slate-audio] AudioContext is suspended — will resume on the first user gesture (browser autoplay policy). Click anywhere to enable audio.');
       this.attachGestureListener();
     }

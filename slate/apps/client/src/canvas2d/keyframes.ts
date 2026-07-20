@@ -4,7 +4,7 @@
  */
 
 import type { SlateDoc } from '../sync/doc';
-import type { Shape, AnimKey2D, Transform2D } from '@slate/sync-protocol';
+import type { Shape } from '@slate/sync-protocol';
 import { withKey2D, withoutKey2D, moveKey2D, shapeToTransform } from './animation';
 
 /** Read a shape from Yjs by id (returns null if missing). */

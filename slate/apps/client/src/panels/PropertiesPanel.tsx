@@ -15,7 +15,7 @@ import { useBoardUnits } from '../sync/useBoardSettings';
 import { autoKeyframe, editObjectLight, editObjectMaterial, resetTransform } from '../viewport3d/scene';
 import { useScene3DStore } from '../viewport3d/store';
 import { sampleAnim } from '../viewport3d/animation';
-import { metersToUnit, unitToMeters, unitDecimals, formatLength, type LengthUnit } from '../viewport3d/units';
+import { metersToUnit, unitToMeters, unitDecimals, formatLength } from '../viewport3d/units';
 import { FieldLabel, Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import {

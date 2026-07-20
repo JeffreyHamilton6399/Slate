@@ -93,7 +93,7 @@ export function App() {
         });
       });
     // Mount-only: the link is consumed once and the URL cleared.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   return (

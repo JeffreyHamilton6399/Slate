@@ -24,7 +24,7 @@ import {
 export function AudioAssetsPanel() {
   const room = useRoom();
   const slate = room.slate;
-  const [version, setVersion] = useState(0);
+  const [, setVersion] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   // Which library sections are expanded — Drums open by default.
   const [openCats, setOpenCats] = useState<Set<LibraryCategory>>(() => new Set(['Drums']));
@@ -52,7 +52,7 @@ export function AudioAssetsPanel() {
       if (c && !seen.has(c.name)) seen.set(c.name, { id, name: c.name, duration: c.duration });
     });
     return [...seen.values()];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   })();
 
   const handleImport = async (file: File) => {

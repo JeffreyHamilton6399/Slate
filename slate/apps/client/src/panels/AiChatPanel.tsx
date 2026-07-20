@@ -82,11 +82,9 @@ export function AiChatPanel() {
 
     try {
       const context = gatherContext();
-      // The AI chat API URL is configurable via Vite env var VITE_AI_CHAT_URL.
-      // - If set (e.g. "https://slate-next.vercel.app/api/ai-chat"), uses that.
-      // - If not set, defaults to "/api/ai-chat" (relative — works when the
-      //   Slate SPA is served from the same origin as the API route, e.g.
-      //   when deployed via the Next.js project's public/slate/ redirect).
+      // The AI chat runs as a Vercel serverless function at /api/ai-chat —
+      // same origin as the Slate app, no CORS or env vars needed.
+      // For local dev (without Vercel), it falls back gracefully.
       const aiUrl = import.meta.env.VITE_AI_CHAT_URL || '/api/ai-chat';
       let resp: Response;
       try {
@@ -98,8 +96,8 @@ export function AiChatPanel() {
             context,
           }),
         });
-      } catch (fetchErr) {
-        throw new Error('Cannot reach the AI server. If you\'re running Slate standalone, the AI chat requires the Next.js backend.');
+      } catch {
+        throw new Error('Cannot reach the AI server. The serverless function deploys automatically on Vercel.');
       }
       if (resp.status === 405 || resp.status === 404) {
         throw new Error('AI chat is not available on this deployment. The Next.js API route at /api/ai-chat was not found.');

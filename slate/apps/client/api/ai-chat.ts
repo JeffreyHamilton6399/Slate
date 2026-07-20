@@ -1,17 +1,51 @@
 /**
  * Vercel Serverless Function — AI Chat
  *
- * Lives in the Slate client's /api/ directory so Vercel detects it
- * when the project root is set to slate/apps/client.
+ * Uses z-ai-web-dev-sdk. The SDK normally reads /etc/.z-ai-config or
+ * ~/.z-ai-config, but on Vercel those don't exist. We pass the config
+ * explicitly via ZAI.create({ baseUrl, apiKey, token }) using env vars
+ * set in the Vercel project settings.
  *
- * Uses z-ai-web-dev-sdk (server-side only).
+ * Required Vercel env vars:
+ *   ZAI_BASE_URL  — e.g. "https://internal-api.z.ai/v1"
+ *   ZAI_API_KEY   — e.g. "Z.ai"
+ *   ZAI_TOKEN     — the JWT token from .z-ai-config
+ *   ZAI_USER_ID   — user id from .z-ai-config
+ *   ZAI_CHAT_ID   — chat id from .z-ai-config
  */
 
 import ZAI from "z-ai-web-dev-sdk";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
+let cachedZai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+
+async function getZai() {
+  if (cachedZai) return cachedZai;
+
+  // On Vercel, read config from env vars (set in Project Settings → Environment Variables)
+  const baseUrl = process.env.ZAI_BASE_URL;
+  const apiKey = process.env.ZAI_API_KEY;
+  const token = process.env.ZAI_TOKEN;
+  const userId = process.env.ZAI_USER_ID;
+  const chatId = process.env.ZAI_CHAT_ID;
+
+  if (baseUrl && apiKey && token) {
+    // Pass config explicitly — bypasses the file lookup
+    cachedZai = await ZAI.create({
+      baseUrl,
+      apiKey,
+      token,
+      userId: userId || undefined,
+      chatId: chatId || undefined,
+    });
+  } else {
+    // Fallback: let the SDK find /etc/.z-ai-config (works locally, not on Vercel)
+    cachedZai = await ZAI.create();
+  }
+  return cachedZai;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS (in case the Slate app is on a different domain)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -34,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const zai = await ZAI.create();
+    const zai = await getZai();
 
     const systemContent = context
       ? `You are Slate AI, a helpful assistant integrated into the Slate collaborative editor. You help with writing, coding, brainstorming, and creative work. Here is the user's current document/code context:\n\n---\n${context}\n---\n\nUse this context to give relevant, specific answers. If the context is empty, just help generally.`

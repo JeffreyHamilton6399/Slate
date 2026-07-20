@@ -3,11 +3,6 @@
   "framework": "vite",
   "buildCommand": "cd ../.. && pnpm install && pnpm --filter @slate/client run build",
   "outputDirectory": "dist",
-  "functions": {
-    "api/ai-chat.ts": {
-      "runtime": "@vercel/node@5"
-    }
-  },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

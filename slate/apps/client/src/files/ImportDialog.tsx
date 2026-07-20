@@ -13,6 +13,7 @@ import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
 import { importModel } from './import3d';
 import { fileToImageShape } from '../canvas2d/importImage';
+import { uploadDataUrl } from '../supabase/storage';
 import { useScene3DStore } from '../viewport3d/store';
 
 interface ImportDialogProps {
@@ -51,9 +52,10 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
           // data URL easily exceeds the relay's per-update cap, which kills
           // the connection and leaves the board unable to sync.
           const { src } = await fileToImageShape(file);
+          const hosted = await uploadDataUrl(src, 'backgrounds');
           room.slate.doc.transact(() => {
             const meta = room.slate.meta();
-            meta.set('paperImage', src);
+            meta.set('paperImage', hosted ?? src);
           });
           toast({ title: 'Background updated' });
         }

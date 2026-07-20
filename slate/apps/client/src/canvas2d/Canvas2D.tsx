@@ -24,6 +24,7 @@ import { useAppStore } from '../app/store';
 import { boardToScreen, screenToBoard } from './transform';
 import { pointInShape } from './geometry';
 import { fileToImageShape, isImageFile } from './importImage';
+import { uploadDataUrl } from '../supabase/storage';
 import { makeId } from '../utils/id';
 import { toast } from '../ui/Toast';
 import type { BoardPoint, Rect } from './types';
@@ -414,6 +415,9 @@ export function Canvas2D({ room }: Canvas2DProps) {
       for (const file of files) {
         try {
           const img = await fileToImageShape(file);
+          // Offload to the Supabase bucket when configured (store a URL, not a
+          // base64 blob, in the shape); fall back to embedding.
+          const hosted = await uploadDataUrl(img.src, 'canvas-images');
           // Cap the placed size so a photo doesn't swallow the viewport.
           const maxPlaced = 480 / t.zoom;
           const k = Math.min(1, maxPlaced / Math.max(img.w, img.h));
@@ -433,7 +437,7 @@ export function Canvas2D({ room }: Canvas2DProps) {
             fill: null,
             strokeWidth: 0,
             strokeOpacity: 1,
-            src: img.src,
+            src: hosted ?? img.src,
             createdAt: Date.now(),
             authorId: room.identity.peerId,
           });

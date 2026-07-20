@@ -75,6 +75,10 @@ function getImage(src: string): HTMLImageElement | null {
   let img = imageCache.get(src);
   if (!img) {
     img = new Image();
+    // Request CORS for remote (bucket-hosted) images so drawing them to the
+    // export canvas doesn't taint it. Harmless for data: URLs. Our image srcs
+    // are only data: or Supabase public URLs, both of which serve CORS headers.
+    if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
     img.onload = () => imageReadyListeners.forEach((cb) => cb());
     img.src = src;
     imageCache.set(src, img);

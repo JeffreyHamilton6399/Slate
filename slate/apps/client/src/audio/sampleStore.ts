@@ -15,6 +15,8 @@
 
 import * as Y from 'yjs';
 import { AUDIO_SYNC_BUDGET_CHARS } from '@slate/sync-protocol';
+import { isSupabaseConfigured } from '../supabase/client';
+import { uploadAsset } from '../supabase/storage';
 
 const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
@@ -170,7 +172,7 @@ export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
       // for everyone else"). Only the plain/meta entries trigger the drop:
       // meta is written LAST in a chunked publish, so re-importing on a
       // CHUNK update could assemble a mix of old and new chunks.
-      const isPlainOrMeta = entry === base || entry.endsWith('#meta');
+      const isPlainOrMeta = entry === base || entry.endsWith('#meta') || entry.endsWith('#url');
       if (isPlainOrMeta && event.changes.keys.get(entry)?.action === 'update') {
         syncedKeys.delete(base);
       }
@@ -191,6 +193,13 @@ function tryImportEntry(entry: string): void {
   if (!syncMap) return;
   const key = baseKeyOf(entry);
   if (syncedKeys.has(key)) return;
+  // Bucket path: a `${key}#url` entry means the samples live in Supabase
+  // Storage — fetch + decode them instead of assembling base64 chunks.
+  const urlRaw = syncMap.get(`${key}#url`);
+  if (urlRaw !== undefined) {
+    importFromBucket(key, urlRaw);
+    return;
+  }
   let base64: string;
   let encoding: 'f32' | 'i16' = 'f32';
   /** Set when the payload was reduced for sync — rebuild to this format. */
@@ -252,6 +261,36 @@ function tryImportEntry(entry: string): void {
   }
 }
 
+/** Fetch + decode samples from a Supabase bucket URL (the `${key}#url` entry).
+ *  Async: the doc holds only the URL, so the big PCM download stays off Yjs. */
+function importFromBucket(key: string, raw: string): void {
+  let meta: { url?: string; enc?: string };
+  try {
+    meta = JSON.parse(raw) as { url?: string; enc?: string };
+  } catch {
+    return;
+  }
+  if (!meta.url) return;
+  syncedKeys.add(key); // claim it before the async fetch so we don't double-import
+  void (async () => {
+    try {
+      const buf = await (await fetch(meta.url as string)).arrayBuffer();
+      let float32: Float32Array;
+      if (meta.enc === 'i16') {
+        const i16 = new Int16Array(buf);
+        float32 = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) float32[i] = i16[i]! / 32767;
+      } else {
+        float32 = new Float32Array(buf);
+      }
+      await storeSamplesLocal(key, float32);
+      window.dispatchEvent(new CustomEvent('slate:audio-clip-changed', { detail: key }));
+    } catch {
+      syncedKeys.delete(key); // let a later change retry
+    }
+  })();
+}
+
 /** Check if a sampleKey has been synced (exists in the Yjs sync map). */
 export function isSampleSynced(sampleKey: string): boolean {
   return syncedKeys.has(sampleKey);
@@ -289,8 +328,53 @@ function syncMapUsedChars(map: Y.Map<string>, exceptKey: string): number {
   return used;
 }
 
-/** Publish samples to the Yjs sync map so other peers receive them. */
+/** Publish samples so other peers receive them. Prefers a Supabase bucket (a
+ *  tiny URL in the doc, full fidelity) when configured; otherwise falls back to
+ *  the chunked base64-in-Yjs path. */
 function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
+  if (!syncMap || !syncRoom?.slate) return;
+  if (isSupabaseConfigured()) {
+    void publishToBucket(key, float32, info);
+    return;
+  }
+  publishBase64(key, float32, info);
+}
+
+/** Upload the samples to Supabase Storage and record a `${key}#url` entry (int16
+ *  PCM, full rate/channels — no mono/downsample reduction needed since there's
+ *  no doc-size budget). Falls back to the base64 path if the upload fails. */
+async function publishToBucket(key: string, float32: Float32Array, info?: SampleSyncInfo): Promise<void> {
+  if (!syncMap || !syncRoom?.slate) return;
+  const map = syncMap;
+  const doc = syncRoom.slate.doc;
+  syncedKeys.add(key); // our own observer must not re-import this
+  try {
+    const i16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const v = Math.max(-1, Math.min(1, float32[i]!));
+      i16[i] = Math.round(v * 32767);
+    }
+    const blob = new Blob([i16.buffer], { type: 'application/octet-stream' });
+    const url = await uploadAsset(blob, 'pcm', 'audio-samples');
+    if (!url) {
+      // Upload failed — fall back so peers still get the clip.
+      syncedKeys.delete(key);
+      publishBase64(key, float32, info);
+      return;
+    }
+    doc.transact(() => {
+      if (map.has(key)) map.delete(key);
+      clearChunks(map, key); // supersede any base64 plain/chunks/meta/url for this key
+      map.set(`${key}#url`, JSON.stringify({ url, enc: 'i16' }));
+    });
+  } catch {
+    syncedKeys.delete(key);
+  }
+}
+
+/** Publish samples to the Yjs sync map (chunked base64) so other peers receive
+ *  them — the no-Supabase path. */
+function publishBase64(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
   if (!syncMap || !syncRoom?.slate) return;
   try {
     const doc = syncRoom.slate.doc;

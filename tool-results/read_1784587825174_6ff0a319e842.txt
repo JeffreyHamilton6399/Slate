@@ -1,0 +1,777 @@
+     1→/**
+     2→ * CodeEditor — collaborative multi-file code surface for 'code' boards.
+     3→ *
+     4→ * CodeMirror 6 bound to one shared Y.Text per file via y-codemirror.next
+     5→ * (yCollab): concurrent typing merges through Yjs, remote peers' carets and
+     6→ * selections render inline with their presence color/name, and undo is a
+     7→ * per-file Y.UndoManager scoped to YOUR edits (yUndoManagerKeymap — CM's own
+     8→ * history is deliberately not installed, two histories would fight Ctrl+Z).
+     9→ *
+    10→ * Files live in the `code:files` Y.Map (id → { name }); each file's content
+    11→ * is a top-level Y.Text (`code:text:<id>`) so every client resolves the same
+    12→ * shared type. The creator seeds `main.js` on an empty board. Language is
+    13→ * auto-detected from the filename via @codemirror/language-data, which
+    14→ * dynamically imports only the grammars actually used.
+    15→ *
+    16→ * Polish (ROUND14-B):
+    17→ *   - Fold gutter + indent-on-input + indent unit (2 spaces) so nested code
+    18→ *     shows structure at a glance.
+    19→ *   - Light/dark theme toggle. oneDark by default; the light theme is a CM
+    20→ *     `EditorView.theme({ dark: false })` that lets the page tokens through.
+    21→ *   - Tab strip above the editor: any file you click becomes a tab, middle-
+    22→ *     click or the × on the tab closes it. The editor body always reflects
+    23→ *     the active tab — clicking the same file in the rail is idempotent.
+    24→ *   - A Find button in the toolbar that dispatches a synthetic Ctrl+F so
+    25→ *     CM's built-in search panel (already bound via searchKeymap) opens.
+    26→ *
+    27→ * Code does NOT execute — this is a shared editor, not a runtime.
+    28→ */
+    29→
+    30→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    31→import * as Y from 'yjs';
+    32→import { nanoid } from 'nanoid';
+    33→import { EditorState, Compartment, type Extension } from '@codemirror/state';
+    34→import {
+    35→  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
+    36→  drawSelection, dropCursor, ViewPlugin, Decoration, type DecorationSet,
+    37→  type ViewUpdate,
+    38→} from '@codemirror/view';
+    39→import { defaultKeymap, indentWithTab, indentSelection } from '@codemirror/commands';
+    40→import {
+    41→  bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle,
+    42→  foldGutter, indentUnit, LanguageDescription,
+    43→} from '@codemirror/language';
+    44→import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
+    45→import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+    46→import { languages } from '@codemirror/language-data';
+    47→import { oneDark } from '@codemirror/theme-one-dark';
+    48→import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+    49→import {
+    50→  FileCode2, FilePlus2, Download, Archive, Search, Sun, Moon, X,
+    51→  WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft,
+    52→} from 'lucide-react';
+    53→import { colorForPeerId } from '@slate/sync-protocol';
+    54→import { useRoom } from '../sync/RoomContext';
+    55→import { useAppStore } from '../app/store';
+    56→import { listCodeFiles, codeZipBlob } from './exportCode';
+    57→import { toast } from '../ui/Toast';
+    58→import './codeEditor.css';
+    59→
+    60→/**
+    61→ * Light theme — an empty rule set marked `{ dark: false }`. CM treats this as
+    62→ * "light mode": it skips oneDark and lets the page tokens (via the
+    63→ * `.slate-code-host .cm-editor { background: var(--bg) }` rules in
+    64→ * codeEditor.css) carry the surface. Syntax tokens fall back to
+    65→ * `defaultHighlightStyle` (already installed below), which has its own light
+    66→ * palette. Together they read well on both light and dark app themes.
+    67→ */
+    68→const lightTheme = EditorView.theme({}, { dark: false });
+    69→
+    70→/**
+    71→ * Indent guides — a tiny ViewPlugin that adds a `cm-indent-guide` line
+    72→ * decoration to every visible line whose leading whitespace crosses one or
+    73→ * more 2-space boundaries, and stashes the count in a `--cm-indent` CSS
+    74→ * variable. codeEditor.css then paints vertical guides via a clipped
+    75→ * `repeating-linear-gradient` background sized to that count.
+    76→ *
+    77→ * `@codemirror/view` shipped an official `indentationMarkers()` helper in a
+    78→ * later 6.4x release; we're on 6.43.6 (latest published), so this is the
+    79→ * local equivalent. Empty lines render with no guides — the trade-off is
+    80→ * a few pixels of visual gap, but the implementation stays in one file.
+    81→ */
+    82→const indentGuides = ViewPlugin.fromClass(
+    83→  class {
+    84→    decos: DecorationSet;
+    85→    constructor(view: EditorView) {
+    86→      this.decos = this.build(view);
+    87→    }
+    88→    update(u: ViewUpdate) {
+    89→      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+    90→        this.decos = this.build(u.view);
+    91→      }
+    92→    }
+    93→    build(view: EditorView) {
+    94→      const items: { from: number; value: ReturnType<typeof Decoration.line> }[] = [];
+    95→      for (const { from, to } of view.visibleRanges) {
+    96→        for (let pos = from; pos <= to; ) {
+    97→          const line = view.state.doc.lineAt(pos);
+    98→          // Count leading whitespace in 2-space units — a leading tab counts
+    99→          // as one guide so mixed-indent files still get something useful.
+   100→          const m = /^([ \t]+)/.exec(line.text);
+   101→          const spaces = m?.[1] ? m[1].replace(/\t/g, '  ').length : 0;
+   102→          const levels = Math.floor(spaces / 2);
+   103→          if (levels > 0) {
+   104→            items.push({
+   105→              from: line.from,
+   106→              value: Decoration.line({
+   107→                class: 'cm-indent-guide',
+   108→                attributes: { style: `--cm-indent: ${levels}` },
+   109→              }),
+   110→            });
+   111→          }
+   112→          pos = line.to + 1;
+   113→        }
+   114→      }
+   115→      return Decoration.set(
+   116→        items.map((i) => i.value.range(i.from)),
+   117→        true,
+   118→      );
+   119→    }
+   120→  },
+   121→  { decorations: (v) => v.decos },
+   122→);
+   123→
+   124→/** Default editor font size (matches the old hard-coded `.cm-editor { font-size: 13px }`
+   125→ *  rule; the +/- buttons step in 1px increments and clamp to [10, 24]). */
+   126→const DEFAULT_FONT_SIZE = 13;
+   127→const MIN_FONT_SIZE = 10;
+   128→const MAX_FONT_SIZE = 24;
+   129→
+   130→/** Build a CM theme extension that sets the editor + gutter font size. */
+   131→function fontTheme(px: number): Extension {
+   132→  return EditorView.theme({
+   133→    '.cm-content': { fontSize: `${px}px` },
+   134→    '.cm-gutters': { fontSize: `${px}px` },
+   135→    '&': { fontSize: `${px}px` },
+   136→  });
+   137→}
+   138→
+   139→export function CodeEditor() {
+   140→  const room = useRoom();
+   141→  const board = useAppStore((s) => s.currentBoard);
+   142→  const [, bump] = useState(0);
+   143→  const [selectedId, setSelectedId] = useState<string | null>(null);
+   144→  const [langName, setLangName] = useState('Plain text');
+   145→  const [darkMode, setDarkMode] = useState(true);
+   146→  // Word-wrap + font-size live behind CM Compartments so toggling them never
+   147→  // tears down the editor (which would lose scroll/selection/cursor). The
+   148→  // compartment refs are populated by the mount effect and read by the
+   149→  // reconfigure effects below.
+   150→  const [lineWrap, setLineWrap] = useState(false);
+   151→  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+   152→  // Command palette: a Ctrl+Shift+P popover with a filterable list of actions.
+   153→  const [paletteOpen, setPaletteOpen] = useState(false);
+   154→  const [paletteQuery, setPaletteQuery] = useState('');
+   155→  const [paletteIndex, setPaletteIndex] = useState(0);
+   156→  const paletteInputRef = useRef<HTMLInputElement | null>(null);
+   157→  const hostRef = useRef<HTMLDivElement | null>(null);
+   158→  const viewRef = useRef<EditorView | null>(null);
+   159→  // The rail/host wrapper — used by the Find button so it can dispatch a
+   160→  // synthetic Ctrl+F into the editor regardless of which child has focus.
+   161→  const editorWrapperRef = useRef<HTMLDivElement | null>(null);
+   162→  // Compartment refs — stashed by the mount effect so the wrap/font
+   163→  // reconfigure effects can dispatch into the live view without rebuilding it.
+   164→  const wrapConfRef = useRef<Compartment | null>(null);
+   165→  const fontConfRef = useRef<Compartment | null>(null);
+   166→
+   167→  // Tab strip state: every file the user has clicked becomes a tab. Clicking
+   168→  // the same file in the rail is a no-op for openFiles; closing a tab removes
+   169→  // it but does NOT delete the file from Yjs (use the rail's trash icon for
+   170→  // that). activeFileId drives which Y.Text the editor binds to.
+   171→  const [openFiles, setOpenFiles] = useState<string[]>([]);
+   172→  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+   173→
+   174→  // Re-render on file map changes (add/rename/delete, local or remote).
+   175→  useEffect(() => {
+   176→    const files = room.slate.codeFiles();
+   177→    const fn = () => bump((v) => v + 1);
+   178→    files.observeDeep(fn);
+   179→    return () => files.unobserveDeep(fn);
+   180→  }, [room]);
+   181→
+   182→  // Creator seeds the first file on an empty board (IndexedDB is hydrated
+   183→  // before the workspace mounts, so an existing board never looks empty).
+   184→  useEffect(() => {
+   185→    const files = room.slate.codeFiles();
+   186→    if (files.size === 0 && board?.iAmCreator) {
+   187→      const meta = new Y.Map<unknown>();
+   188→      meta.set('name', 'main.js');
+   189→      files.set(nanoid(8), meta);
+   190→    }
+   191→  }, [room, board?.iAmCreator]);
+   192→
+   193→  const files = listCodeFiles(room.slate);
+   194→
+   195→  // Drop tabs whose files were deleted remotely (or that never existed). The
+   196→  // rail's click handler is the sole entry point for adding tabs, so this
+   197→  // pass only ever shrinks `openFiles`.
+   198→  const validOpenFiles = useMemo(
+   199→    () => openFiles.filter((id) => files.some((f) => f.id === id)),
+   200→    [openFiles, files],
+   201→  );
+   202→  if (validOpenFiles.length !== openFiles.length) {
+   203→    // Schedule the state update — mutating during render is illegal.
+   204→    setTimeout(() => setOpenFiles(validOpenFiles), 0);
+   205→  }
+   206→
+   207→  // activeFileId falls back to selectedId (legacy single-file click), then to
+   208→  // the first open tab, then to the first file in the rail. Keeping the
+   209→  // selectedId fallback means existing call sites that only call setSelectedId
+   210→  // still do the right thing.
+   211→  const activeId =
+   212→    (activeFileId && files.some((f) => f.id === activeFileId) && activeFileId) ||
+   213→    (selectedId && files.some((f) => f.id === selectedId) && selectedId) ||
+   214→    validOpenFiles[0] ||
+   215→    files[0]?.id ||
+   216→    null;
+   217→  const activeName = files.find((f) => f.id === activeId)?.name ?? '';
+   218→
+   219→  /** Open a file: add to tabs (if not already) and set active. Idempotent.
+   220→   *  Wrapped in useCallback so the open-file event listener below doesn't
+   221→   *  re-bind on every render — the state setters are stable across renders,
+   222→   *  so the callback identity stays put. */
+   223→  const openFile = useCallback((id: string) => {
+   224→    setSelectedId(id);
+   225→    setActiveFileId(id);
+   226→    setOpenFiles((cur) => (cur.includes(id) ? cur : [...cur, id]));
+   227→  }, []);
+   228→
+   229→  // Listen for open-file events from the dockable CodeFilesPanel — it only
+   230→  // knows the file id and asks the editor (which owns the tab/active state)
+   231→  // to actually open it. Window-level so the
+   232→  // panel doesn't need to import the editor or be a child of it.
+   233→  useEffect(() => {
+   234→    const handler = (e: Event) => {
+   235→      const ev = e as CustomEvent<{ id: string }>;
+   236→      if (!ev.detail?.id) return;
+   237→      // Make sure the file still exists before opening — a stale event for
+   238→      // a deleted file would otherwise create a phantom tab.
+   239→      if (!room.slate.codeFiles().has(ev.detail.id)) return;
+   240→      openFile(ev.detail.id);
+   241→    };
+   242→    window.addEventListener('slate:code-open-file', handler as EventListener);
+   243→    return () => window.removeEventListener('slate:code-open-file', handler as EventListener);
+   244→  }, [room, openFile]);
+   245→
+   246→  /** Close a tab. If it was active, fall through to the previous tab. */
+   247→  const closeTab = (id: string) => {
+   248→    setOpenFiles((cur) => {
+   249→      const idx = cur.indexOf(id);
+   250→      const next = cur.filter((x) => x !== id);
+   251→      // Only re-assign the active tab if we closed the active one — closing a
+   252→      // background tab should never jump the editor.
+   253→      if (id === activeFileId) {
+   254→        const fallback = next[idx] ?? next[idx - 1] ?? next[next.length - 1] ?? null;
+   255→        setActiveFileId(fallback);
+   256→        setSelectedId(fallback);
+   257→      }
+   258→      return next;
+   259→    });
+   260→  };
+   261→
+   262→  // Mount CodeMirror for the active file. Recreated on file switch/rename
+   263→  // (rename can change the language) — cheap, and Yjs owns the content.
+   264→  useEffect(() => {
+   265→    const host = hostRef.current;
+   266→    const awareness = room.provider.awareness;
+   267→    if (!host || !activeId || !awareness) return;
+   268→
+   269→    const ytext = room.slate.codeText(activeId);
+   270→    const undoManager = new Y.UndoManager(ytext);
+   271→    // y-codemirror reads the awareness `user` field for caret labels/colors —
+   272→    // same palette the People widget and doc-mode cursors use.
+   273→    const color = colorForPeerId(room.identity.peerId);
+   274→    awareness.setLocalStateField('user', { name: room.identity.name, color, colorLight: `${color}33` });
+   275→
+   276→    const languageConf = new Compartment();
+   277→    const themeConf = new Compartment();
+   278→    const wrapConf = new Compartment();
+   279→    const fontConf = new Compartment();
+   280→    const view = new EditorView({
+   281→      state: EditorState.create({
+   282→        doc: ytext.toString(),
+   283→        extensions: [
+   284→          lineNumbers(),
+   285→          highlightActiveLineGutter(),
+   286→          highlightActiveLine(),
+   287→          drawSelection(),
+   288→          dropCursor(),
+   289→          // indentUnit BEFORE indentOnInput so the latter knows what to insert
+   290→          // on a fresh line (2 spaces — matches what most grammars expect for
+   291→          // JS/TS/CSS/etc., and what pressing Tab produces via indentWithTab).
+   292→          indentUnit.of('  '),
+   293→          indentOnInput(),
+   294→          bracketMatching(),
+   295→          closeBrackets(),
+   296→          // Autocomplete: language grammars expose completion sources through
+   297→          // `@codemirror/language`'s `LanguageDescription`. autocompletion()
+   298→          // wires the UI; completionKeymap adds Ctrl-Space / Enter / arrow keys.
+   299→          autocompletion(),
+   300→          highlightSelectionMatches(),
+   301→          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+   302→          // Indent guides — see the `indentGuides` ViewPlugin above. Painted by
+   303→          // CSS using the `--cm-indent` variable the plugin sets per line.
+   304→          indentGuides,
+   305→          // Fold gutter lives in the gutter column to the right of line
+   306→          // numbers; clicking a marker toggles the fold for that block.
+   307→          foldGutter({
+   308→            markerDOM: (open) => {
+   309→              const el = document.createElement('span');
+   310→              el.textContent = open ? '▾' : '▸';
+   311→              el.style.cursor = 'pointer';
+   312→              el.style.opacity = '0.6';
+   313→              el.style.fontSize = '10px';
+   314→              el.style.padding = '0 2px';
+   315→              return el;
+   316→            },
+   317→          }),
+   318→          themeConf.of(darkMode ? oneDark : lightTheme),
+   319→          // wrap + font are behind Compartments so the toolbar buttons can
+   320→          // toggle them via `reconfigure()` without rebuilding the editor.
+   321→          wrapConf.of(lineWrap ? EditorView.lineWrapping : []),
+   322→          fontConf.of(fontTheme(fontSize)),
+   323→          languageConf.of([]),
+   324→          // yUndoManagerKeymap first: Mod-z must hit the Yjs undo manager
+   325→          // (CM's history extension is intentionally absent).
+   326→          // completionKeymap lives between searchKeymap and defaultKeymap so
+   327→          // Enter accepts a completion before falling through to newline.
+   328→          // searchKeymap already binds Mod-d → selectNextOccurrence (Ctrl+D
+   329→          // multi-cursor), Mod-f → open search panel, etc.
+   330→          keymap.of([
+   331→            ...yUndoManagerKeymap,
+   332→            ...closeBracketsKeymap,
+   333→            ...completionKeymap,
+   334→            ...searchKeymap,
+   335→            ...defaultKeymap,
+   336→            indentWithTab,
+   337→          ]),
+   338→          yCollab(ytext, awareness, { undoManager }),
+   339→        ],
+   340→      }),
+   341→      parent: host,
+   342→    });
+   343→    viewRef.current = view;
+   344→    wrapConfRef.current = wrapConf;
+   345→    fontConfRef.current = fontConf;
+   346→
+   347→    const desc = LanguageDescription.matchFilename(languages, activeName);
+   348→    setLangName(desc?.name ?? 'Plain text');
+   349→    if (desc) {
+   350→      void desc
+   351→        .load()
+   352→        .then((support) => view.dispatch({ effects: languageConf.reconfigure(support) }))
+   353→        .catch(() => {/* grammar failed to load — plain text is fine */});
+   354→    }
+   355→
+   356→    return () => {
+   357→      view.destroy();
+   358→      viewRef.current = null;
+   359→      wrapConfRef.current = null;
+   360→      fontConfRef.current = null;
+   361→      undoManager.destroy();
+   362→    };
+   363→    // Mount effect intentionally does NOT depend on `lineWrap` or `fontSize`:
+   364→    // those live behind Compartments and are reconfigured via their own
+   365→    // effects below, so toggling them never tears down the editor (which
+   366→    // would lose scroll/selection/cursor). darkMode DOES recreate — the
+   367→    // oneDark/lightTheme swap is a full theme replacement.
+   368→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   369→  }, [room, activeId, activeName, darkMode]);
+   370→
+   371→  // Reconfigure word-wrap when the toolbar toggle flips — keeps scroll,
+   372→  // selection, and remote-cursor positions intact (a full remount would lose
+   373→  // them). The mount effect seeds the compartment with the current value, so
+   374→  // this only fires on actual toggles.
+   375→  useEffect(() => {
+   376→    const view = viewRef.current;
+   377→    const conf = wrapConfRef.current;
+   378→    if (!view || !conf) return;
+   379→    view.dispatch({ effects: conf.reconfigure(lineWrap ? EditorView.lineWrapping : []) });
+   380→  }, [lineWrap]);
+   381→
+   382→  // Reconfigure font size on +/- clicks. Same compartment pattern as wrap so
+   383→  // the editor survives a font change without losing its place.
+   384→  useEffect(() => {
+   385→    const view = viewRef.current;
+   386→    const conf = fontConfRef.current;
+   387→    if (!view || !conf) return;
+   388→    view.dispatch({ effects: conf.reconfigure(fontTheme(fontSize)) });
+   389→  }, [fontSize]);
+   390→
+   391→  const addFile = () => {
+   392→    const name = window.prompt('File name', 'untitled.js')?.trim();
+   393→    if (!name) return;
+   394→    const meta = new Y.Map<unknown>();
+   395→    meta.set('name', name);
+   396→    const id = nanoid(8);
+   397→    room.slate.codeFiles().set(id, meta);
+   398→    openFile(id);
+   399→  };
+   400→
+   401→  const downloadFile = () => {
+   402→    if (!activeId) return;
+   403→    const blob = new Blob([room.slate.codeText(activeId).toString()], { type: 'text/plain' });
+   404→    const a = document.createElement('a');
+   405→    a.href = URL.createObjectURL(blob);
+   406→    a.download = activeName || 'file.txt';
+   407→    a.click();
+   408→    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+   409→  };
+   410→
+   411→  const downloadZip = () => {
+   412→    if (files.length === 0) {
+   413→      toast({ title: 'Nothing to export', description: 'Add a file first.' });
+   414→      return;
+   415→    }
+   416→    const a = document.createElement('a');
+   417→    a.href = URL.createObjectURL(codeZipBlob(room.slate));
+   418→    a.download = `${board?.name ?? 'slate-code'}.zip`;
+   419→    a.click();
+   420→    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+   421→  };
+   422→
+   423→  /** Trigger CM's built-in search panel by synthesizing a Ctrl+F keydown on
+   424→   *  the editor's host. searchKeymap is already bound, so CM handles the rest
+   425→   *  (open panel, find next/prev, replace, close on Esc). Dispatching on the
+   426→   *  wrapper rather than the view's DOM root keeps the event bubbling inside
+   427→   *  the editor surface so CM's own listener catches it. */
+   428→  const openSearch = () => {
+   429→    const target = viewRef.current?.contentDOM ?? editorWrapperRef.current;
+   430→    if (!target) return;
+   431→    const ev = new KeyboardEvent('keydown', {
+   432→      key: 'f',
+   433→      ctrlKey: true,
+   434→      metaKey: true,
+   435→      bubbles: true,
+   436→      cancelable: true,
+   437→    });
+   438→    target.dispatchEvent(ev);
+   439→  };
+   440→
+   441→  const toggleTheme = () => setDarkMode((v) => !v);
+   442→  const toggleWrap = () => setLineWrap((v) => !v);
+   443→  const bumpFont = (delta: number) =>
+   444→    setFontSize((px) => Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, px + delta)));
+   445→  const resetFont = () => setFontSize(DEFAULT_FONT_SIZE);
+   446→
+   447→  /** Format code: re-indent the lines covered by the current selection (or
+   448→   *  just the active line when there's no selection) using the active
+   449→   *  language's indentation rules. For a whole-file reformat, the user can
+   450→   *  Ctrl+A first — `indentSelection` handles arbitrarily large ranges. */
+   451→  const formatCode = () => {
+   452→    const view = viewRef.current;
+   453→    if (!view) return;
+   454→    // `indentSelection` is a CM command: it returns true if it did something.
+   455→    // Wrapping in `focus` keeps the editor focused after the toolbar click.
+   456→    view.focus();
+   457→    indentSelection(view);
+   458→  };
+   459→
+   460→  /** Open the command palette via the toolbar button or Ctrl+Shift+P. */
+   461→  const openPalette = useCallback(() => {
+   462→    setPaletteQuery('');
+   463→    setPaletteIndex(0);
+   464→    setPaletteOpen(true);
+   465→  }, []);
+   466→  const closePalette = useCallback(() => setPaletteOpen(false), []);
+   467→
+   468→  // The command palette's command list + its filtered view. Built in one
+   469→  // useMemo so the array identity stays stable across renders when nothing
+   470→  // relevant has changed — without this the filter useMemo would recompute
+   471→  // every render (which works, but trips the exhaustive-deps lint and burns
+   472→  // cycles on each keystroke).
+   473→  type PaletteCommand = { id: string; label: string; hint?: string; run: () => void };
+   474→  const { filteredCommands } = useMemo(() => {
+   475→    const cmds: PaletteCommand[] = [
+   476→      { id: 'find', label: 'Find', hint: 'Ctrl+F', run: () => { closePalette(); setTimeout(openSearch, 0); } },
+   477→      { id: 'theme', label: darkMode ? 'Switch to light theme' : 'Switch to dark theme', run: () => { closePalette(); toggleTheme(); } },
+   478→      { id: 'wrap', label: lineWrap ? 'Disable word wrap' : 'Enable word wrap', run: () => { closePalette(); toggleWrap(); } },
+   479→      { id: 'format', label: 'Format selection (re-indent)', hint: 'auto-indent', run: () => { closePalette(); formatCode(); } },
+   480→      { id: 'font-up', label: 'Increase font size', run: () => { closePalette(); bumpFont(1); } },
+   481→      { id: 'font-down', label: 'Decrease font size', run: () => { closePalette(); bumpFont(-1); } },
+   482→      { id: 'font-reset', label: 'Reset font size', run: () => { closePalette(); resetFont(); } },
+   483→      { id: 'new-file', label: 'New file', run: () => { closePalette(); setTimeout(addFile, 0); } },
+   484→      { id: 'download-file', label: 'Download this file', run: () => { closePalette(); setTimeout(downloadFile, 0); } },
+   485→      { id: 'download-zip', label: 'Download all as .zip', run: () => { closePalette(); setTimeout(downloadZip, 0); } },
+   486→    ];
+   487→    const q = paletteQuery.trim().toLowerCase();
+   488→    const filtered = q
+   489→      ? cmds.filter((c) => c.label.toLowerCase().includes(q) || c.id.includes(q))
+   490→      : cmds;
+   491→    return { filteredCommands: filtered };
+   492→    // The inline handlers (toggleTheme, formatCode, …) are recreated every
+   493→    // render — listing them is exhaustive but the memo recomputes anyway.
+   494→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   495→  }, [paletteQuery, darkMode, lineWrap, closePalette]);
+   496→
+   497→  // Reset the highlighted index whenever the filter changes (so Enter always
+   498→  // hits a visible row).
+   499→  useEffect(() => {
+   500→    setPaletteIndex(0);
+   501→  }, [paletteQuery]);
+   502→
+   503→  // Focus the palette input when it opens + select-all on the value.
+   504→  useEffect(() => {
+   505→    if (!paletteOpen) return;
+   506→    const id = window.setTimeout(() => {
+   507→      paletteInputRef.current?.focus();
+   508→      paletteInputRef.current?.select();
+   509→    }, 0);
+   510→    return () => window.clearTimeout(id);
+   511→  }, [paletteOpen]);
+   512→
+   513→  // Global Ctrl+Shift+P opens the palette from anywhere in the code board.
+   514→  // Bound on `window` so it works whether the editor or a panel has focus.
+   515→  useEffect(() => {
+   516→    if (paletteOpen) return; // palette binds its own keys while open
+   517→    const onKey = (e: KeyboardEvent) => {
+   518→      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+   519→        e.preventDefault();
+   520→        openPalette();
+   521→      }
+   522→    };
+   523→    window.addEventListener('keydown', onKey);
+   524→    return () => window.removeEventListener('keydown', onKey);
+   525→  }, [paletteOpen, openPalette]);
+   526→
+   527→  const lineCount = activeId ? room.slate.codeText(activeId).toString().split('\n').length : 0;
+   528→
+   529→  // Tab strip rows — only files that are actually open as tabs. Clicking a
+   530→  // file in the rail calls openFile, which appends to this list.
+   531→  const tabRows = validOpenFiles
+   532→    .map((id) => files.find((f) => f.id === id))
+   533→    .filter((f): f is { id: string; name: string } => Boolean(f));
+   534→
+   535→  return (
+   536→    <div className="flex h-full bg-bg text-text">
+   537→      {/* Editor column — the file browser lives in the dockable Files panel
+   538→          (left dock), so the editor itself is just tabs + code + status. */}
+   539→      <div className="flex min-w-0 flex-1 flex-col">
+   540→        {/* Tab strip — one button per open file. Active tab lifts to the
+   541→            surface so the border under it merges into the editor's chrome. */}
+   542→        {tabRows.length > 0 && (
+   543→          <div className="flex items-stretch gap-0 overflow-x-auto border-b border-border bg-bg-2">
+   544→            {tabRows.map((f) => {
+   545→              const isActive = f.id === activeId;
+   546→              return (
+   547→                <div
+   548→                  key={f.id}
+   549→                  role="tab"
+   550→                  tabIndex={0}
+   551→                  aria-selected={isActive}
+   552→                  onClick={() => openFile(f.id)}
+   553→                  // Middle-click closes the tab — matches the IDE convention.
+   554→                  onAuxClick={(e) => {
+   555→                    if (e.button === 1) {
+   556→                      e.preventDefault();
+   557→                      closeTab(f.id);
+   558→                    }
+   559→                  }}
+   560→                  onKeyDown={(e) => {
+   561→                    if (e.key === 'Enter' || e.key === ' ') {
+   562→                      e.preventDefault();
+   563→                      openFile(f.id);
+   564→                    } else if (e.key === 'Delete' || (e.key === 'w' && (e.ctrlKey || e.metaKey))) {
+   565→                      e.preventDefault();
+   566→                      closeTab(f.id);
+   567→                    }
+   568→                  }}
+   569→                  title={f.name}
+   570→                  className={`group flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs ${
+   571→                    isActive
+   572→                      ? 'bg-bg text-text'
+   573→                      : 'bg-bg-2 text-text-mid hover:bg-bg-3 hover:text-text'
+   574→                  }`}
+   575→                >
+   576→                  <FileCode2 size={11} className="shrink-0 opacity-70" />
+   577→                  <span className="max-w-[160px] truncate font-mono">{f.name}</span>
+   578→                  <button
+   579→                    type="button"
+   580→                    aria-label={`Close ${f.name} tab`}
+   581→                    title="Close tab (Ctrl+W)"
+   582→                    onClick={(e) => {
+   583→                      e.stopPropagation();
+   584→                      closeTab(f.id);
+   585→                    }}
+   586→                    className="grid h-4 w-4 shrink-0 place-items-center rounded text-text-dim hover:bg-bg-3 hover:text-text"
+   587→                  >
+   588→                    <X size={10} />
+   589→                  </button>
+   590→                </div>
+   591→              );
+   592→            })}
+   593→          </div>
+   594→        )}
+   595→        <div className="flex items-center gap-2 border-b border-border bg-bg-2 px-3 py-1.5">
+   596→          <span className="truncate font-mono text-xs text-text">{activeName || '—'}</span>
+   597→          <div className="flex-1" />
+   598→          {/* Word wrap toggle — behind a Compartment so the editor survives
+   599→              the toggle without losing scroll/selection/cursor. */}
+   600→          <button
+   601→            type="button"
+   602→            title={lineWrap ? 'Disable word wrap' : 'Enable word wrap'}
+   603→            aria-label="Toggle word wrap"
+   604→            aria-pressed={lineWrap}
+   605→            onClick={toggleWrap}
+   606→            className={`grid h-6 w-6 place-items-center rounded ${
+   607→              lineWrap ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+   608→            }`}
+   609→          >
+   610→            <WrapText size={13} />
+   611→          </button>
+   612→          {/* Font size − / + — clamps to [10,24]. The badge shows the current
+   613→              px so the user has feedback without a dropdown. */}
+   614→          <div className="flex items-center gap-0.5">
+   615→            <button
+   616→              type="button"
+   617→              title="Decrease font size"
+   618→              aria-label="Decrease font size"
+   619→              onClick={() => bumpFont(-1)}
+   620→              disabled={fontSize <= MIN_FONT_SIZE}
+   621→              className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40"
+   622→            >
+   623→              <Minus size={13} />
+   624→            </button>
+   625→            <span className="min-w-[1.5rem] text-center font-mono text-[10px] text-text-dim" title={`${fontSize}px (click +/− to change)`}>
+   626→              {fontSize}
+   627→            </span>
+   628→            <button
+   629→              type="button"
+   630→              title="Increase font size"
+   631→              aria-label="Increase font size"
+   632→              onClick={() => bumpFont(1)}
+   633→              disabled={fontSize >= MAX_FONT_SIZE}
+   634→              className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40"
+   635→            >
+   636→              <Plus size={13} />
+   637→            </button>
+   638→          </div>
+   639→          {/* Format: re-indent the current selection (or active line) using
+   640→              the language's indentation rules. Tip onto a small timeout so
+   641→              the click doesn't fight the editor's focus management. */}
+   642→          <button
+   643→            type="button"
+   644→            title="Format selection (re-indent)"
+   645→            aria-label="Format selection"
+   646→            onClick={formatCode}
+   647→            disabled={!activeId}
+   648→            className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40"
+   649→          >
+   650→            <Wand2 size={13} />
+   651→          </button>
+   652→          {/* Command palette (Ctrl+Shift+P) — opens a filterable list of every
+   653→              toolbar action so a keyboard user never has to mouse around. */}
+   654→          <button
+   655→            type="button"
+   656→            title="Command palette (Ctrl+Shift+P)"
+   657→            aria-label="Command palette"
+   658→            onClick={openPalette}
+   659→            className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+   660→          >
+   661→            <CommandIcon size={13} />
+   662→          </button>
+   663→          <button type="button" title="Find (Ctrl+F)" aria-label="Find" onClick={openSearch} disabled={!activeId} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40">
+   664→            <Search size={13} />
+   665→          </button>
+   666→          <button
+   667→            type="button"
+   668→            title={darkMode ? 'Switch to light theme' : 'Switch to dark theme'}
+   669→            aria-label="Toggle editor theme"
+   670→            onClick={toggleTheme}
+   671→            className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+   672→          >
+   673→            {darkMode ? <Sun size={13} /> : <Moon size={13} />}
+   674→          </button>
+   675→          <button type="button" title="New file" aria-label="New file" onClick={addFile} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
+   676→            <FilePlus2 size={13} />
+   677→          </button>
+   678→          <button type="button" title="Download all as .zip" aria-label="Download all as .zip" onClick={downloadZip} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
+   679→            <Archive size={13} />
+   680→          </button>
+   681→          <button type="button" title="Download this file" aria-label="Download this file" onClick={downloadFile} disabled={!activeId} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40">
+   682→            <Download size={13} />
+   683→          </button>
+   684→        </div>
+   685→        <div ref={editorWrapperRef} className="relative flex-1 min-h-0">
+   686→          {activeId ? (
+   687→            <div ref={hostRef} className="slate-code-host h-full" />
+   688→          ) : (
+   689→            <div className="grid h-full place-items-center text-sm text-text-dim">
+   690→              <button type="button" onClick={addFile} className="rounded border border-border px-3 py-1.5 hover:bg-bg-3">
+   691→                Create a file to start coding together
+   692→              </button>
+   693→            </div>
+   694→          )}
+   695→          {paletteOpen && (
+   696→            // Command palette overlay — anchored to the editor column, modal
+   697→            // enough that Escape closes it and Enter runs the highlighted row.
+   698→            // No backdrop click-away (Ctrl+Shift+P users expect a keystroke to
+   699→            // dismiss), but a click on the empty footer area closes it.
+   700→            <div
+   701→              role="dialog"
+   702→              aria-label="Command palette"
+   703→              className="absolute inset-x-0 top-0 z-50 mx-auto mt-2 w-[min(28rem,90%)] overflow-hidden rounded-md border border-border bg-bg-2 shadow-xl"
+   704→            >
+   705→              <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+   706→                <CommandIcon size={14} className="shrink-0 text-text-dim" />
+   707→                <input
+   708→                  ref={paletteInputRef}
+   709→                  type="text"
+   710→                  value={paletteQuery}
+   711→                  onChange={(e) => setPaletteQuery(e.target.value)}
+   712→                  onKeyDown={(e) => {
+   713→                    if (e.key === 'Escape') {
+   714→                      e.preventDefault();
+   715→                      closePalette();
+   716→                    } else if (e.key === 'Enter') {
+   717→                      e.preventDefault();
+   718→                      const cmd = filteredCommands[paletteIndex];
+   719→                      if (cmd) cmd.run();
+   720→                    } else if (e.key === 'ArrowDown') {
+   721→                      e.preventDefault();
+   722→                      setPaletteIndex((i) => Math.min(filteredCommands.length - 1, i + 1));
+   723→                    } else if (e.key === 'ArrowUp') {
+   724→                      e.preventDefault();
+   725→                      setPaletteIndex((i) => Math.max(0, i - 1));
+   726→                    }
+   727→                  }}
+   728→                  placeholder="Type a command…"
+   729→                  className="w-full bg-transparent text-sm text-text outline-none placeholder:text-text-dim"
+   730→                />
+   731→                <span className="shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-dim">Esc</span>
+   732→              </div>
+   733→              <ul className="max-h-72 overflow-y-auto py-1">
+   734→                {filteredCommands.length === 0 && (
+   735→                  <li className="px-3 py-3 text-center text-xs text-text-dim">No matching commands</li>
+   736→                )}
+   737→                {filteredCommands.map((cmd, i) => (
+   738→                  <li key={cmd.id}>
+   739→                    <button
+   740→                      type="button"
+   741→                      onMouseEnter={() => setPaletteIndex(i)}
+   742→                      onClick={() => cmd.run()}
+   743→                      className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs ${
+   744→                        i === paletteIndex ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3'
+   745→                      }`}
+   746→                    >
+   747→                      <span>{cmd.label}</span>
+   748→                      {cmd.hint && <span className="font-mono text-[10px] text-text-dim">{cmd.hint}</span>}
+   749→                      {i === paletteIndex && <CornerDownLeft size={10} className="text-text-dim" />}
+   750→                    </button>
+   751→                  </li>
+   752→                ))}
+   753→              </ul>
+   754→              <button
+   755→                type="button"
+   756→                aria-label="Close command palette"
+   757→                onClick={closePalette}
+   758→                className="block w-full border-t border-border bg-bg-3/40 py-1 text-center font-mono text-[10px] text-text-dim hover:bg-bg-3"
+   759→              >
+   760→                Ctrl+Shift+P to open · ↑↓ to navigate · Enter to run
+   761→              </button>
+   762→            </div>
+   763→          )}
+   764→        </div>
+   765→        <div className="flex items-center gap-3 border-t border-border bg-bg-2 px-3 py-1 font-mono text-[10px] text-text-dim">
+   766→          <span>{langName}</span>
+   767→          <span>{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
+   768→          <div className="flex-1" />
+   769→          <span>shared · every keystroke syncs</span>
+   770→        </div>
+   771→      </div>
+   772→    </div>
+   773→  );
+   774→}
+   775→
+   776→export default CodeEditor;
+   777→

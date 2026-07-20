@@ -1,14 +1,18 @@
 /**
  * Export dialog — pick a format and download. Format options depend on
- * whether the current board is 2D, 3D, or Audio.
+ * the current board mode.
  *
  *   2D    → png / jpg / webp / svg / mp4 (canvas animation)
  *   3D    → glb / gltf / obj / stl / ply / fbx / mp4 (animation render)
  *   Audio → wav (offline mixdown) / mp3 (192 kbps MP3, offline encode)
+ *   Doc   → md (Markdown) / html (standalone web page)
+ *   Code  → zip (all files) / file (the active file)
  *
  * Audio mode previously fell through to the 2D branch and produced blank
  * PNGs — it now renders the mix via OfflineAudioContext (WAV) or encodes
- * an MP3 with lamejs from the same offline-rendered buffer.
+ * an MP3 with lamejs from the same offline-rendered buffer. Doc and code
+ * modes used to be silently cast to '2d' and offer PNG/JPG/MP4 (wrong);
+ * they now have their own format lists and export branches.
  */
 
 import { useEffect, useState } from 'react';
@@ -25,6 +29,8 @@ import { readSceneSnapshot } from '../viewport3d/scene';
 import { useScene3DStore } from '../viewport3d/store';
 import { useCanvasStore } from '../canvas2d/store';
 import { readAudioClip } from '../audio/scene';
+import { docFragmentToMarkdown } from '../docs/exportMarkdown';
+import { codeZipBlob, listCodeFiles } from '../code/exportCode';
 import { toast } from '../ui/Toast';
 import {
   layerSchema,
@@ -56,24 +62,44 @@ const FORMAT_INFO: Record<string, string> = {
   fbx: 'Autodesk FBX — DCC interchange (Blender, Maya, Unity).',
   wav: 'Audio mixdown — lossless 16-bit PCM, plays anywhere.',
   mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.',
+  md: 'Markdown — plain text with formatting preserved.',
+  html: 'HTML — standalone web page with inline styles.',
+  zip: 'ZIP — all files bundled for download.',
+  file: 'Single file — download the active file.',
 };
 
-type ExportFormat = RasterFormat | 'svg' | 'mp4' | 'wav' | 'mp3' | ThreeDFormat;
+type ExportFormat =
+  | RasterFormat
+  | 'svg'
+  | 'mp4'
+  | 'wav'
+  | 'mp3'
+  | ThreeDFormat
+  | 'md'
+  | 'html'
+  | 'zip'
+  | 'file';
 
 /** Default format per board mode — used when the dialog opens or the mode
  *  changes so a stale format from another mode is never selected. */
-function defaultFormatForMode(mode: '2d' | '3d' | 'audio' | undefined): ExportFormat {
+function defaultFormatForMode(
+  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | undefined,
+): ExportFormat {
   if (mode === '3d') return 'glb';
   if (mode === 'audio') return 'wav';
+  if (mode === 'doc') return 'md';
+  if (mode === 'code') return 'zip';
   return 'png';
 }
 
 export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const room = useRoom();
   const board = useAppStore((s) => s.currentBoard);
-  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio';
+  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code';
   const is3d = mode === '3d';
   const isAudio = mode === 'audio';
+  const isDoc = mode === 'doc';
+  const isCode = mode === 'code';
   const [format, setFormat] = useState<ExportFormat>(defaultFormatForMode(mode));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -95,7 +121,45 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     setBusy(true);
     setProgress(0);
     try {
-      if (isAudio) {
+      if (isDoc) {
+        // Doc mode — Markdown or a standalone HTML page built from the
+        // Y.XmlFragment (no TipTap instance is reachable from the dialog).
+        const boardName = board?.name ?? 'document';
+        if (format === 'md') {
+          const md = docFragmentToMarkdown(room.slate.docText());
+          downloadText(md, `${boardName}.md`, 'text/markdown');
+        } else if (format === 'html') {
+          const md = docFragmentToMarkdown(room.slate.docText());
+          const html = docMarkdownToStandaloneHtml(boardName, md);
+          downloadText(html, `${boardName}.html`, 'text/html');
+        } else {
+          throw new Error(`Unsupported doc format: ${format}`);
+        }
+      } else if (isCode) {
+        // Code mode — ZIP every file or download the active file's content.
+        const boardName = board?.name ?? 'slate-code';
+        if (format === 'zip') {
+          const all = listCodeFiles(room.slate);
+          if (all.length === 0) throw new Error('Nothing to export — add a file first.');
+          downloadBlob(codeZipBlob(room.slate), `${boardName}.zip`);
+        } else if (format === 'file') {
+          // Pick the active file from the CodeEditor's window-level state if
+          // available, otherwise fall back to the first file in the map.
+          const all = listCodeFiles(room.slate);
+          const activeId =
+            (window as unknown as { __slateCodeActiveFileId?: string }).__slateCodeActiveFileId
+            ?? all[0]?.id;
+          const active = all.find((f) => f.id === activeId) ?? all[0];
+          if (!active) throw new Error('Nothing to export — add a file first.');
+          downloadText(
+            room.slate.codeText(active.id).toString(),
+            active.name,
+            'text/plain',
+          );
+        } else {
+          throw new Error(`Unsupported code format: ${format}`);
+        }
+      } else if (isAudio) {
         // Audio mode — WAV mixdown or MP3 (lamejs) encode, both offline.
         const duration = computeAudioDuration(room.slate);
         if (duration <= 0) throw new Error('Nothing to export — add some audio clips first.');
@@ -185,14 +249,22 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     ? (['wav', 'mp3'] as const)
     : is3d
       ? (['glb', 'gltf', 'obj', 'stl', 'ply', 'fbx', 'mp4'] as const)
-      : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
-  const raster = !is3d && !isAudio && format !== 'svg' && format !== 'mp4';
+      : isDoc
+        ? (['md', 'html'] as const)
+        : isCode
+          ? (['zip', 'file'] as const)
+          : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
+  const raster = !is3d && !isAudio && !isDoc && !isCode && format !== 'svg' && format !== 'mp4';
 
   const description = isAudio
     ? 'Export the audio mix to a file.'
     : is3d
       ? 'Export this 3D scene to a file.'
-      : 'Export this canvas to a file.';
+      : isDoc
+        ? 'Export this document to a file.'
+        : isCode
+          ? 'Export this project to a file.'
+          : 'Export this canvas to a file.';
 
   return (
     <Dialog
@@ -314,6 +386,26 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           </div>
         )}
 
+        {isDoc && (
+          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+            <p className="text-[11px] text-text-dim">
+              {format === 'md'
+                ? 'Serializes the document to Markdown — headings, lists, code blocks, links, and inline marks preserved. Images embedded as data URLs are referenced by name.'
+                : 'Wraps the document in a standalone HTML page — portable, opens in any browser. Rich formatting is preserved as Markdown inside a styled <pre> block (no TipTap instance is reachable from the dialog).'}
+            </p>
+          </div>
+        )}
+
+        {isCode && (
+          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+            <p className="text-[11px] text-text-dim">
+              {format === 'zip'
+                ? 'Bundles every file in the project into a single .zip archive (stored, not compressed — code is already small). Duplicate names get a " (n)" suffix.'
+                : 'Downloads the active file exactly as it lives in the shared Yjs document — every synced keystroke included.'}
+            </p>
+          </div>
+        )}
+
         {busy && progress > 0 && (
           <div className="flex items-center gap-2 text-[11px] text-text-dim">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg-4">
@@ -371,6 +463,36 @@ function downloadBlob(blob: Blob, name: string): void {
 
 function downloadText(text: string, name: string, mime: string): void {
   downloadBlob(new Blob([text], { type: mime }), name);
+}
+
+/** Build a standalone HTML document from a doc's Markdown. We don't have
+ *  access to the DocEditor's TipTap instance from the dialog, so the editor's
+ *  rich HTML (the export path the toolbar uses) isn't reachable here. Instead
+ *  we serialize the Y.XmlFragment to Markdown (cheap, dependency-free) and
+ *  wrap it in a `<pre>` block inside a basic styled page. Not a perfect
+ *  rendering of the rich text, but a portable, readable, self-contained file.
+ *
+ *  The `<title>` is HTML-escaped; the body is HTML-escaped (so the markdown
+ *  shows up as text rather than being parsed by the browser). */
+function docMarkdownToStandaloneHtml(boardName: string, md: string): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${esc(boardName)}</title>
+<style>
+  body { font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; color: #1a1a1a; background: #fff; max-width: 780px; margin: 2rem auto; padding: 0 1.5rem; font-size: 14px; line-height: 1.6; }
+  pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+  h1, h2, h3 { font-weight: 700; }
+</style>
+</head>
+<body>
+<pre>${esc(md)}</pre>
+</body>
+</html>`;
 }
 
 interface Read2DResult {

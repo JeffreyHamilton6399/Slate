@@ -24,7 +24,14 @@
  *   - A Find button in the toolbar that dispatches a synthetic Ctrl+F so
  *     CM's built-in search panel (already bound via searchKeymap) opens.
  *
- * Code does NOT execute — this is a shared editor, not a runtime.
+ * Split-view preview (ROUND18-A): an Eye toggle in the toolbar splits the
+ * editor 50/50 with a sandboxed <iframe srcdoc> that renders the project's
+ * HTML (via the shared buildPreview helper — local <link>/<script src> are
+ * inlined into the entry HTML, and a console bridge surfaces runtime logs
+ * inside the frame). The divider is drag-resizable (clamp 20%–80%); the
+ * preview auto-refreshes 400ms after any file change. The iframe runs with
+ * `allow-scripts` only (no `allow-same-origin`), so previewed code executes
+ * in a null origin and can't touch the Slate app or its sync state.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -49,11 +56,13 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import {
   FileCode2, FilePlus2, Download, Archive, Search, Sun, Moon, X,
   WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft,
+  Eye, RefreshCw,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles, codeZipBlob } from './exportCode';
+import { buildPreview, type PreviewFile } from './preview';
 import { toast } from '../ui/Toast';
 import './codeEditor.css';
 
@@ -170,6 +179,21 @@ export function CodeEditor() {
   // that). activeFileId drives which Y.Text the editor binds to.
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
+
+  // Split-view preview (Bolt.new / z.ai style): an Eye toggle in the toolbar
+  // splits the editor area 50/50 with a sandboxed iframe that renders the
+  // project's HTML (or a console-mirrored lone script). The split is
+  // drag-resizable between 20% and 80%. Preview rebuilds are debounced 400ms
+  // so a burst of keystrokes (or a remote peer's edits) collapses into one
+  // iframe refresh. The iframe runs with `allow-scripts` only — no
+  // `allow-same-origin` — so previewed code executes in a null origin and
+  // can't touch the Slate app, IndexedDB, or sync state.
+  const [showPreview, setShowPreview] = useState(false);
+  const [splitPct, setSplitPct] = useState(50);
+  const [previewSrcDoc, setPreviewSrcDoc] = useState('');
+  const [previewEntry, setPreviewEntry] = useState<string | undefined>();
+  const [previewReason, setPreviewReason] = useState<string | undefined>();
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Re-render on file map changes (add/rename/delete, local or remote).
   useEffect(() => {
@@ -481,6 +505,7 @@ export function CodeEditor() {
       { id: 'font-down', label: 'Decrease font size', run: () => { closePalette(); bumpFont(-1); } },
       { id: 'font-reset', label: 'Reset font size', run: () => { closePalette(); resetFont(); } },
       { id: 'new-file', label: 'New file', run: () => { closePalette(); setTimeout(addFile, 0); } },
+      { id: 'preview', label: showPreview ? 'Hide preview' : 'Show preview', hint: 'split view', run: () => { closePalette(); setShowPreview((v) => !v); } },
       { id: 'download-file', label: 'Download this file', run: () => { closePalette(); setTimeout(downloadFile, 0); } },
       { id: 'download-zip', label: 'Download all as .zip', run: () => { closePalette(); setTimeout(downloadZip, 0); } },
     ];
@@ -492,7 +517,7 @@ export function CodeEditor() {
     // The inline handlers (toggleTheme, formatCode, …) are recreated every
     // render — listing them is exhaustive but the memo recomputes anyway.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paletteQuery, darkMode, lineWrap, closePalette]);
+  }, [paletteQuery, darkMode, lineWrap, showPreview, closePalette]);
 
   // Reset the highlighted index whenever the filter changes (so Enter always
   // hits a visible row).
@@ -523,6 +548,84 @@ export function CodeEditor() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [paletteOpen, openPalette]);
+
+  /** Rebuild the split-view preview by reading every file's Y.Text and
+   *  handing them to the shared `buildPreview` helper. The helper inlines
+   *  local <link>/<script src> refs into the entry HTML and adds a tiny
+   *  console-bridge so runtime logs surface inside the iframe. */
+  const rebuildPreview = useCallback(() => {
+    const previewFiles: PreviewFile[] = listCodeFiles(room.slate).map((f) => ({
+      name: f.name,
+      content: room.slate.codeText(f.id).toString(),
+    }));
+    const result = buildPreview(previewFiles);
+    setPreviewEntry(result.entry);
+    setPreviewReason(result.html ? undefined : result.reason);
+    setPreviewSrcDoc(result.html ?? '');
+  }, [room]);
+
+  // Rebuild whenever the preview turns on (it may have been off while files
+  // changed) and on the explicit "refresh" click (nonce bump).
+  useEffect(() => {
+    if (showPreview) rebuildPreview();
+  }, [showPreview, rebuildPreview]);
+
+  // Auto-refresh: watch the file map + the whole Y.Doc for any text update,
+  // debounced 400ms so a burst of keystrokes (mine or a remote peer's)
+  // collapses into one iframe refresh. Only runs while the preview is
+  // visible — a hidden iframe rebuilding in the background burns cycles for
+  // nothing.
+  useEffect(() => {
+    if (!showPreview) return;
+    const fileMap = room.slate.codeFiles();
+    const onChange = () => {
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+      previewDebounceRef.current = setTimeout(rebuildPreview, 400);
+    };
+    fileMap.observeDeep(onChange);
+    room.slate.doc.on('update', onChange);
+    return () => {
+      fileMap.unobserveDeep(onChange);
+      room.slate.doc.off('update', onChange);
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+    };
+  }, [showPreview, room, rebuildPreview]);
+
+  // Publish the active file id on `window` so the ExportDialog's "file"
+  // export branch can pick it up without having to plumb a context or a
+  // shared store. Cleared when the editor unmounts to avoid leaking a stale
+  // id into a subsequent board's export.
+  useEffect(() => {
+    (window as unknown as { __slateCodeActiveFileId?: string }).__slateCodeActiveFileId =
+      activeId ?? undefined;
+    return () => {
+      delete (window as unknown as { __slateCodeActiveFileId?: string }).__slateCodeActiveFileId;
+    };
+  }, [activeId]);
+
+  /** Start a mouse-driven drag on the editor|preview splitter. Clamps the
+   *  split to [20%, 80%] and restores the cursor + selection on mouseup. */
+  const startSplitDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = editorWrapperRef.current;
+    if (!container) return;
+    const onMove = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setSplitPct(Math.max(20, Math.min(80, pct)));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
   const lineCount = activeId ? room.slate.codeText(activeId).toString().split('\n').length : 0;
 
@@ -681,16 +784,91 @@ export function CodeEditor() {
           <button type="button" title="Download this file" aria-label="Download this file" onClick={downloadFile} disabled={!activeId} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40">
             <Download size={13} />
           </button>
+          {/* Preview toggle — splits the editor 50/50 with a sandboxed
+              iframe that renders the project's HTML. Drag the divider to
+              resize between 20% and 80%. */}
+          <button
+            type="button"
+            title={showPreview ? 'Hide preview' : 'Show preview'}
+            aria-label="Toggle preview"
+            aria-pressed={showPreview}
+            onClick={() => setShowPreview((v) => !v)}
+            className={`grid h-6 w-6 place-items-center rounded ${
+              showPreview ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+            }`}
+          >
+            <Eye size={13} />
+          </button>
         </div>
-        <div ref={editorWrapperRef} className="relative flex-1 min-h-0">
+        <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0">
           {activeId ? (
-            <div ref={hostRef} className="slate-code-host h-full" />
+            <div
+              ref={hostRef}
+              className="slate-code-host h-full min-w-0"
+              style={showPreview ? { width: `${splitPct}%` } : { width: '100%' }}
+            />
           ) : (
-            <div className="grid h-full place-items-center text-sm text-text-dim">
+            <div className="grid h-full w-full place-items-center text-sm text-text-dim">
               <button type="button" onClick={addFile} className="rounded border border-border px-3 py-1.5 hover:bg-bg-3">
                 Create a file to start coding together
               </button>
             </div>
+          )}
+          {showPreview && activeId && (
+            <>
+              {/* Drag-resizable splitter — clamps the split to [20%, 80%].
+                  The startSplitDrag handler sets a global cursor + disables
+                  text selection while dragging so the user gets clear
+                  feedback. */}
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize editor and preview"
+                onMouseDown={startSplitDrag}
+                onDoubleClick={() => setSplitPct(50)}
+                title="Drag to resize · double-click to reset"
+                className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-accent/50 transition-colors"
+              />
+              <div
+                className="flex min-w-0 flex-col"
+                style={{ width: `${100 - splitPct}%` }}
+              >
+                <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1">
+                  <Eye size={11} className="text-accent" />
+                  <span className="text-[10px] font-medium text-text">Preview</span>
+                  {previewEntry && (
+                    <span className="truncate font-mono text-[10px] text-text-dim">· {previewEntry}</span>
+                  )}
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    title="Refresh preview"
+                    aria-label="Refresh preview"
+                    onClick={rebuildPreview}
+                    className="grid h-5 w-5 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                </div>
+                <div className="relative min-h-0 flex-1 bg-white">
+                  {previewSrcDoc ? (
+                    <iframe
+                      title="Code preview"
+                      srcDoc={previewSrcDoc}
+                      // `allow-scripts` only — no `allow-same-origin`, so the
+                      // previewed code runs in a null origin and can't touch
+                      // the Slate app, IndexedDB, or sync state.
+                      sandbox="allow-scripts"
+                      className="h-full w-full border-0 bg-white"
+                    />
+                  ) : (
+                    <div className="grid h-full place-items-center px-4 text-center text-xs text-text-dim">
+                      {previewReason ?? 'Nothing to preview yet.'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
           )}
           {paletteOpen && (
             // Command palette overlay — anchored to the editor column, modal

@@ -111,7 +111,7 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onFileMenu('import')}>Import…</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onFileMenu('export')}>Export…</DropdownMenuItem>
-          {board?.mode !== '3d' && (
+          {(board?.mode !== '3d' && board?.mode !== 'audio') && (
             <DropdownMenuItem onSelect={() => onFileMenu('print')} shortcut="Ctrl+P">
               Print
             </DropdownMenuItem>

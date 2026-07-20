@@ -1437,3 +1437,22 @@ Stage Summary:
 - Multi-cursor (Ctrl+D / selectNextOccurrence): already wired by `searchKeymap` from ROUND14-B — added a comment so the binding is discoverable.
 - Command palette: Ctrl+Shift+P opens a filterable list of 10 commands (Find, Toggle Theme, Toggle Wrap, Format, +/-/reset Font, New File, Download File, Download ZIP). Enter runs the highlighted row, ↑↓ navigates, Esc closes. No backdrop click-away (Escape is the expected dismiss path).
 - TypeScript clean (exit 0). ESLint clean (0 errors, 2 pre-existing unused-directive warnings). All 48 existing tests still pass. New deps: `@tiptap/extension-subscript` + `@tiptap/extension-superscript` only — FontSize came bundled with the already-installed `@tiptap/extension-text-style`. Backward compatible — all new tools are additive, no schema or API changes.
+
+---
+Task ID: ROUND18-A
+Agent: main
+Task: Three Slate client fixes — ExportDialog per-mode (doc/code), File menu Print gating, Code editor split-view preview.
+
+Work Log:
+- Read worklog and the three target files: `files/ExportDialog.tsx`, `app/Header.tsx`, `code/CodeEditor.tsx`. Also read `docs/exportMarkdown.ts`, `docs/DocEditor.tsx` (for the rich-HTML export path it can't reach from the dialog), `code/exportCode.ts`, `code/preview.ts` (existing `buildPreview` helper — reused as-is), and `panels/CodePreviewPanel.tsx` (the dockable version; mirrored its auto-refresh + iframe pattern).
+- Installed monorepo deps with `bun install` (node_modules was empty).
+- Task 1 (ExportDialog): added doc/code format lists, FORMAT_INFO entries, onExport branches for md/html (doc) and zip/file (code), and a `docMarkdownToStandaloneHtml` helper that wraps the doc's markdown in a basic styled HTML page (rich-HTML export needs a live TipTap instance which the dialog can't reach). Added doc/code info panels. Imports `docFragmentToMarkdown`, `codeZipBlob`, `listCodeFiles`. The code `file` branch reads the active file id from `window.__slateCodeActiveFileId` (published by CodeEditor in Task 3).
+- Task 2 (Header): File menu Print item now hidden for both 3D and audio modes (was 3D-only). Code mode keeps Print. Save/SaveAs/Open/Import/Export remain for all modes.
+- Task 3 (CodeEditor): added an Eye toggle in the toolbar that splits the editor 50/50 with a sandboxed iframe (`sandbox="allow-scripts"`, no same-origin) showing the rendered HTML via the shared `buildPreview` helper. Drag-resizable splitter clamps to [20%, 80%], double-click resets. Auto-refreshes 400ms after any Y.Doc update while visible. Added a Refresh button and an entry/header strip. Publishes `window.__slateCodeActiveFileId` for ExportDialog's `file` export. Added a "Show/Hide preview" entry to the command palette.
+- Verification: `npx tsc --noEmit` exit 0; `npx eslint <the three files>` exit 0.
+
+Stage Summary:
+- `files/ExportDialog.tsx`: doc/code no longer fall through to 2D; doc → md/html, code → zip/file, with their own info panels and helper functions.
+- `app/Header.tsx`: Print hidden for audio mode (and 3D, unchanged).
+- `code/CodeEditor.tsx`: new split-view live preview with drag-resizable divider, auto-refresh, sandboxed iframe, Refresh button, command-palette entry, and `window.__slateCodeActiveFileId` bridge for ExportDialog.
+- Notes for downstream: see `/home/z/my-project/agent-ctx/ROUND18-A-main.md`.

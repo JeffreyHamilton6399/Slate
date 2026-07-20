@@ -39,7 +39,7 @@ import {
 } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { readMeta } from '../sync/doc';
-import { docTextToJson, jsonToDocText } from '../docs/docTextJson';
+import { docTextToJson, jsonToDocText, type PmJsonNode } from '../docs/docTextJson';
 
 const SCHEMA_VERSION = 'slate-v2';
 
@@ -122,11 +122,23 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
       chat,
       // Rich text for 'doc' boards (PM-shaped JSON). Cheap no-op ({} content)
       // on other modes; captured unconditionally so a board that switched
-      // modes never silently loses its document.
-      docText: docTextToJson(slate.docText()),
+      // modes never silently loses its document. Guard against the fragment
+      // not being integrated into the Yjs doc yet (happens on fresh boards).
+      docText: safeDocTextToJson(slate),
       codeFiles: snapshotCodeFiles(slate),
     },
   };
+}
+
+/** Safely serialize the doc text fragment to JSON. Returns empty doc on any error. */
+function safeDocTextToJson(slate: SlateRoom['slate']): PmJsonNode {
+  try {
+    const fragment = slate.docText();
+    if (!fragment) return { type: 'doc', content: [] };
+    return docTextToJson(fragment);
+  } catch {
+    return { type: 'doc', content: [] };
+  }
 }
 
 /** Capture 'code' board files: id/name pairs + each file's text. */

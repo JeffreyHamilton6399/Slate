@@ -39,12 +39,16 @@ export function AiChatPanel() {
     }
   }, [messages, loading]);
 
-  // Gather editor context based on the current mode
+  // Gather editor context based on the current mode.
+  // Guard against room.slate being undefined (can happen during room init
+  // or if the panel renders before the RoomProvider is fully ready).
   const gatherContext = useCallback((): string => {
-    if (!board || !includeContext) return '';
+    if (!board || !includeContext || !room?.slate) return '';
     try {
       if (board.mode === 'doc') {
-        const md = docFragmentToMarkdown(room.slate.docText());
+        const fragment = room.slate.docText?.();
+        if (!fragment) return '';
+        const md = docFragmentToMarkdown(fragment);
         if (md.trim().length === 0) return '';
         // Truncate to avoid exceeding token limits
         return md.slice(0, 8000);
@@ -87,10 +91,13 @@ export function AiChatPanel() {
         }),
       });
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: 'Request failed' }));
-        throw new Error(err.error || `HTTP ${resp.status}`);
+        const errText = await resp.text().catch(() => 'Request failed');
+        let errMsg = errText;
+        try { const errJson = JSON.parse(errText); errMsg = errJson.error || errText; } catch { /* not JSON */ }
+        throw new Error(errMsg || `HTTP ${resp.status}`);
       }
       const data = await resp.json();
+      if (!data.reply) throw new Error('No reply from AI');
       const aiMsg: ChatMsg = { role: 'assistant', content: data.reply };
       setMessages((prev) => [...prev, aiMsg]);
     } catch (err) {

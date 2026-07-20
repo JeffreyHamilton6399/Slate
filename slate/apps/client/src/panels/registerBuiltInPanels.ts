@@ -20,6 +20,7 @@ import { AudioSettingsPanel } from './AudioSettingsPanel';
 import { InstrumentPanel } from './InstrumentPanel';
 import { FriendsPanel } from './FriendsPanel';
 import { DocOutlinePanel } from './DocOutlinePanel';
+import { DocToolsPanel } from './DocToolsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
 import { CodeTerminalPanel } from './CodeTerminalPanel';
@@ -140,13 +141,22 @@ export function registerBuiltInPanels(): void {
     order: 1,
     mode: 'audio',
   });
-  // Doc Outline — table of contents from the doc's headings. Left dock so it
-  // stays visible while writing; the central editor keeps the focus, the
-  // outline is just navigation.
+  // Doc Tools — the 2D-style left "bar" for writing: quick structure/insert
+  // actions. Top-left default so it's the first thing on the left.
+  registerPanel({
+    id: 'doc-tools',
+    title: 'Tools',
+    defaultSide: 'left',
+    render: DocToolsPanel,
+    order: 0,
+    mode: 'doc',
+  });
+  // Doc Outline — table of contents from the doc's headings. Bottom-left, under
+  // the Tools bar (mirrors 2D's tools-over-layers left column).
   registerPanel({
     id: 'doc-outline',
     title: 'Outline',
-    defaultSide: 'left',
+    defaultSide: 'left-bottom',
     render: DocOutlinePanel,
     order: 0,
     mode: 'doc',

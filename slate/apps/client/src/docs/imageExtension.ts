@@ -26,14 +26,15 @@ export const DocImage = Image.extend({
         parseHTML: (el) => (el as HTMLElement).style.width || el.getAttribute('width') || null,
         renderHTML: (attrs) => (attrs.width ? { style: `width: ${attrs.width}` } : {}),
       },
-      // Block alignment is applied via auto margins on the (block) image.
-      align: {
-        default: null,
-        parseHTML: (el) => (el as HTMLElement).getAttribute('data-align'),
+      // Text wrap: float the image so surrounding paragraphs flow beside it.
+      // 'none' keeps it a block image; 'left'/'right' float it that side.
+      wrap: {
+        default: 'none',
+        parseHTML: (el) => (el as HTMLElement).getAttribute('data-wrap') || 'none',
         renderHTML: (attrs) => {
-          if (!attrs.align || attrs.align === 'left') return {};
-          const margin = attrs.align === 'center' ? '0 auto' : '0 0 0 auto';
-          return { 'data-align': attrs.align, style: `margin: ${margin}` };
+          if (attrs.wrap === 'left') return { 'data-wrap': 'left', style: 'float: left; margin: 0.2em 1.2em 0.6em 0' };
+          if (attrs.wrap === 'right') return { 'data-wrap': 'right', style: 'float: right; margin: 0.2em 0 0.6em 1.2em' };
+          return {};
         },
       },
       rotation: {

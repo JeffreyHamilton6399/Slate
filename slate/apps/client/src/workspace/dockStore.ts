@@ -228,7 +228,7 @@ export const useDockStore = create<DockState>()(
     {
       name: 'slate.dock.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 6,
+      version: 7,
       migrate: (persisted, version) => {
         const p = persisted as Partial<DockState>;
         const state: DockState = {
@@ -278,6 +278,11 @@ export const useDockStore = create<DockState>()(
           delete state.panelSide['ai-chat'];
           relocate('code-files', 'right');
           relocate('code-preview', 'right-bottom');
+        }
+        if (version < 7) {
+          // Doc gains a Tools bar top-left; the Outline drops to bottom-left
+          // under it (mirrors 2D's tools-over-layers left column).
+          relocate('doc-outline', 'left-bottom');
         }
         return state;
       },

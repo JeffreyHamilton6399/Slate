@@ -53,13 +53,13 @@ import {
   Underline as UnderlineIcon, Highlighter, Palette, AlignLeft, AlignCenter,
   AlignRight, Table as TableIcon, Plus, Trash2, Search, X,
   Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer,
-  Indent, Outdent, ChevronDown, Type, RotateCcw, RotateCw,
+  Indent, Outdent, ChevronDown, Type,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
-import { DOC_APPLY_EVENT, type DocApplyDetail } from './docBridge';
+import { DOC_APPLY_EVENT, DOC_COMMAND_EVENT, type DocApplyDetail } from './docBridge';
 import { docFragmentToMarkdown } from './exportMarkdown';
 import { toast } from '../ui/Toast';
 import './docEditor.css';
@@ -167,16 +167,40 @@ export function DocEditor() {
     return () => window.removeEventListener(DOC_APPLY_EVENT, handler as EventListener);
   }, [editor]);
 
-  // Image controls (enabled only when an image node is selected). Width is a
-  // CSS width string; rotation is degrees; align uses auto margins.
-  const setImageWidth = (w: string | null) =>
-    editor?.chain().focus().updateAttributes('image', { width: w }).run();
-  const rotateImage = (delta: number) => {
-    const cur = (editor?.getAttributes('image').rotation as number) || 0;
-    editor?.chain().focus().updateAttributes('image', { rotation: ((cur + delta) % 360 + 360) % 360 }).run();
-  };
-  const setImageAlign = (a: 'left' | 'center' | 'right') =>
-    editor?.chain().focus().updateAttributes('image', { align: a }).run();
+  // The dockable Doc Tools panel dispatches formatting/insert commands via a
+  // window event (it can't reach this editor instance directly).
+  useEffect(() => {
+    if (!editor) return;
+    const handler = (e: Event) => {
+      const cmd = (e as CustomEvent<{ command: string }>).detail?.command;
+      if (!cmd) return;
+      const c = editor.chain().focus();
+      switch (cmd) {
+        case 'h1': c.toggleHeading({ level: 1 }).run(); break;
+        case 'h2': c.toggleHeading({ level: 2 }).run(); break;
+        case 'h3': c.toggleHeading({ level: 3 }).run(); break;
+        case 'bold': c.toggleBold().run(); break;
+        case 'italic': c.toggleItalic().run(); break;
+        case 'underline': c.toggleUnderline().run(); break;
+        case 'bulletList': c.toggleBulletList().run(); break;
+        case 'orderedList': c.toggleOrderedList().run(); break;
+        case 'taskList': c.toggleTaskList().run(); break;
+        case 'blockquote': c.toggleBlockquote().run(); break;
+        case 'codeBlock': c.toggleCodeBlock().run(); break;
+        case 'table': c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
+        case 'hr': c.setHorizontalRule().run(); break;
+        case 'image': imageInputRef.current?.click(); break;
+        case 'link': {
+          const url = window.prompt('Link URL');
+          if (url) editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+          break;
+        }
+        default: break;
+      }
+    };
+    window.addEventListener(DOC_COMMAND_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DOC_COMMAND_EVENT, handler as EventListener);
+  }, [editor]);
 
   const addImage = async (file: File) => {
     if (!editor) return;
@@ -309,8 +333,6 @@ ${body}
 
   const words = editor.state.doc.textContent.trim().split(/\s+/).filter(Boolean).length;
   const inTable = editor.isActive('table');
-  const imageSelected = editor.isActive('image');
-  const imageWidth = (editor.getAttributes('image').width as string | null) ?? null;
 
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -472,45 +494,8 @@ ${body}
         <ToolButton editor={editor} label="Export Markdown" onClick={exportMarkdown}><FileDown size={14} /></ToolButton>
       </div>
 
-      {/* Contextual image toolbar — only while an image node is selected. */}
-      {imageSelected && (
-        <div className="flex flex-wrap items-center gap-1 border-b border-border bg-bg-2/60 px-2 py-1">
-          <span className="mr-1 font-mono text-[10px] uppercase tracking-wider text-text-dim">Image</span>
-          <span className="text-[10px] text-text-dim">Size</span>
-          {(['25%', '50%', '75%', '100%'] as const).map((w) => (
-            <button
-              key={w}
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setImageWidth(w)}
-              className={`rounded px-1.5 py-0.5 text-[11px] ${
-                imageWidth === w ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
-              }`}
-            >
-              {w}
-            </button>
-          ))}
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setImageWidth(null)}
-            className={`rounded px-1.5 py-0.5 text-[11px] ${
-              imageWidth === null ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
-            }`}
-          >
-            Auto
-          </button>
-          <Divider />
-          <ToolButton editor={editor} label="Rotate left 90°" onClick={() => rotateImage(-90)}><RotateCcw size={14} /></ToolButton>
-          <ToolButton editor={editor} label="Rotate right 90°" onClick={() => rotateImage(90)}><RotateCw size={14} /></ToolButton>
-          <Divider />
-          <ToolButton editor={editor} label="Align image left" onClick={() => setImageAlign('left')}><AlignLeft size={14} /></ToolButton>
-          <ToolButton editor={editor} label="Align image center" onClick={() => setImageAlign('center')}><AlignCenter size={14} /></ToolButton>
-          <ToolButton editor={editor} label="Align image right" onClick={() => setImageAlign('right')}><AlignRight size={14} /></ToolButton>
-        </div>
-      )}
-
-      {/* Page — a paper sheet on a desk, with page-break guide lines. */}
+      {/* Page — a paper sheet on a desk, with page-break guide lines. Image
+          resize/rotate/wrap controls live ON the selected image itself. */}
       <div className="slate-doc flex-1" onMouseDown={(e) => {
         // Clicking the desk around the page focuses the editor at the end —
         // the whole surface should feel like the document.

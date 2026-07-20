@@ -1,13 +1,17 @@
 /**
- * ResizableImageView — the editor rendering for DocImage. Draws the image with
- * its width / rotation / alignment, and when the node is selected shows a
- * bounding box with corner handles you can drag to resize (like selecting an
- * image on the 2D canvas). Width is written back to the node attribute, so it
- * syncs through Yjs and survives export.
+ * ResizableImageView — editor rendering for DocImage. When selected it shows,
+ * like an image on a design canvas:
+ *   - a small floating toolbar (move handle, text-wrap none/left/right, rotate 90°)
+ *   - a free rotation handle above the image (drag to any angle)
+ *   - corner handles to drag-resize
+ * Drag the move handle to reposition the image in the document (ProseMirror
+ * node drag). `wrap` floats the image so text flows around it. Every change is
+ * written to the node attributes, so it syncs through Yjs and exports.
  */
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
+import { Move, RotateCw, Square, PanelLeft, PanelRight } from 'lucide-react';
 
 type ImgAttrs = {
   src: string;
@@ -15,13 +19,17 @@ type ImgAttrs = {
   title?: string | null;
   width?: string | null;
   rotation?: number;
-  align?: string | null;
+  wrap?: 'none' | 'left' | 'right';
 };
 
 const CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
+const prevent = (e: React.MouseEvent) => e.preventDefault();
 
 export function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps) {
-  const { src, alt, title, width, rotation, align } = node.attrs as ImgAttrs;
+  const attrs = node.attrs as ImgAttrs;
+  const { src, alt, title, width } = attrs;
+  const rotation = attrs.rotation ?? 0;
+  const wrap = attrs.wrap ?? 'none';
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [dragW, setDragW] = useState<number | null>(null);
 
@@ -32,7 +40,6 @@ export function ResizableImageView({ node, updateAttributes, selected }: NodeVie
     if (!img) return;
     const startX = e.clientX;
     const startWidth = img.getBoundingClientRect().width;
-    // Cap at the editor column width so an image can't overflow the page.
     const maxWidth = img.closest('.ProseMirror')?.getBoundingClientRect().width ?? 1600;
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
@@ -49,14 +56,47 @@ export function ResizableImageView({ node, updateAttributes, selected }: NodeVie
     window.addEventListener('pointerup', onUp);
   };
 
-  const margin =
-    align === 'center' ? '0 auto' : align === 'right' ? '0 0 0 auto' : undefined;
+  const startRotate = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const img = imgRef.current;
+    if (!img) return;
+    const r = img.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const onMove = (ev: PointerEvent) => {
+      const deg = (Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180) / Math.PI + 90;
+      updateAttributes({ rotation: Math.round(((deg % 360) + 360) % 360) });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const floatStyle: CSSProperties =
+    wrap === 'left'
+      ? { float: 'left', margin: '0.2em 1.2em 0.6em 0' }
+      : wrap === 'right'
+        ? { float: 'right', margin: '0.2em 0 0.6em 1.2em' }
+        : {};
+
+  const wrapBtn = (active: boolean) =>
+    `slate-img-btn${active ? ' is-active' : ''}`;
 
   return (
     <NodeViewWrapper
       className="slate-doc-img"
-      data-align={align ?? undefined}
-      style={{ position: 'relative', display: 'block', width: 'fit-content', margin, lineHeight: 0 }}
+      data-wrap={wrap}
+      style={{
+        position: 'relative',
+        display: wrap === 'none' ? 'block' : 'inline-block',
+        width: 'fit-content',
+        lineHeight: 0,
+        ...floatStyle,
+      }}
     >
       <img
         ref={imgRef}
@@ -75,6 +115,26 @@ export function ResizableImageView({ node, updateAttributes, selected }: NodeVie
       />
       {selected && (
         <>
+          <div className="slate-img-bar" contentEditable={false}>
+            <button type="button" data-drag-handle draggable title="Drag to move" className="slate-img-btn slate-img-move">
+              <Move size={12} />
+            </button>
+            <span className="slate-img-sep" />
+            <button type="button" title="No wrap (block)" className={wrapBtn(wrap === 'none')} onMouseDown={prevent} onClick={() => updateAttributes({ wrap: 'none' })}>
+              <Square size={12} />
+            </button>
+            <button type="button" title="Wrap text left" className={wrapBtn(wrap === 'left')} onMouseDown={prevent} onClick={() => updateAttributes({ wrap: 'left' })}>
+              <PanelLeft size={12} />
+            </button>
+            <button type="button" title="Wrap text right" className={wrapBtn(wrap === 'right')} onMouseDown={prevent} onClick={() => updateAttributes({ wrap: 'right' })}>
+              <PanelRight size={12} />
+            </button>
+            <span className="slate-img-sep" />
+            <button type="button" title="Rotate 90°" className="slate-img-btn" onMouseDown={prevent} onClick={() => updateAttributes({ rotation: (((rotation + 90) % 360) + 360) % 360 })}>
+              <RotateCw size={12} />
+            </button>
+          </div>
+          <span className="slate-img-rotate" onPointerDown={startRotate} title="Drag to rotate" />
           <span className="slate-img-box" />
           {CORNERS.map((c) => (
             <span

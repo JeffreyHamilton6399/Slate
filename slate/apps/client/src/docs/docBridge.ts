@@ -7,6 +7,14 @@
 
 export const DOC_APPLY_EVENT = 'slate:doc-apply';
 
+/** Formatting/insert commands fired by the dockable Doc Tools panel; DocEditor
+ *  listens and runs the matching TipTap command on its editor instance. */
+export const DOC_COMMAND_EVENT = 'slate:doc-command';
+
+export function runDocCommand(command: string): void {
+  window.dispatchEvent(new CustomEvent<{ command: string }>(DOC_COMMAND_EVENT, { detail: { command } }));
+}
+
 export interface DocApplyDetail {
   /** Full document HTML to replace the current content with. */
   html: string;

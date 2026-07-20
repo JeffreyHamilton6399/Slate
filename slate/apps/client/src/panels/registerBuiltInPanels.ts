@@ -23,7 +23,6 @@ import { DocOutlinePanel } from './DocOutlinePanel';
 import { DocToolsPanel } from './DocToolsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
-import { CodeTerminalPanel } from './CodeTerminalPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -166,9 +165,8 @@ export function registerBuiltInPanels(): void {
   // editor-center / files+preview-right, bolt/Z.ai style).
   registerPanel({ id: 'code-files', title: 'Files', defaultSide: 'right', render: CodeFilesPanel, order: 0, mode: 'code' });
   registerPanel({ id: 'code-preview', title: 'Preview', defaultSide: 'right-bottom', render: CodePreviewPanel, order: 1, mode: 'code' });
-  // Code Terminal — streams the live preview's console output. Right-bottom
-  // with Preview so runtime logs sit beside what produced them.
-  registerPanel({ id: 'code-terminal', title: 'Terminal', defaultSide: 'right-bottom', render: CodeTerminalPanel, order: 2, mode: 'code' });
+  // Terminal is NOT a dockable panel — it lives as a bottom strip inside the
+  // CodeEditor (toggle in the editor toolbar), VS Code / bolt style.
 
   // AI Assistant is registered PER MODE: a panel's dock spot is global to its
   // id, so one shared 'both' panel can't be left in code AND right elsewhere.

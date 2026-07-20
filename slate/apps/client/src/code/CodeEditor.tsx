@@ -56,13 +56,14 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import {
   FileCode2, FilePlus2, Download, Archive, Search, X,
   WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft,
-  Eye, RefreshCw, ExternalLink,
+  Eye, RefreshCw, ExternalLink, TerminalSquare,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles, codeZipBlob } from './exportCode';
 import { buildPreview, type PreviewFile } from './preview';
+import { CodeTerminalPanel } from '../panels/CodeTerminalPanel';
 import { toast } from '../ui/Toast';
 import './codeEditor.css';
 
@@ -191,6 +192,22 @@ export function CodeEditor() {
   // `allow-same-origin` — so previewed code executes in a null origin and
   // can't touch the Slate app, IndexedDB, or sync state.
   const [showPreview, setShowPreview] = useState(false);
+  // Terminal strip along the bottom of the editor (VS Code / bolt style):
+  // toggled from the toolbar, drag-resizable, shows the preview's console.
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(180);
+  const startTerminalDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = terminalHeight;
+    const onMove = (ev: MouseEvent) => setTerminalHeight(Math.max(80, Math.min(500, startH + (startY - ev.clientY))));
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   const [splitPct, setSplitPct] = useState(50);
   const [previewSrcDoc, setPreviewSrcDoc] = useState('');
   const [previewEntry, setPreviewEntry] = useState<string | undefined>();
@@ -506,6 +523,7 @@ export function CodeEditor() {
       { id: 'font-reset', label: 'Reset font size', run: () => { closePalette(); resetFont(); } },
       { id: 'new-file', label: 'New file', run: () => { closePalette(); setTimeout(addFile, 0); } },
       { id: 'preview', label: showPreview ? 'Hide preview' : 'Show preview', hint: 'split view', run: () => { closePalette(); setShowPreview((v) => !v); } },
+      { id: 'terminal', label: showTerminal ? 'Hide terminal' : 'Show terminal', hint: 'bottom panel', run: () => { closePalette(); setShowTerminal((v) => !v); } },
       { id: 'download-file', label: 'Download this file', run: () => { closePalette(); setTimeout(downloadFile, 0); } },
       { id: 'download-zip', label: 'Download all as .zip', run: () => { closePalette(); setTimeout(downloadZip, 0); } },
     ];
@@ -517,7 +535,7 @@ export function CodeEditor() {
     // The inline handlers (toggleTheme, formatCode, …) are recreated every
     // render — listing them is exhaustive but the memo recomputes anyway.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paletteQuery, darkMode, lineWrap, showPreview, closePalette]);
+  }, [paletteQuery, darkMode, lineWrap, showPreview, showTerminal, closePalette]);
 
   // Reset the highlighted index whenever the filter changes (so Enter always
   // hits a visible row).
@@ -816,6 +834,18 @@ export function CodeEditor() {
           >
             <ExternalLink size={13} />
           </button>
+          <button
+            type="button"
+            title={showTerminal ? 'Hide terminal' : 'Show terminal'}
+            aria-label="Toggle terminal"
+            aria-pressed={showTerminal}
+            onClick={() => setShowTerminal((v) => !v)}
+            className={`grid h-6 w-6 place-items-center rounded ${
+              showTerminal ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+            }`}
+          >
+            <TerminalSquare size={13} />
+          </button>
         </div>
         <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0">
           {activeId ? (
@@ -957,6 +987,24 @@ export function CodeEditor() {
             </div>
           )}
         </div>
+        {/* Terminal strip — full-width along the bottom of the editor, above
+            the status bar. Drag the top edge to resize. Reuses the same panel
+            component as the dockable version; it shows the live Preview's
+            console output. */}
+        {showTerminal && (
+          <div className="flex shrink-0 flex-col border-t border-border" style={{ height: terminalHeight }}>
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize terminal"
+              onMouseDown={startTerminalDrag}
+              className="h-1 shrink-0 cursor-row-resize bg-border hover:bg-accent/50"
+            />
+            <div className="min-h-0 flex-1">
+              <CodeTerminalPanel />
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-3 border-t border-border bg-bg-2 px-3 py-1 font-mono text-[10px] text-text-dim">
           <span>{langName}</span>
           <span>{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>

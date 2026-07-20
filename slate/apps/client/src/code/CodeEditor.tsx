@@ -54,9 +54,9 @@ import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import {
-  FileCode2, FilePlus2, Download, Archive, Search, Sun, Moon, X,
+  FileCode2, FilePlus2, Download, Archive, Search, X,
   WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft,
-  Eye, RefreshCw,
+  Eye, RefreshCw, ExternalLink,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -151,7 +151,9 @@ export function CodeEditor() {
   const [, bump] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [langName, setLangName] = useState('Plain text');
-  const [darkMode, setDarkMode] = useState(true);
+  // Editor theme follows the app/board theme (set in Board Settings) — no
+  // separate toggle here. Recreates the editor when the theme flips.
+  const darkMode = useAppStore((s) => s.theme) !== 'light';
   // Word-wrap + font-size live behind CM Compartments so toggling them never
   // tears down the editor (which would lose scroll/selection/cursor). The
   // compartment refs are populated by the mount effect and read by the
@@ -462,7 +464,6 @@ export function CodeEditor() {
     target.dispatchEvent(ev);
   };
 
-  const toggleTheme = () => setDarkMode((v) => !v);
   const toggleWrap = () => setLineWrap((v) => !v);
   const bumpFont = (delta: number) =>
     setFontSize((px) => Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, px + delta)));
@@ -498,7 +499,6 @@ export function CodeEditor() {
   const { filteredCommands } = useMemo(() => {
     const cmds: PaletteCommand[] = [
       { id: 'find', label: 'Find', hint: 'Ctrl+F', run: () => { closePalette(); setTimeout(openSearch, 0); } },
-      { id: 'theme', label: darkMode ? 'Switch to light theme' : 'Switch to dark theme', run: () => { closePalette(); toggleTheme(); } },
       { id: 'wrap', label: lineWrap ? 'Disable word wrap' : 'Enable word wrap', run: () => { closePalette(); toggleWrap(); } },
       { id: 'format', label: 'Format selection (re-indent)', hint: 'auto-indent', run: () => { closePalette(); formatCode(); } },
       { id: 'font-up', label: 'Increase font size', run: () => { closePalette(); bumpFont(1); } },
@@ -563,6 +563,23 @@ export function CodeEditor() {
     setPreviewReason(result.html ? undefined : result.reason);
     setPreviewSrcDoc(result.html ?? '');
   }, [room]);
+
+  /** Open the built preview in a standalone browser window/tab (a full-size
+   *  render, separate from the split-view pane). */
+  const openPreviewWindow = () => {
+    const previewFiles: PreviewFile[] = listCodeFiles(room.slate).map((f) => ({
+      name: f.name,
+      content: room.slate.codeText(f.id).toString(),
+    }));
+    const { html } = buildPreview(previewFiles);
+    if (!html) {
+      toast({ title: 'Nothing to preview', description: 'Add an index.html (or a script) first.' });
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
 
   // Rebuild whenever the preview turns on (it may have been off while files
   // changed) and on the explicit "refresh" click (nonce bump).
@@ -766,15 +783,6 @@ export function CodeEditor() {
           <button type="button" title="Find (Ctrl+F)" aria-label="Find" onClick={openSearch} disabled={!activeId} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40">
             <Search size={13} />
           </button>
-          <button
-            type="button"
-            title={darkMode ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label="Toggle editor theme"
-            onClick={toggleTheme}
-            className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
-          >
-            {darkMode ? <Sun size={13} /> : <Moon size={13} />}
-          </button>
           <button type="button" title="New file" aria-label="New file" onClick={addFile} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
             <FilePlus2 size={13} />
           </button>
@@ -798,6 +806,15 @@ export function CodeEditor() {
             }`}
           >
             <Eye size={13} />
+          </button>
+          <button
+            type="button"
+            title="Open preview in a new window"
+            aria-label="Open preview in a new window"
+            onClick={openPreviewWindow}
+            className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+          >
+            <ExternalLink size={13} />
           </button>
         </div>
         <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0">

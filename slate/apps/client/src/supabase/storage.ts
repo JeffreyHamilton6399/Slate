@@ -1,13 +1,25 @@
 /**
- * Asset uploads to a Supabase Storage bucket. Big binaries (doc images now;
- * audio samples / 3D models next) are stored here and referenced by URL, rather
- * than base64-embedded in the Yjs doc — that keeps boards small and sync fast.
+ * Asset uploads to a Supabase Storage bucket. Big binaries (doc/2D images,
+ * board backgrounds, audio samples) are stored here and referenced by URL,
+ * rather than base64-embedded in the Yjs doc — keeping boards small and sync
+ * fast.
  *
- * Every function returns null when Supabase isn't configured or the upload
- * fails, so callers fall back to embedding the asset inline (current behavior).
+ * Uses the SAME Supabase client as the accounts system (`account/supabase`) so
+ * there's only one client/session. Every function returns null when Supabase
+ * isn't configured or the upload fails, so callers fall back to embedding.
  */
 
-import { supabase, ASSET_BUCKET } from './client';
+import { supabase } from '../account/supabase';
+
+const bucketEnv = (import.meta.env as { VITE_SUPABASE_BUCKET?: string }).VITE_SUPABASE_BUCKET;
+
+/** Public bucket assets are uploaded to. Override with VITE_SUPABASE_BUCKET. */
+export const ASSET_BUCKET = bucketEnv || 'slate-assets';
+
+/** True when Supabase (and therefore bucket upload) is available. */
+export function storageEnabled(): boolean {
+  return supabase !== null;
+}
 
 /** Upload a Blob; returns its public URL, or null on failure / not configured. */
 export async function uploadAsset(data: Blob, ext: string, prefix = 'assets'): Promise<string | null> {

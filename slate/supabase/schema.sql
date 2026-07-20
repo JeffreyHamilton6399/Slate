@@ -164,3 +164,25 @@ drop policy if exists "Delete own board invites" on public.board_invites;
 create policy "Delete own board invites"
   on public.board_invites for delete
   using (auth.uid() = from_user or auth.uid() = to_user);
+
+-- ── Asset storage bucket ─────────────────────────────────────────────────────
+-- Big binaries (doc/2D images, board backgrounds, audio-sample PCM) are
+-- uploaded here and referenced by URL, instead of being base64-embedded in the
+-- Yjs doc — keeps boards small and sync fast. The client uses VITE_SUPABASE_BUCKET
+-- (default 'slate-assets'). Public bucket = anyone can read via the CDN URL.
+insert into storage.buckets (id, name, public)
+values ('slate-assets', 'slate-assets', true)
+on conflict (id) do nothing;
+
+-- Uploads: allowed for anon + signed-in users, matching Slate's open
+-- collaboration model (no account required to edit a board). Tighten to
+-- `to authenticated` once you require sign-in.
+drop policy if exists "slate-assets read" on storage.objects;
+create policy "slate-assets read"
+  on storage.objects for select
+  using (bucket_id = 'slate-assets');
+
+drop policy if exists "slate-assets insert" on storage.objects;
+create policy "slate-assets insert"
+  on storage.objects for insert to anon, authenticated
+  with check (bucket_id = 'slate-assets');

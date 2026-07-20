@@ -15,8 +15,7 @@
 
 import * as Y from 'yjs';
 import { AUDIO_SYNC_BUDGET_CHARS } from '@slate/sync-protocol';
-import { isSupabaseConfigured } from '../supabase/client';
-import { uploadAsset } from '../supabase/storage';
+import { uploadAsset, storageEnabled } from '../supabase/storage';
 
 const DB_NAME = 'slate-audio-samples';
 const STORE = 'samples';
@@ -333,7 +332,7 @@ function syncMapUsedChars(map: Y.Map<string>, exceptKey: string): number {
  *  the chunked base64-in-Yjs path. */
 function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
   if (!syncMap || !syncRoom?.slate) return;
-  if (isSupabaseConfigured()) {
+  if (storageEnabled()) {
     void publishToBucket(key, float32, info);
     return;
   }

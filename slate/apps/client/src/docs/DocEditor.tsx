@@ -26,7 +26,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import ImageExt from '@tiptap/extension-image';
@@ -116,7 +116,7 @@ export function DocEditor() {
             return frag;
           })(),
         }),
-        CollaborationCursor.configure({ provider: room.provider, user }),
+        CollaborationCaret.configure({ provider: room.provider, user }),
         TaskList,
         TaskItem.configure({ nested: true }),
         // Images live as data URLs INSIDE the Yjs doc (bounded by the same

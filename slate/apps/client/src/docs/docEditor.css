@@ -116,6 +116,19 @@
   text-underline-offset: 2px;
 }
 
+/* Subscript / Superscript — most browsers ship UA defaults for <sub>/<sup>,
+   but normalising the size + offset keeps them consistent across engines. */
+.slate-doc .ProseMirror sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+  line-height: 0;
+}
+.slate-doc .ProseMirror sup {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+}
+
 /* Highlight mark — soft yellow by default (matches a real highlighter),
    but multicolor-aware via the inline style attribute the extension sets
    when the user picks a different color. */
@@ -216,3 +229,42 @@
 .slate-doc .hljs-number, .slate-doc .hljs-literal { color: var(--warn); }
 .slate-doc .hljs-title, .slate-doc .hljs-name, .slate-doc .hljs-section { color: var(--accent2); }
 .slate-doc .hljs-deletion { color: var(--danger); }
+
+/* Print: hide everything except the doc page so window.print() yields a
+   clean printout (no toolbar, no file rail, no remote-caret labels). The
+   page container is repainted on a white background with black text. */
+@media print {
+  /* The whole app shell is wrapped in a flex column — hide siblings of the
+     .slate-doc container without dropping it from the layout. */
+  body * {
+    visibility: hidden;
+  }
+  .slate-doc,
+  .slate-doc * {
+    visibility: visible;
+  }
+  .slate-doc {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    background: #fff;
+    color: #000;
+  }
+  .slate-doc .ProseMirror {
+    color: #000;
+    background: #fff;
+  }
+  /* Remote cursors / labels are noise on paper. */
+  .slate-doc .collaboration-cursor__caret,
+  .slate-doc .collaboration-cursor__label {
+    display: none !important;
+  }
+  /* Page width takes the full print area. */
+  .slate-doc .mx-auto {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+}

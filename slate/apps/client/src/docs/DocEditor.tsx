@@ -34,8 +34,10 @@ import LinkExt from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Underline from '@tiptap/extension-underline';
+import Subscript from '@tiptap/extension-subscript';
+import Superscript from '@tiptap/extension-superscript';
 import TextAlign from '@tiptap/extension-text-align';
-import { TextStyle } from '@tiptap/extension-text-style';
+import { TextStyle, FontSize } from '@tiptap/extension-text-style';
 import { Color } from '@tiptap/extension-color';
 import Highlight from '@tiptap/extension-highlight';
 import { Table } from '@tiptap/extension-table';
@@ -47,9 +49,11 @@ import { createLowlight, common } from 'lowlight';
 import {
   Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3,
   List, ListOrdered, ListTodo, TextQuote, SquareCode, ImagePlus, Link2,
-  Minus, Undo2, Redo2, FileDown,
+  Minus, Undo2, Redo2, FileDown, FileCode2,
   Underline as UnderlineIcon, Highlighter, Palette, AlignLeft, AlignCenter,
   AlignRight, Table as TableIcon, Plus, Trash2, Search, X,
+  Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer,
+  Indent, Outdent, ChevronDown, Type,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
@@ -67,6 +71,11 @@ export function DocEditor() {
   const boardName = useAppStore((s) => s.currentBoard?.name) ?? 'document';
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [colorOpen, setColorOpen] = useState(false);
+  const [fontSizeOpen, setFontSizeOpen] = useState(false);
+
+  // Font size presets (in px). The first option (default) clears the inline
+  // style so the doc falls back to the page CSS — picks the rest by hand.
+  const FONT_SIZES = [12, 14, 16, 18, 24, 32];
 
   const user = useMemo(
     () => ({ name: room.identity.name, color: colorForPeerId(room.identity.peerId) }),
@@ -100,7 +109,12 @@ export function DocEditor() {
         CodeBlockLowlight.configure({ lowlight }),
         // Inline formatting additions.
         Underline,
+        Subscript,
+        Superscript,
+        // TextStyle carries the inline `style` attribute; FontSize layers a
+        // `fontSize` style + setFontSize/unsetFontSize commands on top.
         TextStyle,
+        FontSize,
         Color,
         Highlight,
         // Block-level alignment on paragraphs + headings.
@@ -150,6 +164,70 @@ export function DocEditor() {
     setTimeout(() => URL.revokeObjectURL(a.href), 500);
   };
 
+  // Export the doc as a standalone HTML file: the editor's rendered HTML
+  // wrapped in a minimal document with inline CSS that mirrors the on-screen
+  // look (page tokens become literal values so the file is self-contained).
+  const exportHtml = () => {
+    if (!editor) return;
+    const body = editor.getHTML();
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${boardName.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] ?? c))}</title>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; background: #fff; max-width: 780px; margin: 2rem auto; padding: 0 1.5rem; font-size: 15px; line-height: 1.65; }
+  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; line-height: 1.25; margin-top: 1.1em; }
+  h1 { font-size: 1.7em; } h2 { font-size: 1.35em; } h3 { font-size: 1.15em; }
+  a { color: #6366f1; text-decoration: underline; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.88em; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 3px; padding: 0.1em 0.35em; }
+  pre { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.85em; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.75rem 1rem; overflow-x: auto; }
+  pre code { background: none; border: none; padding: 0; font-size: inherit; }
+  blockquote { border-left: 3px solid #6366f1; padding-left: 1rem; color: #4b5563; }
+  ul, ol { padding-left: 1.5rem; } ul { list-style: disc; } ol { list-style: decimal; }
+  ul[data-type='taskList'] { list-style: none; padding-left: 0.25rem; }
+  ul[data-type='taskList'] li { display: flex; gap: 0.5rem; align-items: baseline; }
+  ul[data-type='taskList'] li[data-checked='true'] > div { color: #9ca3af; text-decoration: line-through; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.25rem 0; }
+  img { max-width: 100%; border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; font-weight: 600; }
+  mark { background: #fde68a; border-radius: 2px; padding: 0.05em 0.1em; }
+  u { text-decoration: underline; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${boardName}.html`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+  };
+
+  // Print: hand the page to the browser's print dialog. The doc lives in
+  // `.slate-doc .ProseMirror`, so a print stylesheet scopes the output to it
+  // (added in docEditor.css under @media print — strips the toolbar, file
+  // rail, and other chrome so only the page body lands on paper).
+  const printDoc = () => window.print();
+
+  // Clear formatting: drop every mark + reset every block to a plain
+  // paragraph. Useful for pasting in styled content and stripping it back.
+  const clearFormatting = () => {
+    if (!editor) return;
+    editor.chain().focus().unsetAllMarks().clearNodes().run();
+  };
+
+  // Indent/Outdent: in lists, sink/lift the list item. Outside lists TipTap
+  // has no built-in paragraph indent — these no-op gracefully there.
+  const indent = () => editor?.chain().focus().sinkListItem('listItem').run();
+  const outdent = () => editor?.chain().focus().liftListItem('listItem').run();
+
   // Minimal Find: prompt for a term, walk every text node in the doc, select
   // the first occurrence (case-insensitive) so the browser highlights it and
   // scrolls it into view. A "no matches" toast covers the empty case.
@@ -196,6 +274,8 @@ export function DocEditor() {
         <ToolButton editor={editor} label="Italic (Ctrl+I)" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={14} /></ToolButton>
         <ToolButton editor={editor} label="Strikethrough" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough size={14} /></ToolButton>
         <ToolButton editor={editor} label="Underline (Ctrl+U)" active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()}><UnderlineIcon size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Subscript" active={editor.isActive('subscript')} onClick={() => editor.chain().focus().toggleSubscript().run()}><SubscriptIcon size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Superscript" active={editor.isActive('superscript')} onClick={() => editor.chain().focus().toggleSuperscript().run()}><SuperscriptIcon size={14} /></ToolButton>
         <ToolButton editor={editor} label="Inline code" active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()}><Code size={14} /></ToolButton>
         <ToolButton editor={editor} label="Highlight" active={editor.isActive('highlight')} onClick={() => editor.chain().focus().toggleHighlight().run()}><Highlighter size={14} /></ToolButton>
         <ToolButton editor={editor} label="Link" active={editor.isActive('link')} onClick={setLink}><Link2 size={14} /></ToolButton>
@@ -249,6 +329,62 @@ export function DocEditor() {
             </>
           )}
         </div>
+        {/* Font size — small dropdown that applies/removes an inline
+            font-size style mark. The "Default" entry clears the override. */}
+        <div className="relative">
+          <button
+            type="button"
+            title="Font size"
+            aria-label="Font size"
+            aria-haspopup="dialog"
+            aria-expanded={fontSizeOpen}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setFontSizeOpen((o) => !o)}
+            className={`flex h-7 items-center gap-0.5 rounded px-1.5 text-text-mid transition-colors ${
+              fontSizeOpen ? 'bg-accent/15 text-accent' : 'hover:bg-bg-3 hover:text-text'
+            }`}
+          >
+            <Type size={14} />
+            <ChevronDown size={10} />
+          </button>
+          {fontSizeOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setFontSizeOpen(false)} />
+              <div
+                role="dialog"
+                aria-label="Font size"
+                className="absolute left-0 top-full z-50 mt-1 w-28 rounded-md border border-border bg-bg-2 p-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    editor.chain().focus().unsetFontSize().run();
+                    setFontSizeOpen(false);
+                  }}
+                  className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
+                >
+                  Default
+                </button>
+                {FONT_SIZES.map((px) => (
+                  <button
+                    key={px}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      editor.chain().focus().setFontSize(`${px}px`).run();
+                      setFontSizeOpen(false);
+                    }}
+                    className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
+                    style={{ fontSize: `${px}px` }}
+                  >
+                    {px}px
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <Divider />
         <ToolButton editor={editor} label="Heading 1" active={editor.isActive('heading', { level: 1 })} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1 size={14} /></ToolButton>
         <ToolButton editor={editor} label="Heading 2" active={editor.isActive('heading', { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2 size={14} /></ToolButton>
@@ -257,6 +393,8 @@ export function DocEditor() {
         <ToolButton editor={editor} label="Align left" active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()}><AlignLeft size={14} /></ToolButton>
         <ToolButton editor={editor} label="Align center" active={editor.isActive({ textAlign: 'center' })} onClick={() => editor.chain().focus().setTextAlign('center').run()}><AlignCenter size={14} /></ToolButton>
         <ToolButton editor={editor} label="Align right" active={editor.isActive({ textAlign: 'right' })} onClick={() => editor.chain().focus().setTextAlign('right').run()}><AlignRight size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Outdent (in a list)" onClick={outdent}><Outdent size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Indent (in a list)" onClick={indent}><Indent size={14} /></ToolButton>
         <Divider />
         <ToolButton editor={editor} label="Bullet list" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List size={14} /></ToolButton>
         <ToolButton editor={editor} label="Numbered list" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered size={14} /></ToolButton>
@@ -278,9 +416,12 @@ export function DocEditor() {
         <Divider />
         <ToolButton editor={editor} label="Undo (Ctrl+Z)" onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} /></ToolButton>
         <ToolButton editor={editor} label="Redo (Ctrl+Shift+Z)" onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Clear formatting" onClick={clearFormatting}><Eraser size={14} /></ToolButton>
         <div className="flex-1" />
         <ToolButton editor={editor} label="Find…" onClick={findInDoc}><Search size={14} /></ToolButton>
         <span className="hidden font-mono text-[10px] text-text-dim sm:inline">{words} {words === 1 ? 'word' : 'words'}</span>
+        <ToolButton editor={editor} label="Print" onClick={printDoc}><Printer size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Export HTML" onClick={exportHtml}><FileCode2 size={14} /></ToolButton>
         <ToolButton editor={editor} label="Export Markdown" onClick={exportMarkdown}><FileDown size={14} /></ToolButton>
       </div>
 

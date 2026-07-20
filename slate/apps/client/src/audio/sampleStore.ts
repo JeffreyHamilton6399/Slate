@@ -149,7 +149,8 @@ export function registerSampleSyncMap(room: { slate: { doc: Y.Doc } }): void {
   if (syncMap && syncObserver) syncMap.unobserve(syncObserver);
   syncedKeys.clear();
   syncRoom = room;
-  syncMap = room.slate.doc.getMap<string>('audioSampleSync');
+  syncMap = room.slate?.doc?.getMap<string>('audioSampleSync') ?? null;
+  if (!syncMap) return;
   syncObserver = (event) => {
     // Our own publishes: the samples are already in local IndexedDB —
     // re-decoding megabytes of our own base64 would be pure waste.
@@ -290,7 +291,7 @@ function syncMapUsedChars(map: Y.Map<string>, exceptKey: string): number {
 
 /** Publish samples to the Yjs sync map so other peers receive them. */
 function publishToSyncMap(key: string, float32: Float32Array, info?: SampleSyncInfo): void {
-  if (!syncMap || !syncRoom) return;
+  if (!syncMap || !syncRoom?.slate) return;
   try {
     const doc = syncRoom.slate.doc;
     const map = syncMap;
@@ -450,7 +451,7 @@ export async function deleteSamples(key: string): Promise<void> {
   });
   await promise;
   // Also remove from the Yjs sync map — the plain entry AND any chunks.
-  if (syncMap && syncRoom) {
+  if (syncMap && syncRoom?.slate) {
     const map = syncMap;
     syncRoom.slate.doc.transact(() => {
       if (map.has(key)) map.delete(key);

@@ -82,6 +82,8 @@ export function AiChatPanel() {
 
     try {
       const context = gatherContext();
+      // Try relative URL first (works when served from the same origin as the
+      // Next.js API route). If that fails with 405/404, show a helpful error.
       const resp = await fetch('/api/ai-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -90,6 +92,9 @@ export function AiChatPanel() {
           context,
         }),
       });
+      if (resp.status === 405 || resp.status === 404) {
+        throw new Error('AI chat is not available on this deployment. Make sure the Next.js API routes are deployed.');
+      }
       if (!resp.ok) {
         const errText = await resp.text().catch(() => 'Request failed');
         let errMsg = errText;

@@ -44,3 +44,33 @@
   font-family: Inter, system-ui, sans-serif;
   opacity: 1 !important;
 }
+
+/* Indent guides — the `indentGuides` ViewPlugin (CodeEditor.tsx) tags every
+   visible line with `.cm-indent-guide` and an inline `--cm-indent: N` CSS
+   variable counting how many 2-space levels the line is indented. A clipped
+   repeating-linear-gradient paints one vertical guide at each 2ch boundary
+   up to that count. The `+ 1px` size buffer keeps the last guide from being
+   clipped at the boundary by subpixel rendering. */
+.slate-code-host .cm-line.cm-indent-guide {
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(2ch - 1px),
+    var(--border2) calc(2ch - 1px),
+    var(--border2) 2ch
+  );
+  background-size: calc(var(--cm-indent, 0) * 2ch + 1px) 100%;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+}
+
+/* Command palette scrollbar — keep the same look as the rest of the app. The
+   palette itself is in CodeEditor.tsx; this just trims the scrollbar so it
+   doesn't crowd the narrow popover. */
+.slate-code-host ~ [role="dialog"] ul::-webkit-scrollbar {
+  width: 6px;
+}
+.slate-code-host ~ [role="dialog"] ul::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 3px;
+}

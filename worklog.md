@@ -1320,3 +1320,120 @@ Stage Summary:
 - Doc/code dock panels: four new panels registered for the doc and code board modes — DocOutline (left, order 0, navigates the rendered TipTap headings via DOM scrollIntoView), DocStats (right, order 1, live word/char/paragraph/heading counts + reading time), CodeFiles (left, order 0, folder-tree navigation that dispatches `slate:code-open-file`), CodeSearch (right, order 1, project-wide plain-text/regex search with per-file grouping).
 - Wiring: CodeEditor listens for `slate:code-open-file` window events and opens the file in its tab strip (after a Y.Map existence check so stale events for deleted files don't create phantom tabs). Both CodeFilesPanel and CodeSearchPanel dispatch the event; openCodeFile is exported from CodeFilesPanel and reused by CodeSearchPanel so there's one event channel.
 - TypeScript clean (exit 0). ESLint clean (0 errors, 1 pre-existing warning unrelated to this round). All 48 existing tests pass. No new dependencies added (CodeMirror + y-codemirror.next were already installed by ROUND14-A).
+
+---
+Task ID: ROUND16-A
+Agent: Code (Slate Doc + Code editor tool expansion)
+Task: Add more tools to the doc and code editors — subscript/superscript/font-size/indent-outdent/clear-formatting/print/export-HTML for the doc editor; autocomplete/indent-guides/word-wrap/font-size/format/command-palette for the code editor.
+
+Work Log:
+- Read worklog tail (latest entries: ROUND14-A + ROUND14-B — Doc and Code editors already polished with TipTap/CodeMirror deps installed). Read both editor files (DocEditor.tsx, CodeEditor.tsx) fully plus their CSS. Inspected the installed TextStyle extension's source under node_modules to confirm FontSize is shipped as part of `@tiptap/extension-text-style` v3.28.0 (no separate `@tiptap/extension-font-size` install needed — that package is deprecated on npm).
+
+Environment setup:
+- pnpm 10.33.0 was already bootstrapped by ROUND14-A (via `~/.local/bin/pnpm` wrapper + `~/.bashrc` PATH). Sourced `~/.bashrc` in each shell to make `pnpm` resolvable.
+
+Step 1 — Install TipTap subscript/superscript:
+- `pnpm add @tiptap/extension-subscript @tiptap/extension-superscript --filter @slate/client` → both installed at 3.28.0 (matches the rest of the TipTap stack). Pre-existing peer-dep warning on `@tiptap/extension-collaboration-cursor@2.26.2` (still on core ^2.7.0) carried over from ROUND14-A — runtime-fine, ignored.
+- FontSize: NO install needed. TipTap v3 ships `FontSize` (with `setFontSize`/`unsetFontSize` commands) inside `@tiptap/extension-text-style` — verified by reading the package's `src/font-size/font-size.ts`. The standalone `@tiptap/extension-font-size` package on npm is deprecated and unmaintained (latest 3.0.0-next.3), so the bundled TextStyle path is the right call.
+
+Step 2 — Verified CodeMirror version landscape before Part B:
+- `@codemirror/view` 6.43.6 and `@codemirror/language` 6.12.4 are the actual latest stable releases on npm (not a stale registry mirror — confirmed via `npm view ... dist-tags`). `indentationMarkers()` was added to `@codemirror/view` in 6.46.0+, which is NOT yet published. So I built a local equivalent (see Step 5) instead of waiting on an unreleased API.
+- `autocompletion()` + `completionKeymap` are exported from the already-installed `@codemirror/autocomplete` 6.20.3.
+- `selectNextOccurrence` (Ctrl+D multi-cursor) is already in `searchKeymap` bound to Mod-d — confirmed by grepping the package's `.d.ts`. So multi-cursor is already wired; added a comment to make that explicit.
+- `indentSelection` (Format command) is in `@codemirror/commands` 6.10.4.
+
+Part A — DocEditor.tsx (file modified in place):
+
+Step 3 — Imports + extensions:
+- Added `Subscript` (from `@tiptap/extension-subscript`) and `Superscript` (from `@tiptap/extension-superscript`) imports.
+- Added `FontSize` to the existing `import { TextStyle } from '@tiptap/extension-text-style'` line (now `import { TextStyle, FontSize } ...`).
+- Imported new lucide-react icons: `Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer, Indent, Outdent, ChevronDown, Type, FileCode2` (FileCode2 used for the "Export HTML" button so it doesn't clash with the existing `FileDown` markdown-export icon).
+- Registered `Subscript`, `Superscript`, and `FontSize` between `Underline` and `TextStyle` in the `extensions` array (TextStyle must come before FontSize so FontSize can layer on the textStyle mark).
+
+Step 4 — Handlers (added after the existing `exportMarkdown`):
+- `exportHtml()` — wraps `editor.getHTML()` in a standalone HTML document with inline `<style>` mirroring the on-screen doc look (literal color values, not CSS vars — so the file is self-contained and renders correctly outside Slate). HTML-escapes the board name in the `<title>`. Downloads as `${boardName}.html`.
+- `printDoc()` — `window.print()`. Added a `@media print` block to docEditor.css (see Step 6) that hides the toolbar + file rail and isolates the `.slate-doc` page so the browser's print preview shows only the document body.
+- `clearFormatting()` — `editor.chain().focus().unsetAllMarks().clearNodes().run()`. Drops every mark + resets every block to a plain paragraph.
+- `indent()` / `outdent()` — `editor.chain().focus().sinkListItem('listItem').run()` / `liftListItem('listItem').run()`. TipTap has no built-in paragraph indent; these no-op gracefully outside lists (the tooltip tells the user "(in a list)").
+
+Step 5 — Toolbar buttons:
+- After Underline: Subscript + Superscript (toggleSubscript/toggleSuperscript, `active` when their marks are on).
+- After the text-color popover: a Font size dropdown (Type icon + ChevronDown). Opens a small popover with `Default` (unsetFontSize) + the six preset px values (12/14/16/18/24/32). Each preset button has `style={{ fontSize: '${px}px' }}` so the menu visually previews the size. Click-away backdrop identical to the color popover.
+- After the alignment group: Outdent (Outdent icon) + Indent (Indent icon).
+- After Undo/Redo: Clear formatting (Eraser icon).
+- Right cluster (after Find, before the word count): Print (Printer icon) + Export HTML (FileCode2 icon) + Export Markdown (existing FileDown icon, unchanged).
+
+Step 6 — CSS (docEditor.css):
+- Added `sub`/`sup` rules: 0.75em size, sub/super vertical-align, line-height:0 (so they don't add height to the line). Browsers ship UA defaults but normalising keeps them consistent across engines.
+- Added `@media print` block: `body * { visibility: hidden }` + `.slate-doc, .slate-doc * { visibility: visible }` hides the toolbar + file rail without dropping the doc from the layout. Repositions `.slate-doc` to absolute top-left, full width, white background, black text. Hides remote-caret labels. Forces the `.mx-auto` page container to full width + 0 padding so the printed page uses the full paper area.
+
+Part B — CodeEditor.tsx (file modified in place):
+
+Step 7 — Imports + module-level helpers:
+- Imported `ViewPlugin, Decoration, type DecorationSet, type ViewUpdate` from `@codemirror/view` (alongside the existing `EditorView, keymap, lineNumbers, …`).
+- Imported `type Extension` from `@codemirror/state` (for the `fontTheme` helper's return type).
+- Imported `indentSelection` from `@codemirror/commands`.
+- Imported `autocompletion, completionKeymap` from `@codemirror/autocomplete` (alongside the existing `closeBrackets, closeBracketsKeymap`).
+- Imported new lucide-react icons: `WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft`. (Plus/Minus are reused for font-size +/- since they read naturally in this context; CommandIcon opens the palette; CornerDownLeft is the Enter hint next to the highlighted palette row.)
+- Added module-level `indentGuides` ViewPlugin (see Step 8).
+- Added module-level `DEFAULT_FONT_SIZE = 13`, `MIN_FONT_SIZE = 10`, `MAX_FONT_SIZE = 24` constants + a `fontTheme(px)` helper that returns an `EditorView.theme({ '.cm-content': { fontSize }, '.cm-gutters': { fontSize }, '&': { fontSize } })` extension.
+
+Step 8 — Indent guides ViewPlugin (module-level, since it has no per-component state):
+- `ViewPlugin.fromClass(class { decos: DecorationSet; constructor(view); update(u); build(view) })` with `{ decorations: (v) => v.decos }`.
+- `update()` rebuilds on `docChanged || viewportChanged || selectionSet` (the last so newly-typed indent levels appear immediately).
+- `build()` walks `view.visibleRanges`, and for each line matches `/^([ \t]+)/`, normalises tabs to 2 spaces, computes `levels = Math.floor(spaces / 2)`. If `levels > 0`, pushes `Decoration.line({ class: 'cm-indent-guide', attributes: { style: '--cm-indent: ${levels}' } })` at `line.from`. Returns `Decoration.set(items.map(i => i.value.range(i.from)), true)`.
+- Empty lines render with no guides — a minor visual gap, kept the implementation in one file. Documented in the plugin's JSDoc.
+- CSS (codeEditor.css): `.cm-line.cm-indent-guide` gets a `repeating-linear-gradient(to right, transparent 0, transparent calc(2ch-1px), var(--border2) calc(2ch-1px), var(--border2) 2ch)` background, sized to `calc(var(--cm-indent, 0) * 2ch + 1px) 100%` with `background-repeat: no-repeat`. The `+1px` buffer keeps the last guide from being clipped by subpixel rendering.
+
+Step 9 — Component state + Compartment refs:
+- New state: `lineWrap` (default false), `fontSize` (default 13), `paletteOpen`, `paletteQuery`, `paletteIndex`. New refs: `paletteInputRef`, `wrapConfRef`, `fontConfRef`.
+- Mount effect creates `wrapConf` + `fontConf` Compartments alongside the existing `languageConf` + `themeConf`, seeds them with the current `lineWrap`/`fontSize`, stashes them in `wrapConfRef`/`fontConfRef`, and clears the refs on cleanup.
+- Two new reconfigure effects (deps: `[lineWrap]` and `[fontSize]`) dispatch `conf.reconfigure(...)` into the live view — toggling wrap or changing font size does NOT tear down the editor (preserves scroll, selection, cursor, remote-carets). The mount effect intentionally omits `lineWrap`/`fontSize` from its deps array (with an `eslint-disable-next-line` + comment explaining why) so toggling them doesn't trigger a remount.
+
+Step 10 — New extensions wired into the editor:
+- `autocompletion()` — wires the completion UI. Language grammars expose their own completion sources through `LanguageDescription.load()` (already in the mount effect), so JS/TS/CSS/HTML/etc. get language-aware completions for free.
+- `completionKeymap` — added to the existing `keymap.of([...])` between `closeBracketsKeymap` and `searchKeymap`, so Enter accepts a completion before falling through to newline, Ctrl-Space opens the menu, etc.
+- `indentGuides` — added after `syntaxHighlighting(...)` and before `foldGutter(...)`.
+- `wrapConf.of(lineWrap ? EditorView.lineWrapping : [])` + `fontConf.of(fontTheme(fontSize))` — after `themeConf.of(...)`.
+
+Step 11 — Multi-cursor (Ctrl+D / selectNextOccurrence):
+- Already wired — `searchKeymap` is already in the keymap array (from ROUND14-B) and includes `selectNextOccurrence` bound to Mod-d. Added a comment in the keymap explaining this so future readers don't go looking for the binding.
+
+Step 12 — Toolbar buttons (added between the file name and the existing Find button):
+- Word wrap toggle (WrapText icon) — `aria-pressed={lineWrap}`, highlighted accent when active.
+- Font size − / + (Minus + Plus icons) — clamp to [10,24], with a small monospace badge in the middle showing the current px value. Disabled at the bounds.
+- Format (Wand2 icon) — calls `formatCode()` (see Step 13).
+- Command palette (Command icon) — calls `openPalette()`.
+
+Step 13 — Handlers:
+- `toggleWrap()` / `bumpFont(delta)` / `resetFont()` — straightforward state setters; the reconfigure effects pick up the change.
+- `formatCode()` — focuses the view and calls `indentSelection(view)` (a CM command exported from `@codemirror/commands`). Re-indents the lines covered by the current selection (or the active line when there's no selection) using the active language's indentation rules. For whole-file reformat, Ctrl+A first.
+- `openPalette()` / `closePalette()` — wrapped in `useCallback` so the global Ctrl+Shift+P listener doesn't rebind every render.
+
+Step 14 — Command palette:
+- A `paletteCommands` array (built inside a single `useMemo` along with `filteredCommands` to keep the array identity stable across renders and silence the exhaustive-deps lint). 10 commands: Find, Toggle Theme, Toggle Wrap, Format, Increase/Decrease/Reset Font, New File, Download File, Download ZIP. Each command's `run()` calls `closePalette()` then defers the actual action via `setTimeout(..., 0)` so the palette's unmount doesn't race the action's side effects (e.g. `window.prompt` for new file name).
+- `filteredCommands` — case-insensitive substring match on the label OR the id. Empty query shows everything.
+- `paletteIndex` — reset to 0 whenever `paletteQuery` changes (Enter always hits the top match).
+- Focus effect: when `paletteOpen` flips true, focus the input after a 0ms timeout (so the input is mounted first) and select-all on the value.
+- Global key listener: `window` keydown for Ctrl+Shift+P (case-insensitive on the 'P' key — Caps Lock shouldn't break it). `preventDefault()` so the browser's "Print" shortcut (which is also Ctrl+Shift+P on some platforms) doesn't fire. Bound only while the palette is closed (the palette's own input handler takes over once it's open).
+- UI: absolute-positioned overlay anchored to the top of the editor column, `w-[min(28rem,90%)]`. Header has CommandIcon + filter input + Esc hint. Body is a scrollable `<ul>` (`max-h-72 overflow-y-auto`) of buttons. Each button shows the label, an optional hint (e.g. "Ctrl+F" for Find), and a CornerDownLeft icon when highlighted. Footer is a click-to-close strip with usage hints. No backdrop click-away (Ctrl+Shift+P users expect Escape to dismiss — added a comment).
+- Keyboard: Escape closes, Enter runs the highlighted row, ArrowDown/Up moves the highlight (clamped to [0, filteredCommands.length-1]).
+
+Step 15 — CSS (codeEditor.css):
+- `.cm-line.cm-indent-guide` — the repeating-linear-gradient described in Step 8.
+- `[role="dialog"] ul::-webkit-scrollbar` — slim 6px scrollbar for the command palette list so it doesn't crowd the narrow popover.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, zero errors across all 4 modified files (DocEditor.tsx, docEditor.css unchanged structurally, CodeEditor.tsx, codeEditor.css) plus the rest of the codebase. (CSS files are not type-checked by tsc; the changes are scoped to .tsx + .css.)
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit` → exit 0 (no schema changes — none needed for editor tooling).
+- `npx eslint src/docs/DocEditor.tsx src/code/CodeEditor.tsx` → 0 errors, 2 pre-existing warnings: both "Unused eslint-disable directive (no-alert)" on the `window.prompt` calls in DocEditor.tsx (set by ROUND14-A on lines 150 and 236 — defensive directives the project's eslint config doesn't actually need). No new warnings from this round.
+- `npx vitest run --passWithNoTests` → 9 files, 48 tests pass (including src/code/zip.test.ts and src/docs/docTextJson.test.ts). No regressions.
+
+Stage Summary:
+- Doc editor toolbar grew from ~25 buttons to ~33: added Subscript, Superscript, Font size dropdown (Default + 6 presets), Indent, Outdent, Clear formatting, Print, Export HTML. All wire up to real TipTap commands. New `@media print` block isolates the doc page so Print yields a clean printout (no toolbar, no rail, no remote-caret labels). Export HTML wraps the editor's HTML in a standalone document with inline CSS.
+- Code editor toolbar grew from ~5 buttons to ~9: added Word wrap toggle, Font size − / badge / +, Format (re-indent selection), Command palette. All wire up to real CM commands or Compartment reconfigures. Wrap + font size live behind Compartments so toggling them never tears down the editor (preserves scroll/selection/cursor/remote-carets).
+- Autocomplete: `autocompletion()` + `completionKeymap` wired in. Language grammars provide completion sources automatically (JS/TS/CSS/HTML/etc. via `@codemirror/language-data`).
+- Indent guides: local `indentGuides` ViewPlugin (since `@codemirror/view` 6.43.6 doesn't ship `indentationMarkers()` — that API landed in 6.46.0, not yet published). Tags each indented line with `.cm-indent-guide` + a `--cm-indent: N` CSS variable; CSS paints N vertical guides via a clipped `repeating-linear-gradient`.
+- Multi-cursor (Ctrl+D / selectNextOccurrence): already wired by `searchKeymap` from ROUND14-B — added a comment so the binding is discoverable.
+- Command palette: Ctrl+Shift+P opens a filterable list of 10 commands (Find, Toggle Theme, Toggle Wrap, Format, +/-/reset Font, New File, Download File, Download ZIP). Enter runs the highlighted row, ↑↓ navigates, Esc closes. No backdrop click-away (Escape is the expected dismiss path).
+- TypeScript clean (exit 0). ESLint clean (0 errors, 2 pre-existing unused-directive warnings). All 48 existing tests still pass. New deps: `@tiptap/extension-subscript` + `@tiptap/extension-superscript` only — FontSize came bundled with the already-installed `@tiptap/extension-text-style`. Backward compatible — all new tools are additive, no schema or API changes.

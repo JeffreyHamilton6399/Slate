@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Bot, Send, Trash2, Loader2, Paperclip } from 'lucide-react';
+import { Bot, Send, Trash2, Loader2, Paperclip, Square } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles } from '../code/exportCode';
@@ -29,17 +29,24 @@ interface ChatMsg {
 }
 
 /** Appended to the system prompt in code mode so the model can write files. */
-const CODE_AI_INSTRUCTIONS = `This is a live CODE workspace and you CAN create and modify files directly. When the user asks you to build, add, or change code, output each file as a fenced code block whose opening fence includes its path, exactly like:
+const CODE_AI_INSTRUCTIONS = `You are editing a LIVE code project and your file blocks are written straight to disk. When the user asks you to build, add, or change anything, you MUST output the actual files — not a description of them.
+
+Format: one fenced code block per file, with the path on the opening fence after the language:
 
 \`\`\`html path=index.html
-<full file contents here>
+<!doctype html><html>…full file…</html>
 \`\`\`
 
-Rules:
-- Output the ENTIRE file content every time — never a diff, snippet, or "// rest unchanged".
-- Put the path on the opening fence as path=<relative/path>. Use forward slashes for folders; they're created automatically.
-- Every file you want saved MUST be its own path-tagged block. A short explanation around the blocks is fine.
-- Prefer an index.html entry point (inline or link local CSS/JS) so the live Preview panel can render the result.`;
+\`\`\`css path=styles.css
+body { … }
+\`\`\`
+
+Hard rules:
+- ALWAYS include at least one path-tagged block when the user asks for code. Never reply with only prose.
+- The path MUST be on the opening fence as path=<relative/path> (forward slashes; folders are auto-created).
+- Output the ENTIRE file every time — never a diff, "…", or "rest unchanged".
+- Prefer an index.html entry point that inlines or links the other local files, so the live Preview renders it.
+- Keep any explanation short; the files are what matter.`;
 
 export function AiChatPanel() {
   const room = useRoom();
@@ -49,6 +56,7 @@ export function AiChatPanel() {
   const [loading, setLoading] = useState(false);
   const [includeContext, setIncludeContext] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -106,6 +114,8 @@ export function AiChatPanel() {
       // same origin as the Slate app, no CORS or env vars needed.
       // For local dev (without Vercel), it falls back gracefully.
       const aiUrl = import.meta.env.VITE_AI_CHAT_URL || '/api/ai-chat';
+      const controller = new AbortController();
+      abortRef.current = controller;
       let resp: Response;
       try {
         resp = await fetch(aiUrl, {
@@ -116,8 +126,10 @@ export function AiChatPanel() {
             context,
             instructions: isCode ? CODE_AI_INSTRUCTIONS : isDoc ? DOC_AI_INSTRUCTIONS : undefined,
           }),
+          signal: controller.signal,
         });
-      } catch {
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') throw e;
         throw new Error('Cannot reach the AI server. The serverless function deploys automatically on Vercel.');
       }
       if (resp.status === 405 || resp.status === 404) {
@@ -160,15 +172,21 @@ export function AiChatPanel() {
         }
       }
     } catch (err) {
-      const errorMsg: ChatMsg = {
-        role: 'assistant',
-        content: `Sorry, I couldn't respond: ${(err as Error).message}`,
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      if ((err as Error).name === 'AbortError') {
+        setMessages((prev) => [...prev, { role: 'assistant', content: '⏹ Stopped', note: true }]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `Sorry, I couldn't respond: ${(err as Error).message}` },
+        ]);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
     }
   }, [input, loading, messages, gatherContext, board, room]);
+
+  const stop = useCallback(() => abortRef.current?.abort(), []);
 
   const clearChat = useCallback(() => {
     setMessages([]);
@@ -269,14 +287,25 @@ export function AiChatPanel() {
             className="min-h-[36px] flex-1 resize-none rounded-sm border border-border bg-bg-3 px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
             disabled={loading}
           />
-          <button
-            onClick={() => void send()}
-            disabled={!input.trim() || loading}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-accent text-white hover:bg-accent/80 disabled:opacity-30"
-            title="Send (Enter)"
-          >
-            <Send size={13} />
-          </button>
+          {loading ? (
+            <button
+              onClick={stop}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-danger text-white hover:opacity-80"
+              title="Stop generating"
+              aria-label="Stop generating"
+            >
+              <Square size={12} />
+            </button>
+          ) : (
+            <button
+              onClick={() => void send()}
+              disabled={!input.trim()}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-accent text-white hover:bg-accent/80 disabled:opacity-30"
+              title="Send (Enter)"
+            >
+              <Send size={13} />
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -47,7 +47,7 @@ import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import {
-  FileCode2, FilePlus2, Pencil, Trash2, Download, Archive, Search, Sun, Moon, X,
+  FileCode2, FilePlus2, Download, Archive, Search, Sun, Moon, X,
   WrapText, Plus, Minus, Wand2, Command as CommandIcon, CornerDownLeft,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
@@ -398,20 +398,6 @@ export function CodeEditor() {
     openFile(id);
   };
 
-  const renameFile = (id: string, current: string) => {
-    const name = window.prompt('Rename file', current)?.trim();
-    if (!name || name === current) return;
-    room.slate.codeFiles().get(id)?.set('name', name);
-  };
-
-  const deleteFile = (id: string, name: string) => {
-    if (!window.confirm(`Delete ${name}? The file disappears for everyone on this board.`)) return;
-    room.slate.codeFiles().delete(id);
-    if (selectedId === id) setSelectedId(null);
-    if (activeFileId === id) setActiveFileId(null);
-    setOpenFiles((cur) => cur.filter((x) => x !== id));
-  };
-
   const downloadFile = () => {
     if (!activeId) return;
     const blob = new Blob([room.slate.codeText(activeId).toString()], { type: 'text/plain' });
@@ -548,53 +534,8 @@ export function CodeEditor() {
 
   return (
     <div className="flex h-full bg-bg text-text">
-      {/* File rail */}
-      <div className="flex w-48 shrink-0 flex-col border-r border-border bg-bg-2">
-        {/* Zip lives up here, not at the rail's bottom — the floating People
-            widget hovers over the bottom-left corner and would cover it. */}
-        <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-text-dim">Files</span>
-          <span className="flex gap-0.5">
-            <button type="button" title="Download all as .zip" aria-label="Download all as .zip" onClick={downloadZip} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
-              <Archive size={13} />
-            </button>
-            <button type="button" title="New file" aria-label="New file" onClick={addFile} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
-              <FilePlus2 size={13} />
-            </button>
-          </span>
-        </div>
-        <ul className="flex-1 overflow-y-auto p-1">
-          {files.map((f) => (
-            <li key={f.id} className="group relative">
-              <button
-                type="button"
-                onClick={() => openFile(f.id)}
-                onDoubleClick={() => renameFile(f.id, f.name)}
-                title={f.name}
-                className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs ${
-                  f.id === activeId ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
-                }`}
-              >
-                <FileCode2 size={12} className="shrink-0" />
-                <span className="truncate">{f.name}</span>
-              </button>
-              <span className="absolute right-1 top-1/2 hidden -translate-y-1/2 gap-0.5 group-hover:flex">
-                <button type="button" title={`Rename ${f.name}`} onClick={() => renameFile(f.id, f.name)} className="grid h-5 w-5 place-items-center rounded bg-bg-2/90 text-text-dim hover:text-text">
-                  <Pencil size={10} />
-                </button>
-                <button type="button" title={`Delete ${f.name}`} onClick={() => deleteFile(f.id, f.name)} className="grid h-5 w-5 place-items-center rounded bg-bg-2/90 text-text-dim hover:text-danger">
-                  <Trash2 size={10} />
-                </button>
-              </span>
-            </li>
-          ))}
-          {files.length === 0 && (
-            <li className="px-2 py-4 text-center text-[11px] text-text-dim">No files yet.</li>
-          )}
-        </ul>
-      </div>
-
-      {/* Editor column */}
+      {/* Editor column — the file browser lives in the dockable Files panel
+          (left dock), so the editor itself is just tabs + code + status. */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Tab strip — one button per open file. Active tab lifts to the
             surface so the border under it merges into the editor's chrome. */}
@@ -730,6 +671,12 @@ export function CodeEditor() {
             className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
           >
             {darkMode ? <Sun size={13} /> : <Moon size={13} />}
+          </button>
+          <button type="button" title="New file" aria-label="New file" onClick={addFile} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
+            <FilePlus2 size={13} />
+          </button>
+          <button type="button" title="Download all as .zip" aria-label="Download all as .zip" onClick={downloadZip} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text">
+            <Archive size={13} />
           </button>
           <button type="button" title="Download this file" aria-label="Download this file" onClick={downloadFile} disabled={!activeId} className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text disabled:opacity-40">
             <Download size={13} />

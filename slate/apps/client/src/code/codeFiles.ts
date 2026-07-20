@@ -176,28 +176,62 @@ export interface ParsedFileBlock {
 }
 
 /**
- * Extract file blocks from an AI reply. The assistant is instructed to emit
- * each file as a fenced code block whose opening fence carries the path, e.g.
- *
- *     ```ts path=src/app.ts
- *     ...full file contents...
- *     ```
- *
- * We accept `path=`, `file=`, or `filename=` (quoted or not) anywhere on the
- * opening fence so small formatting differences from the model still parse.
+ * Extract file blocks from an AI reply. The assistant is asked to tag each
+ * fenced block with `path=…`, but models are inconsistent, so we also accept:
+ *   - the path as the info string itself   ```src/app.js
+ *   - a filename on the line just before    **index.html** \n ```html
+ * Blocks with no discernible path are treated as illustrative snippets and
+ * skipped (never written).
  */
 export function parseAiFileBlocks(text: string): ParsedFileBlock[] {
   const out: ParsedFileBlock[] = [];
-  // Opening fence (``` + optional info string containing path=…), then content
-  // up to the closing fence on its own line.
-  const re = /```[^\n]*?\b(?:path|file|filename)\s*=\s*["'`]?([^\s"'`\n]+)["'`]?[^\n]*\n([\s\S]*?)```/g;
+  const seen = new Set<string>();
+  const fence = /```([^\n]*)\n([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const path = normalizePath(m[1] ?? '');
-    if (!path) continue;
-    // Trim a single trailing newline the fence adds, keep interior formatting.
+  let lastIndex = 0;
+  while ((m = fence.exec(text)) !== null) {
+    const info = (m[1] ?? '').trim();
     const content = (m[2] ?? '').replace(/\n$/, '');
+    const between = text.slice(lastIndex, m.index);
+    lastIndex = fence.lastIndex;
+    const raw = pathFromInfo(info) ?? pathFromText(between);
+    if (!raw) continue;
+    const path = normalizePath(raw);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
     out.push({ path, content });
   }
   return out;
+}
+
+function looksLikePath(s: string): boolean {
+  if (!s || /\s/.test(s)) return false;
+  return s.includes('/') || /\.[A-Za-z0-9]{1,8}$/.test(s);
+}
+
+/** Path from a fence info string: `path=…`, or the info itself if it's a path. */
+function pathFromInfo(info: string): string | null {
+  const kv = /\b(?:path|file|filename|name)\s*=\s*["'`]?([^\s"'`]+)/i.exec(info);
+  if (kv?.[1]) return kv[1];
+  const token = info.split(/\s+/)[0] ?? '';
+  return token && !token.includes('=') && looksLikePath(token) ? token : null;
+}
+
+/** Path from the last non-empty line before a block (a filename heading). */
+function pathFromText(between: string): string | null {
+  const lines = between.split('\n').map((l) => l.trim()).filter(Boolean);
+  const last = lines[lines.length - 1];
+  if (!last) return null;
+  const cleaned = last
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^[-*]\s*/, '')
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/^(?:file|filename|path)\s*:\s*/i, '')
+    .replace(/^\/\/\s*/, '')
+    .replace(/:\s*$/, '')
+    .trim();
+  if (looksLikePath(cleaned)) return cleaned;
+  const tok = cleaned.split(/\s+/).find((t) => looksLikePath(t));
+  return tok ?? null;
 }

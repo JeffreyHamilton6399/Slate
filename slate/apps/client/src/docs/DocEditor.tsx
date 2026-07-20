@@ -316,6 +316,9 @@ ${body}
     <div className="flex h-full flex-col bg-bg">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-bg-2 px-2 py-1">
+        <ToolButton editor={editor} label="Undo (Ctrl+Z)" onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} /></ToolButton>
+        <ToolButton editor={editor} label="Redo (Ctrl+Shift+Z)" onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} /></ToolButton>
+        <Divider />
         <ToolButton editor={editor} label="Bold (Ctrl+B)" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={14} /></ToolButton>
         <ToolButton editor={editor} label="Italic (Ctrl+I)" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={14} /></ToolButton>
         <ToolButton editor={editor} label="Strikethrough" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough size={14} /></ToolButton>
@@ -460,8 +463,6 @@ ${body}
         <ToolButton editor={editor} label={inTable ? 'Add row after' : 'Add row (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().addRowAfter().run()}><Plus size={14} /></ToolButton>
         <ToolButton editor={editor} label={inTable ? 'Delete table' : 'Delete table (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().deleteTable().run()}><Trash2 size={14} /></ToolButton>
         <Divider />
-        <ToolButton editor={editor} label="Undo (Ctrl+Z)" onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Redo (Ctrl+Shift+Z)" onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} /></ToolButton>
         <ToolButton editor={editor} label="Clear formatting" onClick={clearFormatting}><Eraser size={14} /></ToolButton>
         <div className="flex-1" />
         <ToolButton editor={editor} label="Find…" onClick={findInDoc}><Search size={14} /></ToolButton>

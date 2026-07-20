@@ -1,17 +1,19 @@
 /**
- * DocToolsPanel — a dockable "tools" palette for doc boards (the 2D-style left
- * bar, but for writing). Buttons dispatch formatting/insert commands to the
- * central DocEditor via the `slate:doc-command` window event, so the panel
- * doesn't need a handle on the editor instance.
- *
- * The top editor toolbar still has inline formatting + everything else; this is
- * a quick-access palette for structure and inserts.
+ * DocToolsPanel — the complete tools palette for doc boards, shown in the
+ * left dock. All formatting/insert/export actions live here — there is no
+ * top toolbar in the DocEditor itself. Buttons dispatch commands via the
+ * `slate:doc-command` window event.
  */
 
 import {
-  Heading1, Heading2, Heading3, Bold, Italic, Underline,
+  Heading1, Heading2, Heading3, Bold, Italic, Underline, Strikethrough,
+  Code, Subscript, Superscript, Highlighter, Eraser,
   List, ListOrdered, ListTodo, TextQuote, SquareCode, Table as TableIcon,
-  Minus, ImagePlus, Link2, type LucideIcon,
+  Minus, ImagePlus, Link2,
+  AlignLeft, AlignCenter, AlignRight, Indent, Outdent,
+  Undo2, Redo2, Search, Printer, FileDown, FileCode2,
+  Plus, Trash2,
+  type LucideIcon,
 } from 'lucide-react';
 import { runDocCommand } from '../docs/docBridge';
 
@@ -23,6 +25,13 @@ interface Tool {
 
 const GROUPS: { title: string; tools: Tool[] }[] = [
   {
+    title: 'History',
+    tools: [
+      { command: 'undo', label: 'Undo', Icon: Undo2 },
+      { command: 'redo', label: 'Redo', Icon: Redo2 },
+    ],
+  },
+  {
     title: 'Text',
     tools: [
       { command: 'h1', label: 'Heading 1', Icon: Heading1 },
@@ -31,14 +40,30 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
       { command: 'bold', label: 'Bold', Icon: Bold },
       { command: 'italic', label: 'Italic', Icon: Italic },
       { command: 'underline', label: 'Underline', Icon: Underline },
+      { command: 'strike', label: 'Strikethrough', Icon: Strikethrough },
+      { command: 'code', label: 'Inline code', Icon: Code },
+      { command: 'subscript', label: 'Subscript', Icon: Subscript },
+      { command: 'superscript', label: 'Superscript', Icon: Superscript },
+      { command: 'highlight', label: 'Highlight', Icon: Highlighter },
+      { command: 'clearFormat', label: 'Clear format', Icon: Eraser },
     ],
   },
   {
     title: 'Lists',
     tools: [
       { command: 'bulletList', label: 'Bullet list', Icon: List },
-      { command: 'orderedList', label: 'Numbered list', Icon: ListOrdered },
+      { command: 'orderedList', label: 'Numbered', Icon: ListOrdered },
       { command: 'taskList', label: 'Checklist', Icon: ListTodo },
+    ],
+  },
+  {
+    title: 'Align',
+    tools: [
+      { command: 'alignLeft', label: 'Align left', Icon: AlignLeft },
+      { command: 'alignCenter', label: 'Center', Icon: AlignCenter },
+      { command: 'alignRight', label: 'Align right', Icon: AlignRight },
+      { command: 'indent', label: 'Indent', Icon: Indent },
+      { command: 'outdent', label: 'Outdent', Icon: Outdent },
     ],
   },
   {
@@ -47,9 +72,21 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
       { command: 'blockquote', label: 'Quote', Icon: TextQuote },
       { command: 'codeBlock', label: 'Code block', Icon: SquareCode },
       { command: 'table', label: 'Table', Icon: TableIcon },
+      { command: 'addCol', label: 'Add column', Icon: Plus },
+      { command: 'addRow', label: 'Add row', Icon: Plus },
+      { command: 'delTable', label: 'Delete table', Icon: Trash2 },
       { command: 'hr', label: 'Divider', Icon: Minus },
       { command: 'image', label: 'Image', Icon: ImagePlus },
       { command: 'link', label: 'Link', Icon: Link2 },
+    ],
+  },
+  {
+    title: 'Actions',
+    tools: [
+      { command: 'find', label: 'Find', Icon: Search },
+      { command: 'print', label: 'Print', Icon: Printer },
+      { command: 'exportMd', label: 'Export .md', Icon: FileDown },
+      { command: 'exportHtml', label: 'Export .html', Icon: FileCode2 },
     ],
   },
 ];

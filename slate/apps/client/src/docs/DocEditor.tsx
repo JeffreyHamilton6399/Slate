@@ -176,18 +176,40 @@ export function DocEditor() {
       if (!cmd) return;
       const c = editor.chain().focus();
       switch (cmd) {
+        // History
+        case 'undo': editor.commands.undo(); break;
+        case 'redo': editor.commands.redo(); break;
+        // Headings
         case 'h1': c.toggleHeading({ level: 1 }).run(); break;
         case 'h2': c.toggleHeading({ level: 2 }).run(); break;
         case 'h3': c.toggleHeading({ level: 3 }).run(); break;
+        // Inline formatting
         case 'bold': c.toggleBold().run(); break;
         case 'italic': c.toggleItalic().run(); break;
         case 'underline': c.toggleUnderline().run(); break;
+        case 'strike': c.toggleStrike().run(); break;
+        case 'code': c.toggleCode().run(); break;
+        case 'subscript': c.toggleSubscript().run(); break;
+        case 'superscript': c.toggleSuperscript().run(); break;
+        case 'highlight': c.toggleHighlight().run(); break;
+        case 'clearFormat': c.unsetAllMarks().clearNodes().run(); break;
+        // Lists
         case 'bulletList': c.toggleBulletList().run(); break;
         case 'orderedList': c.toggleOrderedList().run(); break;
         case 'taskList': c.toggleTaskList().run(); break;
+        // Alignment
+        case 'alignLeft': c.setTextAlign('left').run(); break;
+        case 'alignCenter': c.setTextAlign('center').run(); break;
+        case 'alignRight': c.setTextAlign('right').run(); break;
+        case 'indent': c.sinkListItem('listItem').run(); break;
+        case 'outdent': c.liftListItem('listItem').run(); break;
+        // Insert
         case 'blockquote': c.toggleBlockquote().run(); break;
         case 'codeBlock': c.toggleCodeBlock().run(); break;
         case 'table': c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
+        case 'addCol': c.addColumnAfter().run(); break;
+        case 'addRow': c.addRowAfter().run(); break;
+        case 'delTable': c.deleteTable().run(); break;
         case 'hr': c.setHorizontalRule().run(); break;
         case 'image': imageInputRef.current?.click(); break;
         case 'link': {
@@ -195,6 +217,11 @@ export function DocEditor() {
           if (url) editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
           break;
         }
+        // Actions
+        case 'find': findInDoc(); break;
+        case 'print': window.print(); break;
+        case 'exportMd': exportMarkdown(); break;
+        case 'exportHtml': exportHtml(); break;
         default: break;
       }
     };
@@ -336,166 +363,7 @@ ${body}
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-bg-2 px-2 py-1">
-        <ToolButton editor={editor} label="Undo (Ctrl+Z)" onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Redo (Ctrl+Shift+Z)" onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} /></ToolButton>
-        <Divider />
-        <ToolButton editor={editor} label="Bold (Ctrl+B)" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Italic (Ctrl+I)" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Strikethrough" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Underline (Ctrl+U)" active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()}><UnderlineIcon size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Subscript" active={editor.isActive('subscript')} onClick={() => editor.chain().focus().toggleSubscript().run()}><SubscriptIcon size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Superscript" active={editor.isActive('superscript')} onClick={() => editor.chain().focus().toggleSuperscript().run()}><SuperscriptIcon size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Inline code" active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()}><Code size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Highlight" active={editor.isActive('highlight')} onClick={() => editor.chain().focus().toggleHighlight().run()}><Highlighter size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Link" active={editor.isActive('link')} onClick={setLink}><Link2 size={14} /></ToolButton>
-        {/* Text color — Palette button opens a small popover with a native color
-            input plus a "clear" affordance. The popover auto-closes on pick. */}
-        <div className="relative">
-          <button
-            type="button"
-            title="Text color"
-            aria-label="Text color"
-            aria-haspopup="dialog"
-            aria-expanded={colorOpen}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setColorOpen((o) => !o)}
-            className={`grid h-7 w-7 place-items-center rounded transition-colors ${
-              colorOpen ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
-            }`}
-          >
-            <Palette size={14} />
-          </button>
-          {colorOpen && (
-            <>
-              {/* Click-away backdrop. */}
-              <div className="fixed inset-0 z-40" onClick={() => setColorOpen(false)} />
-              <div
-                role="dialog"
-                aria-label="Text color"
-                className="absolute left-0 top-full z-50 mt-1 flex items-center gap-2 rounded-md border border-border bg-bg-2 p-2 shadow-lg"
-              >
-                <input
-                  type="color"
-                  aria-label="Pick text color"
-                  // Live-apply as the user drags through the swatch grid.
-                  onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
-                  className="h-6 w-6 cursor-pointer rounded border border-border bg-transparent p-0"
-                />
-                <button
-                  type="button"
-                  title="Clear color"
-                  aria-label="Clear color"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    editor.chain().focus().unsetColor().run();
-                    setColorOpen(false);
-                  }}
-                  className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        {/* Font size — small dropdown that applies/removes an inline
-            font-size style mark. The "Default" entry clears the override. */}
-        <div className="relative">
-          <button
-            type="button"
-            title="Font size"
-            aria-label="Font size"
-            aria-haspopup="dialog"
-            aria-expanded={fontSizeOpen}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setFontSizeOpen((o) => !o)}
-            className={`flex h-7 items-center gap-0.5 rounded px-1.5 text-text-mid transition-colors ${
-              fontSizeOpen ? 'bg-accent/15 text-accent' : 'hover:bg-bg-3 hover:text-text'
-            }`}
-          >
-            <Type size={14} />
-            <ChevronDown size={10} />
-          </button>
-          {fontSizeOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setFontSizeOpen(false)} />
-              <div
-                role="dialog"
-                aria-label="Font size"
-                className="absolute left-0 top-full z-50 mt-1 w-28 rounded-md border border-border bg-bg-2 p-1 shadow-lg"
-              >
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    editor.chain().focus().unsetFontSize().run();
-                    setFontSizeOpen(false);
-                  }}
-                  className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
-                >
-                  Default
-                </button>
-                {FONT_SIZES.map((px) => (
-                  <button
-                    key={px}
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      editor.chain().focus().setFontSize(`${px}px`).run();
-                      setFontSizeOpen(false);
-                    }}
-                    className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
-                    style={{ fontSize: `${px}px` }}
-                  >
-                    {px}px
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-        <Divider />
-        <ToolButton editor={editor} label="Heading 1" active={editor.isActive('heading', { level: 1 })} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1 size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Heading 2" active={editor.isActive('heading', { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2 size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Heading 3" active={editor.isActive('heading', { level: 3 })} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><Heading3 size={14} /></ToolButton>
-        <Divider />
-        <ToolButton editor={editor} label="Align left" active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()}><AlignLeft size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Align center" active={editor.isActive({ textAlign: 'center' })} onClick={() => editor.chain().focus().setTextAlign('center').run()}><AlignCenter size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Align right" active={editor.isActive({ textAlign: 'right' })} onClick={() => editor.chain().focus().setTextAlign('right').run()}><AlignRight size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Outdent (in a list)" onClick={outdent}><Outdent size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Indent (in a list)" onClick={indent}><Indent size={14} /></ToolButton>
-        <Divider />
-        <ToolButton editor={editor} label="Bullet list" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Numbered list" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Task list" active={editor.isActive('taskList')} onClick={() => editor.chain().focus().toggleTaskList().run()}><ListTodo size={14} /></ToolButton>
-        <Divider />
-        <ToolButton editor={editor} label="Quote" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}><TextQuote size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Code block" active={editor.isActive('codeBlock')} onClick={() => editor.chain().focus().toggleCodeBlock().run()}><SquareCode size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Image…" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Divider" onClick={() => editor.chain().focus().setHorizontalRule().run()}><Minus size={14} /></ToolButton>
-        <Divider />
-        {/* Table group — insert a 3×3 with header row, then mutate the table
-            the caret currently sits inside. The mutation buttons stay enabled
-            (TipTap no-ops gracefully when there's no table) but get a hint via
-            `inTable` so the user knows why nothing happens outside a table. */}
-        <ToolButton editor={editor} label="Insert table (3×3)" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><TableIcon size={14} /></ToolButton>
-        <ToolButton editor={editor} label={inTable ? 'Add column after' : 'Add column (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().addColumnAfter().run()}><Plus size={14} className="rotate-90" /></ToolButton>
-        <ToolButton editor={editor} label={inTable ? 'Add row after' : 'Add row (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().addRowAfter().run()}><Plus size={14} /></ToolButton>
-        <ToolButton editor={editor} label={inTable ? 'Delete table' : 'Delete table (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().deleteTable().run()}><Trash2 size={14} /></ToolButton>
-        <Divider />
-        <ToolButton editor={editor} label="Clear formatting" onClick={clearFormatting}><Eraser size={14} /></ToolButton>
-        <div className="flex-1" />
-        <ToolButton editor={editor} label="Find…" onClick={findInDoc}><Search size={14} /></ToolButton>
-        <span className="hidden font-mono text-[10px] text-text-dim sm:inline">{words} {words === 1 ? 'word' : 'words'}</span>
-        <ToolButton editor={editor} label="Print" onClick={printDoc}><Printer size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Export HTML" onClick={exportHtml}><FileCode2 size={14} /></ToolButton>
-        <ToolButton editor={editor} label="Export Markdown" onClick={exportMarkdown}><FileDown size={14} /></ToolButton>
-      </div>
-
-      {/* Page — a paper sheet on a desk, with page-break guide lines. Image
-          resize/rotate/wrap controls live ON the selected image itself. */}
+      {/* No top toolbar — all tools are in the left dock's DocToolsPanel */}
       <div className="slate-doc flex-1" onMouseDown={(e) => {
         // Clicking the desk around the page focuses the editor at the end —
         // the whole surface should feel like the document.
@@ -507,6 +375,11 @@ ${body}
         <div className="slate-doc-page">
           <EditorContent editor={editor} />
         </div>
+      </div>
+
+      {/* Word count footer */}
+      <div className="flex shrink-0 items-center justify-end border-t border-border px-3 py-0.5 text-[10px] font-mono text-text-dim">
+        {words} {words === 1 ? 'word' : 'words'}
       </div>
 
       <input
@@ -521,35 +394,6 @@ ${body}
         }}
       />
     </div>
-  );
-}
-
-function Divider() {
-  return <span className="mx-1 h-4 w-px bg-border" />;
-}
-
-function ToolButton({ label, active, onClick, children }: {
-  editor: Editor; // kept in props so buttons re-render with editor state
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      // preventDefault so the editor keeps focus/selection through the click.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={`grid h-7 w-7 place-items-center rounded transition-colors ${
-        active ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
-      }`}
-    >
-      {children}
-    </button>
   );
 }
 

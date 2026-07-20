@@ -1,0 +1,502 @@
+     1→     1→/**
+     2→     2→ * DocEditor — collaborative rich-text document surface for 'doc' boards.
+     3→     3→ *
+     4→     4→ * TipTap (ProseMirror) bound to the board's shared Y.XmlFragment via the
+     5→     5→ * Collaboration extension (y-prosemirror underneath), so every keystroke
+     6→     6→ * merges through the same Yjs pipeline as the other modes — offline edits
+     7→     7→ * included. CollaborationCursor broadcasts carets/selections over the room's
+     8→     8→ * existing Hocuspocus awareness, colored with the same per-peer palette as
+     9→     9→ * the People widget.
+    10→    10→ *
+    11→    11→ * Undo/redo is the Collaboration extension's Yjs undo manager (scoped to
+    12→    12→ * YOUR edits — undoing won't revert a collaborator's typing), deliberately
+    13→    13→ * separate from the room-level UndoManager which tracks the other modes'
+    14→    14→ * containers.
+    15→    15→ *
+    16→    16→ * Node set: headings 1-3, bold/italic/strike/underline/inline code, links,
+    17→    17→ * text color + highlight, bullet/ordered/task lists, blockquote, syntax-
+    18→    18→ * highlighted code blocks (lowlight/common grammars), images (downscaled to
+    19→    19→ * a data URL small enough for a single Yjs update — same importer the 2D
+    20→    20→ * canvas uses), horizontal rule, alignment (left/center/right), tables
+    21→    21→ * (insert/add-row/add-col/delete). Export to Markdown from the toolbar
+    22→    22→ * (and the Export dialog). Find via prompt + ProseMirror text search.
+    23→    23→ */
+    24→    24→
+    25→    25→import { useEffect, useMemo, useRef, useState } from 'react';
+    26→    26→import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+    27→    27→import StarterKit from '@tiptap/starter-kit';
+    28→    28→import Collaboration from '@tiptap/extension-collaboration';
+    29→    29→import CollaborationCaret from '@tiptap/extension-collaboration-caret';
+    30→    30→import TaskList from '@tiptap/extension-task-list';
+    31→    31→import TaskItem from '@tiptap/extension-task-item';
+    32→    32→import { DocImage } from './imageExtension';
+    33→    33→import LinkExt from '@tiptap/extension-link';
+    34→    34→import Placeholder from '@tiptap/extension-placeholder';
+    35→    35→import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+    36→    36→import Underline from '@tiptap/extension-underline';
+    37→    37→import Subscript from '@tiptap/extension-subscript';
+    38→    38→import Superscript from '@tiptap/extension-superscript';
+    39→    39→import TextAlign from '@tiptap/extension-text-align';
+    40→    40→import { TextStyle, FontSize } from '@tiptap/extension-text-style';
+    41→    41→import { Color } from '@tiptap/extension-color';
+    42→    42→import Highlight from '@tiptap/extension-highlight';
+    43→    43→import { Table } from '@tiptap/extension-table';
+    44→    44→import { TableRow } from '@tiptap/extension-table-row';
+    45→    45→import { TableCell } from '@tiptap/extension-table-cell';
+    46→    46→import { TableHeader } from '@tiptap/extension-table-header';
+    47→    47→import { TextSelection } from '@tiptap/pm/state';
+    48→    48→import { createLowlight, common } from 'lowlight';
+    49→    49→import {
+    50→    50→  Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3,
+    51→    51→  List, ListOrdered, ListTodo, TextQuote, SquareCode, ImagePlus, Link2,
+    52→    52→  Minus, Undo2, Redo2, FileDown, FileCode2,
+    53→    53→  Underline as UnderlineIcon, Highlighter, Palette, AlignLeft, AlignCenter,
+    54→    54→  AlignRight, Table as TableIcon, Plus, Trash2, Search, X,
+    55→    55→  Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer,
+    56→    56→  Indent, Outdent, ChevronDown, Type,
+    57→    57→} from 'lucide-react';
+    58→    58→import { colorForPeerId } from '@slate/sync-protocol';
+    59→    59→import { useRoom } from '../sync/RoomContext';
+    60→    60→import { useAppStore } from '../app/store';
+    61→    61→import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
+    62→    62→import { DOC_APPLY_EVENT, DOC_COMMAND_EVENT, type DocApplyDetail } from './docBridge';
+    63→    63→import { docFragmentToMarkdown } from './exportMarkdown';
+    64→    64→import { toast } from '../ui/Toast';
+    65→    65→import './docEditor.css';
+    66→    66→
+    67→    67→// One lowlight instance for the module (grammar registry is stateless).
+    68→    68→const lowlight = createLowlight(common);
+    69→    69→
+    70→    70→export function DocEditor() {
+    71→    71→  const room = useRoom();
+    72→    72→  const boardName = useAppStore((s) => s.currentBoard?.name) ?? 'document';
+    73→    73→  const imageInputRef = useRef<HTMLInputElement | null>(null);
+    74→    74→  const [colorOpen, setColorOpen] = useState(false);
+    75→    75→  const [fontSizeOpen, setFontSizeOpen] = useState(false);
+    76→    76→
+    77→    77→  // Font size presets (in px). The first option (default) clears the inline
+    78→    78→  // style so the doc falls back to the page CSS — picks the rest by hand.
+    79→    79→  const FONT_SIZES = [12, 14, 16, 18, 24, 32];
+    80→    80→
+    81→    81→  const user = useMemo(
+    82→    82→    () => ({ name: room.identity.name, color: colorForPeerId(room.identity.peerId) }),
+    83→    83→    [room],
+    84→    84→  );
+    85→    85→
+    86→    86→  const editor = useEditor(
+    87→    87→    {
+    88→    88→      extensions: [
+    89→    89→        StarterKit.configure({
+    90→    90→          // TipTap v3 splits history out of StarterKit as `undoRedu`. The
+    91→    91→          // Collaboration extension brings its own (Yjs-based) history;
+    92→    92→          // two histories fight over Ctrl+Z, so the local one must be off.
+    93→    93→          undoRedo: false,
+    94→    94→          // Replaced by the lowlight-highlighted code block below.
+    95→    95→          codeBlock: false,
+    96→    96→          // Underline is bundled with StarterKit in v3 — turn it off here so
+    97→    97→          // the explicit Underline extension below owns it (keeps the config
+    98→    98→          // self-documenting and lets us extend it later if needed).
+    99→    99→          underline: false,
+   100→   100→        }),
+   101→   101→        // Guard: the Y.XmlFragment returned by doc.getXmlFragment() is
+   102→   102→        // auto-created but may not be integrated into the doc on very fresh
+   103→   103→        // boards. The Collaboration extension accesses fragment.doc internally
+   104→   104→        // — if it's undefined, the editor crashes. Force-integrate by touching
+   105→   105→        // the fragment's parent doc.
+   106→   106→        Collaboration.configure({
+   107→   107→          fragment: (() => {
+   108→   108→            const frag = room.slate.docText();
+   109→   109→            // Accessing the doc property forces Yjs to integrate the fragment
+   110→   110→            // if it hasn't been yet. If doc is null, the fragment is detached
+   111→   111→            // — we can't use Collaboration, so return a new integrated one.
+   112→   112→            if (!frag.doc) {
+   113→   113→              // Create a new fragment and integrate it into the doc
+   114→   114→              room.slate.doc.getXmlFragment('doc:text');
+   115→   115→              return room.slate.docText();
+   116→   116→            }
+   117→   117→            return frag;
+   118→   118→          })(),
+   119→   119→        }),
+   120→   120→        CollaborationCaret.configure({ provider: room.provider, user }),
+   121→   121→        TaskList,
+   122→   122→        TaskItem.configure({ nested: true }),
+   123→   123→        // Images live as data URLs INSIDE the Yjs doc (bounded by the same
+   124→   124→        // downscaler the 2D canvas uses), so they sync/offline like text.
+   125→   125→        DocImage.configure({ allowBase64: true }),
+   126→   126→        LinkExt.configure({ openOnClick: false, autolink: true }),
+   127→   127→        Placeholder.configure({ placeholder: 'Start writing — everyone on this board sees it live.' }),
+   128→   128→        CodeBlockLowlight.configure({ lowlight }),
+   129→   129→        // Inline formatting additions.
+   130→   130→        Underline,
+   131→   131→        Subscript,
+   132→   132→        Superscript,
+   133→   133→        // TextStyle carries the inline `style` attribute; FontSize layers a
+   134→   134→        // `fontSize` style + setFontSize/unsetFontSize commands on top.
+   135→   135→        TextStyle,
+   136→   136→        FontSize,
+   137→   137→        Color,
+   138→   138→        Highlight,
+   139→   139→        // Block-level alignment on paragraphs + headings.
+   140→   140→        TextAlign.configure({ types: ['heading', 'paragraph'] }),
+   141→   141→        // Tables (with header row, borders come from docEditor.css).
+   142→   142→        Table.configure({ resizable: false }),
+   143→   143→        TableRow,
+   144→   144→        TableHeader,
+   145→   145→        TableCell,
+   146→   146→      ],
+   147→   147→      editorProps: {
+   148→   148→        attributes: {
+   149→   149→          'aria-label': 'Document editor',
+   150→   150→        },
+   151→   151→      },
+   152→   152→    },
+   153→   153→    [room],
+   154→   154→  );
+   155→   155→
+   156→   156→  // The AI assistant edits this document by dispatching a window event with the
+   157→   157→  // full new HTML (it can't reach the editor instance directly). Replacing the
+   158→   158→  // content applies as a Yjs transaction, so the rewrite syncs to every peer.
+   159→   159→  useEffect(() => {
+   160→   160→    if (!editor) return;
+   161→   161→    const handler = (e: Event) => {
+   162→   162→      const detail = (e as CustomEvent<DocApplyDetail>).detail;
+   163→   163→      if (!detail?.html) return;
+   164→   164→      editor.commands.setContent(detail.html, { emitUpdate: true });
+   165→   165→    };
+   166→   166→    window.addEventListener(DOC_APPLY_EVENT, handler as EventListener);
+   167→   167→    return () => window.removeEventListener(DOC_APPLY_EVENT, handler as EventListener);
+   168→   168→  }, [editor]);
+   169→   169→
+   170→   170→  // The dockable Doc Tools panel dispatches formatting/insert commands via a
+   171→   171→  // window event (it can't reach this editor instance directly).
+   172→   172→  useEffect(() => {
+   173→   173→    if (!editor) return;
+   174→   174→    const handler = (e: Event) => {
+   175→   175→      const cmd = (e as CustomEvent<{ command: string }>).detail?.command;
+   176→   176→      if (!cmd) return;
+   177→   177→      const c = editor.chain().focus();
+   178→   178→      switch (cmd) {
+   179→   179→        case 'h1': c.toggleHeading({ level: 1 }).run(); break;
+   180→   180→        case 'h2': c.toggleHeading({ level: 2 }).run(); break;
+   181→   181→        case 'h3': c.toggleHeading({ level: 3 }).run(); break;
+   182→   182→        case 'bold': c.toggleBold().run(); break;
+   183→   183→        case 'italic': c.toggleItalic().run(); break;
+   184→   184→        case 'underline': c.toggleUnderline().run(); break;
+   185→   185→        case 'bulletList': c.toggleBulletList().run(); break;
+   186→   186→        case 'orderedList': c.toggleOrderedList().run(); break;
+   187→   187→        case 'taskList': c.toggleTaskList().run(); break;
+   188→   188→        case 'blockquote': c.toggleBlockquote().run(); break;
+   189→   189→        case 'codeBlock': c.toggleCodeBlock().run(); break;
+   190→   190→        case 'table': c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
+   191→   191→        case 'hr': c.setHorizontalRule().run(); break;
+   192→   192→        case 'image': imageInputRef.current?.click(); break;
+   193→   193→        case 'link': {
+   194→   194→          const url = window.prompt('Link URL');
+   195→   195→          if (url) editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+   196→   196→          break;
+   197→   197→        }
+   198→   198→        default: break;
+   199→   199→      }
+   200→   200→    };
+   201→   201→    window.addEventListener(DOC_COMMAND_EVENT, handler as EventListener);
+   202→   202→    return () => window.removeEventListener(DOC_COMMAND_EVENT, handler as EventListener);
+   203→   203→  }, [editor]);
+   204→   204→
+   205→   205→  const addImage = async (file: File) => {
+   206→   206→    if (!editor) return;
+   207→   207→    try {
+   208→   208→      const img = await fileToImageShape(file);
+   209→   209→      editor.chain().focus().setImage({ src: img.src, alt: file.name }).run();
+   210→   210→    } catch (err) {
+   211→   211→      toast({ title: 'Image import failed', description: err instanceof Error ? err.message : String(err) });
+   212→   212→    }
+   213→   213→  };
+   214→   214→
+   215→   215→  const setLink = () => {
+   216→   216→    if (!editor) return;
+   217→   217→    const prev = (editor.getAttributes('link').href as string | undefined) ?? '';
+   218→   218→    // eslint-disable-next-line no-alert
+   219→   219→    const url = window.prompt('Link URL (empty to remove)', prev);
+   220→   220→    if (url === null) return;
+   221→   221→    if (url === '') editor.chain().focus().extendMarkRange('link').unsetLink().run();
+   222→   222→    else editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+   223→   223→  };
+   224→   224→
+   225→   225→  const exportMarkdown = () => {
+   226→   226→    const md = docFragmentToMarkdown(room.slate.docText());
+   227→   227→    const blob = new Blob([md], { type: 'text/markdown' });
+   228→   228→    const a = document.createElement('a');
+   229→   229→    a.href = URL.createObjectURL(blob);
+   230→   230→    a.download = `${boardName}.md`;
+   231→   231→    a.click();
+   232→   232→    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+   233→   233→  };
+   234→   234→
+   235→   235→  // Export the doc as a standalone HTML file: the editor's rendered HTML
+   236→   236→  // wrapped in a minimal document with inline CSS that mirrors the on-screen
+   237→   237→  // look (page tokens become literal values so the file is self-contained).
+   238→   238→  const exportHtml = () => {
+   239→   239→    if (!editor) return;
+   240→   240→    const body = editor.getHTML();
+   241→   241→    const html = `<!DOCTYPE html>
+   242→   242→<html lang="en">
+   243→   243→<head>
+   244→   244→<meta charset="utf-8" />
+   245→   245→<meta name="viewport" content="width=device-width, initial-scale=1" />
+   246→   246→<title>${boardName.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] ?? c))}</title>
+   247→   247→<style>
+   248→   248→  body { font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; background: #fff; max-width: 780px; margin: 2rem auto; padding: 0 1.5rem; font-size: 15px; line-height: 1.65; }
+   249→   249→  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; line-height: 1.25; margin-top: 1.1em; }
+   250→   250→  h1 { font-size: 1.7em; } h2 { font-size: 1.35em; } h3 { font-size: 1.15em; }
+   251→   251→  a { color: #6366f1; text-decoration: underline; }
+   252→   252→  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.88em; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 3px; padding: 0.1em 0.35em; }
+   253→   253→  pre { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.85em; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.75rem 1rem; overflow-x: auto; }
+   254→   254→  pre code { background: none; border: none; padding: 0; font-size: inherit; }
+   255→   255→  blockquote { border-left: 3px solid #6366f1; padding-left: 1rem; color: #4b5563; }
+   256→   256→  ul, ol { padding-left: 1.5rem; } ul { list-style: disc; } ol { list-style: decimal; }
+   257→   257→  ul[data-type='taskList'] { list-style: none; padding-left: 0.25rem; }
+   258→   258→  ul[data-type='taskList'] li { display: flex; gap: 0.5rem; align-items: baseline; }
+   259→   259→  ul[data-type='taskList'] li[data-checked='true'] > div { color: #9ca3af; text-decoration: line-through; }
+   260→   260→  hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.25rem 0; }
+   261→   261→  img { max-width: 100%; border-radius: 6px; }
+   262→   262→  table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
+   263→   263→  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+   264→   264→  th { background: #f3f4f6; font-weight: 600; }
+   265→   265→  mark { background: #fde68a; border-radius: 2px; padding: 0.05em 0.1em; }
+   266→   266→  u { text-decoration: underline; }
+   267→   267→</style>
+   268→   268→</head>
+   269→   269→<body>
+   270→   270→${body}
+   271→   271→</body>
+   272→   272→</html>`;
+   273→   273→    const blob = new Blob([html], { type: 'text/html' });
+   274→   274→    const a = document.createElement('a');
+   275→   275→    a.href = URL.createObjectURL(blob);
+   276→   276→    a.download = `${boardName}.html`;
+   277→   277→    a.click();
+   278→   278→    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+   279→   279→  };
+   280→   280→
+   281→   281→  // Print: hand the page to the browser's print dialog. The doc lives in
+   282→   282→  // `.slate-doc .ProseMirror`, so a print stylesheet scopes the output to it
+   283→   283→  // (added in docEditor.css under @media print — strips the toolbar, file
+   284→   284→  // rail, and other chrome so only the page body lands on paper).
+   285→   285→  const printDoc = () => window.print();
+   286→   286→
+   287→   287→  // Clear formatting: drop every mark + reset every block to a plain
+   288→   288→  // paragraph. Useful for pasting in styled content and stripping it back.
+   289→   289→  const clearFormatting = () => {
+   290→   290→    if (!editor) return;
+   291→   291→    editor.chain().focus().unsetAllMarks().clearNodes().run();
+   292→   292→  };
+   293→   293→
+   294→   294→  // Indent/Outdent: in lists, sink/lift the list item. Outside lists TipTap
+   295→   295→  // has no built-in paragraph indent — these no-op gracefully there.
+   296→   296→  const indent = () => editor?.chain().focus().sinkListItem('listItem').run();
+   297→   297→  const outdent = () => editor?.chain().focus().liftListItem('listItem').run();
+   298→   298→
+   299→   299→  // Minimal Find: prompt for a term, walk every text node in the doc, select
+   300→   300→  // the first occurrence (case-insensitive) so the browser highlights it and
+   301→   301→  // scrolls it into view. A "no matches" toast covers the empty case.
+   302→   302→  const findInDoc = () => {
+   303→   303→    if (!editor) return;
+   304→   304→    // eslint-disable-next-line no-alert
+   305→   305→    const term = window.prompt('Find in document');
+   306→   306→    if (term === null || term === '') return;
+   307→   307→    const needle = term.toLowerCase();
+   308→   308→    let found = false;
+   309→   309→    editor.state.doc.descendants((node, pos) => {
+   310→   310→      if (found) return false; // stop walking once we've landed on a match
+   311→   311→      // Non-text nodes (paragraphs, list items, table cells, …) — descend
+   312→   312→      // into their children so the search reaches text nested anywhere.
+   313→   313→      if (!node.isText || !node.text) return;
+   314→   314→      const idx = node.text.toLowerCase().indexOf(needle);
+   315→   315→      if (idx === -1) return;
+   316→   316→      const from = pos + idx;
+   317→   317→      const to = from + term.length;
+   318→   318→      // Replace the selection with a TextSelection over the match — ProseMirror
+   319→   319→      // draws the native selection highlight, and scrollIntoView() on the tr
+   320→   320→      // asks the view to bring the new selection into view.
+   321→   321→      const tr = editor.state.tr
+   322→   322→        .setSelection(TextSelection.create(editor.state.doc, from, to))
+   323→   323→        .scrollIntoView();
+   324→   324→      editor.view.dispatch(tr);
+   325→   325→      editor.view.focus();
+   326→   326→      found = true;
+   327→   327→      return false;
+   328→   328→    });
+   329→   329→    if (!found) toast({ title: 'No matches', description: `“${term}” not found in this document.` });
+   330→   330→  };
+   331→   331→
+   332→   332→  if (!editor) return null;
+   333→   333→
+   334→   334→  const words = editor.state.doc.textContent.trim().split(/\s+/).filter(Boolean).length;
+   335→   335→  const inTable = editor.isActive('table');
+   336→   336→
+   337→   337→  return (
+   338→   338→    <div className="flex h-full flex-col bg-bg">
+   339→   339→      {/* Toolbar */}
+   340→   340→      <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-bg-2 px-2 py-1">
+   341→   341→        <ToolButton editor={editor} label="Undo (Ctrl+Z)" onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} /></ToolButton>
+   342→   342→        <ToolButton editor={editor} label="Redo (Ctrl+Shift+Z)" onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} /></ToolButton>
+   343→   343→        <Divider />
+   344→   344→        <ToolButton editor={editor} label="Bold (Ctrl+B)" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={14} /></ToolButton>
+   345→   345→        <ToolButton editor={editor} label="Italic (Ctrl+I)" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={14} /></ToolButton>
+   346→   346→        <ToolButton editor={editor} label="Strikethrough" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough size={14} /></ToolButton>
+   347→   347→        <ToolButton editor={editor} label="Underline (Ctrl+U)" active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()}><UnderlineIcon size={14} /></ToolButton>
+   348→   348→        <ToolButton editor={editor} label="Subscript" active={editor.isActive('subscript')} onClick={() => editor.chain().focus().toggleSubscript().run()}><SubscriptIcon size={14} /></ToolButton>
+   349→   349→        <ToolButton editor={editor} label="Superscript" active={editor.isActive('superscript')} onClick={() => editor.chain().focus().toggleSuperscript().run()}><SuperscriptIcon size={14} /></ToolButton>
+   350→   350→        <ToolButton editor={editor} label="Inline code" active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()}><Code size={14} /></ToolButton>
+   351→   351→        <ToolButton editor={editor} label="Highlight" active={editor.isActive('highlight')} onClick={() => editor.chain().focus().toggleHighlight().run()}><Highlighter size={14} /></ToolButton>
+   352→   352→        <ToolButton editor={editor} label="Link" active={editor.isActive('link')} onClick={setLink}><Link2 size={14} /></ToolButton>
+   353→   353→        {/* Text color — Palette button opens a small popover with a native color
+   354→   354→            input plus a "clear" affordance. The popover auto-closes on pick. */}
+   355→   355→        <div className="relative">
+   356→   356→          <button
+   357→   357→            type="button"
+   358→   358→            title="Text color"
+   359→   359→            aria-label="Text color"
+   360→   360→            aria-haspopup="dialog"
+   361→   361→            aria-expanded={colorOpen}
+   362→   362→            onMouseDown={(e) => e.preventDefault()}
+   363→   363→            onClick={() => setColorOpen((o) => !o)}
+   364→   364→            className={`grid h-7 w-7 place-items-center rounded transition-colors ${
+   365→   365→              colorOpen ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+   366→   366→            }`}
+   367→   367→          >
+   368→   368→            <Palette size={14} />
+   369→   369→          </button>
+   370→   370→          {colorOpen && (
+   371→   371→            <>
+   372→   372→              {/* Click-away backdrop. */}
+   373→   373→              <div className="fixed inset-0 z-40" onClick={() => setColorOpen(false)} />
+   374→   374→              <div
+   375→   375→                role="dialog"
+   376→   376→                aria-label="Text color"
+   377→   377→                className="absolute left-0 top-full z-50 mt-1 flex items-center gap-2 rounded-md border border-border bg-bg-2 p-2 shadow-lg"
+   378→   378→              >
+   379→   379→                <input
+   380→   380→                  type="color"
+   381→   381→                  aria-label="Pick text color"
+   382→   382→                  // Live-apply as the user drags through the swatch grid.
+   383→   383→                  onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
+   384→   384→                  className="h-6 w-6 cursor-pointer rounded border border-border bg-transparent p-0"
+   385→   385→                />
+   386→   386→                <button
+   387→   387→                  type="button"
+   388→   388→                  title="Clear color"
+   389→   389→                  aria-label="Clear color"
+   390→   390→                  onMouseDown={(e) => e.preventDefault()}
+   391→   391→                  onClick={() => {
+   392→   392→                    editor.chain().focus().unsetColor().run();
+   393→   393→                    setColorOpen(false);
+   394→   394→                  }}
+   395→   395→                  className="grid h-6 w-6 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+   396→   396→                >
+   397→   397→                  <X size={12} />
+   398→   398→                </button>
+   399→   399→              </div>
+   400→   400→            </>
+   401→   401→          )}
+   402→   402→        </div>
+   403→   403→        {/* Font size — small dropdown that applies/removes an inline
+   404→   404→            font-size style mark. The "Default" entry clears the override. */}
+   405→   405→        <div className="relative">
+   406→   406→          <button
+   407→   407→            type="button"
+   408→   408→            title="Font size"
+   409→   409→            aria-label="Font size"
+   410→   410→            aria-haspopup="dialog"
+   411→   411→            aria-expanded={fontSizeOpen}
+   412→   412→            onMouseDown={(e) => e.preventDefault()}
+   413→   413→            onClick={() => setFontSizeOpen((o) => !o)}
+   414→   414→            className={`flex h-7 items-center gap-0.5 rounded px-1.5 text-text-mid transition-colors ${
+   415→   415→              fontSizeOpen ? 'bg-accent/15 text-accent' : 'hover:bg-bg-3 hover:text-text'
+   416→   416→            }`}
+   417→   417→          >
+   418→   418→            <Type size={14} />
+   419→   419→            <ChevronDown size={10} />
+   420→   420→          </button>
+   421→   421→          {fontSizeOpen && (
+   422→   422→            <>
+   423→   423→              <div className="fixed inset-0 z-40" onClick={() => setFontSizeOpen(false)} />
+   424→   424→              <div
+   425→   425→                role="dialog"
+   426→   426→                aria-label="Font size"
+   427→   427→                className="absolute left-0 top-full z-50 mt-1 w-28 rounded-md border border-border bg-bg-2 p-1 shadow-lg"
+   428→   428→              >
+   429→   429→                <button
+   430→   430→                  type="button"
+   431→   431→                  onMouseDown={(e) => e.preventDefault()}
+   432→   432→                  onClick={() => {
+   433→   433→                    editor.chain().focus().unsetFontSize().run();
+   434→   434→                    setFontSizeOpen(false);
+   435→   435→                  }}
+   436→   436→                  className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
+   437→   437→                >
+   438→   438→                  Default
+   439→   439→                </button>
+   440→   440→                {FONT_SIZES.map((px) => (
+   441→   441→                  <button
+   442→   442→                    key={px}
+   443→   443→                    type="button"
+   444→   444→                    onMouseDown={(e) => e.preventDefault()}
+   445→   445→                    onClick={() => {
+   446→   446→                      editor.chain().focus().setFontSize(`${px}px`).run();
+   447→   447→                      setFontSizeOpen(false);
+   448→   448→                    }}
+   449→   449→                    className="block w-full rounded px-2 py-1 text-left text-xs text-text-mid hover:bg-bg-3 hover:text-text"
+   450→   450→                    style={{ fontSize: `${px}px` }}
+   451→   451→                  >
+   452→   452→                    {px}px
+   453→   453→                  </button>
+   454→   454→                ))}
+   455→   455→              </div>
+   456→   456→            </>
+   457→   457→          )}
+   458→   458→        </div>
+   459→   459→        <Divider />
+   460→   460→        <ToolButton editor={editor} label="Heading 1" active={editor.isActive('heading', { level: 1 })} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1 size={14} /></ToolButton>
+   461→   461→        <ToolButton editor={editor} label="Heading 2" active={editor.isActive('heading', { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2 size={14} /></ToolButton>
+   462→   462→        <ToolButton editor={editor} label="Heading 3" active={editor.isActive('heading', { level: 3 })} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><Heading3 size={14} /></ToolButton>
+   463→   463→        <Divider />
+   464→   464→        <ToolButton editor={editor} label="Align left" active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()}><AlignLeft size={14} /></ToolButton>
+   465→   465→        <ToolButton editor={editor} label="Align center" active={editor.isActive({ textAlign: 'center' })} onClick={() => editor.chain().focus().setTextAlign('center').run()}><AlignCenter size={14} /></ToolButton>
+   466→   466→        <ToolButton editor={editor} label="Align right" active={editor.isActive({ textAlign: 'right' })} onClick={() => editor.chain().focus().setTextAlign('right').run()}><AlignRight size={14} /></ToolButton>
+   467→   467→        <ToolButton editor={editor} label="Outdent (in a list)" onClick={outdent}><Outdent size={14} /></ToolButton>
+   468→   468→        <ToolButton editor={editor} label="Indent (in a list)" onClick={indent}><Indent size={14} /></ToolButton>
+   469→   469→        <Divider />
+   470→   470→        <ToolButton editor={editor} label="Bullet list" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List size={14} /></ToolButton>
+   471→   471→        <ToolButton editor={editor} label="Numbered list" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered size={14} /></ToolButton>
+   472→   472→        <ToolButton editor={editor} label="Task list" active={editor.isActive('taskList')} onClick={() => editor.chain().focus().toggleTaskList().run()}><ListTodo size={14} /></ToolButton>
+   473→   473→        <Divider />
+   474→   474→        <ToolButton editor={editor} label="Quote" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}><TextQuote size={14} /></ToolButton>
+   475→   475→        <ToolButton editor={editor} label="Code block" active={editor.isActive('codeBlock')} onClick={() => editor.chain().focus().toggleCodeBlock().run()}><SquareCode size={14} /></ToolButton>
+   476→   476→        <ToolButton editor={editor} label="Image…" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /></ToolButton>
+   477→   477→        <ToolButton editor={editor} label="Divider" onClick={() => editor.chain().focus().setHorizontalRule().run()}><Minus size={14} /></ToolButton>
+   478→   478→        <Divider />
+   479→   479→        {/* Table group — insert a 3×3 with header row, then mutate the table
+   480→   480→            the caret currently sits inside. The mutation buttons stay enabled
+   481→   481→            (TipTap no-ops gracefully when there's no table) but get a hint via
+   482→   482→            `inTable` so the user knows why nothing happens outside a table. */}
+   483→   483→        <ToolButton editor={editor} label="Insert table (3×3)" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><TableIcon size={14} /></ToolButton>
+   484→   484→        <ToolButton editor={editor} label={inTable ? 'Add column after' : 'Add column (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().addColumnAfter().run()}><Plus size={14} className="rotate-90" /></ToolButton>
+   485→   485→        <ToolButton editor={editor} label={inTable ? 'Add row after' : 'Add row (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().addRowAfter().run()}><Plus size={14} /></ToolButton>
+   486→   486→        <ToolButton editor={editor} label={inTable ? 'Delete table' : 'Delete table (click inside a table first)'} active={inTable} onClick={() => editor.chain().focus().deleteTable().run()}><Trash2 size={14} /></ToolButton>
+   487→   487→        <Divider />
+   488→   488→        <ToolButton editor={editor} label="Clear formatting" onClick={clearFormatting}><Eraser size={14} /></ToolButton>
+   489→   489→        <div className="flex-1" />
+   490→   490→        <ToolButton editor={editor} label="Find…" onClick={findInDoc}><Search size={14} /></ToolButton>
+   491→   491→        <span className="hidden font-mono text-[10px] text-text-dim sm:inline">{words} {words === 1 ? 'word' : 'words'}</span>
+   492→   492→        <ToolButton editor={editor} label="Print" onClick={printDoc}><Printer size={14} /></ToolButton>
+   493→   493→        <ToolButton editor={editor} label="Export HTML" onClick={exportHtml}><FileCode2 size={14} /></ToolButton>
+   494→   494→        <ToolButton editor={editor} label="Export Markdown" onClick={exportMarkdown}><FileDown size={14} /></ToolButton>
+   495→   495→      </div>
+   496→   496→
+   497→   497→      {/* Page — a paper sheet on a desk, with page-break guide lines. Image
+   498→   498→          resize/rotate/wrap controls live ON the selected image itself. */}
+   499→   499→      <div className="slate-doc flex-1" onMouseDown={(e) => {
+   500→   500→        // Clicking the desk around the page focuses the editor at the end —
+   501→
+   502→[showing lines 1-500 of 557; use offset=501 with limit to continue reading]

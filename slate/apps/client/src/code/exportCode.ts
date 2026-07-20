@@ -12,10 +12,13 @@ export interface CodeFile {
   name: string;
 }
 
-/** File list off the Yjs map, name-sorted for stable display order. */
+/** File list off the Yjs map, name-sorted for stable display order. Explicit
+ *  folder entries (`kind: 'folder'`, used for empty folders) are skipped — they
+ *  are not openable files and must not appear as tabs or in the zip. */
 export function listCodeFiles(slate: SlateDoc): CodeFile[] {
   const out: CodeFile[] = [];
   slate.codeFiles().forEach((m, id) => {
+    if (m.get('kind') === 'folder') return;
     const name = m.get('name');
     if (typeof name === 'string' && name.length > 0) out.push({ id, name });
   });

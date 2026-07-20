@@ -226,9 +226,9 @@ export function CodeEditor() {
     setOpenFiles((cur) => (cur.includes(id) ? cur : [...cur, id]));
   }, []);
 
-  // Listen for open-file events from the dockable CodeFilesPanel and
-  // CodeSearchPanel — they only know the file id and ask the editor (which
-  // owns the tab/active state) to actually open it. Window-level so the
+  // Listen for open-file events from the dockable CodeFilesPanel — it only
+  // knows the file id and asks the editor (which owns the tab/active state)
+  // to actually open it. Window-level so the
   // panel doesn't need to import the editor or be a child of it.
   useEffect(() => {
     const handler = (e: Event) => {

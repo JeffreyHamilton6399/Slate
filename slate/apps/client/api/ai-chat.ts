@@ -57,18 +57,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { messages, context } = (req.body ?? {}) as {
+    const { messages, context, instructions } = (req.body ?? {}) as {
       messages?: ChatMessage[];
       context?: string;
+      instructions?: string;
     };
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       res.status(400).json({ error: "Messages array is required" });
       return;
     }
 
-    const systemContent = context
+    let systemContent = context
       ? `You are Slate AI, a helpful assistant integrated into the Slate collaborative editor. You help with writing, coding, brainstorming, and creative work. Here is the user's current document/code context:\n\n---\n${context}\n---\n\nUse this context to give relevant, specific answers. If the context is empty, just help generally.`
       : "You are Slate AI, a helpful assistant integrated into the Slate collaborative editor. You help with writing, coding, brainstorming, and creative work. Be concise and helpful.";
+    // Mode-specific instructions from the client (e.g. the code editor's
+    // file-writing protocol) are appended verbatim to the system message.
+    if (typeof instructions === "string" && instructions.trim()) {
+      systemContent += `\n\n${instructions.trim()}`;
+    }
 
     // Exact header set z-ai-web-dev-sdk sends (Authorization is the apiKey; the
     // JWT rides in X-Token; chat/user ids are optional routing headers).

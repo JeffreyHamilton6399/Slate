@@ -15,13 +15,30 @@ import { Bot, Send, Trash2, Loader2, Paperclip } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles } from '../code/exportCode';
+import { parseAiFileBlocks, upsertCodeFile } from '../code/codeFiles';
+import { openCodeFile } from './CodeFilesPanel';
 import { docFragmentToMarkdown } from '../docs/exportMarkdown';
 import { cn } from '../utils/cn';
 
 interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
+  /** A local system note (e.g. "Created 2 files") rather than a model reply. */
+  note?: boolean;
 }
+
+/** Appended to the system prompt in code mode so the model can write files. */
+const CODE_AI_INSTRUCTIONS = `This is a live CODE workspace and you CAN create and modify files directly. When the user asks you to build, add, or change code, output each file as a fenced code block whose opening fence includes its path, exactly like:
+
+\`\`\`html path=index.html
+<full file contents here>
+\`\`\`
+
+Rules:
+- Output the ENTIRE file content every time — never a diff, snippet, or "// rest unchanged".
+- Put the path on the opening fence as path=<relative/path>. Use forward slashes for folders; they're created automatically.
+- Every file you want saved MUST be its own path-tagged block. A short explanation around the blocks is fine.
+- Prefer an index.html entry point (inline or link local CSS/JS) so the live Preview panel can render the result.`;
 
 export function AiChatPanel() {
   const room = useRoom();
@@ -82,6 +99,7 @@ export function AiChatPanel() {
 
     try {
       const context = gatherContext();
+      const isCode = board?.mode === 'code';
       // The AI chat runs as a Vercel serverless function at /api/ai-chat —
       // same origin as the Slate app, no CORS or env vars needed.
       // For local dev (without Vercel), it falls back gracefully.
@@ -94,6 +112,7 @@ export function AiChatPanel() {
           body: JSON.stringify({
             messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
             context,
+            instructions: isCode ? CODE_AI_INSTRUCTIONS : undefined,
           }),
         });
       } catch {
@@ -112,6 +131,23 @@ export function AiChatPanel() {
       if (!data.reply) throw new Error('No reply from AI');
       const aiMsg: ChatMsg = { role: 'assistant', content: data.reply };
       setMessages((prev) => [...prev, aiMsg]);
+
+      // In code mode, write any path-tagged file blocks the model produced
+      // straight into the project (creating folders as needed) and open the
+      // first one so the change is visible immediately.
+      if (isCode && room?.slate) {
+        const blocks = parseAiFileBlocks(data.reply);
+        if (blocks.length > 0) {
+          const applied = blocks.map((b) => ({ path: b.path, ...upsertCodeFile(room.slate, b.path, b.content) }));
+          if (applied[0]) openCodeFile(applied[0].id);
+          const created = applied.filter((r) => r.created).map((r) => r.path);
+          const updated = applied.filter((r) => !r.created).map((r) => r.path);
+          const parts: string[] = [];
+          if (created.length) parts.push(`Created ${created.join(', ')}`);
+          if (updated.length) parts.push(`Updated ${updated.join(', ')}`);
+          setMessages((prev) => [...prev, { role: 'assistant', content: `✓ ${parts.join(' · ')}`, note: true }]);
+        }
+      }
     } catch (err) {
       const errorMsg: ChatMsg = {
         role: 'assistant',
@@ -121,7 +157,7 @@ export function AiChatPanel() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, gatherContext]);
+  }, [input, loading, messages, gatherContext, board, room]);
 
   const clearChat = useCallback(() => {
     setMessages([]);
@@ -172,12 +208,14 @@ export function AiChatPanel() {
             key={i}
             className={cn(
               'mb-2 rounded-md px-2.5 py-1.5 text-[11px] leading-relaxed',
-              msg.role === 'user'
-                ? 'bg-accent/15 text-text'
-                : 'bg-bg-3 text-text-mid',
+              msg.note
+                ? 'border border-accent/30 bg-accent/10 font-mono text-[10px] text-accent'
+                : msg.role === 'user'
+                  ? 'bg-accent/15 text-text'
+                  : 'bg-bg-3 text-text-mid',
             )}
           >
-            {msg.role === 'assistant' && (
+            {msg.role === 'assistant' && !msg.note && (
               <div className="mb-0.5 flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider text-text-dim">
                 <Bot size={9} /> AI
               </div>

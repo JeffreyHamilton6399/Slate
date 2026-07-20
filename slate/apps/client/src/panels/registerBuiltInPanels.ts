@@ -22,7 +22,7 @@ import { InstrumentPanel } from './InstrumentPanel';
 import { FriendsPanel } from './FriendsPanel';
 import { DocOutlinePanel } from './DocOutlinePanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
-import { CodeSearchPanel } from './CodeSearchPanel';
+import { CodePreviewPanel } from './CodePreviewPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -151,32 +151,34 @@ export function registerBuiltInPanels(): void {
     order: 0,
     mode: 'doc',
   });
-  // Code Files — dockable file tree for code-mode boards. Mirrors the editor's
-  // left rail as a navigable folder tree; clicks open files in the editor.
+  // Code Files — dockable file tree for code-mode boards. Now the primary file
+  // browser: create files/folders, rename, delete, and click to open. Lives on
+  // the RIGHT (swapped with the AI assistant per the code-workspace layout).
   registerPanel({
     id: 'code-files',
     title: 'Files',
-    defaultSide: 'left',
+    defaultSide: 'right',
     render: CodeFilesPanel,
     order: 0,
     mode: 'code',
   });
-  // Code Search — project-wide text search across every file on the board.
+  // Code Preview — live sandboxed render of the project (Base44/Z.ai style).
+  // Sits under Files on the right; optional (only runs when the tab is open).
   registerPanel({
-    id: 'code-search',
-    title: 'Search',
-    defaultSide: 'right',
-    render: CodeSearchPanel,
-    order: 1,
+    id: 'code-preview',
+    title: 'Preview',
+    defaultSide: 'right-bottom',
+    render: CodePreviewPanel,
+    order: 0,
     mode: 'code',
   });
-  // AI Assistant — context-aware AI chat available in ALL modes. Reads the
-  // current doc/code content and sends it as context to the LLM. The AI
-  // backend runs server-side via the Next.js API route at /api/ai-chat.
+  // AI Assistant — context-aware AI chat. In code mode it can write files
+  // directly into the project. Defaults to the LEFT dock (swapped with Files
+  // for a chat-left / editor-center / files+preview-right workspace).
   registerPanel({
     id: 'ai-chat',
     title: 'AI Assistant',
-    defaultSide: 'right',
+    defaultSide: 'left',
     render: AiChatPanel,
     order: 2,
     mode: 'both',

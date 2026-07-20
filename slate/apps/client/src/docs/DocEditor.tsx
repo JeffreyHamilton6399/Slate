@@ -59,6 +59,7 @@ import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
+import { uploadDataUrl } from '../supabase/storage';
 import { DOC_APPLY_EVENT, DOC_COMMAND_EVENT, type DocApplyDetail } from './docBridge';
 import { docFragmentToMarkdown } from './exportMarkdown';
 import { toast } from '../ui/Toast';
@@ -233,7 +234,10 @@ export function DocEditor() {
     if (!editor) return;
     try {
       const img = await fileToImageShape(file);
-      editor.chain().focus().setImage({ src: img.src, alt: file.name }).run();
+      // Offload to the Supabase bucket when configured (stores a short URL in
+      // the doc instead of a ~550KB base64 blob); fall back to embedding.
+      const hosted = await uploadDataUrl(img.src, 'doc-images');
+      editor.chain().focus().setImage({ src: hosted ?? img.src, alt: file.name }).run();
     } catch (err) {
       toast({ title: 'Image import failed', description: err instanceof Error ? err.message : String(err) });
     }

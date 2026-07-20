@@ -33,6 +33,11 @@ export function parseAiDocHtml(text: string): string | null {
   return html.length > 0 ? html : null;
 }
 
+/** Remove the ```html doc block from a reply, leaving the prose for the chat. */
+export function stripDocBlock(text: string): string {
+  return text.replace(/```(?:html)?\s+doc\b[^\n]*\n[\s\S]*?```/i, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** Instructions appended to the AI system prompt in doc mode. */
 export const DOC_AI_INSTRUCTIONS = `This is a rich-text DOCUMENT you can edit directly. When the user asks you to write, rewrite, or change the document, output the COMPLETE updated document as a single fenced block tagged "doc":
 

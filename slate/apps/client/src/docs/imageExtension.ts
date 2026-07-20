@@ -9,8 +9,15 @@
  */
 
 import Image from '@tiptap/extension-image';
+import { ReactNodeViewRenderer } from '@tiptap/react';
+import { ResizableImageView } from './ResizableImageView';
 
 export const DocImage = Image.extend({
+  addNodeView() {
+    // React node view: draws the image + drag-to-resize handles when selected.
+    // addAttributes below still drives the serialized <img> (export/copy).
+    return ReactNodeViewRenderer(ResizableImageView);
+  },
   addAttributes() {
     return {
       ...this.parent?.(),

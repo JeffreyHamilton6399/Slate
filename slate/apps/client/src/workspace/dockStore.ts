@@ -228,7 +228,7 @@ export const useDockStore = create<DockState>()(
     {
       name: 'slate.dock.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 5,
+      version: 6,
       migrate: (persisted, version) => {
         const p = persisted as Partial<DockState>;
         const state: DockState = {
@@ -266,6 +266,18 @@ export const useDockStore = create<DockState>()(
           relocate('boards', 'right-bottom');
           relocate('assets', 'left-bottom');
           relocate('layers', 'left-bottom');
+        }
+        if (version < 6) {
+          // AI assistant split into per-mode panels (ai-code/ai-2d/…) that dock
+          // themselves; drop the old shared 'ai-chat' tab. Code's Files/Preview
+          // move to the right so the assistant can take the left.
+          for (const z of DOCK_ZONES) {
+            state.tabOrder[z] = state.tabOrder[z].filter((x) => x !== 'ai-chat');
+            if (state.activeTab[z] === 'ai-chat') state.activeTab[z] = state.tabOrder[z][0] ?? null;
+          }
+          delete state.panelSide['ai-chat'];
+          relocate('code-files', 'right');
+          relocate('code-preview', 'right-bottom');
         }
         return state;
       },

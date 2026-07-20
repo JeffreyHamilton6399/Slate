@@ -15,9 +15,9 @@ import { Bot, Send, Trash2, Loader2, Paperclip, Square } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles } from '../code/exportCode';
-import { parseAiFileBlocks, upsertCodeFile } from '../code/codeFiles';
+import { parseAiFileBlocks, upsertCodeFile, stripFileBlocks } from '../code/codeFiles';
 import { openCodeFile } from './CodeFilesPanel';
-import { parseAiDocHtml, applyDocHtml, DOC_AI_INSTRUCTIONS } from '../docs/docBridge';
+import { parseAiDocHtml, applyDocHtml, stripDocBlock, DOC_AI_INSTRUCTIONS } from '../docs/docBridge';
 import { docFragmentToMarkdown } from '../docs/exportMarkdown';
 import { cn } from '../utils/cn';
 
@@ -142,15 +142,18 @@ export function AiChatPanel() {
         throw new Error(errMsg || `HTTP ${resp.status}`);
       }
       const data = await resp.json();
-      if (!data.reply) throw new Error('No reply from AI');
-      const aiMsg: ChatMsg = { role: 'assistant', content: data.reply };
-      setMessages((prev) => [...prev, aiMsg]);
+      const reply = data.reply as string | undefined;
+      if (!reply) throw new Error('No reply from AI');
 
-      // In code mode, write any path-tagged file blocks the model produced
-      // straight into the project (creating folders as needed) and open the
-      // first one so the change is visible immediately.
+      // What to actually show in chat, and short "✓ …" notes for side effects.
+      let displayText = reply;
+      const notes: string[] = [];
+
+      // In code mode, write any path-tagged file blocks into the project (the
+      // full file contents are removed from the chat message — the tree gets
+      // them instead) and open the first one.
       if (isCode && room?.slate) {
-        const blocks = parseAiFileBlocks(data.reply);
+        const blocks = parseAiFileBlocks(reply);
         if (blocks.length > 0) {
           const applied = blocks.map((b) => ({ path: b.path, ...upsertCodeFile(room.slate, b.path, b.content) }));
           if (applied[0]) openCodeFile(applied[0].id);
@@ -159,18 +162,26 @@ export function AiChatPanel() {
           const parts: string[] = [];
           if (created.length) parts.push(`Created ${created.join(', ')}`);
           if (updated.length) parts.push(`Updated ${updated.join(', ')}`);
-          setMessages((prev) => [...prev, { role: 'assistant', content: `✓ ${parts.join(' · ')}`, note: true }]);
+          notes.push(`✓ ${parts.join(' · ')}`);
+          displayText = stripFileBlocks(reply);
         }
       }
 
-      // In doc mode, apply a full-document rewrite the model returned.
+      // In doc mode, apply a full-document rewrite (and drop its block from chat).
       if (isDoc) {
-        const html = parseAiDocHtml(data.reply);
+        const html = parseAiDocHtml(reply);
         if (html) {
           applyDocHtml(html);
-          setMessages((prev) => [...prev, { role: 'assistant', content: '✓ Updated the document', note: true }]);
+          notes.push('✓ Updated the document');
+          displayText = stripDocBlock(reply);
         }
       }
+
+      setMessages((prev) => [
+        ...prev,
+        ...(displayText ? [{ role: 'assistant' as const, content: displayText }] : []),
+        ...notes.map((n) => ({ role: 'assistant' as const, content: n, note: true })),
+      ]);
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         setMessages((prev) => [...prev, { role: 'assistant', content: '⏹ Stopped', note: true }]);

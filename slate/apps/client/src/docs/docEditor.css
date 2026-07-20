@@ -244,6 +244,42 @@
   outline: 2px solid var(--accent);
 }
 
+/* Resizable image node view: selection box + corner drag handles (2D-canvas
+   style). The wrapper is positioned; the box and handles overlay it. */
+.slate-doc-img { max-width: 100%; }
+.slate-doc-img .slate-img-box {
+  position: absolute;
+  inset: 0;
+  outline: 2px solid var(--accent);
+  pointer-events: none;
+}
+.slate-doc-img .slate-img-handle {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  z-index: 2;
+  touch-action: none;
+}
+.slate-doc-img .slate-img-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.slate-doc-img .slate-img-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.slate-doc-img .slate-img-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.slate-doc-img .slate-img-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.slate-doc-img .slate-img-size {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font: 10px/1 ui-monospace, monospace;
+  padding: 3px 5px;
+  border-radius: 3px;
+  z-index: 3;
+  pointer-events: none;
+}
+
 /* Placeholder (first empty paragraph only). */
 .slate-doc .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);

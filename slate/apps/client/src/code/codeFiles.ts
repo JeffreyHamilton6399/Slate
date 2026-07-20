@@ -217,6 +217,35 @@ function pathFromInfo(info: string): string | null {
   return token && !token.includes('=') && looksLikePath(token) ? token : null;
 }
 
+/**
+ * Remove the path-tagged file blocks from an AI reply, leaving just the prose
+ * (and any non-file code snippets). Used so the chat shows the explanation, not
+ * the full file contents, which are written to the tree instead.
+ */
+export function stripFileBlocks(text: string): string {
+  const fence = /```([^\n]*)\n[\s\S]*?```/g;
+  let out = '';
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fence.exec(text)) !== null) {
+    const between = text.slice(last, m.index);
+    const info = (m[1] ?? '').trim();
+    if (pathFromInfo(info) ?? pathFromText(between)) {
+      // Drop the file block, plus a trailing filename-only line ("index.html").
+      const lines = between.split('\n');
+      while (lines.length && (lines[lines.length - 1] ?? '').trim() === '') lines.pop();
+      const tail = (lines[lines.length - 1] ?? '').trim();
+      if (tail && pathFromText(tail)) lines.pop();
+      out += lines.join('\n');
+    } else {
+      out += between + m[0]; // keep a non-file snippet
+    }
+    last = fence.lastIndex;
+  }
+  out += text.slice(last);
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** Path from the last non-empty line before a block (a filename heading). */
 function pathFromText(between: string): string | null {
   const lines = between.split('\n').map((l) => l.trim()).filter(Boolean);

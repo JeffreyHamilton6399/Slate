@@ -22,6 +22,11 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
+// Allow the function to run up to 60s — building a multi-file app can take the
+// model a while, and the default (10s) was cutting long generations off with a
+// timeout. (Vercel caps this at the plan's max; 60s is the Hobby ceiling.)
+export const maxDuration = 60;
+
 interface ChatMessage {
   role: string;
   content: string;

@@ -106,9 +106,10 @@ function withConsoleBridge(html: string): string {
   if(!out){out=document.createElement('div');out.id='__out';
     out.style.cssText='position:fixed;left:0;right:0;bottom:0;max-height:40%;overflow:auto;font:11px/1.4 ui-monospace,monospace;background:rgba(0,0,0,.75);color:#eee;padding:4px 8px;z-index:2147483647';
     document.addEventListener('DOMContentLoaded',function(){document.body&&document.body.appendChild(out)});}
-  function add(cls,args){var line=document.createElement('div');line.className='log '+cls;
-    line.textContent=Array.prototype.map.call(args,function(a){try{return typeof a==='object'?JSON.stringify(a):String(a)}catch(e){return String(a)}}).join(' ');
-    (out.parentNode?out:document.body||document.documentElement).appendChild(line);}
+  function fmt(args){return Array.prototype.map.call(args,function(a){try{return typeof a==='object'?JSON.stringify(a):String(a)}catch(e){return String(a)}}).join(' ');}
+  function add(cls,args){var text=fmt(args);var line=document.createElement('div');line.className='log '+cls;line.textContent=text;
+    (out.parentNode?out:document.body||document.documentElement).appendChild(line);
+    try{parent.postMessage({source:'slate-preview',level:cls||'log',text:text},'*')}catch(e){}}
   ['log','info'].forEach(function(k){var o=console[k];console[k]=function(){add('',arguments);o&&o.apply(console,arguments)}});
   var w=console.warn;console.warn=function(){add('warn',arguments);w&&w.apply(console,arguments)};
   var e=console.error;console.error=function(){add('err',arguments);e&&e.apply(console,arguments)};

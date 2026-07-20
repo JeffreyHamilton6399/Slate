@@ -22,6 +22,7 @@ import { FriendsPanel } from './FriendsPanel';
 import { DocOutlinePanel } from './DocOutlinePanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
+import { CodeTerminalPanel } from './CodeTerminalPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -150,36 +151,21 @@ export function registerBuiltInPanels(): void {
     order: 0,
     mode: 'doc',
   });
-  // Code Files — the single file browser for code boards (the editor's own
-  // rail was removed to avoid two file lists). Tree with create/rename/delete
-  // for files + folders; click to open. Lives on the LEFT.
-  registerPanel({
-    id: 'code-files',
-    title: 'Files',
-    defaultSide: 'left',
-    render: CodeFilesPanel,
-    order: 0,
-    mode: 'code',
-  });
-  // Code Preview — live sandboxed render of the project (Base44/Z.ai style).
-  // Sits under the AI assistant on the right; optional (runs when tab is open).
-  registerPanel({
-    id: 'code-preview',
-    title: 'Preview',
-    defaultSide: 'right-bottom',
-    render: CodePreviewPanel,
-    order: 0,
-    mode: 'code',
-  });
-  // AI Assistant — context-aware AI chat. In code mode it writes files into the
-  // project; in doc mode it edits the document. Right dock (files-left /
-  // editor-center / assistant+preview-right).
-  registerPanel({
-    id: 'ai-chat',
-    title: 'AI Assistant',
-    defaultSide: 'right',
-    render: AiChatPanel,
-    order: 2,
-    mode: 'both',
-  });
+  // Code Files (single browser — the editor's own rail was removed) on the
+  // RIGHT, Preview under it; the AI assistant takes the LEFT (chat-left /
+  // editor-center / files+preview-right, bolt/Z.ai style).
+  registerPanel({ id: 'code-files', title: 'Files', defaultSide: 'right', render: CodeFilesPanel, order: 0, mode: 'code' });
+  registerPanel({ id: 'code-preview', title: 'Preview', defaultSide: 'right-bottom', render: CodePreviewPanel, order: 1, mode: 'code' });
+  // Code Terminal — streams the live preview's console output. Right-bottom
+  // with Preview so runtime logs sit beside what produced them.
+  registerPanel({ id: 'code-terminal', title: 'Terminal', defaultSide: 'right-bottom', render: CodeTerminalPanel, order: 2, mode: 'code' });
+
+  // AI Assistant is registered PER MODE: a panel's dock spot is global to its
+  // id, so one shared 'both' panel can't be left in code AND right elsewhere.
+  registerPanel({ id: 'ai-code', title: 'AI Assistant', defaultSide: 'left', render: AiChatPanel, order: 2, mode: 'code' });
+  registerPanel({ id: 'ai-2d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '2d' });
+  registerPanel({ id: 'ai-3d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '3d' });
+  registerPanel({ id: 'ai-doc', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'doc' });
+  // Audio: Audio Assets stays the top-right default; the AI goes bottom-right.
+  registerPanel({ id: 'ai-audio', title: 'AI Assistant', defaultSide: 'right-bottom', render: AiChatPanel, order: 3, mode: 'audio' });
 }

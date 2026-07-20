@@ -5,7 +5,7 @@
  * the two.
  */
 
-export type DocMode = '2d' | '3d' | 'audio';
+export type DocMode = '2d' | '3d' | 'audio' | 'doc';
 export type BoardVisibility = 'public' | 'private';
 
 export interface BoardMeta {
@@ -414,4 +414,8 @@ export interface SlateDocSnapshot {
   };
   notes: NoteSection[];
   chat: ChatMessage[];
+  /** Rich-text document ('doc' boards) as ProseMirror-shaped JSON — the
+   *  y-prosemirror encoding of the doc:text fragment. Optional: absent on
+   *  snapshots from older clients and non-doc boards. */
+  docText?: unknown;
 }

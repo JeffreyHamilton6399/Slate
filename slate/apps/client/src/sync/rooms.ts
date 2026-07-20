@@ -3,7 +3,7 @@
  * the Boards panel discovery; joining always opens a Yjs doc by name and
  * trusts CRDT for the rest.
  */
-import type { RoomInfo } from '@slate/sync-protocol';
+import type { DocMode, RoomInfo } from '@slate/sync-protocol';
 import { apiUrl } from './serverUrl.js';
 
 export interface PublicRoom {
@@ -11,7 +11,7 @@ export interface PublicRoom {
   visibility: 'public' | 'private';
   hostId: string;
   topic: string;
-  mode: '2d' | '3d' | 'audio';
+  mode: DocMode;
   members: number;
   createdAt: number;
 }

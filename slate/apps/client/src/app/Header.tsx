@@ -87,7 +87,7 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
             {board?.name ?? 'Slate'}
           </span>
           <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
-            {board?.mode === '3d' ? '3D Editor' : board?.mode === 'audio' ? 'Audio Studio' : '2D Whiteboard'}
+            {board?.mode === '3d' ? '3D Editor' : board?.mode === 'audio' ? 'Audio Studio' : board?.mode === 'doc' ? 'Doc Editor' : '2D Whiteboard'}
           </span>
         </div>
       </div>

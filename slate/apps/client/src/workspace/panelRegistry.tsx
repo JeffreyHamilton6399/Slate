@@ -6,10 +6,11 @@
 
 import type { ComponentType, ReactNode } from 'react';
 import { create } from 'zustand';
+import type { DocMode } from '@slate/sync-protocol';
 import type { DockZone } from './dockStore';
 
 export type { DockSide, DockZone } from './dockStore';
-export type AppMode = '2d' | '3d' | 'audio' | 'both';
+export type AppMode = DocMode | 'both';
 
 export interface PanelDef {
   id: string;
@@ -49,7 +50,7 @@ export function getPanel(id: string): PanelDef | undefined {
 }
 
 /** Should this panel be offered in a board of the given mode? */
-export function panelMatchesMode(def: PanelDef | undefined, mode: '2d' | '3d' | 'audio'): boolean {
+export function panelMatchesMode(def: PanelDef | undefined, mode: DocMode): boolean {
   if (!def) return false;
   return !def.mode || def.mode === 'both' || def.mode === mode;
 }

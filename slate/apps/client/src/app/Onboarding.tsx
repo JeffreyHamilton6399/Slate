@@ -17,7 +17,7 @@ import {
 } from '../ui/DropdownMenu';
 import { useAppStore } from './store';
 import { fetchRooms, type PublicRoom } from '../sync/rooms';
-import { sanitizeDisplayName } from '@slate/sync-protocol';
+import { sanitizeDisplayName, type DocMode } from '@slate/sync-protocol';
 import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { AboutDialog } from './AboutDialog';
@@ -31,7 +31,7 @@ export function Onboarding() {
   const [name, setName] = useState(cachedName || '');
   const [board, setBoard] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
-  const [mode, setMode] = useState<'2d' | '3d' | 'audio'>('2d');
+  const [mode, setMode] = useState<DocMode>('2d');
   const [rooms, setRooms] = useState<PublicRoom[]>([]);
   const [allProjectsOpen, setAllProjectsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -40,7 +40,7 @@ export function Onboarding() {
 
   // Build recents from local saves (max 3).
   const recents = (() => {
-    const byBoard = new Map<string, { boardName: string; mode: '2d' | '3d' | 'audio'; savedAt: number }>();
+    const byBoard = new Map<string, { boardName: string; mode: DocMode; savedAt: number }>();
     for (const e of listSaves()) {
       const cur = byBoard.get(e.boardName);
       if (!cur || e.savedAt > cur.savedAt) {
@@ -52,7 +52,7 @@ export function Onboarding() {
   })();
 
   const allProjects = (() => {
-    const byBoard = new Map<string, { boardName: string; mode: '2d' | '3d' | 'audio'; savedAt: number }>();
+    const byBoard = new Map<string, { boardName: string; mode: DocMode; savedAt: number }>();
     for (const e of listSaves()) {
       const cur = byBoard.get(e.boardName);
       if (!cur || e.savedAt > cur.savedAt) {
@@ -72,7 +72,8 @@ export function Onboarding() {
     const params = new URLSearchParams(window.location.search);
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     const linkModeRaw = params.get('mode');
-    const linkMode = linkModeRaw === '3d' ? '3d' : linkModeRaw === '2d' ? '2d' : linkModeRaw === 'audio' ? 'audio' : null;
+    const linkMode: DocMode | null =
+      linkModeRaw === '3d' || linkModeRaw === '2d' || linkModeRaw === 'audio' || linkModeRaw === 'doc' ? linkModeRaw : null;
 
     fetchRooms()
       .then((rs) => {
@@ -214,10 +215,10 @@ export function Onboarding() {
             />
             <IconToggle
               active={mode !== '2d'}
-              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : '2d')}
-              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
+              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : '2d')}
+              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : <BoxIcon size={15} />}
               offIcon={<PenLine size={15} />}
-              onLabel={mode === '3d' ? '3D' : 'Audio'}
+              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : 'Doc'}
               offLabel="2D"
             />
           </div>
@@ -253,7 +254,7 @@ export function Onboarding() {
                   >
                     <Clock size={11} className="shrink-0 text-text-dim" />
                     <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
-                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : 'text-green')}>
+                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : r.mode === 'doc' ? 'text-accent-2' : 'text-green')}>
                       {r.mode}
                     </span>
                   </button>
@@ -306,7 +307,7 @@ export function Onboarding() {
                     }}
                     className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-bg-2 text-left hover:border-accent/50"
                   >
-                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : 'bg-green/10 text-green')}>
+                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : r.mode === 'doc' ? 'bg-accent-2/10 text-accent-2' : 'bg-green/10 text-green')}>
                       {r.mode.toUpperCase()}
                     </span>
                     <span className="flex flex-col gap-0.5 p-2">

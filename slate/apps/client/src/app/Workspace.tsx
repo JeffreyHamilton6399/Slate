@@ -9,7 +9,7 @@
  * panel registry; this component owns nothing about specific panel content.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
@@ -27,6 +27,10 @@ import { RoomProvider } from '../sync/RoomContext';
 import { Canvas2D } from '../canvas2d/Canvas2D';
 import { Viewport3D } from '../viewport3d/Viewport3D';
 import { AudioEditor } from '../audio/AudioEditor';
+
+// Doc mode is the only surface that pulls in TipTap/ProseMirror — lazy-load
+// it so whiteboard/3D/audio boards don't pay the bundle cost.
+const DocEditor = lazy(() => import('../docs/DocEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -329,6 +333,10 @@ export function Workspace() {
               <Viewport3D room={room} />
             ) : board.mode === 'audio' ? (
               <AudioEditor />
+            ) : board.mode === 'doc' ? (
+              <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                <DocEditor />
+              </Suspense>
             ) : (
               <Canvas2D room={room} />
             )}

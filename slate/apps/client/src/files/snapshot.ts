@@ -17,6 +17,7 @@ import type {
   AudioClip,
   AudioTrack,
   ChatMessage,
+  DocMode,
   Layer,
   Material,
   MeshData,
@@ -38,6 +39,7 @@ import {
 } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { readMeta } from '../sync/doc';
+import { docTextToJson, jsonToDocText } from '../docs/docTextJson';
 
 const SCHEMA_VERSION = 'slate-v2';
 
@@ -118,6 +120,10 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
       },
       notes,
       chat,
+      // Rich text for 'doc' boards (PM-shaped JSON). Cheap no-op ({} content)
+      // on other modes; captured unconditionally so a board that switched
+      // modes never silently loses its document.
+      docText: docTextToJson(slate.docText()),
     },
   };
 }
@@ -169,6 +175,8 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     }
     for (const n of snapshot.data.notes) notes.push([toYMap(n)]);
     for (const c of snapshot.data.chat) chat.push([toYMap(c)]);
+    // Rich-text document (absent on snapshots from older clients).
+    if (snap.docText !== undefined) jsonToDocText(slate.docText(), snap.docText);
   });
 }
 
@@ -208,7 +216,7 @@ export interface SaveIndexEntry {
   boardName: string;
   label: string;
   savedAt: number;
-  mode: '2d' | '3d' | 'audio';
+  mode: DocMode;
   /** Approximate byte size, kept loose for UI display. */
   approxBytes: number;
 }

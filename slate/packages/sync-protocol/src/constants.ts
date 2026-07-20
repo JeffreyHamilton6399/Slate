@@ -88,3 +88,8 @@ export const AUDIO_KEYS = {
   clips: 'clips',
   bpm: 'bpm',
 } as const;
+
+/** Top-level Y.XmlFragment holding the rich-text document for 'doc' boards.
+ *  Top-level (doc.getXmlFragment) for the same reason as the scene/audio
+ *  containers: globally keyed = every client resolves the same shared type. */
+export const DOC_TEXT_KEY = 'doc:text';

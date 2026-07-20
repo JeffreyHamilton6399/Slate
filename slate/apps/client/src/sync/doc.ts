@@ -23,6 +23,7 @@ import {
   DOC_KEYS,
   SCENE3D_KEYS,
   AUDIO_KEYS,
+  DOC_TEXT_KEY,
   type BoardMeta,
   type DocMode,
 } from '@slate/sync-protocol';
@@ -54,6 +55,8 @@ export interface SlateDoc {
   chat: () => Y.Array<Y.Map<unknown>>;
   /** Curated asset library (folders / mesh assets / material assets). */
   assets: () => Y.Map<Y.Map<unknown>>;
+  /** Rich-text document for 'doc' boards (bound to TipTap via y-prosemirror). */
+  docText: () => Y.XmlFragment;
 }
 
 export function createSlateDoc(): SlateDoc {
@@ -76,6 +79,7 @@ export function createSlateDoc(): SlateDoc {
     notes: () => doc.getArray<Y.Map<unknown>>(DOC_KEYS.notes),
     chat: () => doc.getArray<Y.Map<unknown>>(DOC_KEYS.chat),
     assets: () => doc.getMap<Y.Map<unknown>>('assets'),
+    docText: () => doc.getXmlFragment(DOC_TEXT_KEY),
   };
 }
 

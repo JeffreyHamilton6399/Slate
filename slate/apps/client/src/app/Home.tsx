@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -20,7 +20,7 @@ import {
   DropdownMenuSeparator,
 } from '../ui/DropdownMenu';
 import { cn } from '../utils/cn';
-import { sanitizeDisplayName } from '@slate/sync-protocol';
+import { sanitizeDisplayName, type DocMode } from '@slate/sync-protocol';
 import { useAppStore } from './store';
 import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
 import { Avatar } from './Avatar';
@@ -290,8 +290,16 @@ function SignIn() {
 
 interface RecentProject {
   boardName: string;
-  mode: '2d' | '3d' | 'audio';
+  mode: DocMode;
   savedAt: number;
+}
+
+/** Mode-badge color classes — one place so every list renders modes alike. */
+function modeBadgeClass(mode: DocMode): string {
+  if (mode === '3d') return 'bg-accent/15 text-accent';
+  if (mode === 'audio') return 'bg-warn/15 text-warn';
+  if (mode === 'doc') return 'bg-accent-2/15 text-accent-2';
+  return 'bg-green/15 text-green';
 }
 
 /** Signed-in home: recents grid + create + live boards. */
@@ -305,7 +313,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
   const [rooms, setRooms] = useState<PublicRoom[]>([]);
   const [board, setBoard] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
-  const [createMode, setCreateMode] = useState<'2d' | '3d' | 'audio'>('2d');
+  const [createMode, setCreateMode] = useState<DocMode>('2d');
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>('profile');
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -368,9 +376,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     if (!linkBoard) return;
     const rawMode = params.get('mode');
-    const linkMode = rawMode === '3d' ? '3d' : rawMode === '2d' ? '2d' : rawMode === 'audio' ? 'audio' : null;
+    const linkMode: DocMode | null =
+      rawMode === '3d' || rawMode === '2d' || rawMode === 'audio' || rawMode === 'doc' ? rawMode : null;
     window.history.replaceState(null, '', window.location.pathname);
-    const join = (creator: boolean, mode: '2d' | '3d' | 'audio') =>
+    const join = (creator: boolean, mode: DocMode) =>
       enterBoard({
         name: linkBoard,
         mode,
@@ -386,10 +395,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
       .catch(() => join(true, linkMode ?? '2d'));
   }, [enterBoard]);
 
-  const open = (name: string, m: '2d' | '3d' | 'audio', creator: boolean) =>
+  const open = (name: string, m: DocMode, creator: boolean) =>
     enterBoard({ name, mode: m, visibility, iAmCreator: creator, joinedAt: Date.now() });
 
-  const create = (m: '2d' | '3d' | 'audio') => {
+  const create = (m: DocMode) => {
     const room = sanitizeBoardName(board) || randomBoardName();
     open(room, m, !rooms.some((r) => r.name === room));
   };
@@ -462,10 +471,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
                 />
                 <IconToggle
                   active={createMode !== '2d'}
-                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : '2d')}
-                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : <BoxIcon size={15} />}
+                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : createMode === 'audio' ? 'doc' : '2d')}
+                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : createMode === 'doc' ? <FileTextIcon size={15} /> : <BoxIcon size={15} />}
                   offIcon={<PenLineIcon size={15} />}
-                  onLabel={createMode === '3d' ? '3D scene' : 'Audio'}
+                  onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : 'Doc'}
                   offLabel="2D whiteboard"
                 />
                 <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
@@ -503,11 +512,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
                           <span
                             className={cn(
                               'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
-                              r.mode === '3d'
-                                ? 'bg-accent/15 text-accent'
-                                : r.mode === 'audio'
-                                  ? 'bg-warn/15 text-warn'
-                                  : 'bg-green/15 text-green',
+                              modeBadgeClass(r.mode),
                             )}
                           >
                             {r.mode}
@@ -547,11 +552,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
                     <span
                       className={cn(
                         'rounded px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
-                        r.mode === '3d'
-                          ? 'bg-accent/15 text-accent'
-                          : r.mode === 'audio'
-                            ? 'bg-warn/15 text-warn'
-                            : 'bg-green/15 text-green',
+                        modeBadgeClass(r.mode),
                       )}
                     >
                       {r.mode}
@@ -605,7 +606,7 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   projects: RecentProject[];
-  onOpen: (name: string, mode: '2d' | '3d' | 'audio') => void;
+  onOpen: (name: string, mode: DocMode) => void;
   onDelete: (name: string) => void;
 }) {
   return (
@@ -631,7 +632,9 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
                       ? 'bg-accent/10 text-accent'
                       : r.mode === 'audio'
                         ? 'bg-warn/10 text-warn'
-                        : 'bg-green/10 text-green',
+                        : r.mode === 'doc'
+                          ? 'bg-accent-2/10 text-accent-2'
+                          : 'bg-green/10 text-green',
                   )}
                 >
                   {r.mode.toUpperCase()}

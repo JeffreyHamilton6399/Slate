@@ -4,6 +4,7 @@
  * All functions no-op when Supabase isn't configured.
  */
 
+import type { DocMode } from '@slate/sync-protocol';
 import { supabase } from './supabase';
 
 // ── Presence ────────────────────────────────────────────────────────────────
@@ -34,7 +35,7 @@ export interface BoardInvite {
   fromName: string;
   fromAvatar: string | null;
   boardName: string;
-  mode: '2d' | '3d' | 'audio';
+  mode: DocMode;
   createdAt: number;
 }
 
@@ -44,7 +45,7 @@ export async function sendBoardInvite(
   fromUserId: string,
   toUserId: string,
   boardName: string,
-  mode: '2d' | '3d' | 'audio',
+  mode: DocMode,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabase) return { ok: false, error: 'Accounts are not configured.' };
   const { data: existing } = await supabase
@@ -90,7 +91,7 @@ export async function getIncomingInvites(userId: string): Promise<BoardInvite[]>
     fromName: byId.get(r.from_user)?.display_name ?? 'A friend',
     fromAvatar: byId.get(r.from_user)?.avatar_url ?? null,
     boardName: r.board_name,
-    mode: (r.mode === '3d' || r.mode === 'audio' ? r.mode : '2d') as '2d' | '3d' | 'audio',
+    mode: (r.mode === '3d' || r.mode === 'audio' || r.mode === 'doc' ? r.mode : '2d') as DocMode,
     createdAt: Date.parse(r.created_at) || Date.now(),
   }));
 }

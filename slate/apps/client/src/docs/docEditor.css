@@ -2,19 +2,73 @@
    the ProseMirror content is styled by hand using the ui-tokens CSS vars
    (same vars the Tailwind preset maps to bg-*, text-*, accent, …). */
 
+/* The "desk" — a neutral surface the paper page floats on. */
 .slate-doc {
   height: 100%;
   overflow-y: auto;
+  background: var(--bg2);
+  padding: 22px 16px 80px;
 }
 
-.slate-doc .ProseMirror {
+/* The paper page — a white sheet with margins, a soft drop shadow, and faint
+   page-break guide lines every 11in so a growing document reads as multiple
+   pages (a print-accurate, zero-reflow approximation). Fixed dark ink on white
+   regardless of app theme, like a real document. */
+.slate-doc-page {
+  --page-h: 1056px;              /* 11in @ 96dpi */
+  --paper-line: #d0d7de;
+  --ink: #1f2328;
+  --ink-dim: #57606a;
+  --paper-code-bg: #f6f8fa;
+  width: 816px;                  /* 8.5in @ 96dpi */
+  max-width: 100%;
+  min-height: var(--page-h);
+  margin: 0 auto;
+  padding: 72px 84px;            /* top/bottom 0.75in, generous side margins */
+  background-color: #fff;
+  color: var(--ink);
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 12px 34px rgba(0, 0, 0, 0.14);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--page-h) - 2px),
+    var(--paper-line) calc(var(--page-h) - 2px),
+    var(--paper-line) var(--page-h)
+  );
+}
+
+.slate-doc-page .ProseMirror {
   outline: none;
-  min-height: 60vh;
-  color: var(--text);
+  min-height: 40vh;
+  color: var(--ink);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.7;
   caret-color: var(--accent);
 }
+
+/* Paper-palette overrides so the theme-var elements read on white in both
+   light and dark app themes. */
+.slate-doc-page .ProseMirror a { color: #0969da; }
+.slate-doc-page .ProseMirror code {
+  background: var(--paper-code-bg);
+  border-color: var(--paper-line);
+  color: #24292f;
+}
+.slate-doc-page .ProseMirror pre {
+  background: var(--paper-code-bg);
+  border-color: var(--paper-line);
+  color: #24292f;
+}
+.slate-doc-page .ProseMirror blockquote {
+  border-left-color: var(--accent);
+  color: var(--ink-dim);
+}
+.slate-doc-page .ProseMirror hr { border-top-color: var(--paper-line); }
+.slate-doc-page .ProseMirror th { background: var(--paper-code-bg); }
+.slate-doc-page .ProseMirror th,
+.slate-doc-page .ProseMirror td { border-color: var(--paper-line); }
+.slate-doc-page .ProseMirror p.is-editor-empty:first-child::before { color: #8b949e; }
 
 .slate-doc .ProseMirror > * + * {
   margin-top: 0.6em;
@@ -179,8 +233,12 @@
 
 .slate-doc .ProseMirror img {
   max-width: 100%;
+  height: auto;
   border-radius: var(--radius-md);
   display: block;
+  /* Toolbar sets width (CSS width), rotation (transform), and align (auto
+     margins) as inline styles on the node. Rotate about the center. */
+  transform-origin: center center;
 }
 .slate-doc .ProseMirror img.ProseMirror-selectednode {
   outline: 2px solid var(--accent);
@@ -262,9 +320,19 @@
   .slate-doc .collaboration-cursor__label {
     display: none !important;
   }
-  /* Page width takes the full print area. */
-  .slate-doc .mx-auto {
-    max-width: 100% !important;
+  /* The page fills the print area: drop the shadow, guide lines, and desk. */
+  .slate-doc {
+    background: #fff !important;
     padding: 0 !important;
+  }
+  .slate-doc-page {
+    width: 100% !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    background-image: none !important;
+    background-color: #fff !important;
+    color: #000 !important;
   }
 }

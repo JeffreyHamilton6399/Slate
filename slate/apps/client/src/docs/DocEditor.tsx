@@ -22,14 +22,14 @@
  * (and the Export dialog). Find via prompt + ProseMirror text search.
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
-import ImageExt from '@tiptap/extension-image';
+import { DocImage } from './imageExtension';
 import LinkExt from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
@@ -53,12 +53,13 @@ import {
   Underline as UnderlineIcon, Highlighter, Palette, AlignLeft, AlignCenter,
   AlignRight, Table as TableIcon, Plus, Trash2, Search, X,
   Subscript as SubscriptIcon, Superscript as SuperscriptIcon, Eraser, Printer,
-  Indent, Outdent, ChevronDown, Type,
+  Indent, Outdent, ChevronDown, Type, RotateCcw, RotateCw,
 } from 'lucide-react';
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
+import { DOC_APPLY_EVENT, type DocApplyDetail } from './docBridge';
 import { docFragmentToMarkdown } from './exportMarkdown';
 import { toast } from '../ui/Toast';
 import './docEditor.css';
@@ -121,7 +122,7 @@ export function DocEditor() {
         TaskItem.configure({ nested: true }),
         // Images live as data URLs INSIDE the Yjs doc (bounded by the same
         // downscaler the 2D canvas uses), so they sync/offline like text.
-        ImageExt.configure({ allowBase64: true }),
+        DocImage.configure({ allowBase64: true }),
         LinkExt.configure({ openOnClick: false, autolink: true }),
         Placeholder.configure({ placeholder: 'Start writing — everyone on this board sees it live.' }),
         CodeBlockLowlight.configure({ lowlight }),
@@ -151,6 +152,31 @@ export function DocEditor() {
     },
     [room],
   );
+
+  // The AI assistant edits this document by dispatching a window event with the
+  // full new HTML (it can't reach the editor instance directly). Replacing the
+  // content applies as a Yjs transaction, so the rewrite syncs to every peer.
+  useEffect(() => {
+    if (!editor) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<DocApplyDetail>).detail;
+      if (!detail?.html) return;
+      editor.commands.setContent(detail.html, { emitUpdate: true });
+    };
+    window.addEventListener(DOC_APPLY_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DOC_APPLY_EVENT, handler as EventListener);
+  }, [editor]);
+
+  // Image controls (enabled only when an image node is selected). Width is a
+  // CSS width string; rotation is degrees; align uses auto margins.
+  const setImageWidth = (w: string | null) =>
+    editor?.chain().focus().updateAttributes('image', { width: w }).run();
+  const rotateImage = (delta: number) => {
+    const cur = (editor?.getAttributes('image').rotation as number) || 0;
+    editor?.chain().focus().updateAttributes('image', { rotation: ((cur + delta) % 360 + 360) % 360 }).run();
+  };
+  const setImageAlign = (a: 'left' | 'center' | 'right') =>
+    editor?.chain().focus().updateAttributes('image', { align: a }).run();
 
   const addImage = async (file: File) => {
     if (!editor) return;
@@ -283,6 +309,8 @@ ${body}
 
   const words = editor.state.doc.textContent.trim().split(/\s+/).filter(Boolean).length;
   const inTable = editor.isActive('table');
+  const imageSelected = editor.isActive('image');
+  const imageWidth = (editor.getAttributes('image').width as string | null) ?? null;
 
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -443,16 +471,54 @@ ${body}
         <ToolButton editor={editor} label="Export Markdown" onClick={exportMarkdown}><FileDown size={14} /></ToolButton>
       </div>
 
-      {/* Page */}
+      {/* Contextual image toolbar — only while an image node is selected. */}
+      {imageSelected && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-border bg-bg-2/60 px-2 py-1">
+          <span className="mr-1 font-mono text-[10px] uppercase tracking-wider text-text-dim">Image</span>
+          <span className="text-[10px] text-text-dim">Size</span>
+          {(['25%', '50%', '75%', '100%'] as const).map((w) => (
+            <button
+              key={w}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setImageWidth(w)}
+              className={`rounded px-1.5 py-0.5 text-[11px] ${
+                imageWidth === w ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+              }`}
+            >
+              {w}
+            </button>
+          ))}
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setImageWidth(null)}
+            className={`rounded px-1.5 py-0.5 text-[11px] ${
+              imageWidth === null ? 'bg-accent/15 text-accent' : 'text-text-mid hover:bg-bg-3 hover:text-text'
+            }`}
+          >
+            Auto
+          </button>
+          <Divider />
+          <ToolButton editor={editor} label="Rotate left 90°" onClick={() => rotateImage(-90)}><RotateCcw size={14} /></ToolButton>
+          <ToolButton editor={editor} label="Rotate right 90°" onClick={() => rotateImage(90)}><RotateCw size={14} /></ToolButton>
+          <Divider />
+          <ToolButton editor={editor} label="Align image left" onClick={() => setImageAlign('left')}><AlignLeft size={14} /></ToolButton>
+          <ToolButton editor={editor} label="Align image center" onClick={() => setImageAlign('center')}><AlignCenter size={14} /></ToolButton>
+          <ToolButton editor={editor} label="Align image right" onClick={() => setImageAlign('right')}><AlignRight size={14} /></ToolButton>
+        </div>
+      )}
+
+      {/* Page — a paper sheet on a desk, with page-break guide lines. */}
       <div className="slate-doc flex-1" onMouseDown={(e) => {
-        // Clicking the empty margin below/around the page focuses the editor
-        // at the end — the whole surface should feel like the document.
+        // Clicking the desk around the page focuses the editor at the end —
+        // the whole surface should feel like the document.
         if (e.target === e.currentTarget && editor) {
           e.preventDefault();
           editor.chain().focus('end').run();
         }
       }}>
-        <div className="mx-auto w-full max-w-[780px] px-6 py-8 sm:px-10">
+        <div className="slate-doc-page">
           <EditorContent editor={editor} />
         </div>
       </div>

@@ -17,6 +17,7 @@ import { useAppStore } from '../app/store';
 import { listCodeFiles } from '../code/exportCode';
 import { parseAiFileBlocks, upsertCodeFile } from '../code/codeFiles';
 import { openCodeFile } from './CodeFilesPanel';
+import { parseAiDocHtml, applyDocHtml, DOC_AI_INSTRUCTIONS } from '../docs/docBridge';
 import { docFragmentToMarkdown } from '../docs/exportMarkdown';
 import { cn } from '../utils/cn';
 
@@ -100,6 +101,7 @@ export function AiChatPanel() {
     try {
       const context = gatherContext();
       const isCode = board?.mode === 'code';
+      const isDoc = board?.mode === 'doc';
       // The AI chat runs as a Vercel serverless function at /api/ai-chat —
       // same origin as the Slate app, no CORS or env vars needed.
       // For local dev (without Vercel), it falls back gracefully.
@@ -112,7 +114,7 @@ export function AiChatPanel() {
           body: JSON.stringify({
             messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
             context,
-            instructions: isCode ? CODE_AI_INSTRUCTIONS : undefined,
+            instructions: isCode ? CODE_AI_INSTRUCTIONS : isDoc ? DOC_AI_INSTRUCTIONS : undefined,
           }),
         });
       } catch {
@@ -146,6 +148,15 @@ export function AiChatPanel() {
           if (created.length) parts.push(`Created ${created.join(', ')}`);
           if (updated.length) parts.push(`Updated ${updated.join(', ')}`);
           setMessages((prev) => [...prev, { role: 'assistant', content: `✓ ${parts.join(' · ')}`, note: true }]);
+        }
+      }
+
+      // In doc mode, apply a full-document rewrite the model returned.
+      if (isDoc) {
+        const html = parseAiDocHtml(data.reply);
+        if (html) {
+          applyDocHtml(html);
+          setMessages((prev) => [...prev, { role: 'assistant', content: '✓ Updated the document', note: true }]);
         }
       }
     } catch (err) {

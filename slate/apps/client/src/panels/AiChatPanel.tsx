@@ -82,13 +82,15 @@ export function AiChatPanel() {
 
     try {
       const context = gatherContext();
-      // The AI chat API route lives in the Next.js app. When the Slate SPA is
-      // served from the same origin (e.g., via the /slate/ redirect on
-      // localhost:3000 or Vercel), a relative fetch works. On standalone
-      // deployments the route may not exist — show a clear error.
+      // The AI chat API URL is configurable via Vite env var VITE_AI_CHAT_URL.
+      // - If set (e.g. "https://slate-next.vercel.app/api/ai-chat"), uses that.
+      // - If not set, defaults to "/api/ai-chat" (relative — works when the
+      //   Slate SPA is served from the same origin as the API route, e.g.
+      //   when deployed via the Next.js project's public/slate/ redirect).
+      const aiUrl = import.meta.env.VITE_AI_CHAT_URL || '/api/ai-chat';
       let resp: Response;
       try {
-        resp = await fetch('/api/ai-chat', {
+        resp = await fetch(aiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

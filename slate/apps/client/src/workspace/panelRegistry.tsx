@@ -7,6 +7,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import { create } from 'zustand';
 import type { DocMode } from '@slate/sync-protocol';
+import { RecoverBoundary } from '../app/RecoverBoundary';
 import type { DockZone } from './dockStore';
 
 export type { DockSide, DockZone } from './dockStore';
@@ -59,5 +60,11 @@ export function RenderPanel({ id }: { id: string }): ReactNode {
   const def = usePanelRegistry((s) => s.panels[id]);
   if (!def) return null;
   const C = def.render;
-  return <C />;
+  // A throw inside one panel renders an inline recovery card instead of
+  // unmounting the whole app via the root ErrorBoundary.
+  return (
+    <RecoverBoundary label={`“${def.title}”`}>
+      <C />
+    </RecoverBoundary>
+  );
 }

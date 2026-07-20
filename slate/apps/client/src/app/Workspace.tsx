@@ -24,6 +24,7 @@ import { NewProjectDialog } from './NewProjectDialog';
 import { useSlateRoom } from '../sync/useSlateRoom';
 import { initMetaIfEmpty } from '../sync/doc';
 import { RoomProvider } from '../sync/RoomContext';
+import { RecoverBoundary } from './RecoverBoundary';
 import { Canvas2D } from '../canvas2d/Canvas2D';
 import { Viewport3D } from '../viewport3d/Viewport3D';
 import { AudioEditor } from '../audio/AudioEditor';
@@ -330,21 +331,23 @@ export function Workspace() {
             <Dock side="left" width={sidebarWidth} onResize={setSidebarWidth} />
           )}
           <main className="relative flex-1 min-w-0">
-            {board.mode === '3d' ? (
-              <Viewport3D room={room} />
-            ) : board.mode === 'audio' ? (
-              <AudioEditor />
-            ) : board.mode === 'doc' ? (
-              <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
-                <DocEditor />
-              </Suspense>
-            ) : board.mode === 'code' ? (
-              <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
-                <CodeEditor />
-              </Suspense>
-            ) : (
-              <Canvas2D room={room} />
-            )}
+            <RecoverBoundary label="The editor">
+              {board.mode === '3d' ? (
+                <Viewport3D room={room} />
+              ) : board.mode === 'audio' ? (
+                <AudioEditor />
+              ) : board.mode === 'doc' ? (
+                <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                  <DocEditor />
+                </Suspense>
+              ) : board.mode === 'code' ? (
+                <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                  <CodeEditor />
+                </Suspense>
+              ) : (
+                <Canvas2D room={room} />
+              )}
+            </RecoverBoundary>
             <PeopleWidget awareness={awareness} room={room} />
           </main>
           {!isMobile && (

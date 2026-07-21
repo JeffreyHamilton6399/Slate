@@ -1456,3 +1456,44 @@ Stage Summary:
 - `app/Header.tsx`: Print hidden for audio mode (and 3D, unchanged).
 - `code/CodeEditor.tsx`: new split-view live preview with drag-resizable divider, auto-refresh, sandboxed iframe, Refresh button, command-palette entry, and `window.__slateCodeActiveFileId` bridge for ExportDialog.
 - Notes for downstream: see `/home/z/my-project/agent-ctx/ROUND18-A-main.md`.
+
+---
+Task ID: ROUND20-A
+Agent: main
+Task: Make the code terminal actually useful — a real interactive file-system terminal
+
+Work Log:
+- Read worklog, agent-ctx/ROUND18-A-main.md (the prior split-view preview work),
+  and the five target files: code/codeFiles.ts, code/exportCode.ts,
+  panels/CodeTerminalPanel.tsx, panels/CodePreviewPanel.tsx, code/CodeEditor.tsx.
+- code/codeFiles.ts: exported `findFileId` (was module-private) and added a
+  public `readCodeFileText(slate, path)` wrapper that returns the file's
+  Y.Text content as a string, or null. Used by the terminal's `cat`.
+- code/terminalCommands.ts (NEW): the command engine. Pure function
+  `runTerminalCommand(slate, rawInput) -> TerminalResult`. Implements
+  ls, cat, touch, mkdir, rm, mv, write, echo, run, clear, pwd, help.
+  All mutations go through the existing codeFiles.ts helpers so they're
+  collaborative + undoable.
+- panels/CodeTerminalPanel.tsx (rewritten): interactive terminal with
+  prompt row, command history (up/down arrows, dedup consecutive
+  duplicates, Ctrl+L clears), and the kept preview-console forwarding
+  (messages from the preview iframe still append with level-color).
+  Dispatches `slate:code-refresh-preview` window event on `run`, empties
+  log on `clear`. Exports SLATE_REFRESH_PREVIEW_EVENT constant.
+- code/CodeEditor.tsx: imports SLATE_REFRESH_PREVIEW_EVENT alongside
+  CodeTerminalPanel; adds a useEffect listener that calls rebuildPreview()
+  when the event fires (only if the split-view preview is visible).
+- panels/CodePreviewPanel.tsx: same listener wired to its own rebuild().
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0.
+- `npx eslint` on all five changed files → exit 0, no warnings.
+
+Stage Summary:
+- The terminal is now a real shell-like surface: type `ls`, `cat main.js`,
+  `touch new.js`, `mkdir src`, `write foo.js console.log('hi')`, `rm old.ts`,
+  `mv a.js b.js`, `run` (refreshes the preview), `clear`, `help`. Every
+  mutation syncs through Yjs to peers and the Files panel. Up/down arrows
+  walk history. Preview console output still flows in with its existing
+  color coding. Both preview surfaces (split view in CodeEditor + dockable
+  CodePreviewPanel) rebuild on `run`.

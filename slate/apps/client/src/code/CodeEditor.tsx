@@ -63,7 +63,7 @@ import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { listCodeFiles, codeZipBlob } from './exportCode';
 import { buildPreview, type PreviewFile } from './preview';
-import { CodeTerminalPanel } from '../panels/CodeTerminalPanel';
+import { CodeTerminalPanel, SLATE_REFRESH_PREVIEW_EVENT } from '../panels/CodeTerminalPanel';
 import { toast } from '../ui/Toast';
 import './codeEditor.css';
 
@@ -625,6 +625,17 @@ export function CodeEditor() {
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
     };
   }, [showPreview, room, rebuildPreview]);
+
+  // Refresh-on-demand: the terminal's `run` command dispatches this event
+  // (and the dockable CodePreviewPanel listens too). We rebuild immediately
+  // when the preview is visible; if it's hidden there's nothing to refresh.
+  useEffect(() => {
+    const onRefresh = () => {
+      if (showPreview) rebuildPreview();
+    };
+    window.addEventListener(SLATE_REFRESH_PREVIEW_EVENT, onRefresh);
+    return () => window.removeEventListener(SLATE_REFRESH_PREVIEW_EVENT, onRefresh);
+  }, [showPreview, rebuildPreview]);
 
   // Publish the active file id on `window` so the ExportDialog's "file"
   // export branch can pick it up without having to plumb a context or a

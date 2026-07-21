@@ -16,6 +16,7 @@ import { RefreshCw, Play, Pause, ExternalLink, Eye } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
 import { listCodeFiles } from '../code/exportCode';
 import { buildPreview, type PreviewFile } from '../code/preview';
+import { SLATE_REFRESH_PREVIEW_EVENT } from './CodeTerminalPanel';
 
 export function CodePreviewPanel() {
   const room = useRoom();
@@ -61,6 +62,15 @@ export function CodePreviewPanel() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [auto, room, rebuild]);
+
+  // Refresh-on-demand: the terminal's `run` command (and the CodeEditor's
+  // split-view preview) dispatch this event. We rebuild immediately so the
+  // user sees the new output without waiting for the auto-debounce.
+  useEffect(() => {
+    const onRefresh = () => rebuild();
+    window.addEventListener(SLATE_REFRESH_PREVIEW_EVENT, onRefresh);
+    return () => window.removeEventListener(SLATE_REFRESH_PREVIEW_EVENT, onRefresh);
+  }, [rebuild]);
 
   const openInTab = () => {
     if (!srcDoc) return;

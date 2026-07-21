@@ -38,13 +38,24 @@ export function listCodeFolders(slate: SlateDoc): string[] {
 }
 
 /** Find a file entry id by its exact path (real files only, not folders). */
-function findFileId(slate: SlateDoc, path: string): string | null {
+export function findFileId(slate: SlateDoc, path: string): string | null {
   let found: string | null = null;
   slate.codeFiles().forEach((m, id) => {
     if (m.get('kind') === 'folder') return;
     if (m.get('name') === path) found = id;
   });
   return found;
+}
+
+/** Read a code file's text by its path. Returns null if no such file exists.
+ *  Exposed so the terminal (and other read-only consumers) can fetch file
+ *  contents without reaching into Y.Text directly. The path is matched
+ *  exactly (use `normalizePath` on user input first if you need lenient
+ *  matching). */
+export function readCodeFileText(slate: SlateDoc, path: string): string | null {
+  const id = findFileId(slate, path);
+  if (!id) return null;
+  return slate.codeText(id).toString();
 }
 
 /** Create a file if absent, or replace an existing file's contents. Returns the

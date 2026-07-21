@@ -4,6 +4,14 @@
  */
 import { z } from 'zod';
 
+// Load apps/server/.env when present (native Node ≥ 21.7) so local dev can
+// hold secrets like ZAI_API_KEY outside the shell. Deploys set real env vars.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env file — fine
+}
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   HOST: z.string().default('0.0.0.0'),
@@ -30,6 +38,15 @@ const envSchema = z.object({
   /** Optional URL returning `{ iceServers | array }` (e.g. Metered's
    *  /api/v1/turn/credentials?apiKey=...) — fetched server-side and cached. */
   TURN_CREDENTIALS_URL: z.string().optional(),
+
+  /** Optional Z.AI config for /api/ai-chat (see aiChat.ts). Without
+   *  ZAI_BASE_URL + ZAI_API_KEY the route responds 503 "not configured". */
+  ZAI_BASE_URL: z.string().optional(),
+  ZAI_API_KEY: z.string().optional(),
+  ZAI_TOKEN: z.string().optional(),
+  ZAI_USER_ID: z.string().optional(),
+  ZAI_CHAT_ID: z.string().optional(),
+  ZAI_MODEL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

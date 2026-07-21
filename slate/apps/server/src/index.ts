@@ -7,6 +7,7 @@
  *   - GET  /api/identity — issue anonymous JWT
  *   - GET  /api/rooms    — public room registry
  *   - GET  /api/turn     — TURN ICE config (if configured)
+ *   - POST /api/ai-chat  — Z.AI chat proxy (if ZAI_* configured)
  *   - WS   /yjs/:room    — Hocuspocus Yjs relay
  *   - WS   /voice        — voice signaling
  */
@@ -23,6 +24,7 @@ import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
 import { z } from 'zod';
 import { MAX_UPDATE_BYTES } from '@slate/sync-protocol';
+import { registerAiChatRoutes } from './aiChat.js';
 import { env, isProd } from './config.js';
 import { issueIdentity } from './identity.js';
 import { createRelay } from './relay.js';
@@ -87,6 +89,8 @@ app.post('/api/identity', async (req, reply) => {
 });
 
 app.get('/api/rooms', async () => ({ rooms: rooms.publicRooms() }));
+
+registerAiChatRoutes(app);
 
 const STUN_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },

@@ -24,3 +24,11 @@ services:
       # so the static client may call this server cross-origin:
       # - key: CORS_ORIGINS
       #   value: https://your-app.vercel.app
+      # To enable the AI chat panel served from this server (/api/ai-chat),
+      # set these in the Render dashboard (sync: false hides the values):
+      # - key: ZAI_BASE_URL
+      #   sync: false
+      # - key: ZAI_API_KEY
+      #   sync: false
+      # - key: ZAI_TOKEN
+      #   sync: false

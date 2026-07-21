@@ -14,6 +14,9 @@
  *   ZAI_TOKEN     (optional) JWT → X-Token (internal API only)
  *   ZAI_USER_ID / ZAI_CHAT_ID (optional) → X-User-Id / X-Chat-Id
  *   ZAI_MODEL     (optional; only sent when set)
+ *
+ * Twin implementation for local dev / plain-Node deploys lives at
+ * apps/server/src/aiChat.ts — keep the two in sync.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";

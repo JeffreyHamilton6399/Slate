@@ -6,8 +6,10 @@
  * - Code mode: sends all code files as context
  * - Other modes: general assistant (no editor context)
  *
- * The AI backend is a Next.js API route at /api/ai-chat that uses
- * z-ai-web-dev-sdk (server-side only per the LLM skill rules).
+ * The AI backend is /api/ai-chat — a Vercel serverless function
+ * (apps/client/api/ai-chat.ts) on Vercel, or the Fastify route
+ * (apps/server/src/aiChat.ts) in local dev / plain-Node deploys.
+ * Both need ZAI_* env vars; VITE_AI_CHAT_URL overrides the URL.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -110,9 +112,9 @@ export function AiChatPanel() {
       const context = gatherContext();
       const isCode = board?.mode === 'code';
       const isDoc = board?.mode === 'doc';
-      // The AI chat runs as a Vercel serverless function at /api/ai-chat —
-      // same origin as the Slate app, no CORS or env vars needed.
-      // For local dev (without Vercel), it falls back gracefully.
+      // /api/ai-chat is same-origin everywhere: a Vercel serverless function
+      // on Vercel, or the Fastify server route in local dev (Vite proxies
+      // /api to the server) and plain-Node deploys.
       const aiUrl = import.meta.env.VITE_AI_CHAT_URL || '/api/ai-chat';
       const controller = new AbortController();
       abortRef.current = controller;
@@ -130,10 +132,10 @@ export function AiChatPanel() {
         });
       } catch (e) {
         if ((e as Error).name === 'AbortError') throw e;
-        throw new Error('Cannot reach the AI server. The serverless function deploys automatically on Vercel.');
+        throw new Error('Cannot reach the AI server. In local dev, make sure the Slate server is running (it serves /api/ai-chat).');
       }
       if (resp.status === 405 || resp.status === 404) {
-        throw new Error('AI chat is not available on this deployment. The Next.js API route at /api/ai-chat was not found.');
+        throw new Error('AI chat is not available on this deployment: /api/ai-chat was not found. Update the server, or set VITE_AI_CHAT_URL to a deployment that has it.');
       }
       if (!resp.ok) {
         const errText = await resp.text().catch(() => 'Request failed');

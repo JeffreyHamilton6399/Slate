@@ -174,14 +174,16 @@ insert into storage.buckets (id, name, public)
 values ('slate-assets', 'slate-assets', true)
 on conflict (id) do nothing;
 
+-- Reads: NONE needed. A public bucket serves each object over its public CDN
+-- URL (getPublicUrl) with no RLS check, and Slate only ever fetches URLs it
+-- already stored in the doc — it never LISTs the bucket. A `for select` policy
+-- would let any client enumerate every file in the bucket, so we deliberately
+-- omit it (Supabase's storage linter flags that as over-exposure).
+--
 -- Uploads: allowed for anon + signed-in users, matching Slate's open
 -- collaboration model (no account required to edit a board). Tighten to
 -- `to authenticated` once you require sign-in.
-drop policy if exists "slate-assets read" on storage.objects;
-create policy "slate-assets read"
-  on storage.objects for select
-  using (bucket_id = 'slate-assets');
-
+drop policy if exists "slate-assets read" on storage.objects;  -- remove if previously created
 drop policy if exists "slate-assets insert" on storage.objects;
 create policy "slate-assets insert"
   on storage.objects for insert to anon, authenticated

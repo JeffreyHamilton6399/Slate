@@ -41,6 +41,8 @@ import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough,
   Heading1, Heading2, Heading3, Palette, Eraser,
   List as ListIcon, ListOrdered, AlignLeft, AlignCenter, AlignRight,
+  Square, Circle as CircleIcon, ArrowRight, Minus,
+  Image as ImageIcon, Eye,
   type LucideIcon,
 } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
@@ -76,26 +78,63 @@ const TRANSITIONS = [
 ] as const;
 type TransitionId = (typeof TRANSITIONS)[number]['id'];
 
+/** Slide ANIMATIONS — distinct from transitions: a transition fires when
+ *  navigating BETWEEN slides (the new slide's entrance animation), while an
+ *  animation is the in-slide content reveal. They stack (a slide can have
+ *  transition=fade AND animation=slide-up). */
+const ANIMATIONS = [
+  { id: 'none', label: 'None' },
+  { id: 'fade-in', label: 'Fade In' },
+  { id: 'slide-up', label: 'Slide Up' },
+  { id: 'zoom-in', label: 'Zoom In' },
+  { id: 'bounce', label: 'Bounce' },
+] as const;
+type AnimationId = (typeof ANIMATIONS)[number]['id'];
+
+function isAnimationId(v: unknown): v is AnimationId {
+  return v === 'none' || v === 'fade-in' || v === 'slide-up' || v === 'zoom-in' || v === 'bounce';
+}
+
+/** Quick theme presets — set the background AND the default text color in
+ *  one tap. Themes apply to the active slide (not the whole deck) so the user
+ *  can mix-and-match per section. The text color is applied to the slide's
+ *  contenteditable via inline `color` style on the wrapper. */
+const THEMES: { id: string; label: string; bg: string; color: string }[] = [
+  { id: 'dark', label: 'Dark', bg: '#0c0c0e', color: '#f5f5f7' },
+  { id: 'light', label: 'Light', bg: '#ffffff', color: '#1a1a1d' },
+  { id: 'blue', label: 'Blue', bg: '#1e3a8a', color: '#ffffff' },
+  { id: 'sunset', label: 'Sunset', bg: 'linear-gradient(135deg, #f97316 0%, #db2777 100%)', color: '#ffffff' },
+  { id: 'forest', label: 'Forest', bg: 'linear-gradient(135deg, #065f46 0%, #064e3b 100%)', color: '#f0fdf4' },
+  { id: 'slate', label: 'Slate', bg: '#1e293b', color: '#e2e8f0' },
+];
+
 interface Slide {
   id: string;
   content: string;
   background: string;
+  /** Inline text color override (set when a theme is applied) — empty string
+   *  means "no override, use the default". */
+  textColor: string;
   notes: string;
   transition: TransitionId;
+  animation: AnimationId;
 }
 
 /** Read a slide Y.Map as a plain object (defensive — fields may be missing
  *  on a freshly-added slide before its first commit). */
 function readSlide(m: Y.Map<unknown>, fallbackId: string): Slide {
   const transition = (m.get('transition') as TransitionId | undefined) ?? 'none';
+  const animation = m.get('animation');
   return {
     id: (m.get('id') as string | undefined) ?? fallbackId,
     content: (m.get('content') as string | undefined) ?? '',
     background: (m.get('background') as string | undefined) ?? DEFAULT_BG,
+    textColor: (m.get('textColor') as string | undefined) ?? '',
     notes: (m.get('notes') as string | undefined) ?? '',
     transition: (transition === 'none' || transition === 'fade' || transition === 'slide' || transition === 'zoom')
       ? transition
       : 'none',
+    animation: isAnimationId(animation) ? animation : 'none',
   };
 }
 
@@ -153,6 +192,17 @@ export function PresentationEditor() {
    *  navigation (changing `presentKey` remounts the slide container and
    *  re-runs the CSS keyframe animation). */
   const [presentKey, setPresentKey] = useState(0);
+  /** Presenter view overlay (small speaker-notes panel at the bottom of
+   *  present mode) — toggleable from a button in the present chrome. */
+  const [presenterNotes, setPresenterNotes] = useState(false);
+  /** Elapsed-time counter for present mode — set when starting present,
+   *  cleared when leaving. Updated once per second by an interval below. */
+  const [presentElapsed, setPresentElapsed] = useState(0);
+  const presentStartRef = useRef<number | null>(null);
+  /** Image-file picker — hidden input; the Image button in the toolbar
+   *  clicks it. On change, the file is read as a data URL and inserted as
+   *  an <img> into the contenteditable. */
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   /** Context-menu state for the slide navigator (right-click). Null hides
    *  the menu; otherwise holds the target slide index + screen coords. */
   const [contextMenu, setContextMenu] = useState<{ idx: number; x: number; y: number } | null>(null);
@@ -265,8 +315,10 @@ export function PresentationEditor() {
     m.set('id', id);
     m.set('content', templateHtml(templateId));
     m.set('background', DEFAULT_BG);
+    m.set('textColor', '');
     m.set('notes', '');
     m.set('transition', 'none');
+    m.set('animation', 'none');
     const insertAt = Math.min(slidesArr.length, current + 1);
     slidesArr.insert(insertAt, [m]);
     setCurrent(insertAt);
@@ -290,8 +342,10 @@ export function PresentationEditor() {
     m.set('id', makeId('slide'));
     m.set('content', (src.get('content') as string | undefined) ?? '');
     m.set('background', (src.get('background') as string | undefined) ?? DEFAULT_BG);
+    m.set('textColor', (src.get('textColor') as string | undefined) ?? '');
     m.set('notes', (src.get('notes') as string | undefined) ?? '');
     m.set('transition', (src.get('transition') as TransitionId | undefined) ?? 'none');
+    m.set('animation', isAnimationId(src.get('animation')) ? src.get('animation') as AnimationId : 'none');
     slidesArr.insert(idx + 1, [m]);
     setCurrent(idx + 1);
   }, [slidesArr]);
@@ -368,6 +422,102 @@ export function PresentationEditor() {
     slide.set('transition', t);
   }, [slidesArr, current]);
 
+  /** Set the animation for the current slide. Immediate commit. */
+  const setAnimation = useCallback((a: AnimationId) => {
+    const slide = slidesArr.get(current);
+    if (!slide) return;
+    selfCommitRef.current = true;
+    slide.set('animation', a);
+  }, [slidesArr, current]);
+
+  /** Apply a quick theme preset: sets both the slide background AND the
+   *  default text color in one go. The text color is stored separately so a
+   *  user can override it later by picking a different text color without
+   *  losing the background. */
+  const applyTheme = useCallback((themeId: string) => {
+    const slide = slidesArr.get(current);
+    if (!slide) return;
+    const theme = THEMES.find((t) => t.id === themeId);
+    if (!theme) return;
+    selfCommitRef.current = true;
+    slide.set('background', theme.bg);
+    slide.set('textColor', theme.color);
+  }, [slidesArr, current]);
+
+  /** Insert a shape (rect / circle / arrow / line) at the cursor. Shapes are
+   *  absolutely positioned <div>s with inline styles, so they live inside the
+   *  same contenteditable HTML and round-trip through Yjs like any other
+   *  content. The default position is `top:20%; left:10%` — the user drags
+   *  them by editing the inline style (no separate shape layer needed). */
+  const insertShape = useCallback((shape: 'rect' | 'circle' | 'arrow' | 'line') => {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    let html = '';
+    // Place the shape inside a positioned wrapper so the absolute coords are
+    // relative to the slide (the contenteditable fills the slide).
+    const wrap = (inner: string) =>
+      `<div data-shape="${shape}" style="position:absolute;top:20%;left:10%;width:30%;height:30%;display:flex;align-items:center;justify-content:center;">${inner}</div>`;
+    switch (shape) {
+      case 'rect':
+        html = wrap('<div style="width:100%;height:100%;background:#3b82f6;border:2px solid #1d4ed8;border-radius:4px;"></div>');
+        break;
+      case 'circle':
+        html = wrap('<div style="width:100%;aspect-ratio:1/1;background:#10b981;border:2px solid #047857;border-radius:50%;"></div>');
+        break;
+      case 'arrow':
+        // A right-pointing arrow built from a horizontal bar + a triangular
+        // head via border-trick + transform. Inline styles only so it survives
+        // the HTML string round-trip.
+        html = wrap(
+          '<div style="display:flex;align-items:center;width:100%;height:24px;">' +
+          '<div style="flex:1;height:8px;background:#ef4444;"></div>' +
+          '<div style="width:0;height:0;border-top:14px solid transparent;border-bottom:14px solid transparent;border-left:18px solid #ef4444;"></div>' +
+          '</div>'
+        );
+        break;
+      case 'line':
+        html = wrap('<div style="width:100%;height:4px;background:#e5e7eb;border-radius:2px;"></div>');
+        break;
+    }
+    // execCommand('insertHTML') inserts at the caret; placing the wrapper
+    // before the caret keeps the cursor outside the shape so subsequent text
+    // doesn't end up inside the shape div.
+    document.execCommand('insertHTML', false, html);
+    commitContent();
+  }, [commitContent]);
+
+  /** Insert an image: read the picked file as a data URL, then insert an
+   *  <img> into the contenteditable. Images are bounded to 60% of the slide
+   *  width so they don't overflow the 16:9 surface; the user can resize by
+   *  dragging the corner (browser default for contenteditable <img> selection).
+   *  We don't offload to Supabase here (slides sync as a small Yjs doc; a
+   *  ~500KB data URL is fine and keeps the deck self-contained for export). */
+  const insertImageFile = useCallback((file: File) => {
+    const el = editorRef.current;
+    if (!el) return;
+    if (!file.type.startsWith('image/')) {
+      toast({ title: 'Not an image', description: 'Pick a PNG, JPG, GIF, or WebP file.', variant: 'error' });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const src = typeof reader.result === 'string' ? reader.result : '';
+      if (!src) return;
+      el.focus();
+      // Place the image at the caret with a max-width so it fits the slide.
+      // `position:relative` keeps it in the text flow (not absolutely
+      // positioned like shapes) so the user can drag it around naturally.
+      const html = `<img src="${src}" alt="${file.name.replace(/"/g, '&quot;')}" style="max-width:60%;height:auto;border-radius:6px;display:inline-block;" />`;
+      document.execCommand('insertHTML', false, html);
+      commitContent();
+    };
+    reader.onerror = () => {
+      toast({ title: 'Image read failed', description: 'The file could not be read.', variant: 'error' });
+    };
+    reader.readAsDataURL(file);
+  }, [commitContent]);
+
   // ── Formatting (execCommand — deprecated but still the simplest way to
   //  round-trip rich text through a contenteditable without ProseMirror). */
   const exec = useCallback((cmd: string, value?: string) => {
@@ -439,6 +589,10 @@ export function PresentationEditor() {
   const startPresent = useCallback(async () => {
     setPresenting(true);
     setPresentKey((k) => k + 1);
+    // Start the elapsed-time counter — setPresentElapsed(0) resets it so a
+    // resumed present session starts fresh.
+    presentStartRef.current = Date.now();
+    setPresentElapsed(0);
     requestAnimationFrame(() => {
       const el = presentRef.current;
       if (!el) return;
@@ -454,7 +608,22 @@ export function PresentationEditor() {
       document.exitFullscreen?.().catch(() => { /* ignore */ });
     }
     setPresenting(false);
+    presentStartRef.current = null;
+    setPresenterNotes(false);
   }, []);
+
+  // Tick the elapsed-time counter once per second while presenting. Stops
+  // when the user exits present mode (presentStartRef clears). Uses
+  // Date.now() - presentStartRef.current so a tab-throttled interval still
+  // shows the right elapsed time after the tab is brought back to focus.
+  useEffect(() => {
+    if (!presenting) return;
+    const id = window.setInterval(() => {
+      if (presentStartRef.current == null) return;
+      setPresentElapsed(Math.floor((Date.now() - presentStartRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [presenting]);
 
   // Sync `presenting` with the browser's fullscreen state so Esc (which the
   // browser handles itself) closes our overlay too.
@@ -543,8 +712,11 @@ export function PresentationEditor() {
     const boardName = room.room ?? 'presentation';
     const sections = slides.map((s, i) => {
       const esc = (v: string) => v.replace(/"/g, '&quot;');
+      // Inline `color` carries the slide's textColor (set by a theme) so the
+      // exported deck preserves the visual styling without external CSS.
+      const colorStyle = s.textColor ? `color:${esc(s.textColor)};` : '';
       return (
-        `<section class="slide" data-index="${i}" data-transition="${esc(s.transition)}" style="background:${esc(s.background)};">` +
+        `<section class="slide" data-index="${i}" data-transition="${esc(s.transition)}" data-animation="${esc(s.animation)}" style="background:${esc(s.background)};${colorStyle}">` +
         `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
         (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escapeHtml(s.notes)}</aside>` : '') +
         '</section>'
@@ -646,6 +818,25 @@ ${sections}
           if (t === 'none' || t === 'fade' || t === 'slide' || t === 'zoom') setTransition(t);
           break;
         }
+        case 'setAnimation': {
+          const a = detail.value;
+          if (isAnimationId(a)) setAnimation(a);
+          break;
+        }
+        case 'applyTheme': {
+          const themeId = detail.value;
+          if (themeId) applyTheme(themeId);
+          break;
+        }
+        case 'insertShape': {
+          const shape = detail.value;
+          if (shape === 'rect' || shape === 'circle' || shape === 'arrow' || shape === 'line') insertShape(shape);
+          break;
+        }
+        case 'insertImage': {
+          imageInputRef.current?.click();
+          break;
+        }
         // Actions
         case 'present': void startPresent(); break;
         case 'exportHtml': exportHtml(); break;
@@ -654,8 +845,7 @@ ${sections}
     };
     window.addEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
     return () => window.removeEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, startPresent, exportHtml]);
+  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml]);
 
   // ── Drag-to-reorder in the slide navigator ────────────────────────────
   /** Refs read inside document-level pointer handlers (which don't re-bind
@@ -721,7 +911,12 @@ ${sections}
 
   return (
     <div className="flex h-full w-full flex-col bg-bg text-text overflow-hidden">
-      {/* Toolbar — slide ops + inline formatting + background + navigation + present. */}
+      {/* Toolbar — slide ops + inline formatting + background + navigation + present.
+          Mobile-tightened: keeps the essentials (Add / Duplicate / Delete /
+          Notes / Prev-Next / Export / Present) in the horizontally-scrolling
+          strip; the inline-formatting + background + transition + animation +
+          shapes + image + theme controls are desktop-only (the dock panel has
+          the full set). */}
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
         <button onClick={addSlide} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add slide (Ctrl+Shift+N)">
           <Plus size={12} /> Slide
@@ -736,8 +931,9 @@ ${sections}
           <NotesIcon size={12} /> Notes
         </button>
         <div className="mx-1 h-5 w-px bg-border" />
-        {/* Inline formatting — execCommand. Hidden on mobile (the slide
-            content is still editable by direct touch). */}
+        {/* Inline formatting + Insert (shapes/image) + design (bg/transition/
+            animation/theme) — desktop only. Mobile users reach these from
+            the dock's PresentationToolsPanel (or the FAB on portrait phones). */}
         {!isMobile && (
           <>
             <ToolbarButton onClick={() => exec('formatBlock', 'h1')} title="Heading 1" Icon={Heading1} />
@@ -767,35 +963,76 @@ ${sections}
               />
             </label>
             <div className="mx-1 h-5 w-px bg-border" />
+            {/* Insert — shapes + image. Shapes are absolutely positioned divs
+                inside the contenteditable; images are <img> with a max-width. */}
+            <ToolbarButton onClick={() => insertShape('rect')} title="Insert rectangle" Icon={Square} />
+            <ToolbarButton onClick={() => insertShape('circle')} title="Insert circle" Icon={CircleIcon} />
+            <ToolbarButton onClick={() => insertShape('arrow')} title="Insert arrow" Icon={ArrowRight} />
+            <ToolbarButton onClick={() => insertShape('line')} title="Insert line" Icon={Minus} />
+            <ToolbarButton onClick={() => imageInputRef.current?.click()} title="Insert image" Icon={ImageIcon} />
+            <div className="mx-1 h-5 w-px bg-border" />
           </>
         )}
-        {/* Background swatches */}
-        <div className="flex items-center gap-0.5">
-          {BG_SWATCHES.map((bg) => (
-            <button
-              key={bg}
-              onClick={() => setBackground(bg)}
-              className={`h-5 w-5 rounded-full border ${activeBg === bg ? 'border-accent ring-1 ring-accent' : 'border-border'}`}
-              style={{ backgroundColor: bg }}
-              title={`Background: ${bg}`}
-              aria-label={`Set background ${bg}`}
-            />
-          ))}
-        </div>
-        {/* Transition selector */}
-        <div className="mx-1 h-5 w-px bg-border" />
-        <label className="flex items-center gap-1 text-[10px] text-text-dim">
-          Transition
-          <select
-            value={activeSlide?.transition ?? 'none'}
-            onChange={(e) => setTransition(e.target.value as TransitionId)}
-            className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
-          >
-            {TRANSITIONS.map((t) => (
-              <option key={t.id} value={t.id}>{t.label}</option>
+        {/* Background swatches — desktop only (mobile uses the dock panel). */}
+        {!isMobile && (
+          <div className="flex items-center gap-0.5">
+            {BG_SWATCHES.map((bg) => (
+              <button
+                key={bg}
+                onClick={() => setBackground(bg)}
+                className={`h-5 w-5 rounded-full border ${activeBg === bg ? 'border-accent ring-1 ring-accent' : 'border-border'}`}
+                style={{ backgroundColor: bg }}
+                title={`Background: ${bg}`}
+                aria-label={`Set background ${bg}`}
+              />
             ))}
-          </select>
-        </label>
+          </div>
+        )}
+        {/* Transition + Animation selectors + Theme quick-picker — desktop
+            only. Mobile uses the dock panel. */}
+        {!isMobile && (
+          <>
+            <div className="mx-1 h-5 w-px bg-border" />
+            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+              Transition
+              <select
+                value={activeSlide?.transition ?? 'none'}
+                onChange={(e) => setTransition(e.target.value as TransitionId)}
+                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+              >
+                {TRANSITIONS.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+              Animation
+              <select
+                value={activeSlide?.animation ?? 'none'}
+                onChange={(e) => setAnimation(e.target.value as AnimationId)}
+                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+              >
+                {ANIMATIONS.map((a) => (
+                  <option key={a.id} value={a.id}>{a.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+              Theme
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) applyTheme(e.target.value); e.target.value = ''; }}
+                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+                title="Apply a quick theme preset"
+              >
+                <option value="">Apply…</option>
+                {THEMES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
         <div className="mx-1 h-5 w-px bg-border" />
         <button onClick={goPrev} disabled={current === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Previous slide (←)">
           <ChevronLeft size={14} />
@@ -859,6 +1096,9 @@ ${sections}
                       {s.transition !== 'none' && (
                         <span className="opacity-60" title={`Transition: ${s.transition}`}>↻</span>
                       )}
+                      {s.animation !== 'none' && (
+                        <span className="opacity-60" title={`Animation: ${s.animation}`}>✨</span>
+                      )}
                     </span>
                     <span
                       className="block aspect-video w-full overflow-hidden rounded-sm border border-border/50"
@@ -881,7 +1121,7 @@ ${sections}
         {/* Main editing surface — the current slide, centered, with a 16:9
             aspect ratio. The contenteditable fills the slide; the user
             clicks anywhere to edit. */}
-        <main className="flex min-w-0 flex-1 flex-col items-center justify-center overflow-auto bg-bg-3 p-4">
+        <main className="flex min-w-0 flex-1 flex-col items-center justify-center overflow-auto bg-bg-3 p-2 sm:p-4">
           <div
             className="relative flex aspect-video w-full max-w-4xl items-center justify-center overflow-hidden rounded-lg border border-border shadow-xl"
             style={activeBgStyle}
@@ -911,13 +1151,17 @@ ${sections}
                   }
                 }
               }}
-              className="h-full w-full overflow-auto p-[6%] text-text outline-none"
-              style={{ caretColor: 'currentColor' }}
+              // The active slide's textColor (set by a theme) overrides the
+              // default text color via inline style. Empty string falls back
+              // to the inherited .text-text color.
+              className="h-full w-full overflow-auto p-[6%] outline-none"
+              style={{ caretColor: 'currentColor', color: activeSlide?.textColor || 'currentColor' }}
               data-placeholder="Click to add slide content…"
             />
           </div>
 
-          {/* Speaker notes — collapsible textarea below the slide. */}
+          {/* Speaker notes — collapsible textarea below the slide. Smaller
+              default height on mobile so it doesn't crowd the editor surface. */}
           {notesOpen && (
             <div className="mt-2 w-full max-w-4xl rounded-md border border-border bg-bg-2 p-2">
               <div className="mb-1 flex items-center gap-2">
@@ -935,18 +1179,36 @@ ${sections}
                 ref={notesRef}
                 onInput={commitNotes}
                 placeholder="Notes for this slide (presenter view only — not shown in the export)…"
-                className="h-20 w-full resize-y rounded border border-border bg-bg p-2 text-[12px] text-text outline-none focus:border-accent/40"
+                className="h-16 w-full resize-y rounded border border-border bg-bg p-2 text-[12px] text-text outline-none focus:border-accent/40 sm:h-20"
               />
             </div>
           )}
         </main>
       </div>
 
+      {/* Hidden image file input — the Image button (toolbar or dock panel)
+          clicks it. On change, the file is read as a data URL and inserted
+          as an <img> into the contenteditable. */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) insertImageFile(f);
+        }}
+      />
+
       {/* Status bar */}
       <div className="flex shrink-0 items-center gap-3 border-t border-border bg-bg-2 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
         <span>{slideCount} slide{slideCount === 1 ? '' : 's'}</span>
         {activeSlide?.transition && activeSlide.transition !== 'none' && (
           <span>transition: {activeSlide.transition}</span>
+        )}
+        {activeSlide?.animation && activeSlide.animation !== 'none' && (
+          <span>animation: {activeSlide.animation}</span>
         )}
         <span className="ml-auto hidden sm:inline">Click slide to edit · ←/→ navigate · Ctrl+Shift+N new · Ctrl+Shift+P present · Del deletes · Esc exits present</span>
       </div>
@@ -990,26 +1252,58 @@ ${sections}
         >
           <div
             key={presentKey}
-            className={`flex aspect-video h-full max-h-screen w-full max-w-[177vh] items-center justify-center overflow-hidden present-transition-${activeSlide?.transition ?? 'none'}`}
+            // Transition + animation stack: the transition fires on the
+            // container (entrance), the animation fires on the inner content
+            // (reveal). Both re-trigger on navigation because presentKey
+            // remounts the wrapper.
+            className={`flex aspect-video h-full max-h-screen w-full max-w-[177vh] items-center justify-center overflow-hidden present-transition-${activeSlide?.transition ?? 'none'} present-animation-${activeSlide?.animation ?? 'none'}`}
             style={activeBgStyle}
           >
             <div
-              className="h-full w-full overflow-auto p-[6%] text-text"
+              className="h-full w-full overflow-auto p-[6%]"
+              style={{ color: activeSlide?.textColor || '#fff' }}
               dangerouslySetInnerHTML={{ __html: activeSlide?.content ?? '' }}
             />
           </div>
-          {/* Slide counter (top-left) + progress bar (bottom) */}
-          <div className="pointer-events-none absolute left-6 top-6 rounded-full bg-white/10 px-3 py-1 font-mono text-xs text-white">
-            {current + 1} / {slideCount}
+          {/* Slide counter + elapsed timer (top-left). The timer runs from
+              the moment `startPresent` set presentStartRef and ticks once
+              per second via the interval effect above. mm:ss format keeps
+              it compact in the corner. */}
+          <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 font-mono text-xs text-white sm:left-6 sm:top-6">
+            <span>{current + 1} / {slideCount}</span>
+            <span className="opacity-60">·</span>
+            <span title="Elapsed time">{formatElapsed(presentElapsed)}</span>
           </div>
+          {/* Progress bar (bottom) — visual sense of how far through the deck. */}
           <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-1 bg-white/10">
             <div
               className="h-full bg-white transition-[width] duration-300"
               style={{ width: `${slideCount > 0 ? ((current + 1) / slideCount) * 100 : 0}%` }}
             />
           </div>
-          {/* Present-mode controls — bottom-right, hidden until hover. */}
-          <div className="absolute bottom-4 right-4 flex items-center gap-2 opacity-60 transition-opacity hover:opacity-100">
+          {/* Presenter view overlay — speaker notes for the current slide in
+              a small panel at the bottom-left. Toggleable so it doesn't get
+              in the way of slides that don't use notes. */}
+          {presenterNotes && activeSlide?.notes && (
+            <div className="pointer-events-none absolute bottom-6 left-4 right-4 max-h-32 overflow-y-auto rounded-md bg-black/70 px-4 py-2 text-sm text-white/90 sm:left-6 sm:max-w-md">
+              <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-white/50">Notes · slide {current + 1}</div>
+              <div className="whitespace-pre-wrap">{activeSlide.notes}</div>
+            </div>
+          )}
+          {/* Present-mode controls — bottom-right. Always visible on mobile
+              (no hover state on touch); desktop shows them at 60% opacity
+              and brightens on hover. */}
+          <div className={`absolute bottom-4 right-4 flex items-center gap-2 transition-opacity ${isMobile ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>
+            {/* Presenter-view toggle — shows/hides the speaker-notes overlay. */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setPresenterNotes((v) => !v); }}
+              className={`flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 ${presenterNotes ? 'bg-accent/80' : 'bg-white/10'}`}
+              aria-label="Toggle presenter notes"
+              aria-pressed={presenterNotes}
+              title="Toggle presenter notes"
+            >
+              <Eye size={18} />
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); goPrev(); setPresentKey((k) => k + 1); }}
               disabled={current === 0}
@@ -1035,16 +1329,24 @@ ${sections}
               <X size={20} />
             </button>
           </div>
-          {/* Inline transition keyframes. Rendered once per present session;
-              the `key={presentKey}` on the slide container re-triggers the
-              animation on each navigation. */}
+          {/* Inline transition + animation keyframes. Rendered once per
+              present session; the `key={presentKey}` on the slide container
+              re-triggers both on each navigation. */}
           <style>{`
             .present-transition-fade { animation: pFade 0.4s ease-out; }
             .present-transition-slide { animation: pSlide 0.4s ease-out; }
             .present-transition-zoom { animation: pZoom 0.4s ease-out; }
+            .present-animation-fade-in > div { animation: paFade 0.6s ease-out; }
+            .present-animation-slide-up > div { animation: paSlideUp 0.6s ease-out; }
+            .present-animation-zoom-in > div { animation: paZoom 0.6s ease-out; }
+            .present-animation-bounce > div { animation: paBounce 0.8s cubic-bezier(0.34, 1.56, 0.64, 1); }
             @keyframes pFade { from { opacity: 0; } to { opacity: 1; } }
             @keyframes pSlide { from { transform: translateX(8%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
             @keyframes pZoom { from { transform: scale(0.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            @keyframes paFade { from { opacity: 0; } to { opacity: 1; } }
+            @keyframes paSlideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+            @keyframes paZoom { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            @keyframes paBounce { 0% { transform: translateY(-60px); opacity: 0; } 60% { transform: translateY(8px); opacity: 1; } 80% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
           `}</style>
         </div>
       )}
@@ -1149,6 +1451,19 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Format a seconds count as `m:ss` (or `h:mm:ss` past the hour) for the
+ *  present-mode elapsed-time readout. Keeps the corner compact while still
+ *  scaling for long presentations. */
+function formatElapsed(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
 export default PresentationEditor;

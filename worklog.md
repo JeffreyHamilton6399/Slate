@@ -2682,3 +2682,261 @@ Stage Summary:
   transitions, present mode with progress bar + transitions, HTML
   export, PDF export via hidden-iframe print, full keyboard
   shortcuts. TypeScript clean.
+
+---
+Task ID: ROUND33-A
+Agent: main
+Task: Fix mobile layout for all editors + add more slideshow features
+
+Work Log:
+- Read /home/z/my-project/worklog.md (latest: ROUND32-A polished the
+  PresentationEditor with templates, drag-to-reorder, transitions,
+  speaker notes, present mode with progress bar). Read in full the
+  files each task targeted:
+  - app/Workspace.tsx (smallLandscape + Dock width passing + FAB)
+  - workspace/dockStore.ts (sidebarWidth/dockWidth clamps)
+  - workspace/useMediaQuery.ts (useIsMobile / useIsSmallScreen)
+  - presentation/PresentationEditor.tsx (1155 lines, full read)
+  - presentation/presentationBridge.ts (bridge event helper)
+  - panels/PresentationToolsPanel.tsx (tools panel)
+  - docs/DocEditor.tsx + docs/docEditor.css (mobile @media rule)
+  - code/CodeEditor.tsx (terminal default height + clamp, tab close)
+  - files/snapshot.ts (snapshotSlides / applySnapshot for slides)
+  - files/ExportDialog.tsx (presentationDeckToHtml)
+  - packages/sync-protocol/src/schema.ts (SlateDocSnapshot.slides type)
+
+Task 1 — mobile landscape layout (Workspace + dockStore):
+- dockStore.ts: lowered the resizer minimums so the user can drag the
+  docks narrower on a cramped landscape phone.
+    setSidebarWidth: clamp [200, 420] → [160, 420]
+    setDockWidth:    clamp [220, 520] → [180, 520]
+- Workspace.tsx: tightened the smallLandscape override caps.
+    effectiveSidebar: Math.min(sidebarWidth, 200) → Math.min(..., 180)
+    effectiveDock:    Math.min(dockWidth, 220)    → Math.min(..., 200)
+  This leaves more horizontal room for the central editor on a
+  812×375 landscape phone (was ~500px of dock, now ~380px).
+- Workspace.tsx: added a "Panels" hint button at absolute left-4 top-4
+  that opens the MobileDrawer when smallLandscape. Without it, the user
+  had no visible affordance for opening dock panels — auto-open is
+  skipped on small landscape, and the FAB only shows on portrait mobile.
+  The hint is a small backdrop-blurred chip so it doesn't dominate the
+  canvas.
+
+Task 2 — presentation editor mobile layout:
+- Confirmed slide navigator (<aside>) already wrapped in {!isMobile}.
+- Confirmed editing surface is flex-1 (full-width on mobile).
+- Confirmed toolbar already has overflow-x-auto + [&>*]:shrink-0.
+- Tightened the main padding: p-4 → p-2 sm:p-4 so the slide gets more
+  room on a 375px screen.
+- Tightened speaker-notes textarea: h-20 → h-16 sm:h-20.
+- Made present-mode controls always visible on mobile (no hover state):
+  opacity-60 hover:opacity-100 → isMobile ? opacity-100 : opacity-60
+  hover:opacity-100.
+- Moved the slide counter closer to the edge on mobile: left-6 top-6 →
+  left-4 top-4 sm:left-6 sm:top-6 (same for the presenter-notes overlay
+  bottom-left coordinates).
+- Present mode works in both orientations (it's fixed inset-0).
+
+Task 3 — doc editor mobile layout:
+- docEditor.css: confirmed the existing @media (max-width: 640px) rule
+  sets .slate-doc-page padding to 24px 16px (per the task brief).
+- docEditor.css: added env(safe-area-inset-bottom) to the .slate-doc
+  bottom padding on mobile so the page content + word-count footer clear
+  the iOS home indicator on notched phones.
+- DocEditor.tsx: added bg-bg-2 to the word-count footer (was transparent)
+  and env(safe-area-inset-bottom) to its padding-bottom so it never
+  underlaps the iOS home indicator. Footer is still in normal flow
+  (shrink-0) so it never overlaps the editor content.
+
+Task 4 — code editor mobile layout:
+- Confirmed the toolbar already has overflow-x-auto (line 746).
+- Confirmed the split view already uses flex-col sm:flex-row (line 863).
+- Confirmed the file tabs already have overflow-x-auto (line 694).
+- CodeEditor.tsx: tightened the terminal default + max height on
+  mobile. Default 180 → isMobile ? 120 : 180; max 500 → isMobile ? 320
+  : 500. A 180px terminal on a 375px-tall landscape phone left barely
+  200px for code — now it's 120px by default with a 320px ceiling.
+- CodeEditor.tsx: bumped the file-tab close button to h-6 w-6 sm:h-4
+  sm:w-4 (24px touch target on mobile, back to 16px on desktop) so a
+  finger tap reliably hits the × instead of switching tabs.
+
+Task 5 — new slideshow features:
+
+(a) Slide animations (distinct from transitions):
+- PresentationEditor.tsx: added ANIMATIONS const + AnimationId union
+  ('none' | 'fade-in' | 'slide-up' | 'zoom-in' | 'bounce') and an
+  isAnimationId guard.
+- Added `animation: AnimationId` field to the Slide interface +
+  readSlide (defensive coerce). addSlideInternal seeds 'none'.
+  duplicateSlide copies the source slide's animation through.
+- Added `setAnimation(a: AnimationId)` mutation.
+- Toolbar: added an "Animation" <select> next to the existing
+  "Transition" one (desktop only — mobile uses the dock panel).
+- Present mode: the slide container now carries BOTH
+  present-transition-{id} (entrance) AND present-animation-{id}
+  (content reveal) classes. The inner <div> gets the animation
+  keyframes (paFade / paSlideUp / paZoom / paBounce) so transitions
+  and animations stack (a slide can fade-in on enter AND slide-up its
+  content).
+- Navigator thumbnail: shows a ✨ glyph next to slides with a non-none
+  animation (parallels the existing ↻ for transitions).
+
+(b) Shape insertion (Rectangle / Circle / Arrow / Line):
+- PresentationEditor.tsx: added insertShape(shape) — builds an
+  absolutely-positioned wrapper <div> with the shape inside, then
+  calls document.execCommand('insertHTML', false, html). Shapes live
+  inside the same contenteditable HTML and round-trip through Yjs.
+  - rect: blue filled box (4px border-radius)
+  - circle: emerald filled circle (border-radius: 50%)
+  - arrow: red horizontal bar + triangular head (border-trick)
+  - line: 4px gray horizontal bar
+  All inline styles so they survive the HTML string round-trip.
+- Toolbar: added 4 shape ToolbarButtons (Square / CircleIcon /
+  ArrowRight / Minus) on desktop only.
+- Tools panel: added an "Insert" group with the same 4 shape buttons +
+  an Image button.
+
+(c) Image insertion:
+- PresentationEditor.tsx: added imageInputRef + hidden <input
+  type="file" accept="image/*">. insertImageFile reads the picked
+  file as a data URL via FileReader, then execCommand('insertHTML')
+  an <img src="data:..." style="max-width:60%; height:auto;
+  border-radius:6px; display:inline-block">. Bounded to 60% of the
+  slide so it fits the 16:9 surface; the user can resize by selecting
+  + dragging (browser default for contenteditable images). Data URL
+  keeps the deck self-contained for HTML export (no Supabase round-
+  trip needed for slides — they sync as a small Yjs doc).
+- Toolbar: added an ImageIcon ToolbarButton (desktop only).
+- Tools panel: Image button in the Insert group.
+
+(d) Slide themes (Dark / Light / Blue / Sunset / Forest / Slate):
+- PresentationEditor.tsx: added THEMES const (6 presets: dark, light,
+  blue, sunset gradient, forest gradient, slate). Each preset sets
+  BOTH the background AND the default text color in one tap. Added
+  applyTheme(themeId) — writes both fields to the slide's Y.Map.
+- Added `textColor: string` field to the Slide interface + readSlide.
+  addSlideInternal seeds '' (no override). duplicateSlide copies it.
+- The contenteditable's inline `color` style now reads from
+  activeSlide.textColor (empty falls back to currentColor), so theme
+  text colors render live in the editor.
+- Present mode: the inner slide div's inline `color` also reads from
+  activeSlide.textColor so the theme renders correctly when
+  presenting.
+- Toolbar: added a "Theme" quick-picker <select> (Apply… → Dark /
+  Light / Blue / Sunset / Forest / Slate) on desktop only. Resets to
+  the "Apply…" placeholder after each pick so the same theme can be
+  re-applied (or a different one picked).
+- Tools panel: added a ThemePresets section with a 3-col grid of
+  buttons, each rendered with the actual theme bg + text color so the
+  user sees the contrast at a glance.
+
+(e) Timer / progress in present mode:
+- PresentationEditor.tsx: added presentStartRef + presentElapsed
+  state. startPresent sets presentStartRef.current = Date.now() and
+  resets presentElapsed to 0. An interval effect ticks every second
+  while presenting, computing Math.floor((Date.now() - start) / 1000)
+  so a tab-throttled interval still shows the right elapsed time after
+  the tab is brought back to focus.
+- Present mode: the top-left counter pill now shows "X / N · mm:ss"
+  (or h:mm:ss past the hour). Added a formatElapsed() helper at the
+  bottom of the file.
+- The existing progress bar (bottom 1px strip, white fill) was already
+  in place — kept as-is.
+
+(f) Presenter view (speaker-notes overlay in present mode):
+- PresentationEditor.tsx: added presenterNotes boolean state.
+- Present mode: when presenterNotes is true AND the current slide has
+  notes, renders a small bottom-left overlay panel
+  (max-h-32, overflow-y-auto, bg-black/70) showing the slide's notes.
+  pointer-events-none so it doesn't intercept click-to-advance.
+- Added an Eye toggle button in the present chrome (bottom-right,
+  before the prev/next/exit cluster). aria-pressed reflects the
+  toggle. Stops propagation so it doesn't advance the slide.
+- stopPresent clears presenterNotes so the next session starts clean.
+
+Schema + export updates (so new fields round-trip):
+- schema.ts (sync-protocol): widened SlateDocSnapshot.slides element
+  type to include optional textColor, notes, transition, animation.
+  Comment updated to document the per-field semantics.
+- snapshot.ts: snapshotSlides now captures textColor / notes /
+  transition / animation when the slide has a non-default value (so
+  JSON stays compact for slides that never set them). applySnapshot
+  restores them when the snapshot carries them; missing fields
+  default safely inside readSlide.
+- PresentationEditor.exportHtml: section element now carries
+  data-animation attribute + inline color style (when textColor is
+  set) so the exported HTML preserves the theme styling. Notes +
+  transition attributes were already there.
+- ExportDialog.presentationDeckToHtml: same updates (it builds a
+  parallel standalone HTML string for the dialog's HTML/PDF export
+  branch).
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` →
+  EXIT 0, zero type errors.
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc
+  --noEmit` → EXIT 0.
+- `cd /home/z/my-project/slate/apps/server && npx tsc --noEmit` →
+  EXIT 0 (server imports the schema types).
+- ESLint on the 8 modified client files: 0 errors, 2 warnings — both
+  PRE-EXISTING (Workspace.tsx missing-deps on the file-menu useEffect
+  + useMemo, called out in ROUND31-A's stage summary). My edits
+  removed the 2 new warnings I'd introduced (unused `Sparkles` import
+  + a stale eslint-disable in PresentationEditor.tsx).
+- Dev server log tail: only routine /health 404 and / 200 entries;
+  no compile errors after the edits.
+
+Stage Summary:
+- 8 files modified, 0 files created, 0 new dependencies.
+- Workspace.tsx: +1 import (PanelLeft), tighter smallLandscape caps
+  (180/200), added Panels hint button.
+- dockStore.ts: lowered resizer minimums (sidebarWidth 200→160,
+  dockWidth 220→180).
+- PresentationEditor.tsx: added ANIMATIONS, THEMES, AnimationId,
+  isAnimationId, setAnimation, applyTheme, insertShape,
+  insertImageFile, imageInputRef, presenterNotes, presentStartRef,
+  presentElapsed, formatElapsed; toolbar adds shapes/image/animation/
+  theme pickers (desktop); present mode adds elapsed timer, presenter
+  notes overlay, animation keyframes, mobile-visible controls;
+  contenteditable + present content now read textColor; navigator
+  thumbnail shows ✨ for animated slides; mobile-tightened padding +
+  notes textarea height.
+- PresentationToolsPanel.tsx: added INSERT_TOOLS (4 shapes + image),
+  ANIMATION_PRESETS, TRANSITION_PRESETS, THEME_PRESETS, TransitionPicker
+  popover, AnimationPicker popover, ThemePresets grid; new "Insert" +
+  "Themes" + "Motion" sections.
+- DocEditor.tsx: word-count footer gets bg-bg-2 + safe-area-inset
+  padding-bottom.
+- docEditor.css: .slate-doc bottom padding on mobile adds
+  env(safe-area-inset-bottom).
+- CodeEditor.tsx: terminal default + max height clamp on mobile
+  (120/320 vs 180/500), tab close button h-6 w-6 sm:h-4 sm:w-4.
+- snapshot.ts: snapshotSlides + applySnapshot now round-trip
+  textColor / notes / transition / animation per slide.
+- ExportDialog.tsx: presentationDeckToHtml now emits data-animation +
+  inline color style per slide.
+- schema.ts: SlateDocSnapshot.slides type widened with the new
+  optional fields.
+
+Behavioral changes on desktop:
+- PresentationEditor toolbar grows by ~7 new controls (4 shapes, 1
+  image, 1 animation picker, 1 theme picker). They live in the
+  existing overflow-x-auto strip so they don't push other controls
+  off-screen — the user scrolls to reach them.
+- The dock panel's PresentationToolsPanel grows by 3 new sections
+  (Insert / Themes / Motion) — same scrollable column.
+- Present mode gains a small "X / N · mm:ss" timer pill (top-left),
+  a presenter-notes Eye toggle (bottom-right), and the animation
+  keyframes fire alongside the transition keyframes on navigation.
+
+Behavioral changes on mobile:
+- Landscape phones get narrower docks (180/200 vs 200/220) and a
+  discoverable "Panels" hint chip at top-left.
+- Portrait phones already used the MobileDrawer; no change there.
+- Doc editor: word-count footer clears the iOS home indicator.
+- Code editor: terminal defaults to 120px (was 180px), maxes at
+  320px (was 500px); tab close button is now 24px (was 16px).
+- Presentation editor: smaller padding + smaller notes textarea,
+  present-mode controls always visible (no hover), all the new
+  slideshow features (shapes/image/animation/themes) are reachable
+  via the dock's PresentationToolsPanel.

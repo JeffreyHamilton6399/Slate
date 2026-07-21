@@ -177,9 +177,12 @@ function snapshotCodeFiles(slate: SlateRoom['slate']): { files: { id: string; na
   return { files, contents };
 }
 
-/** Capture 'presentation' board slides: ordered { id, content, background }. */
-function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: string; background: string }[] {
-  const slides: { id: string; content: string; background: string }[] = [];
+/** Capture 'presentation' board slides: ordered { id, content, background,
+ *  textColor, notes, transition, animation }. Older snapshots only have
+ *  { id, content, background } — the missing fields default safely when
+ *  re-applied (see applySnapshot). */
+function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[] {
+  const slides: { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[] = [];
   try {
     const arr = slate.slides();
     for (let i = 0; i < arr.length; i++) {
@@ -187,7 +190,18 @@ function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: strin
       const id = (m.get('id') as string | undefined) ?? `slide-${i}`;
       const content = (m.get('content') as string | undefined) ?? '';
       const background = (m.get('background') as string | undefined) ?? '#0c0c0e';
-      slides.push({ id, content, background });
+      const slide: { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string } = { id, content, background };
+      // Optional fields — only included when the slide has them so the JSON
+      // stays compact for older slides that predate the field.
+      const textColor = m.get('textColor');
+      if (typeof textColor === 'string' && textColor) slide.textColor = textColor;
+      const notes = m.get('notes');
+      if (typeof notes === 'string' && notes) slide.notes = notes;
+      const transition = m.get('transition');
+      if (typeof transition === 'string' && transition && transition !== 'none') slide.transition = transition;
+      const animation = m.get('animation');
+      if (typeof animation === 'string' && animation && animation !== 'none') slide.animation = animation;
+      slides.push(slide);
     }
   } catch {
     // ignore — return what we have
@@ -282,6 +296,13 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
           m.set('id', s.id);
           m.set('content', s.content);
           m.set('background', s.background);
+          // Restore the optional fields when the snapshot carries them.
+          // Older snapshots omit them — they default to '' / 'none' inside
+          // PresentationEditor.readSlide, so we don't need to set defaults here.
+          if (s.textColor) m.set('textColor', s.textColor);
+          if (s.notes) m.set('notes', s.notes);
+          if (s.transition) m.set('transition', s.transition);
+          if (s.animation) m.set('animation', s.animation);
           slides.push([m]);
         }
       }

@@ -559,14 +559,16 @@ function presentationDeckToHtml(
   boardName: string,
 ): string {
   const arr = slate.slides();
-  const slides: { content: string; background: string; notes: string; transition: string }[] = [];
+  const slides: { content: string; background: string; textColor: string; notes: string; transition: string; animation: string }[] = [];
   for (let i = 0; i < arr.length; i++) {
     const m = arr.get(i);
     slides.push({
       content: (m.get('content') as string | undefined) ?? '',
       background: (m.get('background') as string | undefined) ?? '#0c0c0e',
+      textColor: (m.get('textColor') as string | undefined) ?? '',
       notes: (m.get('notes') as string | undefined) ?? '',
       transition: (m.get('transition') as string | undefined) ?? 'none',
+      animation: (m.get('animation') as string | undefined) ?? 'none',
     });
   }
   const escAttr = (v: string) => v.replace(/"/g, '&quot;');
@@ -574,11 +576,17 @@ function presentationDeckToHtml(
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const sections = slides
     .map(
-      (s, i) =>
-        `<section class="slide" data-index="${i}" data-transition="${escAttr(s.transition)}" style="background:${escAttr(s.background)};">` +
-        `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
-        (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escText(s.notes)}</aside>` : '') +
-        '</section>',
+      (s, i) => {
+        // Inline `color` carries the slide's textColor (set by a theme) so
+        // the exported deck preserves the visual styling without external CSS.
+        const colorStyle = s.textColor ? `color:${escAttr(s.textColor)};` : '';
+        return (
+          `<section class="slide" data-index="${i}" data-transition="${escAttr(s.transition)}" data-animation="${escAttr(s.animation)}" style="background:${escAttr(s.background)};${colorStyle}">` +
+          `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
+          (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escText(s.notes)}</aside>` : '') +
+          '</section>'
+        );
+      },
     )
     .join('\n');
   return `<!DOCTYPE html>

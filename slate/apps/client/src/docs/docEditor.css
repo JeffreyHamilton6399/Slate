@@ -395,12 +395,18 @@
    wrap to one word per line. The 1056px page-break guide lines also disappear
    on mobile: a phone screen is already small, and the horizontal page-divider
    lines would dominate the viewport without adding useful "page" affordance.
-   The paper sheet instead flows as one continuous card. */
+   The paper sheet instead flows as one continuous card.
+   Safe-area-inset padding on the desk bottom keeps the word-count footer
+   (and the editor's bottom edge) clear of the iOS home indicator on
+   notched phones — the FAB at bottom-16 in Workspace.tsx also reserves this
+   zone. */
 @media (max-width: 640px) {
   .slate-doc-page {
     padding: 24px 16px;
     min-height: auto;
     background-image: none;
   }
-  .slate-doc { padding: 8px 4px 60px; }
+  .slate-doc {
+    padding: 8px 4px calc(60px + env(safe-area-inset-bottom, 0px));
+  }
 }

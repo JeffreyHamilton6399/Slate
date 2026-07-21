@@ -383,8 +383,13 @@ ${body}
         </div>
       </div>
 
-      {/* Word count footer */}
-      <div className="flex shrink-0 items-center justify-end border-t border-border px-3 py-0.5 text-[10px] font-mono text-text-dim">
+      {/* Word count footer — kept in normal flow (not absolutely positioned)
+          so it never overlaps the editor content. On mobile, the safe-area-
+          inset bottom padding makes sure it clears the iOS home indicator. */}
+      <div
+        className="flex shrink-0 items-center justify-end border-t border-border bg-bg-2 px-3 py-0.5 text-[10px] font-mono text-text-dim"
+        style={{ paddingBottom: 'calc(0.125rem + env(safe-area-inset-bottom, 0px))' }}
+      >
         {words} {words === 1 ? 'word' : 'words'}
       </div>
 

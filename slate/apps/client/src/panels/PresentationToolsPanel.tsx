@@ -27,7 +27,8 @@ import {
   List, ListOrdered, Palette, Type,
   AlignLeft, AlignCenter, AlignRight,
   Play as PlayIcon, FileCode2, FileText, Layout, Square,
-  ChevronDown, type LucideIcon,
+  ChevronDown, Circle as CircleIcon, ArrowRight, Minus, Image as ImageIcon,
+  Sparkles, type LucideIcon,
 } from 'lucide-react';
 import { runPresentationCommand } from '../presentation/presentationBridge';
 
@@ -52,6 +53,37 @@ const SLIDE_TEMPLATES: { id: string; label: string; Icon: LucideIcon }[] = [
 ];
 
 const FONT_SIZE_PRESETS = [12, 14, 16, 18, 24, 32, 48, 64];
+
+/** Animation presets offered under the “Animation” button. The id strings
+ *  must match the AnimationId union in PresentationEditor.tsx — they round-
+ *  trip through Yjs as the slide's `animation` field. */
+const ANIMATION_PRESETS: { id: string; label: string }[] = [
+  { id: 'none', label: 'None' },
+  { id: 'fade-in', label: 'Fade In' },
+  { id: 'slide-up', label: 'Slide Up' },
+  { id: 'zoom-in', label: 'Zoom In' },
+  { id: 'bounce', label: 'Bounce' },
+];
+
+/** Transition presets (same set as the editor's toolbar dropdown). */
+const TRANSITION_PRESETS: { id: string; label: string }[] = [
+  { id: 'none', label: 'None' },
+  { id: 'fade', label: 'Fade' },
+  { id: 'slide', label: 'Slide' },
+  { id: 'zoom', label: 'Zoom' },
+];
+
+/** Theme presets — each sets the slide's background AND default text color
+ *  in one tap. The id strings are matched against the THEMES table in
+ *  PresentationEditor.tsx. */
+const THEME_PRESETS: { id: string; label: string; bg: string; color: string }[] = [
+  { id: 'dark', label: 'Dark', bg: '#0c0c0e', color: '#f5f5f7' },
+  { id: 'light', label: 'Light', bg: '#ffffff', color: '#1a1a1d' },
+  { id: 'blue', label: 'Blue', bg: '#1e3a8a', color: '#ffffff' },
+  { id: 'sunset', label: 'Sunset', bg: 'linear-gradient(135deg, #f97316 0%, #db2777 100%)', color: '#ffffff' },
+  { id: 'forest', label: 'Forest', bg: 'linear-gradient(135deg, #065f46 0%, #064e3b 100%)', color: '#f0fdf4' },
+  { id: 'slate', label: 'Slate', bg: '#1e293b', color: '#e2e8f0' },
+];
 
 /** Background swatches — solid tones + a couple of gradient hints. The
  *  gradient strings ship straight to PresentationEditor's `setBackground`
@@ -326,10 +358,151 @@ const DESIGN_TOOLS: Tool[] = [
   { command: 'fontSize', label: 'Font Size', Icon: Type },
 ];
 
+/** Insert tools — shapes + image. Shapes dispatch the `insertShape` command
+ *  with the shape id as the value; image opens the hidden file picker. */
+const INSERT_TOOLS: Tool[] = [
+  { command: 'insertShape', label: 'Rect', Icon: Square, value: 'rect' },
+  { command: 'insertShape', label: 'Circle', Icon: CircleIcon, value: 'circle' },
+  { command: 'insertShape', label: 'Arrow', Icon: ArrowRight, value: 'arrow' },
+  { command: 'insertShape', label: 'Line', Icon: Minus, value: 'line' },
+  { command: 'insertImage', label: 'Image', Icon: ImageIcon },
+];
+
 const ACTION_TOOLS: Tool[] = [
   { command: 'present', label: 'Present', Icon: PlayIcon },
   { command: 'exportHtml', label: 'Export HTML', Icon: FileCode2 },
 ];
+
+/** Popover-style picker for slide transitions — same set as the editor's
+ *  toolbar dropdown, exposed as a panel button so it's reachable on mobile
+ *  (where the dropdown is hidden). */
+function TransitionPicker() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        title="Slide transition"
+        aria-label="Slide transition"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={TOOL_BUTTON_CLASS}
+      >
+        <Sparkles size={16} />
+        <span className="flex items-center text-[9px] leading-tight">
+          Transition
+          <ChevronDown size={10} className="ml-0.5 opacity-70" />
+        </span>
+      </button>
+      {open && (
+        <div role="menu" aria-label="Slide transitions" className="absolute bottom-full right-0 z-30 mb-1 w-32 rounded-md border border-border bg-bg-2 p-1 shadow-lg">
+          {TRANSITION_PRESETS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="menuitem"
+              onClick={() => { runPresentationCommand('setTransition', t.id); setOpen(false); }}
+              className="block w-full rounded px-1.5 py-1.5 text-left text-[11px] text-text-mid hover:bg-bg-3 hover:text-text"
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Popover-style picker for slide animations (in-slide content reveal). */
+function AnimationPicker() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        title="Slide animation"
+        aria-label="Slide animation"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={TOOL_BUTTON_CLASS}
+      >
+        <Sparkles size={16} />
+        <span className="flex items-center text-[9px] leading-tight">
+          Animation
+          <ChevronDown size={10} className="ml-0.5 opacity-70" />
+        </span>
+      </button>
+      {open && (
+        <div role="menu" aria-label="Slide animations" className="absolute bottom-full right-0 z-30 mb-1 w-32 rounded-md border border-border bg-bg-2 p-1 shadow-lg">
+          {ANIMATION_PRESETS.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              role="menuitem"
+              onClick={() => { runPresentationCommand('setAnimation', a.id); setOpen(false); }}
+              className="block w-full rounded px-1.5 py-1.5 text-left text-[11px] text-text-mid hover:bg-bg-3 hover:text-text"
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Themes section — quick one-tap presets that set both the slide background
+ *  AND the default text color. Each preset renders as a small swatch with
+ *  the theme's bg + a sample letter colored with the theme's text color, so
+ *  the user can see the contrast at a glance. */
+function ThemePresets() {
+  return (
+    <div>
+      <h5 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-text-dim">Themes</h5>
+      <div className="grid grid-cols-3 gap-1">
+        {THEME_PRESETS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            title={`Apply ${t.label} theme`}
+            aria-label={`Apply ${t.label} theme`}
+            onClick={() => runPresentationCommand('applyTheme', t.id)}
+            className="flex h-12 items-center justify-center rounded-md border-2 border-border text-sm font-semibold transition-transform hover:scale-105"
+            style={t.bg.startsWith('linear-gradient')
+              ? { backgroundImage: t.bg, color: t.color }
+              : { backgroundColor: t.bg, color: t.color }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function PresentationToolsPanel() {
   return (
@@ -354,12 +527,27 @@ export function PresentationToolsPanel() {
           <ToolButton key={t.command} t={t} />
         ))}
       </Group>
+      <Group title="Insert">
+        {INSERT_TOOLS.map((t) => (
+          <ToolButton key={`${t.command}-${t.value ?? ''}`} t={t} />
+        ))}
+      </Group>
       <BackgroundSwatches />
+      <ThemePresets />
       <Group title="Design">
         {DESIGN_TOOLS.map((t) => (
           <ToolButton key={t.command} t={t} />
         ))}
       </Group>
+      {/* Transition + Animation pickers — popover-style, one column wider
+          than the 4-col ToolButton grid so the labels fit. */}
+      <div>
+        <h5 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-text-dim">Motion</h5>
+        <div className="grid grid-cols-2 gap-1">
+          <TransitionPicker />
+          <AnimationPicker />
+        </div>
+      </div>
       <Group title="Actions">
         {ACTION_TOOLS.map((t) => (
           <ToolButton key={t.command} t={t} />
@@ -367,8 +555,10 @@ export function PresentationToolsPanel() {
       </Group>
       <p className="text-[10px] leading-snug text-text-dim">
         Pick a slide template to add a pre-built layout, then edit in the
-        canvas. Drag thumbnails in the navigator to reorder. ←/→ navigate,
-        Ctrl+Shift+N adds a slide, Ctrl+Shift+P presents.
+        canvas. Drag thumbnails in the navigator to reorder. Themes set the
+        background + text color in one tap. Animations reveal slide content
+        in present mode; transitions animate the move between slides.
+        ←/→ navigate, Ctrl+Shift+N adds a slide, Ctrl+Shift+P presents.
       </p>
     </div>
   );

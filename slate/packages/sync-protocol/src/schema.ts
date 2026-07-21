@@ -489,8 +489,12 @@ export interface SlateDocSnapshot {
     files: { id: string; name: string }[];
     contents: Record<string, string>;
   };
-  /** 'presentation' boards: ordered list of slides. Each slide is a simple
-   *  { id, content (HTML string), background (CSS color) } triple. Optional —
-   *  absent on snapshots from older clients and non-presentation boards. */
-  slides?: { id: string; content: string; background: string }[];
+  /** 'presentation' boards: ordered list of slides. Each slide carries its
+   *  HTML `content`, `background` (CSS color or gradient), and optional
+   *  per-slide extras: `textColor` (set by theme presets), `notes` (speaker
+   *  notes), `transition` ('fade'|'slide'|'zoom'), `animation` ('fade-in'|
+   *  'slide-up'|'zoom-in'|'bounce'). Optional fields are absent on snapshots
+   *  from older clients (and on slides that never set them) — they default
+   *  safely inside PresentationEditor.readSlide. */
+  slides?: { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[];
 }

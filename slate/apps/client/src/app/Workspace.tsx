@@ -10,7 +10,7 @@
  */
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, PanelLeft } from 'lucide-react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
@@ -84,17 +84,24 @@ export function Workspace() {
   // still writes the underlying value, so a user who explicitly drags wider
   // on a small screen sees it apply on a larger screen later.)
   const smallLandscape = isSmallScreen && !isMobile;
-  const effectiveSidebar = smallLandscape ? Math.min(sidebarWidth, 200) : sidebarWidth;
-  const effectiveDock = smallLandscape ? Math.min(dockWidth, 220) : dockWidth;
+  // Cap each dock to 180/200 on a small landscape phone (e.g. 812×375)
+  // so the central editor keeps usable horizontal room — the default
+  // 240/260px would eat ~500px before the editor even renders. The
+  // resizer still writes the underlying value via setSidebarWidth /
+  // setDockWidth, so a user who explicitly drags wider on a small screen
+  // sees it apply on a larger screen later (the cap is render-only).
+  const effectiveSidebar = smallLandscape ? Math.min(sidebarWidth, 180) : sidebarWidth;
+  const effectiveDock = smallLandscape ? Math.min(dockWidth, 200) : dockWidth;
 
   const { room, status, awareness } = useSlateRoom(board.name, displayName);
   const autosave = useAutosave(room);
 
   // On first open, push default tabs based on mode + register fresh panels.
   // SKIPPED on small landscape screens (e.g. 812×375 phone in landscape):
-  // the docks at their minimum width already eat ~420px, so auto-opening
+  // the docks at their reduced width already eat ~380px, so auto-opening
   // every panel for the mode would cover the canvas. The user opens the
-  // ones they need via the dock's `+` menu.
+  // ones they need via the dock's `+` menu (or the small-landscape hint
+  // overlay rendered below the editor surface).
   const panels = usePanelRegistry((s) => s.panels);
   useEffect(() => {
     if (smallLandscape) return;
@@ -385,6 +392,24 @@ export function Workspace() {
               )}
             </RecoverBoundary>
             <PeopleWidget awareness={awareness} room={room} />
+            {/* Small-landscape hint — when the desktop docks are visible but
+                auto-open is skipped (no tabs to show), surface a one-tap
+                "Open panels" affordance so the user isn't left guessing how
+                to reach the per-mode tools. Tapping the left dock's `+` menu
+                is the underlying action; this just makes the affordance
+                discoverable on a cramped landscape phone. */}
+            {smallLandscape && (
+              <button
+                type="button"
+                onClick={() => setMobileDrawer(true)}
+                aria-label="Open panels"
+                title="Open panels"
+                className="absolute left-4 top-4 z-30 flex items-center gap-1.5 rounded-md border border-border bg-bg-2/90 px-2.5 py-1.5 text-[11px] text-text-mid shadow-sm backdrop-blur hover:bg-bg-3 hover:text-text"
+              >
+                <PanelLeft size={13} />
+                Panels
+              </button>
+            )}
             {/* Mobile FAB — a big always-visible "Panels" button at the
                 bottom-right of the canvas. The Header has a small Menu icon
                 too, but on a phone it's easy to miss mixed in with Share /

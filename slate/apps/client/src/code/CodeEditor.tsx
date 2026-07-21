@@ -197,12 +197,17 @@ export function CodeEditor() {
   // Terminal strip along the bottom of the editor (VS Code / bolt style):
   // toggled from the toolbar, drag-resizable, shows the preview's console.
   const [showTerminal, setShowTerminal] = useState(false);
-  const [terminalHeight, setTerminalHeight] = useState(180);
+  // Terminal default + clamp: smaller on mobile so it doesn't crowd the
+  // editor surface (a 180px strip on a 375px-tall landscape phone leaves
+  // barely 200px for code). Mobile clamps to [80, 320]; desktop to [80, 500].
+  const terminalMin = 80;
+  const terminalMax = isMobile ? 320 : 500;
+  const [terminalHeight, setTerminalHeight] = useState(isMobile ? 120 : 180);
   const startTerminalDrag = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
     const startH = terminalHeight;
-    const onMove = (ev: MouseEvent) => setTerminalHeight(Math.max(80, Math.min(500, startH + (startY - ev.clientY))));
+    const onMove = (ev: MouseEvent) => setTerminalHeight(Math.max(terminalMin, Math.min(terminalMax, startH + (startY - ev.clientY))));
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -734,7 +739,9 @@ export function CodeEditor() {
                       e.stopPropagation();
                       closeTab(f.id);
                     }}
-                    className="grid h-4 w-4 shrink-0 place-items-center rounded text-text-dim hover:bg-bg-3 hover:text-text"
+                    // Bigger touch target on mobile (h-6 = 24px) so a finger
+                    // tap reliably hits the × instead of the tab switch.
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-dim hover:bg-bg-3 hover:text-text sm:h-4 sm:w-4"
                   >
                     <X size={10} />
                   </button>

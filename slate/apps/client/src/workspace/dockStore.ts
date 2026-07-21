@@ -217,8 +217,11 @@ export const useDockStore = create<DockState>()(
         set((s) => ({
           splitRatio: { ...s.splitRatio, [side]: Math.max(0.2, Math.min(0.85, ratio)) },
         })),
-      setSidebarWidth: (w) => set({ sidebarWidth: Math.max(200, Math.min(420, w)) }),
-      setDockWidth: (w) => set({ dockWidth: Math.max(220, Math.min(520, w)) }),
+      // Lower minimums (160/180) so the resizer can shrink the docks further
+      // on cramped landscape phones — a 375px-tall landscape phone with the
+      // old 200/220 minimums would eat ~420px before the editor even renders.
+      setSidebarWidth: (w) => set({ sidebarWidth: Math.max(160, Math.min(420, w)) }),
+      setDockWidth: (w) => set({ dockWidth: Math.max(180, Math.min(520, w)) }),
       setMobileDrawer: (open, tab) =>
         set((s) => ({
           mobileDrawerOpen: open,

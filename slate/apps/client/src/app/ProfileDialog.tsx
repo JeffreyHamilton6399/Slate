@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Camera,
   Check,
   CloudDownload,
@@ -34,7 +35,7 @@ import { useAppStore, type Theme } from './store';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { useFriends } from '../account/useFriends';
-import { upsertMyProfile, fetchMyProfile } from '../account/friends';
+import { upsertMyProfile, fetchMyProfile, fetchUserProfile, type Friend } from '../account/friends';
 import { backupSavesToCloud, restoreSavesFromCloud } from '../account/cloudSaves';
 import { listSaves } from '../files/snapshot';
 import { useDockStore } from '../workspace/dockStore';
@@ -74,16 +75,18 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
 
   // On open, pull the profile synced from another device (if the local store
   // hasn't got the fields yet). Keeps the pic/bio/status following the account.
+  // The cloud is the source of truth — always overwrite local with cloud when
+  // the cloud has a value, so changes made on another device show up here too.
   useEffect(() => {
     if (!open || !user?.id) return;
     let cancelled = false;
     void fetchMyProfile(user.id).then((prof) => {
       if (cancelled || !prof) return;
       const s = useAppStore.getState();
-      if (prof.avatarUrl && !s.avatarUrl) setAvatarUrl(prof.avatarUrl);
-      if (prof.displayName && !s.displayName) setDisplayName(prof.displayName);
-      if (prof.bio && !s.bio) s.setBio(prof.bio);
-      if (prof.status && !s.statusText) s.setStatusText(prof.status);
+      if (prof.displayName) setDisplayName(prof.displayName);
+      if (prof.avatarUrl) setAvatarUrl(prof.avatarUrl);
+      if (prof.bio) s.setBio(prof.bio);
+      if (prof.status) s.setStatusText(prof.status);
       if (prof.bannerColor) s.setBannerColor(prof.bannerColor);
     });
     return () => { cancelled = true; };
@@ -521,8 +524,9 @@ function SettingsTabView() {
 
 /**
  * Friends section — add by email, pending requests, accepted friends list.
- * Falls back to a "sign in" hint when Supabase isn't configured or the user
- * isn't signed in.
+ * Clicking an accepted friend opens a detail view (avatar, bio, status, days
+ * on Slate, banner color). Falls back to a "sign in" hint when Supabase isn't
+ * configured or the user isn't signed in.
  */
 function FriendsSection({ userId }: { userId: string | undefined }) {
   const { friends, pending, loading, sendRequest, accept, remove } = useFriends(userId);
@@ -531,6 +535,8 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
   // Must be declared with the other hooks (before any early return) so the hook
   // order stays constant whether or not accounts are enabled / the user is in.
   const [query, setQuery] = useState('');
+  /** The friend whose profile detail view is open (null = list view). */
+  const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
 
   if (!accountsEnabled) {
     return (
@@ -548,6 +554,20 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
       <p className="text-xs text-text-dim">
         Sign in to add friends and share boards with people you know.
       </p>
+    );
+  }
+
+  // Detail view for a clicked friend — overlays the list with a Back button.
+  if (selectedFriend) {
+    return (
+      <FriendProfileView
+        friend={selectedFriend}
+        onBack={() => setSelectedFriend(null)}
+        onRemove={async (id) => {
+          await remove(id);
+          setSelectedFriend(null);
+        }}
+      />
     );
   }
 
@@ -653,8 +673,8 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
 
           {friends.length > 0 ? (
             <>
-              {online.length > 0 && <FriendList label={`Online — ${online.length}`} friends={online} onRemove={remove} />}
-              {offline.length > 0 && <FriendList label={`Offline — ${offline.length}`} friends={offline} onRemove={remove} />}
+              {online.length > 0 && <FriendList label={`Online — ${online.length}`} friends={online} onRemove={remove} onSelect={setSelectedFriend} />}
+              {offline.length > 0 && <FriendList label={`Offline — ${offline.length}`} friends={offline} onRemove={remove} onSelect={setSelectedFriend} />}
               {online.length === 0 && offline.length === 0 && (
                 <p className="text-xs text-text-dim">No friends match “{query}”.</p>
               )}
@@ -670,15 +690,144 @@ function FriendsSection({ userId }: { userId: string | undefined }) {
   );
 }
 
-/** One group of friend cards (Online / Offline), Discord-style. */
+/** Friend detail view — a social-style profile card for a clicked friend:
+ *  banner, big avatar, status line, bio, stats (days on Slate, online status),
+ *  email, plus a Back button and a Remove friend action. Fetches the friend's
+ *  full profile (bio, banner color, created_at) on mount. */
+function FriendProfileView({
+  friend,
+  onBack,
+  onRemove,
+}: {
+  friend: Friend;
+  onBack: () => void;
+  onRemove: (friendId: string) => Promise<void>;
+}) {
+  const [profile, setProfile] = useState<Awaited<ReturnType<typeof fetchUserProfile>> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void fetchUserProfile(friend.userId).then((p) => {
+      if (cancelled) return;
+      setProfile(p);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [friend.userId]);
+
+  // Prefer the freshly-fetched profile fields; fall back to the Friend row
+  // (which already has display name / avatar / status / bio / email) so the
+  // view renders immediately even before the fetch resolves.
+  const displayName = profile?.displayName ?? friend.displayName ?? 'Anonymous';
+  const avatarUrl = profile?.avatarUrl ?? friend.avatarUrl;
+  const bio = profile?.bio ?? friend.bio;
+  const statusText = profile?.status ?? friend.statusText;
+  const email = profile?.email ?? friend.email;
+  const bannerColor = profile?.bannerColor ?? '#7c6aff';
+  const online = friend.online;
+
+  const daysOnSlate = useMemo(() => {
+    const t = profile?.createdAt;
+    if (!t || !Number.isFinite(t)) return null;
+    return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+  }, [profile?.createdAt]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex w-max items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-mid hover:bg-bg-3 hover:text-text"
+        aria-label="Back to friends list"
+      >
+        <ArrowLeft size={13} />
+        <span>Back</span>
+      </button>
+
+      <div className="overflow-hidden rounded-xl border border-border bg-bg-2">
+        <div
+          className="h-24"
+          style={{ background: `linear-gradient(135deg, ${bannerColor} 0%, ${bannerColor}55 70%, transparent 130%)` }}
+        />
+        <div className="px-5 pb-4">
+          <div className="-mt-10 mb-2 flex items-end justify-between">
+            <span className="relative shrink-0">
+              <Avatar
+                url={avatarUrl}
+                name={displayName}
+                size={88}
+                className="ring-4 ring-bg-2"
+              />
+              <span
+                className={
+                  'absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full ring-2 ring-bg-2 ' +
+                  (online ? 'bg-green' : 'bg-text-dim/50')
+                }
+                title={online ? 'Online' : 'Offline'}
+              />
+            </span>
+          </div>
+          <p className="truncate text-xl font-bold text-text">{displayName}</p>
+          {statusText && <p className="mt-0.5 truncate text-sm text-text-mid">{statusText}</p>}
+          {email && (
+            <p className="mt-0.5 truncate text-xs text-text-dim" title={email}>
+              {email}
+            </p>
+          )}
+          {bio && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-mid">{bio}</p>}
+
+          {/* Stats row */}
+          <div className="mt-3 flex flex-wrap gap-4 border-t border-border pt-3 text-xs text-text-dim">
+            <span className="flex items-center gap-1">
+              <span
+                className={
+                  'inline-block h-2 w-2 rounded-full ' + (online ? 'bg-green' : 'bg-text-dim/50')
+                }
+              />
+              {online ? 'Online now' : 'Offline'}
+            </span>
+            {daysOnSlate !== null && (
+              <span>
+                <span className="font-semibold text-text">{daysOnSlate}</span> day{daysOnSlate === 1 ? '' : 's'} on Slate
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {loading && <p className="text-xs text-text-dim">Loading profile…</p>}
+
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-text-dim hover:text-danger"
+          onClick={() => void onRemove(friend.userId)}
+          aria-label={`Remove friend ${displayName}`}
+        >
+          <UserMinus size={13} />
+          <span className="ml-1.5">Remove friend</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** One group of friend cards (Online / Offline), Discord-style. The avatar +
+ *  name area is a button that opens the friend's profile detail view; the
+ *  UserMinus button stays separate so it doesn't trigger navigation. */
 function FriendList({
   label,
   friends,
   onRemove,
+  onSelect,
 }: {
   label: string;
   friends: ReturnType<typeof useFriends>['friends'];
   onRemove: (friendId: string) => Promise<void>;
+  onSelect: (friend: Friend) => void;
 }) {
   return (
     <div>
@@ -689,24 +838,31 @@ function FriendList({
             key={f.userId}
             className="group flex items-center gap-2.5 rounded-md border border-border bg-bg-2 px-2.5 py-2"
           >
-            <span className="relative shrink-0">
-              <Avatar url={f.avatarUrl} name={f.displayName} size={34} className={f.online ? '' : 'opacity-60 saturate-50'} />
-              <span
-                className={
-                  'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
-                  (f.online ? 'bg-green' : 'bg-text-dim/50')
-                }
-                title={f.online ? 'Online' : 'Offline'}
-              />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className={'truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')}>
-                {f.displayName || 'Anonymous'}
-              </p>
-              <p className="truncate text-[10px] text-text-dim">
-                {f.statusText || f.bio || f.email || (f.online ? 'Online' : 'Offline')}
-              </p>
-            </div>
+            <button
+              type="button"
+              onClick={() => onSelect(f)}
+              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+              aria-label={`View ${f.displayName || 'Anonymous'}'s profile`}
+            >
+              <span className="relative shrink-0">
+                <Avatar url={f.avatarUrl} name={f.displayName} size={34} className={f.online ? '' : 'opacity-60 saturate-50'} />
+                <span
+                  className={
+                    'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
+                    (f.online ? 'bg-green' : 'bg-text-dim/50')
+                  }
+                  title={f.online ? 'Online' : 'Offline'}
+                />
+              </span>
+              <span className="min-w-0 flex-1">
+                <p className={'truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')}>
+                  {f.displayName || 'Anonymous'}
+                </p>
+                <p className="truncate text-[10px] text-text-dim">
+                  {f.statusText || f.bio || f.email || (f.online ? 'Online' : 'Offline')}
+                </p>
+              </span>
+            </button>
             <Button
               size="sm"
               variant="ghost"

@@ -1,0 +1,792 @@
+     1→     1→/**
+     2→     2→ * Profile screen — a real full-size screen (not a scrolling column) with a
+     3→     3→ * left tab rail: Profile · Friends · Settings. Everything account-shaped lives
+     4→     4→ * here, so the Home avatar dropdown no longer needs Friends / Settings / Terms
+     5→     5→ * entries — they're tabs in here.
+     6→     6→ *
+     7→     7→ *   Profile  — avatar + email, display name, cloud backup / restore / sign out
+     8→     8→ *   Friends  — add by email, pending requests, accepted friends
+     9→     9→ *   Settings — appearance (theme/accent), voice, 3D viewport, layout reset
+    10→    10→ */
+    11→    11→
+    12→    12→import { useEffect, useMemo, useRef, useState } from 'react';
+    13→    13→import {
+    14→    14→  Camera,
+    15→    15→  Check,
+    16→    16→  CloudDownload,
+    17→    17→  CloudUpload,
+    18→    18→  LogOut,
+    19→    19→  Moon,
+    20→    20→  Search,
+    21→    21→  Settings as SettingsIcon,
+    22→    22→  Sun,
+    23→    23→  Trash2,
+    24→    24→  User as UserIcon,
+    25→    25→  UserMinus,
+    26→    26→  UserPlus,
+    27→    27→  Users,
+    28→    28→  X,
+    29→    29→} from 'lucide-react';
+    30→    30→import { Dialog } from '../ui/Dialog';
+    31→    31→import { Button } from '../ui/Button';
+    32→    32→import { Input, FieldLabel } from '../ui/Input';
+    33→    33→import { useAppStore, type Theme } from './store';
+    34→    34→import { accountsEnabled, supabase } from '../account/supabase';
+    35→    35→import { useAccount } from '../account/useAccount';
+    36→    36→import { useFriends } from '../account/useFriends';
+    37→    37→import { upsertMyProfile, fetchMyProfile } from '../account/friends';
+    38→    38→import { backupSavesToCloud, restoreSavesFromCloud } from '../account/cloudSaves';
+    39→    39→import { listSaves } from '../files/snapshot';
+    40→    40→import { useDockStore } from '../workspace/dockStore';
+    41→    41→import { useVoiceOptional } from '../voice/useVoiceOptional';
+    42→    42→import { toast } from '../ui/Toast';
+    43→    43→import { Avatar } from './Avatar';
+    44→    44→import { AvatarCropper } from './AvatarCropper';
+    45→    45→
+    46→    46→export type ProfileTab = 'profile' | 'friends' | 'settings';
+    47→    47→
+    48→    48→interface ProfileDialogProps {
+    49→    49→  open: boolean;
+    50→    50→  onOpenChange: (open: boolean) => void;
+    51→    51→  /** Which tab to show when opened. */
+    52→    52→  initialTab?: ProfileTab;
+    53→    53→}
+    54→    54→
+    55→    55→const TABS: { id: ProfileTab; label: string; Icon: typeof UserIcon }[] = [
+    56→    56→  { id: 'profile', label: 'Profile', Icon: UserIcon },
+    57→    57→  { id: 'friends', label: 'Friends', Icon: Users },
+    58→    58→  { id: 'settings', label: 'Settings', Icon: SettingsIcon },
+    59→    59→];
+    60→    60→
+    61→    61→export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: ProfileDialogProps) {
+    62→    62→  const displayName = useAppStore((s) => s.displayName);
+    63→    63→  const avatarUrl = useAppStore((s) => s.avatarUrl);
+    64→    64→  const setAvatarUrl = useAppStore((s) => s.setAvatarUrl);
+    65→    65→  const setDisplayName = useAppStore((s) => s.setDisplayName);
+    66→    66→  const [tab, setTab] = useState<ProfileTab>(initialTab);
+    67→    67→  const { user } = useAccount();
+    68→    68→  const email = user?.email ?? '';
+    69→    69→
+    70→    70→  // Jump to the requested tab each time the screen opens.
+    71→    71→  useEffect(() => {
+    72→    72→    if (open) setTab(initialTab);
+    73→    73→  }, [open, initialTab]);
+    74→    74→
+    75→    75→  // On open, pull the profile synced from another device (if the local store
+    76→    76→  // hasn't got the fields yet). Keeps the pic/bio/status following the account.
+    77→    77→  useEffect(() => {
+    78→    78→    if (!open || !user?.id) return;
+    79→    79→    let cancelled = false;
+    80→    80→    void fetchMyProfile(user.id).then((prof) => {
+    81→    81→      if (cancelled || !prof) return;
+    82→    82→      const s = useAppStore.getState();
+    83→    83→      if (prof.avatarUrl && !s.avatarUrl) setAvatarUrl(prof.avatarUrl);
+    84→    84→      if (prof.displayName && !s.displayName) setDisplayName(prof.displayName);
+    85→    85→      if (prof.bio && !s.bio) s.setBio(prof.bio);
+    86→    86→      if (prof.status && !s.statusText) s.setStatusText(prof.status);
+    87→    87→      if (prof.bannerColor) s.setBannerColor(prof.bannerColor);
+    88→    88→    });
+    89→    89→    return () => { cancelled = true; };
+    90→    90→  }, [open, user?.id, setAvatarUrl, setDisplayName]);
+    91→    91→
+    92→    92→  return (
+    93→    93→    <Dialog
+    94→    94→      open={open}
+    95→    95→      onOpenChange={onOpenChange}
+    96→    96→      className="max-w-5xl w-[95vw] p-0"
+    97→    97→    >
+    98→    98→      <div className="flex max-h-[85vh] min-h-[300px] flex-col sm:flex-row">
+    99→    99→        {/* Tab rail */}
+   100→   100→        <nav className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
+   101→   101→          <div className="mb-2 hidden items-center gap-2 px-1.5 sm:flex">
+   102→   102→            <Avatar url={avatarUrl} name={displayName || email} size={38} />
+   103→   103→            <div className="min-w-0">
+   104→   104→              <p className="truncate text-sm font-semibold text-text">{displayName || 'Anonymous'}</p>
+   105→   105→              <p className="truncate text-[11px] text-text-dim" title={email}>{email || 'Not signed in'}</p>
+   106→   106→            </div>
+   107→   107→          </div>
+   108→   108→          {TABS.map(({ id, label, Icon }) => (
+   109→   109→            <button
+   110→   110→              key={id}
+   111→   111→              type="button"
+   112→   112→              onClick={() => setTab(id)}
+   113→   113→              aria-current={tab === id}
+   114→   114→              className={
+   115→   115→                'flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ' +
+   116→   116→                (tab === id
+   117→   117→                  ? 'bg-accent/15 text-accent'
+   118→   118→                  : 'text-text-mid hover:bg-bg-3 hover:text-text')
+   119→   119→              }
+   120→   120→            >
+   121→   121→              <Icon size={15} />
+   122→   122→              {label}
+   123→   123→            </button>
+   124→   124→          ))}
+   125→   125→        </nav>
+   126→   126→
+   127→   127→        {/* Content */}
+   128→   128→        <div className="min-w-0 flex-1 overflow-y-auto p-6">
+   129→   129→          {tab === 'profile' && <ProfileTabView />}
+   130→   130→          {tab === 'friends' && (
+   131→   131→            <section>
+   132→   132→              <h3 className="mb-4 text-lg font-semibold text-text">Friends</h3>
+   133→   133→              <FriendsSection userId={user?.id} />
+   134→   134→            </section>
+   135→   135→          )}
+   136→   136→          {tab === 'settings' && <SettingsTabView />}
+   137→   137→        </div>
+   138→   138→      </div>
+   139→   139→    </Dialog>
+   140→   140→  );
+   141→   141→}
+   142→   142→
+   143→   143→const BANNER_COLORS = ['#7c6aff', '#38bdf8', '#22d3a5', '#fbbf24', '#f472b6', '#f87171', '#64748b'];
+   144→   144→
+   145→   145→/** Profile tab — a social-style profile card: banner, big avatar, status line,
+   146→   146→ *  bio, stats, then the account plumbing (cloud backup, sign out). */
+   147→   147→function ProfileTabView() {
+   148→   148→  const displayName = useAppStore((s) => s.displayName);
+   149→   149→  const setDisplayName = useAppStore((s) => s.setDisplayName);
+   150→   150→  const avatarUrl = useAppStore((s) => s.avatarUrl);
+   151→   151→  const setAvatarUrl = useAppStore((s) => s.setAvatarUrl);
+   152→   152→  const bio = useAppStore((s) => s.bio);
+   153→   153→  const setBio = useAppStore((s) => s.setBio);
+   154→   154→  const statusText = useAppStore((s) => s.statusText);
+   155→   155→  const setStatusText = useAppStore((s) => s.setStatusText);
+   156→   156→  const bannerColor = useAppStore((s) => s.bannerColor);
+   157→   157→  const setBannerColor = useAppStore((s) => s.setBannerColor);
+   158→   158→  const { user } = useAccount();
+   159→   159→  const email = user?.email ?? '';
+   160→   160→  const userId = user?.id;
+   161→   161→  const { friends } = useFriends(userId);
+   162→   162→  const [name, setName] = useState(displayName);
+   163→   163→  const [bioDraft, setBioDraft] = useState(bio);
+   164→   164→  const [statusDraft, setStatusDraft] = useState(statusText);
+   165→   165→  useEffect(() => setName(displayName), [displayName]);
+   166→   166→  useEffect(() => setBioDraft(bio), [bio]);
+   167→   167→  useEffect(() => setStatusDraft(statusText), [statusText]);
+   168→   168→
+   169→   169→  const boardsCount = useMemo(() => listSaves().length, []);
+   170→   170→  const memberSince = useMemo(() => {
+   171→   171→    const t = user?.created_at ? Date.parse(user.created_at) : NaN;
+   172→   172→    if (!Number.isFinite(t)) return null;
+   173→   173→    return new Date(t).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+   174→   174→  }, [user?.created_at]);
+   175→   175→
+   176→   176→  const fileRef = useRef<HTMLInputElement | null>(null);
+   177→   177→  const [cropSrc, setCropSrc] = useState<string | null>(null);
+   178→   178→
+   179→   179→  const onPickFile = (file: File | undefined) => {
+   180→   180→    if (!file) return;
+   181→   181→    if (!/^image\//.test(file.type)) {
+   182→   182→      toast({ title: 'Pick an image file', variant: 'error' });
+   183→   183→      return;
+   184→   184→    }
+   185→   185→    const reader = new FileReader();
+   186→   186→    reader.onload = () => setCropSrc(reader.result as string);
+   187→   187→    reader.readAsDataURL(file);
+   188→   188→  };
+   189→   189→
+   190→   190→  /** Push the full local profile to the cloud row (partial-safe). */
+   191→   191→  const syncProfile = (patch?: { avatar?: string | null; bio?: string; status?: string; bannerColor?: string }) => {
+   192→   192→    if (!userId) return;
+   193→   193→    const s = useAppStore.getState();
+   194→   194→    void upsertMyProfile(userId, s.displayName || name, email, patch?.avatar, {
+   195→   195→      bio: patch?.bio ?? s.bio,
+   196→   196→      status: patch?.status ?? s.statusText,
+   197→   197→      bannerColor: patch?.bannerColor ?? s.bannerColor,
+   198→   198→    });
+   199→   199→  };
+   200→   200→
+   201→   201→  const saveAvatar = (dataUrl: string | null) => {
+   202→   202→    setAvatarUrl(dataUrl ?? '');
+   203→   203→    syncProfile({ avatar: dataUrl ?? null });
+   204→   204→  };
+   205→   205→
+   206→   206→  return (
+   207→   207→    <div className="flex flex-col gap-5">
+   208→   208→      {/* ── Profile card: banner + avatar + identity ── */}
+   209→   209→      <div className="overflow-hidden rounded-xl border border-border bg-bg-2">
+   210→   210→        {/* Banner (choose a color on hover). */}
+   211→   211→        <div
+   212→   212→          className="group/banner relative h-24"
+   213→   213→          style={{ background: `linear-gradient(135deg, ${bannerColor} 0%, ${bannerColor}55 70%, transparent 130%)` }}
+   214→   214→        >
+   215→   215→          <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/35 px-2 py-1 opacity-0 backdrop-blur transition-opacity group-hover/banner:opacity-100">
+   216→   216→            {BANNER_COLORS.map((c) => (
+   217→   217→              <button
+   218→   218→                key={c}
+   219→   219→                type="button"
+   220→   220→                aria-label={`Banner color ${c}`}
+   221→   221→                onClick={() => { setBannerColor(c); syncProfile({ bannerColor: c }); }}
+   222→   222→                className={
+   223→   223→                  'h-4 w-4 rounded-full border transition-transform hover:scale-110 ' +
+   224→   224→                  (bannerColor.toLowerCase() === c ? 'border-white' : 'border-white/30')
+   225→   225→                }
+   226→   226→                style={{ backgroundColor: c }}
+   227→   227→              />
+   228→   228→            ))}
+   229→   229→          </div>
+   230→   230→        </div>
+   231→   231→        <div className="px-5 pb-4">
+   232→   232→          {/* Avatar overlaps the banner like every social profile. */}
+   233→   233→          <div className="-mt-10 mb-2 flex items-end justify-between">
+   234→   234→            <button
+   235→   235→              type="button"
+   236→   236→              onClick={() => fileRef.current?.click()}
+   237→   237→              className="group relative flex shrink-0 rounded-full"
+   238→   238→              title="Change photo"
+   239→   239→              aria-label="Change profile photo"
+   240→   240→            >
+   241→   241→              <Avatar url={avatarUrl} name={displayName || email} size={88} className="ring-4 ring-bg-2" />
+   242→   242→              <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+   243→   243→                <Camera size={20} className="text-white" />
+   244→   244→              </span>
+   245→   245→            </button>
+   246→   246→            <div className="flex gap-2">
+   247→   247→              <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
+   248→   248→                <Camera size={13} />
+   249→   249→                <span className="ml-1.5">{avatarUrl ? 'Change photo' : 'Upload photo'}</span>
+   250→   250→              </Button>
+   251→   251→              {avatarUrl && (
+   252→   252→                <Button variant="ghost" size="sm" onClick={() => saveAvatar(null)} aria-label="Remove photo">
+   253→   253→                  <Trash2 size={13} />
+   254→   254→                </Button>
+   255→   255→              )}
+   256→   256→            </div>
+   257→   257→          </div>
+   258→   258→          <input
+   259→   259→            ref={fileRef}
+   260→   260→            type="file"
+   261→   261→            accept="image/*"
+   262→   262→            className="hidden"
+   263→   263→            onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = ''; }}
+   264→   264→          />
+   265→   265→          <p className="truncate text-xl font-bold text-text">{displayName || 'Anonymous'}</p>
+   266→   266→          {statusText && <p className="mt-0.5 truncate text-sm text-text-mid">{statusText}</p>}
+   267→   267→          <p className="mt-0.5 truncate text-xs text-text-dim" title={email}>
+   268→   268→            {email || 'Not signed in'}
+   269→   269→          </p>
+   270→   270→          {bio && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-mid">{bio}</p>}
+   271→   271→          {/* Stats row. */}
+   272→   272→          <div className="mt-3 flex flex-wrap gap-4 border-t border-border pt-3 text-xs text-text-dim">
+   273→   273→            <span>
+   274→   274→              <span className="font-semibold text-text">{friends.length}</span> friend{friends.length === 1 ? '' : 's'}
+   275→   275→            </span>
+   276→   276→            <span>
+   277→   277→              <span className="font-semibold text-text">{boardsCount}</span> saved board{boardsCount === 1 ? '' : 's'}
+   278→   278→            </span>
+   279→   279→            {memberSince && <span>Member since <span className="font-semibold text-text">{memberSince}</span></span>}
+   280→   280→          </div>
+   281→   281→        </div>
+   282→   282→      </div>
+   283→   283→
+   284→   284→      {/* ── Edit fields ── */}
+   285→   285→      <div className="grid gap-4 sm:grid-cols-2">
+   286→   286→        <div>
+   287→   287→          <FieldLabel>Display name</FieldLabel>
+   288→   288→          <div className="flex gap-2">
+   289→   289→            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Your name" />
+   290→   290→            <Button
+   291→   291→              size="sm"
+   292→   292→              onClick={() => {
+   293→   293→                setDisplayName(name);
+   294→   294→                if (userId) void upsertMyProfile(userId, name, email, useAppStore.getState().avatarUrl || null);
+   295→   295→                toast({ title: 'Display name updated' });
+   296→   296→              }}
+   297→   297→            >
+   298→   298→              Save
+   299→   299→            </Button>
+   300→   300→          </div>
+   301→   301→          <p className="mt-1 text-xs text-text-dim">How collaborators and friends see you.</p>
+   302→   302→        </div>
+   303→   303→        <div>
+   304→   304→          <FieldLabel>Status</FieldLabel>
+   305→   305→          <div className="flex gap-2">
+   306→   306→            <Input
+   307→   307→              value={statusDraft}
+   308→   308→              onChange={(e) => setStatusDraft(e.target.value)}
+   309→   309→              maxLength={60}
+   310→   310→              placeholder="🎨 What are you up to?"
+   311→   311→            />
+   312→   312→            <Button
+   313→   313→              size="sm"
+   314→   314→              onClick={() => {
+   315→   315→                setStatusText(statusDraft.trim());
+   316→   316→                syncProfile({ status: statusDraft.trim() });
+   317→   317→                toast({ title: 'Status updated' });
+   318→   318→              }}
+   319→   319→            >
+   320→   320→              Save
+   321→   321→            </Button>
+   322→   322→          </div>
+   323→   323→          <p className="mt-1 text-xs text-text-dim">A one-liner friends see next to your name.</p>
+   324→   324→        </div>
+   325→   325→      </div>
+   326→   326→
+   327→   327→      <div>
+   328→   328→        <FieldLabel>About me</FieldLabel>
+   329→   329→        <textarea
+   330→   330→          value={bioDraft}
+   331→   331→          onChange={(e) => setBioDraft(e.target.value)}
+   332→   332→          maxLength={280}
+   333→   333→          rows={3}
+   334→   334→          placeholder="Tell people what you make…"
+   335→   335→          className="w-full resize-none rounded-md border border-border bg-bg-2 px-3 py-2 text-sm text-text outline-none placeholder:text-text-dim focus:border-accent"
+   336→   336→        />
+   337→   337→        <div className="mt-1 flex items-center justify-between">
+   338→   338→          <p className="text-xs text-text-dim">{bioDraft.length}/280</p>
+   339→   339→          <Button
+   340→   340→            size="sm"
+   341→   341→            variant="outline"
+   342→   342→            disabled={bioDraft === bio}
+   343→   343→            onClick={() => {
+   344→   344→              setBio(bioDraft.trim());
+   345→   345→              syncProfile({ bio: bioDraft.trim() });
+   346→   346→              toast({ title: 'Bio updated' });
+   347→   347→            }}
+   348→   348→          >
+   349→   349→            Save bio
+   350→   350→          </Button>
+   351→   351→        </div>
+   352→   352→      </div>
+   353→   353→
+   354→   354→      <div className="border-t border-border pt-4">
+   355→   355→        <FieldLabel>Account</FieldLabel>
+   356→   356→        <AccountSection />
+   357→   357→      </div>
+   358→   358→
+   359→   359→      <AvatarCropper
+   360→   360→        open={cropSrc !== null}
+   361→   361→        src={cropSrc}
+   362→   362→        onCancel={() => setCropSrc(null)}
+   363→   363→        onCrop={(dataUrl) => { setCropSrc(null); saveAvatar(dataUrl); toast({ title: 'Photo updated' }); }}
+   364→   364→      />
+   365→   365→    </div>
+   366→   366→  );
+   367→   367→}
+   368→   368→
+   369→   369→/** Settings tab — appearance, voice, 3D viewport, layout. */
+   370→   370→function SettingsTabView() {
+   371→   371→  const theme = useAppStore((s) => s.theme);
+   372→   372→  const setTheme = useAppStore((s) => s.setTheme);
+   373→   373→  const paperFollowsTheme = useAppStore((s) => s.paperFollowsTheme);
+   374→   374→  const setPaperFollowsTheme = useAppStore((s) => s.setPaperFollowsTheme);
+   375→   375→  const accent = useAppStore((s) => s.accent);
+   376→   376→  const setAccent = useAppStore((s) => s.setAccent);
+   377→   377→  const showOnline = useAppStore((s) => s.showOnline);
+   378→   378→  const setShowOnline = useAppStore((s) => s.setShowOnline);
+   379→   379→  const voiceVolume = useAppStore((s) => s.voiceVolume);
+   380→   380→  const storeSetVoiceVolume = useAppStore((s) => s.setVoiceVolume);
+   381→   381→  const voice = useVoiceOptional();
+   382→   382→  const setVoiceVolume = (v: number) => {
+   383→   383→    if (voice) voice.setOutputVolume(v);
+   384→   384→    else storeSetVoiceVolume(v);
+   385→   385→  };
+   386→   386→
+   387→   387→  return (
+   388→   388→    <div className="flex flex-col gap-5">
+   389→   389→      <h3 className="text-lg font-semibold text-text">Settings</h3>
+   390→   390→
+   391→   391→      {/* Two columns on wide screens so settings span across instead of
+   392→   392→          stacking into one very tall column. */}
+   393→   393→      <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
+   394→   394→      {/* Appearance */}
+   395→   395→      <div>
+   396→   396→        <FieldLabel>Theme</FieldLabel>
+   397→   397→        <div className="flex w-max gap-1 rounded-sm bg-bg-3 p-0.5">
+   398→   398→          {(
+   399→   399→            [
+   400→   400→              ['dark', 'Dark', Moon],
+   401→   401→              ['light', 'Light', Sun],
+   402→   402→            ] as [Theme, string, typeof Moon][]
+   403→   403→          ).map(([value, label, Icon]) => (
+   404→   404→            <button
+   405→   405→              key={value}
+   406→   406→              type="button"
+   407→   407→              aria-pressed={theme === value}
+   408→   408→              onClick={() => setTheme(value)}
+   409→   409→              className={
+   410→   410→                'flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs ' +
+   411→   411→                (theme === value ? 'bg-accent/20 text-accent' : 'text-text-dim hover:text-text')
+   412→   412→              }
+   413→   413→            >
+   414→   414→              <Icon size={12} />
+   415→   415→              {label}
+   416→   416→            </button>
+   417→   417→          ))}
+   418→   418→        </div>
+   419→   419→        <label className="mt-3 flex items-start gap-2 text-xs text-text-mid">
+   420→   420→          <input
+   421→   421→            type="checkbox"
+   422→   422→            checked={paperFollowsTheme}
+   423→   423→            onChange={(e) => setPaperFollowsTheme(e.target.checked)}
+   424→   424→            className="mt-0.5 accent-accent"
+   425→   425→          />
+   426→   426→          <span>
+   427→   427→            Board canvas follows theme
+   428→   428→            <span className="block text-text-dim">
+   429→   429→              The 2D paper and 3D viewport render light or dark to match. Turn off to show the
+   430→   430→              board&apos;s shared background color instead.
+   431→   431→            </span>
+   432→   432→          </span>
+   433→   433→        </label>
+   434→   434→        <div className="mt-3">
+   435→   435→          <FieldLabel>Accent color</FieldLabel>
+   436→   436→          <div className="flex items-center gap-2">
+   437→   437→            <input
+   438→   438→              type="color"
+   439→   439→              value={accent}
+   440→   440→              onChange={(e) => setAccent(e.target.value)}
+   441→   441→              aria-label="Accent color"
+   442→   442→              className="h-8 w-12 rounded-sm border border-border bg-transparent"
+   443→   443→            />
+   444→   444→            {['#7c6aff', '#38bdf8', '#22d3a5', '#fbbf24', '#f472b6', '#f87171'].map((c) => (
+   445→   445→              <button
+   446→   446→                key={c}
+   447→   447→                type="button"
+   448→   448→                aria-label={`Accent ${c}`}
+   449→   449→                onClick={() => setAccent(c)}
+   450→   450→                className={
+   451→   451→                  'h-5 w-5 rounded-full border ' +
+   452→   452→                  (accent.toLowerCase() === c ? 'border-text' : 'border-text-dim/40')
+   453→   453→                }
+   454→   454→                style={{ backgroundColor: c }}
+   455→   455→              />
+   456→   456→            ))}
+   457→   457→          </div>
+   458→   458→        </div>
+   459→   459→      </div>
+   460→   460→
+   461→   461→      {/* Voice */}
+   462→   462→      <div>
+   463→   463→        <FieldLabel>Voice</FieldLabel>
+   464→   464→        <label className="flex items-center gap-2 text-xs text-text-mid">
+   465→   465→          <span className="w-24 shrink-0">Output volume</span>
+   466→   466→          <input
+   467→   467→            type="range"
+   468→   468→            min={0}
+   469→   469→            max={1}
+   470→   470→            step={0.05}
+   471→   471→            value={voiceVolume}
+   472→   472→            onChange={(e) => setVoiceVolume(Number(e.target.value))}
+   473→   473→            className="flex-1 accent-accent"
+   474→   474→            aria-label="Voice output volume"
+   475→   475→          />
+   476→   476→          <span className="w-8 text-right font-mono">{Math.round(voiceVolume * 100)}</span>
+   477→   477→        </label>
+   478→   478→        <p className="mt-1 text-xs text-text-dim">
+   479→   479→          How loud everyone sounds to you. Per-person sliders live in the people widget while
+   480→   480→          you&apos;re in voice.
+   481→   481→        </p>
+   482→   482→      </div>
+   483→   483→
+   484→   484→      {/* Privacy */}
+   485→   485→      <div>
+   486→   486→        <FieldLabel>Privacy</FieldLabel>
+   487→   487→        <label className="flex items-start gap-2 text-xs text-text-mid">
+   488→   488→          <input
+   489→   489→            type="checkbox"
+   490→   490→            checked={showOnline}
+   491→   491→            onChange={(e) => setShowOnline(e.target.checked)}
+   492→   492→            className="mt-0.5 accent-accent"
+   493→   493→          />
+   494→   494→          <span>
+   495→   495→            Show when I&apos;m online
+   496→   496→            <span className="block text-text-dim">
+   497→   497→              Friends see a green dot while you&apos;re active. Turn off to always appear offline.
+   498→   498→            </span>
+   499→   499→          </span>
+   500→   500→        </label>
+   501→   501→      </div>
+   502→   502→
+   503→   503→      {/* Layout */}
+   504→   504→      <div>
+   505→   505→        <FieldLabel>Layout</FieldLabel>
+   506→   506→        <Button
+   507→   507→          variant="ghost"
+   508→   508→          size="sm"
+   509→   509→          onClick={() => {
+   510→   510→            useDockStore.persist?.clearStorage?.();
+   511→   511→            location.reload();
+   512→   512→          }}
+   513→   513→        >
+   514→   514→          Reset dock layout
+   515→   515→        </Button>
+   516→   516→      </div>
+   517→   517→      </div>
+   518→   518→    </div>
+   519→   519→  );
+   520→   520→}
+   521→   521→
+   522→   522→/**
+   523→   523→ * Friends section — add by email, pending requests, accepted friends list.
+   524→   524→ * Falls back to a "sign in" hint when Supabase isn't configured or the user
+   525→   525→ * isn't signed in.
+   526→   526→ */
+   527→   527→function FriendsSection({ userId }: { userId: string | undefined }) {
+   528→   528→  const { friends, pending, loading, sendRequest, accept, remove } = useFriends(userId);
+   529→   529→  const [email, setEmail] = useState('');
+   530→   530→  const [busy, setBusy] = useState(false);
+   531→   531→  // Must be declared with the other hooks (before any early return) so the hook
+   532→   532→  // order stays constant whether or not accounts are enabled / the user is in.
+   533→   533→  const [query, setQuery] = useState('');
+   534→   534→
+   535→   535→  if (!accountsEnabled) {
+   536→   536→    return (
+   537→   537→      <p className="text-xs text-text-dim">
+   538→   538→        Accounts are not configured. Create a free Supabase project, run{' '}
+   539→   539→        <code className="font-mono">supabase/schema.sql</code>, and set{' '}
+   540→   540→        <code className="font-mono">VITE_SUPABASE_URL</code> +{' '}
+   541→   541→        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable friends.
+   542→   542→      </p>
+   543→   543→    );
+   544→   544→  }
+   545→   545→
+   546→   546→  if (!userId) {
+   547→   547→    return (
+   548→   548→      <p className="text-xs text-text-dim">
+   549→   549→        Sign in to add friends and share boards with people you know.
+   550→   550→      </p>
+   551→   551→    );
+   552→   552→  }
+   553→   553→
+   554→   554→  const submit = async (e?: React.FormEvent) => {
+   555→   555→    e?.preventDefault();
+   556→   556→    if (!email.trim()) return;
+   557→   557→    setBusy(true);
+   558→   558→    await sendRequest(email);
+   559→   559→    setBusy(false);
+   560→   560→    setEmail('');
+   561→   561→  };
+   562→   562→
+   563→   563→  const q = query.trim().toLowerCase();
+   564→   564→  const matches = (f: { displayName: string; email: string | null; statusText?: string | null }) =>
+   565→   565→    q === '' ||
+   566→   566→    f.displayName.toLowerCase().includes(q) ||
+   567→   567→    (f.email ?? '').toLowerCase().includes(q) ||
+   568→   568→    (f.statusText ?? '').toLowerCase().includes(q);
+   569→   569→  const online = friends.filter((f) => f.online && matches(f));
+   570→   570→  const offline = friends.filter((f) => !f.online && matches(f));
+   571→   571→
+   572→   572→  return (
+   573→   573→    <div className="flex flex-col gap-3">
+   574→   574→      <form onSubmit={submit} className="flex gap-2">
+   575→   575→        <Input
+   576→   576→          type="email"
+   577→   577→          value={email}
+   578→   578→          onChange={(e) => setEmail(e.target.value)}
+   579→   579→          placeholder="friend@example.com"
+   580→   580→          aria-label="Friend's email"
+   581→   581→          className="flex-1"
+   582→   582→        />
+   583→   583→        <Button type="submit" size="sm" disabled={busy || !email.trim()}>
+   584→   584→          <UserPlus size={13} />
+   585→   585→          <span className="ml-1.5">Send</span>
+   586→   586→        </Button>
+   587→   587→      </form>
+   588→   588→
+   589→   589→      {friends.length > 3 && (
+   590→   590→        <div className="relative">
+   591→   591→          <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim" />
+   592→   592→          <input
+   593→   593→            type="search"
+   594→   594→            value={query}
+   595→   595→            onChange={(e) => setQuery(e.target.value)}
+   596→   596→            placeholder="Search friends…"
+   597→   597→            aria-label="Search friends"
+   598→   598→            className="w-full rounded-md border border-border bg-bg-2 py-1.5 pl-8 pr-3 text-xs text-text outline-none placeholder:text-text-dim focus:border-accent"
+   599→   599→          />
+   600→   600→        </div>
+   601→   601→      )}
+   602→   602→
+   603→   603→      {loading ? (
+   604→   604→        <p className="text-xs text-text-dim">Loading…</p>
+   605→   605→      ) : (
+   606→   606→        <>
+   607→   607→          {pending.length > 0 && (
+   608→   608→            <div>
+   609→   609→              <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
+   610→   610→                Pending requests
+   611→   611→              </p>
+   612→   612→              <ul className="flex flex-col gap-1">
+   613→   613→                {pending.map((f) => (
+   614→   614→                  <li
+   615→   615→                    key={f.userId}
+   616→   616→                    className="flex items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5"
+   617→   617→                  >
+   618→   618→                    <Avatar url={f.avatarUrl} name={f.displayName} size={28} />
+   619→   619→                    <div className="min-w-0 flex-1">
+   620→   620→                      <p className="truncate text-xs font-medium text-text">{f.displayName || 'Anonymous'}</p>
+   621→   621→                      {f.email && <p className="truncate text-[10px] text-text-dim">{f.email}</p>}
+   622→   622→                    </div>
+   623→   623→                    {f.incoming ? (
+   624→   624→                      <>
+   625→   625→                        <Button
+   626→   626→                          size="sm"
+   627→   627→                          variant="outline"
+   628→   628→                          onClick={() => void accept(f.userId)}
+   629→   629→                          aria-label={`Accept friend request from ${f.displayName}`}
+   630→   630→                        >
+   631→   631→                          <Check size={12} />
+   632→   632→                          <span className="ml-1">Accept</span>
+   633→   633→                        </Button>
+   634→   634→                        <Button
+   635→   635→                          size="sm"
+   636→   636→                          variant="ghost"
+   637→   637→                          onClick={() => void remove(f.userId)}
+   638→   638→                          aria-label={`Decline friend request from ${f.displayName}`}
+   639→   639→                        >
+   640→   640→                          <X size={12} />
+   641→   641→                        </Button>
+   642→   642→                      </>
+   643→   643→                    ) : (
+   644→   644→                      <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
+   645→   645→                        Sent
+   646→   646→                      </span>
+   647→   647→                    )}
+   648→   648→                  </li>
+   649→   649→                ))}
+   650→   650→              </ul>
+   651→   651→            </div>
+   652→   652→          )}
+   653→   653→
+   654→   654→          {friends.length > 0 ? (
+   655→   655→            <>
+   656→   656→              {online.length > 0 && <FriendList label={`Online — ${online.length}`} friends={online} onRemove={remove} />}
+   657→   657→              {offline.length > 0 && <FriendList label={`Offline — ${offline.length}`} friends={offline} onRemove={remove} />}
+   658→   658→              {online.length === 0 && offline.length === 0 && (
+   659→   659→                <p className="text-xs text-text-dim">No friends match “{query}”.</p>
+   660→   660→              )}
+   661→   661→            </>
+   662→   662→          ) : pending.length === 0 ? (
+   663→   663→            <p className="text-xs text-text-dim">
+   664→   664→              No friends yet — add someone by their email above to start collaborating.
+   665→   665→            </p>
+   666→   666→          ) : null}
+   667→   667→        </>
+   668→   668→      )}
+   669→   669→    </div>
+   670→   670→  );
+   671→   671→}
+   672→   672→
+   673→   673→/** One group of friend cards (Online / Offline), Discord-style. */
+   674→   674→function FriendList({
+   675→   675→  label,
+   676→   676→  friends,
+   677→   677→  onRemove,
+   678→   678→}: {
+   679→   679→  label: string;
+   680→   680→  friends: ReturnType<typeof useFriends>['friends'];
+   681→   681→  onRemove: (friendId: string) => Promise<void>;
+   682→   682→}) {
+   683→   683→  return (
+   684→   684→    <div>
+   685→   685→      <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">{label}</p>
+   686→   686→      <ul className="flex flex-col gap-1">
+   687→   687→        {friends.map((f) => (
+   688→   688→          <li
+   689→   689→            key={f.userId}
+   690→   690→            className="group flex items-center gap-2.5 rounded-md border border-border bg-bg-2 px-2.5 py-2"
+   691→   691→          >
+   692→   692→            <span className="relative shrink-0">
+   693→   693→              <Avatar url={f.avatarUrl} name={f.displayName} size={34} className={f.online ? '' : 'opacity-60 saturate-50'} />
+   694→   694→              <span
+   695→   695→                className={
+   696→   696→                  'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
+   697→   697→                  (f.online ? 'bg-green' : 'bg-text-dim/50')
+   698→   698→                }
+   699→   699→                title={f.online ? 'Online' : 'Offline'}
+   700→   700→              />
+   701→   701→            </span>
+   702→   702→            <div className="min-w-0 flex-1">
+   703→   703→              <p className={'truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')}>
+   704→   704→                {f.displayName || 'Anonymous'}
+   705→   705→              </p>
+   706→   706→              <p className="truncate text-[10px] text-text-dim">
+   707→   707→                {f.statusText || f.bio || f.email || (f.online ? 'Online' : 'Offline')}
+   708→   708→              </p>
+   709→   709→            </div>
+   710→   710→            <Button
+   711→   711→              size="sm"
+   712→   712→              variant="ghost"
+   713→   713→              className="opacity-0 transition-opacity group-hover:opacity-100"
+   714→   714→              onClick={() => void onRemove(f.userId)}
+   715→   715→              aria-label={`Remove friend ${f.displayName}`}
+   716→   716→            >
+   717→   717→              <UserMinus size={12} />
+   718→   718→            </Button>
+   719→   719→          </li>
+   720→   720→        ))}
+   721→   721→      </ul>
+   722→   722→    </div>
+   723→   723→  );
+   724→   724→}
+   725→   725→
+   726→   726→/**
+   727→   727→ * Account — Supabase-backed sign-in + cross-device save backup. Renders a
+   728→   728→ * setup hint until VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are provided.
+   729→   729→ */
+   730→   730→function AccountSection() {
+   731→   731→  const { user, loading } = useAccount();
+   732→   732→  const [busy, setBusy] = useState(false);
+   733→   733→  const [note, setNote] = useState<string | null>(null);
+   734→   734→
+   735→   735→  if (!accountsEnabled) {
+   736→   736→    return (
+   737→   737→      <p className="text-xs text-text-dim">
+   738→   738→        Accounts are not configured. Create a free Supabase project, run{' '}
+   739→   739→        <code className="font-mono">supabase/schema.sql</code>, and set{' '}
+   740→   740→        <code className="font-mono">VITE_SUPABASE_URL</code> +{' '}
+   741→   741→        <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build time to enable sign-in
+   742→   742→        and cross-device saves.
+   743→   743→      </p>
+   744→   744→    );
+   745→   745→  }
+   746→   746→  if (loading) return <p className="text-xs text-text-dim">Checking session…</p>;
+   747→   747→
+   748→   748→  if (!user) {
+   749→   749→    return (
+   750→   750→      <p className="text-xs text-text-dim">
+   751→   751→        You&apos;re signed out — sign in from the start screen to back up your saves and open them
+   752→   752→        on any device.
+   753→   753→      </p>
+   754→   754→    );
+   755→   755→  }
+   756→   756→
+   757→   757→  const run = async (fn: () => Promise<{ pushed?: number; pulled?: number; error?: string }>) => {
+   758→   758→    setBusy(true);
+   759→   759→    const r = await fn();
+   760→   760→    setBusy(false);
+   761→   761→    setNote(
+   762→   762→      r.error ??
+   763→   763→        (r.pushed !== undefined
+   764→   764→          ? `Backed up ${r.pushed} save${r.pushed === 1 ? '' : 's'}.`
+   765→   765→          : `Restored ${r.pulled} save${r.pulled === 1 ? '' : 's'} — File → Open to load one.`),
+   766→   766→    );
+   767→   767→  };
+   768→   768→
+   769→   769→  return (
+   770→   770→    <div className="flex flex-col gap-2">
+   771→   771→      <p className="text-xs text-text-mid">
+   772→   772→        Signed in as <span className="font-mono text-text">{user.email}</span>
+   773→   773→      </p>
+   774→   774→      <div className="flex flex-wrap gap-2">
+   775→   775→        <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => backupSavesToCloud(user.id))}>
+   776→   776→          <CloudUpload size={13} />
+   777→   777→          <span className="ml-1.5">Back up saves</span>
+   778→   778→        </Button>
+   779→   779→        <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => restoreSavesFromCloud(user.id))}>
+   780→   780→          <CloudDownload size={13} />
+   781→   781→          <span className="ml-1.5">Restore saves</span>
+   782→   782→        </Button>
+   783→   783→        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void supabase?.auth.signOut()}>
+   784→   784→          <LogOut size={13} />
+   785→   785→          <span className="ml-1.5">Sign out</span>
+   786→   786→        </Button>
+   787→   787→      </div>
+   788→   788→      {note && <p className="text-xs text-text-mid">{note}</p>}
+   789→   789→    </div>
+   790→   790→  );
+   791→   791→}
+   792→   792→

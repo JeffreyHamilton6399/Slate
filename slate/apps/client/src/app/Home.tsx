@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Trash2, FolderOpen, ChevronRight, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -32,7 +32,7 @@ import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
-import { ensureMyProfile } from '../account/friends';
+import { ensureMyProfile, fetchMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
 
 export function Entry() {
@@ -361,6 +361,27 @@ function Home({ email, userId }: { email: string; userId: string }) {
     void ensureMyProfile(userId, email, useAppStore.getState().displayName);
   }, [userId, email]);
 
+  // Cross-device display-name sync: pull the cloud profile on sign-in and
+  // OVERWRITE the local store with the cloud values. The cloud is the source
+  // of truth — when a user changes their name on device A, device B picks it
+  // up the next time they sign in. (Previously the local store only took the
+  // cloud value when empty, so a device that had a stale localStorage name
+  // never picked up the change.) Empty cloud values keep the local value.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void fetchMyProfile(userId).then((prof) => {
+      if (cancelled || !prof) return;
+      const s = useAppStore.getState();
+      if (prof.displayName) s.setDisplayName(prof.displayName);
+      if (prof.avatarUrl) s.setAvatarUrl(prof.avatarUrl);
+      if (prof.bio) s.setBio(prof.bio);
+      if (prof.status) s.setStatusText(prof.status);
+      if (prof.bannerColor) s.setBannerColor(prof.bannerColor);
+    });
+    return () => { cancelled = true; };
+  }, [userId]);
+
   useEffect(() => {
     fetchRooms().then(setRooms).catch(() => setRooms([]));
     // Poll for live board updates (visibility toggles, member counts) so
@@ -424,7 +445,6 @@ function Home({ email, userId }: { email: string; userId: string }) {
             email={email}
             notifCount={notifCount}
             onOpenProfile={() => { setProfileTab('profile'); setProfileOpen(true); }}
-            onOpenFriends={() => { setProfileTab('friends'); setProfileOpen(true); }}
           />
         </header>
 
@@ -749,20 +769,19 @@ function timeAgo(t: number): string {
 /**
  * Circular avatar button in the top-right of the Home header. The dropdown is
  * intentionally minimal — Profile opens the tabbed Profile screen (which holds
- * Friends, Settings, and Account), so those are no longer separate menu items.
- * Donate is external and Sign out is a quick action. Closes on outside-click /
- * item-select / Esc — handled by Radix.
+ * Friends, Settings, and Account). The notification badge on the avatar
+ * itself surfaces incoming friend requests; tapping the avatar → Profile →
+ * Friends tab is the path to act on them. Donate is reachable via the footer
+ * About link. Closes on outside-click / item-select / Esc — handled by Radix.
  */
 function ProfileMenu({
   email,
   notifCount,
   onOpenProfile,
-  onOpenFriends,
 }: {
   email: string;
   notifCount: number;
   onOpenProfile: () => void;
-  onOpenFriends: () => void;
 }) {
   const displayName = useAppStore((s) => s.displayName);
   const avatarUrl = useAppStore((s) => s.avatarUrl);
@@ -795,19 +814,11 @@ function ProfileMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onOpenProfile}>
           <UserCircle size={14} /> Profile
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onOpenFriends}>
-          <Users size={14} /> Friends
           {notifCount > 0 && (
             <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white">
               {notifCount > 9 ? '9+' : notifCount}
             </span>
           )}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => window.open('https://buymeacoffee.com/jeffreyscof', '_blank', 'noopener,noreferrer')}
-        >
-          <Coffee size={14} /> Donate
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

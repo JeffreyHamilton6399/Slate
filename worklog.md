@@ -1979,3 +1979,72 @@ Stage Summary:
 - TypeScript clean (exit 0). No new ESLint warnings. 4 files modified
   (AudioEditor.tsx, Workspace.tsx, sampleStore.ts, vite.config.ts);
   0 files created.
+
+---
+Task ID: ROUND26-A
+Agent: main (Z.ai Code)
+Task: Fix 4 Slate client issues — mobile panels access, landscape mobile UI, display name sync, dropdown cleanup + friend profile view
+
+Work Log:
+
+Task 1 — Mobile FAB for panels access (Workspace.tsx):
+- Problem: The Header's small Menu icon opens the MobileDrawer but is easy to miss on a phone (mixed in with Share/Settings/Leave). Users reported 2D/3D modes "don't show the tabs at the top like if we were in code" — they couldn't find the panels.
+- Fix: Added a floating "Panels" button (LayoutGrid icon) at the bottom-right of the canvas on mobile (`absolute bottom-4 right-4 z-40`, 48px hit area, accent-colored). Visible in every mode (2D/3D/audio/doc/code) since it lives in the always-rendered `<main>`. Calls `setMobileDrawer(true)`. Header's small Menu button unchanged as a secondary affordance.
+- New helper component: `PanelsFabIcon` (renders `<LayoutGrid size={22} />`).
+
+Task 2 — Landscape mobile UI too big (useMediaQuery.ts, Workspace.tsx):
+- Problem: `useIsMobile()` checks `(max-width: 768px) and (orientation: portrait)`. A landscape phone (812×375) crosses 768px → gets desktop layout with docks. Default dock widths 240/260 = 500px, leaving only 312px for canvas.
+- Fix: Added `useIsSmallScreen()` hook (`(max-width: 900px)`) — true regardless of orientation, true for both portrait AND landscape phones.
+- In Workspace.tsx when `smallLandscape = isSmallScreen && !isMobile`:
+  • Skip the auto-open-tabs useEffect (`if (smallLandscape) return;`). Docks start empty (just the `+` menu) — user opens panels via the dock's `+` button.
+  • Cap rendered dock widths: `effectiveSidebar = Math.min(sidebarWidth, 200)`, `effectiveDock = Math.min(dockWidth, 220)`. Resizer still writes the underlying persisted value (so a manual drag wider on a small screen applies on a larger screen later).
+  • Pass `effectiveSidebar`/`effectiveDock` to `<Dock>` instead of raw persisted values.
+
+Task 3 — Display name sync across devices (Home.tsx, ProfileDialog.tsx):
+- Problem: When a user changed their name in Settings, it updated local store + Supabase profiles table. But on another device, the local store only took the cloud value when `!s.displayName` — a device with stale localStorage never picked up the cloud change.
+- Fix:
+  • Home.tsx: Added a new useEffect on `userId` that calls `fetchMyProfile(userId)` and ALWAYS overwrites local store with cloud values when cloud has a non-empty value (displayName, avatarUrl, bio, status, bannerColor). Cloud is now the source of truth on sign-in.
+  • ProfileDialog.tsx: Changed the existing fetch-on-open useEffect from "only set when local is empty" to "always overwrite when cloud has a value". Picks up changes made on another device while the tab was open, on the next dialog open.
+- Save path (ProfileDialog's Save button → upsertMyProfile) was already correct, unchanged.
+
+Task 4 — Remove Donate/Friends from dropdown, add friend profile view (Home.tsx, ProfileDialog.tsx, friends.ts):
+
+4a. ProfileMenu dropdown (Home.tsx):
+- Removed the Friends dropdown item (Friends tab inside ProfileDialog is the path; avatar's notification badge still surfaces incoming requests).
+- Removed the Donate dropdown item (already in footer About dialog).
+- Moved the notification badge to the Profile item so incoming-request count is still visible from the menu.
+- Removed unused `onOpenFriends` prop + `Coffee` lucide import.
+
+4b. Added `fetchUserProfile(userId)` to friends.ts:
+- Fetches another user's public profile (display_name, email, avatar_url, bio, status, banner_color, created_at, last_seen). Returns null if unconfigured/not found. profiles table is publicly readable per schema RLS.
+
+4c. New `FriendProfileView` component (ProfileDialog.tsx):
+- Rendered when a friend is clicked. Shows:
+  • Banner with friend's banner_color (or default accent).
+  • Big avatar (88px) overlapping banner, with online/offline dot.
+  • Display name (large, bold).
+  • Status text (if any).
+  • Email (if any).
+  • Bio (multi-line, if any).
+  • Stats row: online status + "X days on Slate" (from created_at).
+  • Back button at top to return to friends list.
+  • Remove friend button at bottom.
+- Fetches friend's full profile on mount via `fetchUserProfile`; falls back to Friend row's basic fields (displayName, avatarUrl, status, bio, email) immediately so view renders before fetch resolves.
+- `daysOnSlate` computed with useMemo from `profile.createdAt`.
+
+4d. Wired FriendProfileView into FriendsSection (ProfileDialog.tsx):
+- Added `selectedFriend: Friend | null` state.
+- When set, renders `<FriendProfileView>` instead of the list. `onBack` clears state; `onRemove` calls remove(id) then clears state.
+- Added `onSelect: (friend: Friend) => void` prop to FriendList. Avatar + name area is now a `<button>` calling `onSelect(f)`; UserMinus remove button stays separate so it doesn't trigger navigation.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → only pre-existing environment errors (vite-plugin-pwa/client, vite/client type defs not installed in sandbox); zero errors in any of the 5 modified files.
+- ESLint: pre-existing config issue (eslint-config-prettier not installed); no new issues introduced.
+- Dev server log clean (only routine /health 404s, no compile errors).
+
+Stage Summary:
+- Task 1: Mobile FAB (LayoutGrid icon, bottom-right, accent) makes panels discoverable for every mode.
+- Task 2: `useIsSmallScreen()` + skip auto-open-tabs + cap dock widths to 200/220 on narrow landscape screens.
+- Task 3: Cloud is now source of truth — sign-in always overwrites local with cloud profile; ProfileDialog re-fetches on open.
+- Task 4: Donate + Friends removed from dropdown (badge moved to Profile item); Friends tab in ProfileDialog unchanged; clicking a friend opens a social-style profile card with banner, avatar, bio, status, email, days-on-Slate, online dot, Back/Remove actions.
+- 5 files modified, 0 files created, 0 new dependencies. TypeScript clean (exit 0 for modified files).

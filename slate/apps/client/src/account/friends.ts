@@ -343,3 +343,48 @@ export async function fetchMyProfile(userId: string): Promise<{
     createdAt: row.created_at ? Date.parse(row.created_at) : null,
   };
 }
+
+/** Fetch ANOTHER user's public profile (a friend's). Same shape as
+ *  `fetchMyProfile` but keyed by the friend's user id; used to render the
+ *  friend detail view in the Profile dialog (bio, status, banner color,
+ *  "days on Slate" from `created_at`). The profiles table is publicly
+ *  readable (any signed-in user can select on it — see supabase/schema.sql),
+ *  so this works for any friend. Returns null if unconfigured / not found. */
+export async function fetchUserProfile(userId: string): Promise<{
+  displayName: string;
+  email: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+  status: string | null;
+  bannerColor: string | null;
+  createdAt: number | null;
+  lastSeen: number | null;
+} | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('display_name,email,avatar_url,bio,status,banner_color,created_at,last_seen')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as {
+    display_name: string;
+    email: string | null;
+    avatar_url: string | null;
+    bio: string | null;
+    status: string | null;
+    banner_color: string | null;
+    created_at: string | null;
+    last_seen: string | null;
+  };
+  return {
+    displayName: row.display_name,
+    email: row.email ?? null,
+    avatarUrl: row.avatar_url,
+    bio: row.bio ?? null,
+    status: row.status ?? null,
+    bannerColor: row.banner_color ?? null,
+    createdAt: row.created_at ? Date.parse(row.created_at) : null,
+    lastSeen: row.last_seen ? Date.parse(row.last_seen) : null,
+  };
+}

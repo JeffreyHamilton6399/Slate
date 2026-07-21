@@ -10,11 +10,12 @@
  */
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutGrid } from 'lucide-react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
 import { useDockStore } from '../workspace/dockStore';
-import { useIsMobile } from '../workspace/useMediaQuery';
+import { useIsMobile, useIsSmallScreen } from '../workspace/useMediaQuery';
 import { usePanelRegistry } from '../workspace/panelRegistry';
 import { useAppStore } from './store';
 import { Header, type FileMenuAction } from './Header';
@@ -70,19 +71,34 @@ export function Workspace() {
   const setSidebarWidth = useDockStore((s) => s.setSidebarWidth);
   const setDockWidth = useDockStore((s) => s.setDockWidth);
   const ensureTab = useDockStore((s) => s.ensureTab);
+  const setMobileDrawer = useDockStore((s) => s.setMobileDrawer);
   const isMobile = useIsMobile();
+  const isSmallScreen = useIsSmallScreen();
+  // On a narrow landscape phone (e.g. 812×375) the desktop docks at their
+  // default 240/260px would eat ~500px of the canvas. Cap each dock to its
+  // persisted-or-minimum width so the editor keeps usable room. (The resizer
+  // still writes the underlying value, so a user who explicitly drags wider
+  // on a small screen sees it apply on a larger screen later.)
+  const smallLandscape = isSmallScreen && !isMobile;
+  const effectiveSidebar = smallLandscape ? Math.min(sidebarWidth, 200) : sidebarWidth;
+  const effectiveDock = smallLandscape ? Math.min(dockWidth, 220) : dockWidth;
 
   const { room, status, awareness } = useSlateRoom(board.name, displayName);
   const autosave = useAutosave(room);
 
   // On first open, push default tabs based on mode + register fresh panels.
+  // SKIPPED on small landscape screens (e.g. 812×375 phone in landscape):
+  // the docks at their minimum width already eat ~420px, so auto-opening
+  // every panel for the mode would cover the canvas. The user opens the
+  // ones they need via the dock's `+` menu.
   const panels = usePanelRegistry((s) => s.panels);
   useEffect(() => {
+    if (smallLandscape) return;
     Object.values(panels).forEach((p) => {
       if (p.mode && p.mode !== 'both' && p.mode !== board.mode) return;
       ensureTab(p.defaultSide, p.id);
     });
-  }, [panels, board.mode, ensureTab]);
+  }, [panels, board.mode, ensureTab, smallLandscape]);
 
   // Initialize meta if this is the creator on a fresh board.
   useEffect(() => {
@@ -334,7 +350,7 @@ export function Workspace() {
         />
         <div className="flex flex-1 min-h-0">
           {!isMobile && (
-            <Dock side="left" width={sidebarWidth} onResize={setSidebarWidth} />
+            <Dock side="left" width={effectiveSidebar} onResize={setSidebarWidth} />
           )}
           <main className="relative flex-1 min-w-0">
             <RecoverBoundary label="The editor">
@@ -361,9 +377,24 @@ export function Workspace() {
               )}
             </RecoverBoundary>
             <PeopleWidget awareness={awareness} room={room} />
+            {/* Mobile FAB — a big always-visible "Panels" button at the
+                bottom-right of the canvas. The Header has a small Menu icon
+                too, but on a phone it's easy to miss mixed in with Share /
+                Settings / Leave. This FAB makes panels discoverable for
+                every mode (2D, 3D, audio, doc, code) without scrolling. */}
+            {isMobile && (
+              <button
+                type="button"
+                onClick={() => setMobileDrawer(true)}
+                aria-label="Open panels"
+                className="absolute bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition-transform hover:scale-105 active:scale-95"
+              >
+                <PanelsFabIcon />
+              </button>
+            )}
           </main>
           {!isMobile && (
-            <Dock side="right" width={dockWidth} onResize={setDockWidth} />
+            <Dock side="right" width={effectiveDock} onResize={setDockWidth} />
           )}
         </div>
         {!isMobile && <FloatingPanels />}
@@ -425,4 +456,11 @@ function EditorFallback({ label }: { label: string }) {
       <span>Loading {label}…</span>
     </div>
   );
+}
+
+/** Icon for the mobile Panels FAB — a 4-square grid suggests "panels" without
+ *  the ambiguity of the generic Menu (hamburger) icon, which a user might
+ *  mistake for "settings" or "more". */
+function PanelsFabIcon() {
+  return <LayoutGrid size={22} />;
 }

@@ -22,3 +22,12 @@ export function useIsMobile(): boolean {
   // the dock panels are usable when the device is sideways.
   return useMediaQuery('(max-width: 768px) and (orientation: portrait)');
 }
+
+/** Narrow screen regardless of orientation — true for portrait phones AND
+ *  landscape phones (e.g. 812×375). Used to tighten the desktop layout
+ *  (skip auto-opening dock tabs, cap dock widths) so the central editor
+ *  still has room to breathe on a cramped landscape phone. Tablets (≥900px)
+ *  and desktops are unaffected. */
+export function useIsSmallScreen(): boolean {
+  return useMediaQuery('(max-width: 900px)');
+}

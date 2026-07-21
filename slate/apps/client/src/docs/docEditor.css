@@ -279,34 +279,6 @@
   z-index: 3;
   pointer-events: none;
 }
-/* Floating on-image toolbar (move / wrap / rotate). */
-.slate-doc-img .slate-img-bar {
-  position: absolute;
-  top: -34px;
-  left: 0;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-2, #17171b);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-  z-index: 5;
-}
-.slate-doc-img .slate-img-btn {
-  display: grid;
-  place-items: center;
-  height: 22px;
-  width: 22px;
-  border-radius: 4px;
-  color: var(--text-mid);
-  cursor: pointer;
-}
-.slate-doc-img .slate-img-btn:hover { background: var(--bg-3, #202028); color: var(--text); }
-.slate-doc-img .slate-img-btn.is-active { background: var(--accent-glow, rgba(124,106,255,.18)); color: var(--accent); }
-.slate-doc-img .slate-img-move { cursor: grab; }
-.slate-doc-img .slate-img-sep { width: 1px; height: 16px; background: var(--border); margin: 0 1px; }
 /* Free rotation handle — a knob on a short stem above the image. */
 .slate-doc-img .slate-img-rotate {
   position: absolute;

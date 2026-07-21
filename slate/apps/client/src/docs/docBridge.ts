@@ -11,8 +11,23 @@ export const DOC_APPLY_EVENT = 'slate:doc-apply';
  *  listens and runs the matching TipTap command on its editor instance. */
 export const DOC_COMMAND_EVENT = 'slate:doc-command';
 
-export function runDocCommand(command: string): void {
-  window.dispatchEvent(new CustomEvent<{ command: string }>(DOC_COMMAND_EVENT, { detail: { command } }));
+export interface DocCommandDetail {
+  command: string;
+  /** Optional value payload for commands that need one (e.g. the picked color
+   *  for `textColor`, the picked px size for `fontSize`, the language string
+   *  for `codeLang`). */
+  value?: string;
+}
+
+/**
+ * Dispatch a formatting/insert command to the DocEditor. The optional `value`
+ * is forwarded to the editor's command handler so commands like `textColor` or
+ * `fontSize` can carry the user's picked value (color hex, pixel size, …).
+ */
+export function runDocCommand(command: string, value?: string): void {
+  window.dispatchEvent(
+    new CustomEvent<DocCommandDetail>(DOC_COMMAND_EVENT, { detail: { command, value } }),
+  );
 }
 
 export interface DocApplyDetail {

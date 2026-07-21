@@ -55,7 +55,7 @@ import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
 import { uploadDataUrl } from '../supabase/storage';
-import { DOC_APPLY_EVENT, DOC_COMMAND_EVENT, type DocApplyDetail } from './docBridge';
+import { DOC_APPLY_EVENT, DOC_COMMAND_EVENT, type DocApplyDetail, type DocCommandDetail } from './docBridge';
 import { docFragmentToMarkdown } from './exportMarkdown';
 import { toast } from '../ui/Toast';
 import './docEditor.css';
@@ -162,7 +162,8 @@ export function DocEditor() {
   useEffect(() => {
     if (!editor) return;
     const handler = (e: Event) => {
-      const cmd = (e as CustomEvent<{ command: string }>).detail?.command;
+      const detail = (e as CustomEvent<DocCommandDetail>).detail;
+      const cmd = detail?.command;
       if (!cmd) return;
       const c = editor.chain().focus();
       switch (cmd) {
@@ -182,23 +183,61 @@ export function DocEditor() {
         case 'subscript': c.toggleSubscript().run(); break;
         case 'superscript': c.toggleSuperscript().run(); break;
         case 'highlight': c.toggleHighlight().run(); break;
+        case 'textColor': {
+          const color = detail.value;
+          if (color) c.setColor(color).run();
+          break;
+        }
+        case 'clearColor': c.unsetColor().run(); break;
+        case 'fontSize': {
+          const px = detail.value;
+          if (px) c.setFontSize(`${px}px`).run();
+          break;
+        }
+        case 'clearFontSize': c.unsetFontSize().run(); break;
         case 'clearFormat': c.unsetAllMarks().clearNodes().run(); break;
         // Lists
         case 'bulletList': c.toggleBulletList().run(); break;
         case 'orderedList': c.toggleOrderedList().run(); break;
         case 'taskList': c.toggleTaskList().run(); break;
+        // Toggle the checkbox of the task item the cursor is sitting in. TipTap
+        // v3's TaskItem has no toggle command — read the active item's `checked`
+        // attribute from the selection's $from and flip it. No-op outside a
+        // task item (kept silent so the button doesn't error mid-paragraph).
+        case 'toggleTask': {
+          const { $from } = editor.state.selection;
+          for (let d = $from.depth; d > 0; d--) {
+            const node = $from.node(d);
+            if (node.type.name === 'taskItem') {
+              c.updateAttributes('taskItem', { checked: !node.attrs.checked }).run();
+              break;
+            }
+          }
+          break;
+        }
         // Alignment
         case 'alignLeft': c.setTextAlign('left').run(); break;
         case 'alignCenter': c.setTextAlign('center').run(); break;
         case 'alignRight': c.setTextAlign('right').run(); break;
+        case 'alignJustify': c.setTextAlign('justify').run(); break;
         case 'indent': c.sinkListItem('listItem').run(); break;
         case 'outdent': c.liftListItem('listItem').run(); break;
         // Insert
         case 'blockquote': c.toggleBlockquote().run(); break;
         case 'codeBlock': c.toggleCodeBlock().run(); break;
+        // Set the language attribute on the code block at the cursor. Prompted
+        // here (rather than in the panel) because the panel can't reach the
+        // editor's current attributes to prefill.
+        case 'codeLang': {
+          const lang = window.prompt('Code block language (e.g. js, ts, css, html)', editor.getAttributes('codeBlock').language ?? '');
+          if (lang) c.updateAttributes('codeBlock', { language: lang.trim() }).run();
+          break;
+        }
         case 'table': c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
         case 'addCol': c.addColumnAfter().run(); break;
         case 'addRow': c.addRowAfter().run(); break;
+        case 'delCol': c.deleteColumn().run(); break;
+        case 'delRow': c.deleteRow().run(); break;
         case 'delTable': c.deleteTable().run(); break;
         case 'hr': c.setHorizontalRule().run(); break;
         case 'image': imageInputRef.current?.click(); break;

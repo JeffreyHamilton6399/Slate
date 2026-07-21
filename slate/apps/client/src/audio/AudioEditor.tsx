@@ -965,7 +965,14 @@ export function AudioEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const timelineDuration = Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10);
+  // Memoized — `clips.map(...)` builds a fresh array every render and the
+  // spread into Math.max is O(n) per render; only `clips` identity changes
+  // are worth recomputing for. `positionRef.current` is read fresh on each
+  // recomputation (a ref, so it doesn't drive re-renders itself).
+  const timelineDuration = useMemo(
+    () => Math.max(30, ...clips.map((c) => c.start + c.duration), positionRef.current + 10),
+    [clips],
+  );
 
   /** Compute the px-per-sec that fits the ENTIRE timeline duration into the
    *  currently-visible timeline viewport (scroll container minus the sticky
@@ -1348,8 +1355,16 @@ export function AudioEditor() {
   // ── Loop region drag ──────────────────────────────────────────────────────
 
   const loopDragRef = useRef<{ mode: 'start' | 'end' | 'move'; sx: number; os: number; oe: number } | null>(null);
+  /** Holds the in-flight loop-drag cleanup function (removes the window
+   *  pointermove/pointerup listeners) while a drag is active, so the unmount
+   *  effect below can tear them down if the component unmounts mid-drag —
+   *  otherwise the listeners keep firing on a dead component and leak. */
+  const loopDragCleanupRef = useRef<(() => void) | null>(null);
   const startLoopDrag = useCallback((mode: 'start' | 'end' | 'move', e: React.PointerEvent) => {
     e.stopPropagation();
+    // If a previous drag somehow didn't finish, tear its listeners down first
+    // so we never stack two sets of pointermove/pointerup listeners.
+    loopDragCleanupRef.current?.();
     loopDragRef.current = { mode, sx: e.clientX, os: loopStart, oe: loopEnd };
     const onMove = (ev: PointerEvent) => {
       const d = loopDragRef.current; if (!d) return;
@@ -1358,9 +1373,29 @@ export function AudioEditor() {
       else if (d.mode === 'end') { setLoopEnd(Math.max(d.os + 0.5, d.oe + dt)); }
       else if (d.mode === 'move') { setLoopStart(Math.max(0, d.os + dt)); setLoopEnd(Math.max(0.5, d.oe + dt)); }
     };
-    const onUp = () => { loopDragRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
-    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+    const onUp = () => {
+      loopDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      loopDragCleanupRef.current = null;
+    };
+    loopDragCleanupRef.current = onUp;
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   }, [loopStart, loopEnd, pxPerSec]);
+
+  // Unmount safety: if the user closes the audio panel (or navigates away)
+  // while a loop-handle drag is in flight, the window pointermove/pointerup
+  // listeners added by startLoopDrag would otherwise leak and fire on a dead
+  // component. Tear them down here.
+  useEffect(
+    () => () => {
+      loopDragCleanupRef.current?.();
+      loopDragCleanupRef.current = null;
+      loopDragRef.current = null;
+    },
+    [],
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
 

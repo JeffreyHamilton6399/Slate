@@ -25,14 +25,20 @@ import { useSlateRoom } from '../sync/useSlateRoom';
 import { initMetaIfEmpty } from '../sync/doc';
 import { RoomProvider } from '../sync/RoomContext';
 import { RecoverBoundary } from './RecoverBoundary';
-import { Canvas2D } from '../canvas2d/Canvas2D';
-import { Viewport3D } from '../viewport3d/Viewport3D';
-import { AudioEditor } from '../audio/AudioEditor';
 
 // Doc/code modes are the only surfaces that pull in TipTap/ProseMirror and
 // CodeMirror respectively — lazy-load them so other boards skip the cost.
 const DocEditor = lazy(() => import('../docs/DocEditor'));
 const CodeEditor = lazy(() => import('../code/CodeEditor'));
+// 3D viewport pulls in Three.js (≈600KB) — the heaviest single editor. Audio
+// pulls in the Web Audio engine + TipTap/CodeMirror-adjacent DSP utilities.
+// 2D canvas pulls in the stroke engine. All three are lazy so a board of a
+// different mode never pays the parse/eval cost up front; the Suspense
+// fallback shows while the chunk streams in. These modules don't have default
+// exports, so wrap the named export in `{ default }` for React.lazy.
+const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ default: m.Viewport3D })));
+const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
+const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -333,19 +339,25 @@ export function Workspace() {
           <main className="relative flex-1 min-w-0">
             <RecoverBoundary label="The editor">
               {board.mode === '3d' ? (
-                <Viewport3D room={room} />
+                <Suspense fallback={<EditorFallback label="3D editor" />}>
+                  <Viewport3D room={room} />
+                </Suspense>
               ) : board.mode === 'audio' ? (
-                <AudioEditor />
+                <Suspense fallback={<EditorFallback label="audio studio" />}>
+                  <AudioEditor />
+                </Suspense>
               ) : board.mode === 'doc' ? (
-                <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                <Suspense fallback={<EditorFallback label="document editor" />}>
                   <DocEditor />
                 </Suspense>
               ) : board.mode === 'code' ? (
-                <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
+                <Suspense fallback={<EditorFallback label="code editor" />}>
                   <CodeEditor />
                 </Suspense>
               ) : (
-                <Canvas2D room={room} />
+                <Suspense fallback={<EditorFallback label="canvas" />}>
+                  <Canvas2D room={room} />
+                </Suspense>
               )}
             </RecoverBoundary>
             <PeopleWidget awareness={awareness} room={room} />
@@ -399,6 +411,18 @@ function LoadingBoard() {
   return (
     <div className="grid h-full place-items-center text-text-dim text-sm">
       <span>Connecting to board…</span>
+    </div>
+  );
+}
+
+/** Suspense fallback for any of the lazy-loaded editor surfaces. Same look as
+ *  the previous inline fallback, just factored out so all five editors share
+ *  it. The `label` is rendered in the message so the user knows which editor
+ *  is loading. */
+function EditorFallback({ label }: { label: string }) {
+  return (
+    <div className="grid h-full place-items-center text-sm text-text-dim" role="status" aria-live="polite">
+      <span>Loading {label}…</span>
     </div>
   );
 }

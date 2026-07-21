@@ -38,6 +38,25 @@ export default defineConfig({
         manualChunks: {
           three: ['three', '@react-three/fiber', '@react-three/drei'],
           yjs: ['yjs', 'y-indexeddb', '@hocuspocus/provider'],
+          // TipTap + ProseMirror only load on doc-mode boards — pull them
+          // out of the main chunk so audio/2D/3D/code boards skip the
+          // ~250KB parse/eval cost. `@tiptap/extension-collaboration-caret`
+          // is the v3 name (was `-cursor` in v2).
+          tiptap: [
+            '@tiptap/react',
+            '@tiptap/starter-kit',
+            '@tiptap/extension-collaboration',
+            '@tiptap/extension-collaboration-caret',
+          ],
+          // CodeMirror only loads on code-mode boards — same idea.
+          codemirror: [
+            '@codemirror/state',
+            '@codemirror/view',
+            '@codemirror/commands',
+            '@codemirror/language',
+            '@codemirror/autocomplete',
+            '@codemirror/search',
+          ],
         },
       },
     },

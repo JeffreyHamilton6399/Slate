@@ -11,6 +11,28 @@
  * MULTIPLAYER SYNC: For clips under the SYNC_SIZE_LIMIT (~5MB), samples are
  * also published to a Yjs Y.Map (base64-encoded) so other peers in the room
  * receive them automatically. Larger clips stay local-only (would freeze Yjs).
+ *
+ * KNOWN LEAK (orphaned sample blobs): when a clip is deleted we DO call
+ * `deleteSamples(clipId)` from `scene.ts`, which removes the IndexedDB entry
+ * AND the Yjs sync-map entry for that key. BUT:
+ *   1. `deleteSamples` is only called on a local delete. If a remote peer
+ *      deletes the clip, our local IndexedDB still holds the blob — we never
+ *      observe clip deletions to garbage-collect the matching sample key.
+ *   2. Split / normalize / reverse rewrite samples under a NEW key (so the
+ *      old key becomes orphaned), and `deleteSamples` is not called on the
+ *      old key in those paths.
+ *   3. The undo manager can resurrect a deleted clip — `deleteSamples` would
+ *      then need to be re-importable, so we deliberately don't proactively
+ *      GC on every delete.
+ *
+ * Net effect: IndexedDB grows over a long session and is never reclaimed.
+ * A proper fix would be a periodic (or on-board-open) sweep that:
+ *   - reads every key in the IndexedDB `samples` store,
+ *   - reads every `sampleKey` in the current Yjs `audioClips()` map,
+ *   - deletes IndexedDB entries whose key isn't referenced by any clip.
+ * That sweep must NOT run while the undo manager can still resurrect a clip
+ * (e.g. gate it on `um.clear()` on board close, or skip the most-recently-
+ * deleted N keys). Implementing that safely is out of scope for this round.
  */
 
 import * as Y from 'yjs';

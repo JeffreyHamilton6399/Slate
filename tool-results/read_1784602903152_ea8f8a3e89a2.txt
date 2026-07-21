@@ -1,0 +1,983 @@
+     1→/**
+     2→ * Audio playback engine — Web Audio API scheduler that plays clips on tracks
+     3→ * at the right time, with gain/pan/mute/solo per track and a metronome.
+     4→ *
+     5→ * The engine is a singleton per AudioEditor mount. It reads from the Yjs doc
+     6→ * (via the SlateRoom) so remote clip edits are reflected in playback.
+     7→ */
+     8→
+     9→import type { AudioClip, AudioTrack } from '@slate/sync-protocol';
+    10→import type { SlateDoc } from '../sync/doc';
+    11→import { readAudioClip, readAudioTrack } from './scene';
+    12→import { loadSamples } from './sampleStore';
+    13→import { toast } from '../ui/Toast';
+    14→import { INSTRUMENT_PRESETS, loadCustomInstruments, startVoice, type InstrumentParams } from './instruments';
+    15→import { SoundfontInstrument } from './soundfont';
+    16→import { createPitchShifter, ensurePitchWorklet, releasePitchShifter, PITCH_SHIFT_LATENCY } from './pitchShift';
+    17→
+    18→interface PlayingClip {
+    19→  source: AudioBufferSourceNode;
+    20→  gain: GainNode;
+    21→  clipId: string;
+    22→  /** Pitch-shift worklet node, present when speed ≠ 1 or pitch ≠ 0 —
+    23→   *  released (tail ring-out, then processor self-terminates) on stop. */
+    24→  shifter?: AudioWorkletNode;
+    25→}
+    26→
+    27→/** A scheduled MIDI note voice — has a `stop(when)` method (like the
+    28→ *  instrument's VoiceHandle) so the engine can release all live voices when
+    29→ *  playback stops. The clipId is kept so restart/stop can find voices by
+    30→ *  their owning clip. */
+    31→interface PlayingMidiVoice {
+    32→  clipId: string;
+    33→  stop: (when: number) => void;
+    34→}
+    35→
+    36→/** The synthetic instrument ID that selects the SoundfontInstrument (freepats
+    37→ *  acoustic grand piano). Any other instrumentId falls through to the
+    38→ *  oscillator-based LiveInstrument preset lookup. */
+    39→export const SOUNDFONT_PIANO_ID = 'soundfont-piano';
+    40→
+    41→export class AudioEngine {
+    42→  private ctx: AudioContext | null = null;
+    43→  private masterGain: GainNode | null = null;
+    44→  private playing = false;
+    45→  private recording = false;
+    46→  private startTime = 0;
+    47→  /** Playhead offset (seconds) — where playback started from. */
+    48→  private startOffset = 0;
+    49→  private playingClips: PlayingClip[] = [];
+    50→  /** Scheduled MIDI voices — released on stop()/restartPlayback. Kept separate
+    51→   *  from playingClips (which hold BufferSourceNodes) so stop() can iterate
+    52→   *  both without type-narrowing. */
+    53→  private playingMidiVoices: PlayingMidiVoice[] = [];
+    54→  /** One SoundfontInstrument per AudioContext — created lazily on first use
+    55→   *  (the freepats samples are fetched on-demand). Disposed with the engine. */
+    56→  private soundfont: SoundfontInstrument | null = null;
+    57→  private metronomeOn = false;
+    58→  private bpm = 120;
+    59→  private nextClickTime = 0;
+    60→  private clickTimer: number | null = null;
+    61→  /** Cached AudioBuffers per clip id (decoded from PCM samples). */
+    62→  private bufferCache = new Map<string, AudioBuffer>();
+    63→  /** Clip ids currently in a getBuffer retry loop. Prevents multiple concurrent
+    64→   *  retry loops for the same clip when several play()/restartPlayback() calls
+    65→   *  race (e.g. a remote clip arriving while the user is scrubbing). */
+    66→  private retryingClips = new Set<string>();
+    67→  /** Per-clip attempt counts for the getBuffer retry loop. Read + bumped inside
+    68→   *  the loop; reset to 0 by `slate:audio-clip-changed` events (sample arrival)
+    69→   *  so a clip whose samples took longer than the initial budget still gets
+    70→   *  more attempts instead of being silently dropped. */
+    71→  private retryAttempts = new Map<string, number>();
+    72→  /** One-time gesture listener that resumes a suspended AudioContext on the
+    73→   *  first pointerdown/keydown/touchstart. Held as a field so dispose() can
+    74→   *  remove it if the engine is torn down before any gesture fires. */
+    75→  private gestureHandler: (() => void) | null = null;
+    76→  /** Listener for `slate:audio-clip-changed` — resets a clip's retry budget
+    77→   *  when its samples land (fired by sampleStore's tryImportEntry on remote
+    78→   *  sample arrival, and by AudioEditor on local clip edits). Held as a field
+    79→   *  so dispose() can remove it. */
+    80→  private clipChangedHandler: ((e: Event) => void) | null = null;
+    81→  /** Active track gain nodes (for live volume/pan changes). */
+    82→  private trackGains = new Map<string, GainNode>();
+    83→  private trackPanners = new Map<string, StereoPannerNode>();
+    84→  /** Per-track 3-band channel EQ (low shelf 200 Hz / peak 1 kHz / high shelf
+    85→   *  4 kHz), inserted between the track gain and panner. */
+    86→  private trackEqs = new Map<string, { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode }>();
+    87→  /** Per-track send gains into the shared reverb/delay FX bus (post-EQ). */
+    88→  private trackSends = new Map<string, { reverb: GainNode; delay: GainNode }>();
+    89→  /** Shared FX bus — ONE convolver + ONE feedback delay for the whole mix;
+    90→   *  per-track send gains control how much each track feeds them. */
+    91→  private fxReverb: ConvolverNode | null = null;
+    92→  private fxDelay: DelayNode | null = null;
+    93→  private fxDelayFeedback: GainNode | null = null;
+    94→  /** Master volume (0..1). */
+    95→  private masterVolume = 0.9;
+    96→  /** Loop region (null = no loop). */
+    97→  private loopRegion: { start: number; end: number } | null = null;
+    98→  /** Timer that restarts playback at the loop-region end so the AUDIO wraps
+    99→   *  with the playhead (getPosition only wraps the display). */
+   100→  private loopTimer: number | null = null;
+   101→
+   102→  constructor() {
+   103→    // Reset any in-flight retry loop's attempt counter when samples for that
+   104→    // clip arrive (or when the clip is otherwise mutated). Without this, a
+   105→    // remote peer whose sample blob arrives JUST after the 20×500ms budget
+   106→    // expired would never hear the clip until the next play() — the cache
+   107→    // miss path would re-enter the retry loop, but only if the clip is
+   108→    // re-requested. Resetting mid-loop extends the budget on the signal
+   109→    // that the samples are now available, so the in-flight loop wins on
+   110→    // its next iteration instead of giving up.
+   111→    this.clipChangedHandler = (e: Event) => {
+   112→      const id = (e as CustomEvent<string>).detail;
+   113→      if (typeof id === 'string' && this.retryingClips.has(id)) {
+   114→        this.retryAttempts.set(id, 0);
+   115→      }
+   116→    };
+   117→    window.addEventListener('slate:audio-clip-changed', this.clipChangedHandler);
+   118→  }
+   119→
+   120→  /** Ensure the AudioContext is created. Browsers' autoplay policies suspend
+   121→   *  AudioContexts created before a user gesture — `ctx.resume()` from within
+   122→   *  a non-gesture call stack is silently ignored, so the previous
+   123→   *  `void this.ctx.resume()` was a no-op for a remote peer who just joined
+   124→   *  and hadn't clicked anything. Instead of silently failing, we register a
+   125→   *  one-time gesture listener (pointerdown/keydown/touchstart) that resumes
+   126→   *  the context on the first interaction. Callers that KNOW they're in a
+   127→   *  gesture handler (e.g. a click on the play button) should also call
+   128→   *  `resumeOnGesture()` directly for immediate effect. */
+   129→  private ensureContext(): AudioContext {
+   130→    if (!this.ctx) {
+   131→      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+   132→      this.ctx = new AudioCtx();
+   133→      this.masterGain = this.ctx.createGain();
+   134→      this.masterGain.gain.value = this.masterVolume;
+   135→      this.masterGain.connect(this.ctx.destination);
+   136→    }
+   137→    if (this.ctx.state === 'suspended') {
+   138→       
+   139→      console.warn('[slate-audio] AudioContext is suspended — will resume on the first user gesture (browser autoplay policy). Click anywhere to enable audio.');
+   140→      this.attachGestureListener();
+   141→    }
+   142→    return this.ctx;
+   143→  }
+   144→
+   145→  /** Register a one-time pointerdown/keydown/touchstart listener that resumes
+   146→   *  the suspended AudioContext on the first user interaction. Idempotent —
+   147→   *  multiple calls while suspended coalesce into one listener. The listener
+   148→   *  removes itself from all three event targets when it fires. */
+   149→  private attachGestureListener(): void {
+   150→    if (this.gestureHandler) return;
+   151→    const handler = () => {
+   152→      if (this.ctx && this.ctx.state === 'suspended') void this.ctx.resume();
+   153→      window.removeEventListener('pointerdown', handler);
+   154→      window.removeEventListener('keydown', handler);
+   155→      window.removeEventListener('touchstart', handler);
+   156→      this.gestureHandler = null;
+   157→    };
+   158→    this.gestureHandler = handler;
+   159→    window.addEventListener('pointerdown', handler);
+   160→    window.addEventListener('keydown', handler);
+   161→    window.addEventListener('touchstart', handler);
+   162→  }
+   163→
+   164→  /** Resume the AudioContext if it's suspended. Safe to call from any user
+   165→   *  gesture handler (click, pointerdown, keydown, touchstart) — browsers
+   166→   *  only allow `resume()` to take effect from within a gesture call stack.
+   167→   *  No-op if the context is already running or hasn't been created yet. */
+   168→  resumeOnGesture(): void {
+   169→    if (this.ctx && this.ctx.state === 'suspended') {
+   170→      void this.ctx.resume();
+   171→      // Clean up the gesture listener if one is pending — the explicit call
+   172→      // supersedes it.
+   173→      if (this.gestureHandler) {
+   174→        window.removeEventListener('pointerdown', this.gestureHandler);
+   175→        window.removeEventListener('keydown', this.gestureHandler);
+   176→        window.removeEventListener('touchstart', this.gestureHandler);
+   177→        this.gestureHandler = null;
+   178→      }
+   179→    }
+   180→  }
+   181→
+   182→  /** Get or create an AudioBuffer for a clip — loads samples from IndexedDB.
+   183→   *  If the samples haven't arrived yet (empty Float32Array, which happens when
+   184→   *  a remote peer's sample-blob is still in flight via the Yjs sync map),
+   185→   *  retries up to 20 times at 500ms intervals (10s total) before giving up
+   186→   *  and returning null. The clip is then skipped on this play() pass, but
+   187→   *  the AudioEditor's restart-on-sample-arrival will re-schedule it once the
+   188→   *  samples land and the cache is populated. The 20×500ms budget matches
+   189→   *  the WaveformImg retry budget — large multi-MB samples arriving as
+   190→   *  ~512KB Yjs chunks over a slow link can take several seconds, and the
+   191→   *  previous 10×300ms (3s) budget was too short. The `slate:audio-clip-changed`
+   192→   *  event (fired when samples arrive) resets `retryAttempts` to 0 for any
+   193→   *  clip currently in the loop, so the budget extends on the very signal
+   194→   *  that the samples are now available. */
+   195→  private async getBuffer(clip: AudioClip): Promise<AudioBuffer | null> {
+   196→    const ctx = this.ctx!;
+   197→    const cached = this.bufferCache.get(clip.id);
+   198→    if (cached) return cached;
+   199→
+   200→    // If a retry loop is already running for this clip, bail — another
+   201→    // play()/restartPlayback() call will pick up the cached buffer once it
+   202→    // lands (the AudioEditor restarts on `slate:audio-clip-changed`).
+   203→    if (this.retryingClips.has(clip.id)) return null;
+   204→
+   205→    const buildBuffer = async (): Promise<AudioBuffer | null> => {
+   206→      const samples = await loadSamples(clip.sampleKey);
+   207→      const channels = clip.channels;
+   208→      const length = samples.length / channels;
+   209→      if (length === 0) return null;
+   210→      const buf = ctx.createBuffer(channels, length, clip.sampleRate);
+   211→      for (let ch = 0; ch < channels; ch++) {
+   212→        const data = buf.getChannelData(ch);
+   213→        for (let i = 0; i < length; i++) {
+   214→          data[i] = samples[i * channels + ch] ?? 0;
+   215→        }
+   216→      }
+   217→      return buf;
+   218→    };
+   219→
+   220→    // Fast path — samples already present (the overwhelmingly common case).
+   221→    let buf = await buildBuffer();
+   222→    if (buf) {
+   223→      this.bufferCache.set(clip.id, buf);
+   224→      return buf;
+   225→    }
+   226→
+   227→    // Samples not yet arrived — retry for up to 10s (20 × 500ms). This
+   228→    // covers the gap between a remote clip's metadata landing in Yjs and
+   229→    // its sample blob landing in the sync map + being written to local
+   230→    // IndexedDB. The `retryAttempts` counter is read fresh on every
+   231→    // iteration so a `slate:audio-clip-changed` event (samples arrived)
+   232→    // can reset it to 0 mid-loop, extending the budget on the signal that
+   233→    // the wait is over.
+   234→    this.retryingClips.add(clip.id);
+   235→    this.retryAttempts.set(clip.id, 0);
+   236→    try {
+   237→      while ((this.retryAttempts.get(clip.id) ?? 0) < 20) {
+   238→        this.retryAttempts.set(clip.id, (this.retryAttempts.get(clip.id) ?? 0) + 1);
+   239→        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+   240→        buf = await buildBuffer();
+   241→        if (buf) {
+   242→          this.bufferCache.set(clip.id, buf);
+   243→          return buf;
+   244→        }
+   245→      }
+   246→    } finally {
+   247→      this.retryingClips.delete(clip.id);
+   248→      this.retryAttempts.delete(clip.id);
+   249→    }
+   250→    return null;
+   251→  }
+   252→
+   253→  /** Pre-load (decode + cache) the AudioBuffer for a clip WITHOUT scheduling
+   254→   *  playback. Used to warm the cache when samples arrive for a clip while
+   255→   *  the user is paused — without this, the first play() goes through the
+   256→   *  full getBuffer retry loop, adding audible latency to the first
+   257→   *  playback after a remote sample lands. No-op if the clip doesn't exist
+   258→   *  or the AudioContext hasn't been created yet (no gesture → no decoding). */
+   259→  async preloadBuffer(slate: SlateDoc, clipId: string): Promise<void> {
+   260→    if (!this.ctx) return;
+   261→    const yo = slate.audioClips().get(clipId);
+   262→    if (!yo) return;
+   263→    const clip = readAudioClip(yo, clipId);
+   264→    if (!clip) return;
+   265→    await this.getBuffer(clip); // pre-warm the cache
+   266→  }
+   267→
+   268→  /** Lazily build the shared FX bus (one reverb + one feedback echo the whole
+   269→   *  mix shares; per-track send gains feed them). */
+   270→  private ensureFxBus(): void {
+   271→    if (this.fxReverb || !this.ctx || !this.masterGain) return;
+   272→    const ctx = this.ctx;
+   273→    this.fxReverb = ctx.createConvolver();
+   274→    this.fxReverb.buffer = this.makeReverbIR(ctx, 2.2, 3);
+   275→    this.fxReverb.connect(this.masterGain);
+   276→    this.fxDelay = ctx.createDelay(1);
+   277→    this.fxDelay.delayTime.value = this.delayTimeForBpm();
+   278→    this.fxDelayFeedback = ctx.createGain();
+   279→    this.fxDelayFeedback.gain.value = 0.35;
+   280→    this.fxDelay.connect(this.fxDelayFeedback);
+   281→    this.fxDelayFeedback.connect(this.fxDelay);
+   282→    this.fxDelay.connect(this.masterGain);
+   283→  }
+   284→
+   285→  /** Dotted-eighth echo synced to the project tempo (the classic slap). */
+   286→  private delayTimeForBpm(): number {
+   287→    return Math.min(1, 0.375 * (60 / this.bpm));
+   288→  }
+   289→
+   290→  /** Build the per-track chain for the current set of tracks:
+   291→   *  gain → EQ low/mid/high → panner → master, with post-EQ sends into the
+   292→   *  shared reverb/delay bus. Values (volume, pan, EQ dB, send levels) are
+   293→   *  re-applied on every call, so this doubles as the "apply Yjs → graph"
+   294→   *  step for live edits from the settings panel. */
+   295→  private setupTrackNodes(tracks: AudioTrack[]): void {
+   296→    const ctx = this.ctx!;
+   297→    this.ensureFxBus();
+   298→    // Remove stale nodes.
+   299→    for (const [id] of this.trackGains) {
+   300→      if (!tracks.find((t) => t.id === id)) {
+   301→        this.trackGains.get(id)?.disconnect();
+   302→        this.trackPanners.get(id)?.disconnect();
+   303→        const eq = this.trackEqs.get(id);
+   304→        if (eq) { eq.low.disconnect(); eq.mid.disconnect(); eq.high.disconnect(); }
+   305→        const sends = this.trackSends.get(id);
+   306→        if (sends) { sends.reverb.disconnect(); sends.delay.disconnect(); }
+   307→        this.trackGains.delete(id);
+   308→        this.trackPanners.delete(id);
+   309→        this.trackEqs.delete(id);
+   310→        this.trackSends.delete(id);
+   311→      }
+   312→    }
+   313→    // Create missing nodes.
+   314→    for (const track of tracks) {
+   315→      if (!this.trackGains.has(track.id)) {
+   316→        const gain = ctx.createGain();
+   317→        const low = ctx.createBiquadFilter();
+   318→        low.type = 'lowshelf';
+   319→        low.frequency.value = 200;
+   320→        const mid = ctx.createBiquadFilter();
+   321→        mid.type = 'peaking';
+   322→        mid.frequency.value = 1000;
+   323→        mid.Q.value = 0.9;
+   324→        const high = ctx.createBiquadFilter();
+   325→        high.type = 'highshelf';
+   326→        high.frequency.value = 4000;
+   327→        const panner = ctx.createStereoPanner();
+   328→        gain.connect(low);
+   329→        low.connect(mid);
+   330→        mid.connect(high);
+   331→        high.connect(panner);
+   332→        panner.connect(this.masterGain!);
+   333→        const reverbSend = ctx.createGain();
+   334→        reverbSend.gain.value = 0;
+   335→        const delaySend = ctx.createGain();
+   336→        delaySend.gain.value = 0;
+   337→        high.connect(reverbSend);
+   338→        high.connect(delaySend);
+   339→        if (this.fxReverb) reverbSend.connect(this.fxReverb);
+   340→        if (this.fxDelay) delaySend.connect(this.fxDelay);
+   341→        this.trackGains.set(track.id, gain);
+   342→        this.trackPanners.set(track.id, panner);
+   343→        this.trackEqs.set(track.id, { low, mid, high });
+   344→        this.trackSends.set(track.id, { reverb: reverbSend, delay: delaySend });
+   345→      }
+   346→      // Update values.
+   347→      const gain = this.trackGains.get(track.id)!;
+   348→      const panner = this.trackPanners.get(track.id)!;
+   349→      const eq = this.trackEqs.get(track.id)!;
+   350→      const sends = this.trackSends.get(track.id)!;
+   351→      const anySolo = tracks.some((t) => t.solo);
+   352→      const audible = anySolo ? track.solo : !track.muted;
+   353→      gain.gain.value = audible ? track.volume : 0;
+   354→      panner.pan.value = track.pan;
+   355→      eq.low.gain.value = track.eqLow ?? 0;
+   356→      eq.mid.gain.value = track.eqMid ?? 0;
+   357→      eq.high.gain.value = track.eqHigh ?? 0;
+   358→      sends.reverb.gain.value = track.reverbSend ?? 0;
+   359→      sends.delay.gain.value = track.delaySend ?? 0;
+   360→    }
+   361→  }
+   362→
+   363→  /** Play all clips that intersect the current playhead. */
+   364→  async play(slate: SlateDoc, offset: number): Promise<void> {
+   365→    const ctx = this.ensureContext();
+   366→    // Browser autoplay policy: if the AudioContext is still suspended (no
+   367→    // user gesture yet, or the gesture listener hasn't fired), scheduling
+   368→    // sources is a silent no-op — the user would see the playhead move but
+   369→    // hear nothing. Bail with an actionable toast instead. The gesture
+   370→    // listener registered in ensureContext() will resume on the first click,
+   371→    // and the user can press play again.
+   372→    if (ctx.state === 'suspended') {
+   373→      toast({
+   374→        title: 'Click anywhere to enable audio',
+   375→        description: 'Your browser blocked audio until you interact with the page.',
+   376→      });
+   377→      return;
+   378→    }
+   379→    if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
+   380→    this.playing = true;
+   381→    this.startOffset = offset;
+   382→    this.startTime = ctx.currentTime;
+   383→
+   384→    // Read tracks + clips from the doc.
+   385→    const tracks: AudioTrack[] = [];
+   386→    slate.audioTracks().forEach((m, id) => {
+   387→      const t = readAudioTrack(m, id);
+   388→      if (t) tracks.push(t);
+   389→    });
+   390→    this.setupTrackNodes(tracks);
+   391→
+   392→    const clips: AudioClip[] = [];
+   393→    slate.audioClips().forEach((m, id) => {
+   394→      const c = readAudioClip(m, id);
+   395→      if (c) clips.push(c);
+   396→    });
+   397→
+   398→    // Preload EVERY buffer before scheduling anything. Awaiting each buffer
+   399→    // inside the scheduling loop anchored each clip to a drifting
+   400→    // ctx.currentTime — a clip whose decode (or sample-arrival retry) took
+   401→    // 500ms started 500ms late relative to the playhead AND to clips scheduled
+   402→    // before it, so multi-track projects audibly fell out of sync.
+   403→    //
+   404→    // MIDI clips have no IndexedDB sample blob (their notes are inline in
+   405→    // Yjs), so they're skipped in the audio-buffer preload pass — they get
+   406→    // their own preload pass below (warm the soundfont sample cache for
+   407→    // soundfont-piano clips so the first note doesn't drop).
+   408→    const buffers = new Map<string, AudioBuffer>();
+   409→    await Promise.all(
+   410→      clips.map(async (clip) => {
+   411→        if (clip.mute) return;
+   412→        if (clip.kind === 'midi') return; // no PCM samples
+   413→        const buffer = await this.getBuffer(clip);
+   414→        if (buffer) buffers.set(clip.id, buffer);
+   415→      }),
+   416→    );
+   417→    if (!this.playing) return; // stopped while buffers were loading
+   418→
+   419→    // Register the pitch-shift worklet if any clip needs time-stretch or
+   420→    // pitch-shift (speed ≠ 1 or pitch ≠ 0). One addModule per context —
+   421→    // memoized, so this is a cheap await after the first play(). Resolves
+   422→    // false where AudioWorklet is unavailable; scheduling then falls back to
+   423→    // the old coupled detune behaviour.
+   424→    const needsShift = clips.some(
+   425→      (c) => !c.mute && c.kind !== 'midi' && ((c.pitch ?? 0) !== 0 || (c.speed != null && c.speed > 0 && c.speed !== 1)),
+   426→    );
+   427→    const shiftReady = needsShift ? await ensurePitchWorklet(ctx) : false;
+   428→    if (!this.playing) return; // stopped while the worklet was loading
+   429→
+   430→    // Pre-warm the soundfont for MIDI clips that use it. Without this the
+   431→    // first note of each clip would silently fetch its sample and miss its
+   432→    // scheduled start time (noteOn returns null while loading). We collect
+   433→    // every distinct midi number across all soundfont-piano clips and ask
+   434→    // the SoundfontInstrument to preload them in parallel — by the time the
+   435→    // scheduling loop runs, every note is cached and noteOn fires instantly.
+   436→    const sfMidis = new Set<number>();
+   437→    for (const clip of clips) {
+   438→      if (clip.mute || clip.kind !== 'midi') continue;
+   439→      const instId = this.resolveInstrumentId(clip, tracks);
+   440→      if (instId === SOUNDFONT_PIANO_ID) {
+   441→        for (const n of clip.notes ?? []) sfMidis.add(n.midi);
+   442→      }
+   443→    }
+   444→    if (sfMidis.size > 0) {
+   445→      const sf = this.ensureSoundfont();
+   446→      if (sf) await sf.preloadNotes(Array.from(sfMidis));
+   447→    }
+   448→    if (!this.playing) return; // stopped during soundfont preload
+   449→
+   450→    // Re-anchor NOW that everything is ready: all clips schedule against one
+   451→    // shared clock read, so their relative timing is sample-accurate.
+   452→    this.startTime = ctx.currentTime;
+   453→
+   454→    // Schedule each clip that starts after the playhead or is currently playing.
+   455→    for (const clip of clips) {
+   456→      const track = tracks.find((t) => t.id === clip.trackId);
+   457→      if (!track) continue;
+   458→      if (clip.mute) continue; // clip muted individually
+   459→
+   460→      const clipEnd = clip.start + clip.duration;
+   461→      if (clipEnd <= offset) continue; // clip already finished
+   462→
+   463→      // ── MIDI branch ────────────────────────────────────────────────────
+   464→      // For MIDI clips, schedule each note as an instrument voice (soundfont
+   465→      // sample or oscillator synth preset) at startTime + (clip.start +
+   466→      // note.start - offset). Notes whose start has already passed (the
+   467→      // playhead is partway through the clip) are scheduled with a clamped
+   468→      // start time so they fire immediately rather than in the past (Web Audio
+   469→      // throws if source.start(when) is called with when < currentTime).
+   470→      if (clip.kind === 'midi') {
+   471→        const trackGain = this.trackGains.get(track.id) ?? this.masterGain!;
+   472→        this.scheduleMidiClip(ctx, clip, track, offset, trackGain);
+   473→        continue;
+   474→      }
+   475→
+   476→      const buffer = buffers.get(clip.id);
+   477→      if (!buffer) continue;
+   478→
+   479→      const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+   480→      const pitchCents = clip.pitch ?? 0;
+   481→      const clipOffset = clip.offset ?? 0; // trim from the source (buffer seconds)
+   482→      const clipVol = clip.gain ?? 1;
+   483→
+   484→      const source = ctx.createBufferSource();
+   485→      source.buffer = buffer;
+   486→      // Speed and pitch, DECOUPLED like a real editor (Audition's Stretch &
+   487→      // Pitch / Premiere's "maintain pitch"):
+   488→      //   - playbackRate = speed sets the timeline duration (and would shift
+   489→      //     pitch by ×speed as a Web Audio side effect);
+   490→      //   - a granular pitch-shift worklet after the source scales frequency
+   491→      //     by 2^(cents/1200) / speed — cancelling the varispeed side effect
+   492→      //     and applying the user's pitch knob on top.
+   493→      // Net: Speed changes duration but keeps pitch; Pitch shifts semitones
+   494→      // but keeps duration. Unity ratio bypasses the shifter entirely (the
+   495→      // common path stays two nodes). If the worklet isn't available, fall
+   496→      // back to the old coupled detune.
+   497→      source.playbackRate.value = speed;
+   498→      const shiftRatio = Math.pow(2, pitchCents / 1200) / speed;
+   499→      let shifter: AudioWorkletNode | undefined;
+   500→      let clipHead: AudioNode = source;
+   501→      if (shiftReady && Math.abs(shiftRatio - 1) > 0.0005) {
+   502→        shifter = createPitchShifter(ctx, shiftRatio);
+   503→        source.connect(shifter);
+   504→        clipHead = shifter;
+   505→        // Let the shifter ring out its buffered tail and self-terminate when
+   506→        // the source ends (naturally or via stop()) — worklet nodes whose
+   507→        // process() keeps returning true are never GC'd.
+   508→        const s = shifter;
+   509→        source.onended = () => releasePitchShifter(s);
+   510→      } else if (!shiftReady && pitchCents !== 0) {
+   511→        source.detune.value = pitchCents; // legacy coupled fallback
+   512→      }
+   513→
+   514→      // Per-clip gain (fades + clip volume) → per-clip panner → optional
+   515→      // HP/LP filters → track chain. Filters are only inserted when engaged
+   516→      // (cutoff moved off the ends of the audible range) so the default path
+   517→      // stays two nodes.
+   518→      const clipGain = ctx.createGain();
+   519→      const clipPan = ctx.createStereoPanner();
+   520→      clipPan.pan.value = Math.max(-1, Math.min(1, clip.pan ?? 0));
+   521→      clipHead.connect(clipGain);
+   522→      clipGain.connect(clipPan);
+   523→      let clipTail: AudioNode = clipPan;
+   524→      const hp = clip.hpCutoff ?? 20;
+   525→      if (hp > 22) {
+   526→        const hpf = ctx.createBiquadFilter();
+   527→        hpf.type = 'highpass';
+   528→        hpf.frequency.value = hp;
+   529→        clipTail.connect(hpf);
+   530→        clipTail = hpf;
+   531→      }
+   532→      const lp = clip.lpCutoff ?? 20000;
+   533→      if (lp < 19500) {
+   534→        const lpf = ctx.createBiquadFilter();
+   535→        lpf.type = 'lowpass';
+   536→        lpf.frequency.value = lp;
+   537→        clipTail.connect(lpf);
+   538→        clipTail = lpf;
+   539→      }
+   540→      const trackGain = this.trackGains.get(track.id);
+   541→      if (trackGain) clipTail.connect(trackGain);
+   542→      else clipTail.connect(this.masterGain!);
+   543→
+   544→      // How far the playhead is already into the clip (real seconds), and where
+   545→      // that lands in the source buffer (buffer seconds → scaled by speed).
+   546→      const skipTo = Math.max(0, offset - clip.start);
+   547→      const whenToStart = this.startTime + Math.max(0, clip.start - offset);
+   548→      const playDuration = clip.duration - skipTo; // real seconds left on the timeline
+   549→      const bufStart = clipOffset + skipTo * speed;
+   550→      const bufDuration = playDuration * speed;
+   551→
+   552→      // Latency compensation: the shifter's granular window delays audio by
+   553→      // ~45ms on average, so shifted clips would land late against unshifted
+   554→      // ones. Start the SOURCE early by that amount when there's headroom —
+   555→      // the audio emerges from the shifter on time. (Fades below stay
+   556→      // anchored to whenToStart: the gain node sits after the shifter, in
+   557→      // timeline time.)
+   558→      const srcStart = shifter ? Math.max(ctx.currentTime, whenToStart - PITCH_SHIFT_LATENCY) : whenToStart;
+   559→      source.start(srcStart, bufStart, bufDuration);
+   560→
+   561→      // Fades (real-time). Base level is the clip gain.
+   562→      clipGain.gain.setValueAtTime(clip.fadeIn > 0 ? 0 : clipVol, whenToStart);
+   563→      if (clip.fadeIn > 0) {
+   564→        clipGain.gain.linearRampToValueAtTime(clipVol, whenToStart + clip.fadeIn);
+   565→      }
+   566→      if (clip.fadeOut > 0) {
+   567→        clipGain.gain.setValueAtTime(clipVol, whenToStart + playDuration - clip.fadeOut);
+   568→        clipGain.gain.linearRampToValueAtTime(0, whenToStart + playDuration);
+   569→      }
+   570→
+   571→      this.playingClips.push({ source, gain: clipGain, clipId: clip.id, shifter });
+   572→    }
+   573→
+   574→    // Loop region: getPosition() wraps the PLAYHEAD at the loop end, but the
+   575→    // scheduled sources would happily play straight through it — the display
+   576→    // looped while the audio didn't. Schedule a restart at the boundary so the
+   577→    // audio wraps with the playhead.
+   578→    if (this.loopRegion && this.loopRegion.end > this.loopRegion.start && offset < this.loopRegion.end) {
+   579→      const untilWrap = this.loopRegion.end - offset;
+   580→      this.loopTimer = window.setTimeout(() => {
+   581→        this.loopTimer = null;
+   582→        if (this.playing && this.loopRegion) this.restartPlayback(slate, this.loopRegion.start);
+   583→      }, untilWrap * 1000);
+   584→    }
+   585→
+   586→    // Start metronome if enabled.
+   587→    if (this.metronomeOn) this.startMetronome();
+   588→  }
+   589→
+   590→  /** Stop all playback. */
+   591→  stop(): void {
+   592→    this.playing = false;
+   593→    if (this.loopTimer !== null) { clearTimeout(this.loopTimer); this.loopTimer = null; }
+   594→    for (const { source, shifter } of this.playingClips) {
+   595→      try { source.stop(); } catch { /* already stopped */ }
+   596→      if (shifter) releasePitchShifter(shifter); // idempotent (onended also fires)
+   597→    }
+   598→    this.playingClips = [];
+   599→    // Release every live MIDI voice too — without this, oscillator-based
+   600→    // presets would ring past stop() until their natural decay finished, and
+   601→    // soundfont samples would play out their full release tail.
+   602→    if (this.ctx) {
+   603→      const now = this.ctx.currentTime;
+   604→      for (const v of this.playingMidiVoices) {
+   605→        try { v.stop(now); } catch { /* already stopped */ }
+   606→      }
+   607→    }
+   608→    this.playingMidiVoices = [];
+   609→    this.stopMetronome();
+   610→  }
+   611→
+   612→  /** Stop all current sources and immediately re-schedule all clips from
+   613→   *  `offset`, atomically — `playing` stays true throughout so getPosition()
+   614→   *  keeps tracking from the new startTime (no jump back to 0, no UI glitch).
+   615→   *  Used when the clip set changes mid-playback (a remote peer adds a clip,
+   616→   *  or a clip's samples arrive after play started) so the new clip is picked
+   617→   *  up without a full stop+play round-trip from the UI. There's a brief audio
+   618→   *  gap while buffers reload, but the playhead and `playing` state never
+   619→   *  flicker. If the AudioContext hasn't been created yet (no user gesture),
+   620→   *  falls back to a plain play() which creates it. */
+   621→  restartPlayback(slate: SlateDoc, offset: number): void {
+   622→    if (!this.ctx) {
+   623→      void this.play(slate, offset);
+   624→      return;
+   625→    }
+   626→    // Stop + forget current sources, but keep `playing` true so getPosition()
+   627→    // continues to track. play() will reset startTime/startOffset.
+   628→    for (const { source, shifter } of this.playingClips) {
+   629→      try { source.stop(); } catch { /* already stopped */ }
+   630→      if (shifter) releasePitchShifter(shifter); // idempotent (onended also fires)
+   631→    }
+   632→    this.playingClips = [];
+   633→    // Release live MIDI voices too (see stop()).
+   634→    {
+   635→      const now = this.ctx.currentTime;
+   636→      for (const v of this.playingMidiVoices) {
+   637→        try { v.stop(now); } catch { /* already stopped */ }
+   638→      }
+   639→    }
+   640→    this.playingMidiVoices = [];
+   641→    this.stopMetronome();
+   642→    // Re-schedule. play() re-reads the doc (so new clips are included),
+   643→    // resets startTime/startOffset, and restarts the metronome if enabled.
+   644→    void this.play(slate, offset);
+   645→  }
+   646→
+   647→  /** Get the current playhead position (seconds). Loops if a loop region is set. */
+   648→  getPosition(): number {
+   649→    if (!this.playing || !this.ctx) return this.startOffset;
+   650→    let pos = this.startOffset + (this.ctx.currentTime - this.startTime);
+   651→    if (this.loopRegion) {
+   652→      const loopLen = this.loopRegion.end - this.loopRegion.start;
+   653→      if (loopLen > 0 && pos >= this.loopRegion.end) {
+   654→        // Wrap around the loop region.
+   655→        pos = this.loopRegion.start + ((pos - this.loopRegion.start) % loopLen);
+   656→      }
+   657→    }
+   658→    return pos;
+   659→  }
+   660→
+   661→  isPlaying(): boolean { return this.playing; }
+   662→  isRecording(): boolean { return this.recording; }
+   663→
+   664→  setMetronome(on: boolean): void {
+   665→    this.metronomeOn = on;
+   666→    if (on && this.playing) this.startMetronome();
+   667→    else this.stopMetronome();
+   668→  }
+   669→
+   670→  setBpm(bpm: number): void {
+   671→    this.bpm = bpm;
+   672→    // Keep the shared echo musically in time with the new tempo.
+   673→    if (this.fxDelay) this.fxDelay.delayTime.value = this.delayTimeForBpm();
+   674→  }
+   675→
+   676→  setMasterVolume(v: number): void {
+   677→    this.masterVolume = v;
+   678→    if (this.masterGain) this.masterGain.gain.value = v;
+   679→  }
+   680→
+   681→  getMasterVolume(): number { return this.masterVolume; }
+   682→
+   683→  setLoopRegion(start: number | null, end: number | null): void {
+   684→    if (start === null || end === null) {
+   685→      this.loopRegion = null;
+   686→    } else {
+   687→      this.loopRegion = { start, end };
+   688→    }
+   689→  }
+   690→
+   691→  getLoopRegion(): { start: number; end: number } | null { return this.loopRegion; }
+   692→
+   693→  /** Create a simple reverb impulse response for the ConvolverNode. */
+   694→  private makeReverbIR(ctx: AudioContext, seconds: number, decay: number): AudioBuffer {
+   695→    const rate = ctx.sampleRate;
+   696→    const length = Math.max(1, Math.floor(rate * seconds));
+   697→    const ir = ctx.createBuffer(2, length, rate);
+   698→    for (let ch = 0; ch < 2; ch++) {
+   699→      const data = ir.getChannelData(ch);
+   700→      for (let i = 0; i < length; i++) {
+   701→        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+   702→      }
+   703→    }
+   704→    return ir;
+   705→  }
+   706→
+   707→  /** Set one EQ band's gain (dB) directly on a track's filter node — O(1),
+   708→   *  used by the settings-panel knobs for live feedback during playback.
+   709→   *  No-op before the graph exists; the next play() reads the Yjs value. */
+   710→  setTrackEq(trackId: string, band: 'low' | 'mid' | 'high', dB: number): void {
+   711→    const eq = this.trackEqs.get(trackId);
+   712→    if (!eq) return;
+   713→    eq[band].gain.value = Math.max(-12, Math.min(12, dB));
+   714→  }
+   715→
+   716→  /** Set a track's reverb/delay send level (0..1) directly — O(1) live write. */
+   717→  setTrackSend(trackId: string, which: 'reverb' | 'delay', level: number): void {
+   718→    const sends = this.trackSends.get(trackId);
+   719→    if (!sends) return;
+   720→    sends[which].gain.value = Math.max(0, Math.min(1, level));
+   721→  }
+   722→
+   723→  private startMetronome(): void {
+   724→    if (!this.ctx) return;
+   725→    this.stopMetronome();
+   726→    const beatDur = 60 / this.bpm;
+   727→    this.nextClickTime = this.ctx.currentTime;
+   728→    const tick = () => {
+   729→      if (!this.ctx || !this.playing) return;
+   730→      if (this.nextClickTime < this.ctx.currentTime + 0.2) {
+   731→        this.click(this.nextClickTime);
+   732→        this.nextClickTime += beatDur;
+   733→      }
+   734→      this.clickTimer = window.setTimeout(tick, 25);
+   735→    };
+   736→    tick();
+   737→  }
+   738→
+   739→  private stopMetronome(): void {
+   740→    if (this.clickTimer !== null) {
+   741→      clearTimeout(this.clickTimer);
+   742→      this.clickTimer = null;
+   743→    }
+   744→  }
+   745→
+   746→  private click(time: number): void {
+   747→    if (!this.ctx || !this.masterGain) return;
+   748→    const osc = this.ctx.createOscillator();
+   749→    const gain = this.ctx.createGain();
+   750→    osc.frequency.value = 1000; // Click pitch
+   751→    gain.gain.setValueAtTime(0.3, time);
+   752→    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+   753→    osc.connect(gain);
+   754→    gain.connect(this.masterGain);
+   755→    osc.start(time);
+   756→    osc.stop(time + 0.05);
+   757→  }
+   758→
+   759→  /** Start recording from a microphone input. Returns a stop callback that
+   760→   *  resolves to the recorded PCM samples. */
+   761→  async startRecording(): Promise<() => Promise<{ samples: number[]; sampleRate: number; channels: number; duration: number }>> {
+   762→    const ctx = this.ensureContext();
+   763→    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   764→    const source = ctx.createMediaStreamSource(stream);
+   765→    const processor = ctx.createScriptProcessor(4096, 1, 1);
+   766→    const chunks: number[] = [];
+   767→    source.connect(processor);
+   768→    processor.connect(ctx.destination);
+   769→    processor.onaudioprocess = (e) => {
+   770→      const data = e.inputBuffer.getChannelData(0);
+   771→      for (let i = 0; i < data.length; i++) chunks.push(data[i]!);
+   772→    };
+   773→    this.recording = true;
+   774→
+   775→    return async () => {
+   776→      processor.disconnect();
+   777→      source.disconnect();
+   778→      stream.getTracks().forEach((t) => t.stop());
+   779→      this.recording = false;
+   780→      const duration = chunks.length / ctx.sampleRate;
+   781→      return { samples: chunks, sampleRate: ctx.sampleRate, channels: 1, duration };
+   782→    };
+   783→  }
+   784→
+   785→  /** Update live track settings (volume/pan/mute/solo) without restarting.
+   786→   *  Re-reads ALL tracks from Yjs and rebuilds the per-track gain/panner
+   787→   *  values via setupTrackNodes — use this when the track SET changed (add/
+   788→   *  delete) or mute/solo toggled (which rebalances every track's audibility).
+   789→   *  For a single track's volume/pan DRAG, prefer setTrackVolume / setTrackPan
+   790→   *  (O(1) direct node write, no Yjs read, no graph rebuild) to avoid lag. */
+   791→  updateTracks(slate: SlateDoc): void {
+   792→    if (!this.ctx) return;
+   793→    const tracks: AudioTrack[] = [];
+   794→    slate.audioTracks().forEach((m, id) => {
+   795→      const t = readAudioTrack(m, id);
+   796→      if (t) tracks.push(t);
+   797→    });
+   798→    this.setupTrackNodes(tracks);
+   799→  }
+   800→
+   801→  /** Set a single track's volume DIRECTLY on its gain node — O(1), no Yjs
+   802→   *  read, no audio-graph rebuild. Used by the TrackHeader volume slider
+   803→   *  during a drag for immediate audio feedback; the Yjs commit happens on
+   804→   *  pointerup via updateAudioTrack. No-op if the AudioContext hasn't been
+   805→   *  created yet or the track's gain node doesn't exist (e.g. playback hasn't
+   806→   *  started — there's no audio to adjust anyway, and the next play() will
+   807→   *  read the committed Yjs value).
+   808→   *
+   809→   *  `audible` mirrors setupTrackNodes' mute/solo logic so dragging the
+   810→   *  volume slider on a muted (or non-soloed-while-another-track-is-soloed)
+   811→   *  track doesn't briefly un-mute it: if not audible, the gain is forced
+   812→   *  to 0 regardless of `volume`. The React side computes `audible` from
+   813→   *  the track's `muted`/`solo` props + the `hasSolo` flag. */
+   814→  setTrackVolume(trackId: string, volume: number, audible: boolean): void {
+   815→    if (!this.ctx) return;
+   816→    const gain = this.trackGains.get(trackId);
+   817→    if (!gain) return;
+   818→    gain.gain.value = audible ? volume : 0;
+   819→  }
+   820→
+   821→  /** Set a single track's pan DIRECTLY on its StereoPannerNode — O(1), no
+   822→   *  Yjs read, no audio-graph rebuild. See setTrackVolume for the rationale.
+   823→   *  Pan is clamped to [-1, 1] (StereoPannerNode's legal range) — values
+   824→   *  outside that throw a NotSupportedError on assignment. */
+   825→  setTrackPan(trackId: string, pan: number): void {
+   826→    if (!this.ctx) return;
+   827→    const panner = this.trackPanners.get(trackId);
+   828→    if (!panner) return;
+   829→    panner.pan.value = Math.max(-1, Math.min(1, pan));
+   830→  }
+   831→
+   832→  /** Clear the buffer cache (e.g. when a clip's samples change). */
+   833→  clearCache(clipId?: string): void {
+   834→    if (clipId) this.bufferCache.delete(clipId);
+   835→    else this.bufferCache.clear();
+   836→  }
+   837→
+   838→  /** Lazily create the shared SoundfontInstrument (one per AudioContext).
+   839→   *  Routes its output through the master gain so it joins the same mix as
+   840→   *  audio clips — but per-track routing for MIDI clips is handled in
+   841→   *  scheduleMidiClip(), which passes the track's gain-chain tail as `dest`
+   842→   *  to a per-call noteOn (the SoundfontInstrument constructor only needs a
+   843→   *  fallback destination; the per-clip routing overrides it).
+   844→   *
+   845→   *  Returns null if the AudioContext doesn't exist yet (no gesture). The
+   846→   *  caller (play()) bails on suspended ctx anyway, so this is mostly a
+   847→   *  belt-and-braces guard. */
+   848→  private ensureSoundfont(): SoundfontInstrument | null {
+   849→    if (!this.ctx || !this.masterGain) return null;
+   850→    if (!this.soundfont) {
+   851→      // The dest here is a fallback only — scheduleMidiClip routes each note
+   852→      // through the track's gain chain. The SoundfontInstrument connects its
+   853→      // per-note gain nodes to whatever `dest` is at noteOn time, so the
+   854→      // constructor's dest is only used if noteOn is called without a dest
+   855→      // override (it isn't, in our usage).
+   856→      this.soundfont = new SoundfontInstrument(this.ctx, this.masterGain);
+   857→    }
+   858→    return this.soundfont;
+   859→  }
+   860→
+   861→  /** Resolve which instrument a MIDI clip should play through. Clip-level
+   862→   *  `instrumentId` wins; otherwise the track's `instrumentId` is used; if
+   863→   *  neither is set, fall back to the grand-piano preset (a sensible default
+   864→   *  for any MIDI clip — it's what a user expects when they create a MIDI
+   865→   *  track and drop notes on it without picking an instrument). */
+   866→  private resolveInstrumentId(clip: AudioClip, tracks: AudioTrack[]): string {
+   867→    if (clip.instrumentId) return clip.instrumentId;
+   868→    const track = tracks.find((t) => t.id === clip.trackId);
+   869→    if (track?.instrumentId) return track.instrumentId;
+   870→    return INSTRUMENT_PRESETS[0]!.id; // 'inst-grand-piano'
+   871→  }
+   872→
+   873→  /** Look up a synth preset by id (factory presets first, then custom
+   874→   *  instruments from localStorage). Falls back to the grand-piano preset
+   875→   *  if the id is unknown — better to play *something* than silently drop
+   876→   *  the clip because the user deleted a custom instrument mid-session. */
+   877→  private resolveSynthParams(id: string): InstrumentParams {
+   878→    const factory = INSTRUMENT_PRESETS.find((p) => p.id === id);
+   879→    if (factory) return factory;
+   880→    // loadCustomInstruments reads localStorage — cheap, but only worth doing
+   881→    // when the id isn't a factory preset. We don't memoize because the set of
+   882→    // custom instruments can change mid-session (user saves/deletes one).
+   883→    const custom = loadCustomInstruments().find((p) => p.id === id);
+   884→    if (custom) return custom;
+   885→    return INSTRUMENT_PRESETS[0]!;
+   886→  }
+   887→
+   888→  /** Schedule every note in a MIDI clip. Each note fires at
+   889→   *  `startTime + (clip.start + note.start - offset)` and releases at the
+   890→   *  note's start + duration. Notes whose start time is already in the past
+   891→   *  (the playhead is partway through the clip) are clamped to fire
+   892→   *  immediately — Web Audio throws if source.start(when) is called with a
+   893→   *  `when` < ctx.currentTime.
+   894→   *
+   895→   *  The instrument is selected by `resolveInstrumentId`:
+   896→   *  - 'soundfont-piano' → SoundfontInstrument (sample-based, freepats)
+   897→   *  - any other id → oscillator-based LiveInstrument preset (startVoice)
+   898→   *
+   899→   *  The voice's output is routed through the track's gain chain (the same
+   900→   *  one audio clips use) so MIDI clips get the same volume/pan/EQ/sends/
+   901→   *  mute/solo treatment as audio clips. */
+   902→  private scheduleMidiClip(
+   903→    ctx: AudioContext,
+   904→    clip: AudioClip,
+   905→    _track: AudioTrack,
+   906→    offset: number,
+   907→    dest: AudioNode,
+   908→  ): void {
+   909→    const notes = clip.notes ?? [];
+   910→    if (notes.length === 0) return;
+   911→    const instId = this.resolveInstrumentId(clip, [_track]);
+   912→    const clipVol = clip.gain ?? 1;
+   913→
+   914→    if (instId === SOUNDFONT_PIANO_ID) {
+   915→      const sf = this.ensureSoundfont();
+   916→      if (!sf) return;
+   917→      for (const n of notes) {
+   918→        const noteAbsStart = clip.start + n.start;
+   919→        if (noteAbsStart + n.duration <= offset) continue; // note already ended
+   920→        // Clamp to currentTime so a note whose scheduled start is in the past
+   921→        // (playhead partway through the clip) fires NOW instead of throwing.
+   922→        const when = Math.max(ctx.currentTime, this.startTime + Math.max(0, noteAbsStart - offset));
+   923→        const voice = sf.noteOn(n.midi, n.velocity * clipVol, when);
+   924→        if (!voice) continue; // sample not loaded (will be on next play)
+   925→        const stopWhen = Math.max(when + 0.01, this.startTime + Math.max(0, noteAbsStart + n.duration - offset));
+   926→        voice.stop(stopWhen);
+   927→        this.playingMidiVoices.push({ clipId: clip.id, stop: voice.stop });
+   928→      }
+   929→      return;
+   930→    }
+   931→
+   932→    // Oscillator-based synth preset.
+   933→    const params = this.resolveSynthParams(instId);
+   934→    for (const n of notes) {
+   935→      const noteAbsStart = clip.start + n.start;
+   936→      if (noteAbsStart + n.duration <= offset) continue; // note already ended
+   937→      const when = Math.max(ctx.currentTime, this.startTime + Math.max(0, noteAbsStart - offset));
+   938→      const voice = startVoice(ctx, dest, params, n.midi, n.velocity * clipVol, when);
+   939→      const stopWhen = Math.max(when + 0.02, this.startTime + Math.max(0, noteAbsStart + n.duration - offset));
+   940→      voice.stop(stopWhen);
+   941→      this.playingMidiVoices.push({ clipId: clip.id, stop: voice.stop });
+   942→    }
+   943→  }
+   944→
+   945→  dispose(): void {
+   946→    this.stop();
+   947→    if (this.gestureHandler) {
+   948→      window.removeEventListener('pointerdown', this.gestureHandler);
+   949→      window.removeEventListener('keydown', this.gestureHandler);
+   950→      window.removeEventListener('touchstart', this.gestureHandler);
+   951→      this.gestureHandler = null;
+   952→    }
+   953→    if (this.clipChangedHandler) {
+   954→      window.removeEventListener('slate:audio-clip-changed', this.clipChangedHandler);
+   955→      this.clipChangedHandler = null;
+   956→    }
+   957→    this.trackGains.forEach((g) => g.disconnect());
+   958→    this.trackPanners.forEach((p) => p.disconnect());
+   959→    this.trackEqs.forEach((eq) => { eq.low.disconnect(); eq.mid.disconnect(); eq.high.disconnect(); });
+   960→    this.trackSends.forEach((s) => { s.reverb.disconnect(); s.delay.disconnect(); });
+   961→    this.trackGains.clear();
+   962→    this.trackPanners.clear();
+   963→    this.trackEqs.clear();
+   964→    this.trackSends.clear();
+   965→    this.fxReverb?.disconnect();
+   966→    this.fxDelay?.disconnect();
+   967→    this.fxDelayFeedback?.disconnect();
+   968→    this.fxReverb = null;
+   969→    this.fxDelay = null;
+   970→    this.fxDelayFeedback = null;
+   971→    this.bufferCache.clear();
+   972→    this.retryingClips.clear();
+   973→    this.retryAttempts.clear();
+   974→    this.soundfont?.dispose();
+   975→    this.soundfont = null;
+   976→    if (this.ctx) {
+   977→      void this.ctx.close();
+   978→      this.ctx = null;
+   979→      this.masterGain = null;
+   980→    }
+   981→  }
+   982→}
+   983→

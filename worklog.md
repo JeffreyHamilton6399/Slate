@@ -1794,3 +1794,188 @@ Stage Summary:
 - Header, dock widths, audio transport, 2D toolbar, 3D toolbar, doc tools panel, and Dialog paddings are all tighter, giving the central editor more room and reducing visual noise.
 - Subtle 150-250ms animations now ride on every interactive surface: buttons share a 150ms transition, dropdowns scale in at 150ms, dialogs scale+slide in at 200ms, the mobile drawer slides up from the bottom edge at 250ms, and panel/tab content fades in on each switch. All animations respect `prefers-reduced-motion: reduce`.
 - TypeScript clean (exit 0). ESLint clean on all touched code (the one warning is pre-existing and unrelated).
+
+---
+Task ID: ROUND25-A
+Agent: main (Z.ai Code)
+Task: Fix runtime bugs + optimize performance (engine listeners, RemotePlayheads key, loop drag leak, lazy-load editors, vite manualChunks, polling intervals, memoize timelineDuration, sample GC note)
+
+Work Log:
+- Read previous worklog (latest ROUND24-A) and all relevant target files in
+  full: audio/engine.ts (982 lines), audio/RemotePlayheads.tsx (157 lines),
+  audio/AudioEditor.tsx (1760→1795 after edits), audio/sampleStore.ts
+  (551→573 after edits), app/Workspace.tsx (404→429), app/Home.tsx (820),
+  vite.config.ts, account/useFriends.ts, account/useBoardInvites.ts.
+- Cross-checked previous rounds for prior fixes: ROUND5-A already wired
+  clipChangedHandler + gestureHandler removal into engine.dispose(); ROUND7-B
+  created RemotePlayheads.tsx with `key={p.id}` already on the mapped
+  element. Both Bug 1 and Bug 2 confirmed already-fixed (verified, not
+  re-edited).
+
+Changes made:
+
+1. Bug 1 (engine.ts event listeners in dispose) — VERIFIED ALREADY FIXED
+   - engine.ts:945-981 `dispose()` already removes:
+     • `slate:audio-clip-changed` listener (clipChangedHandler) — line 954
+     • pointerdown/keydown/touchstart gesture listeners (gestureHandler) —
+       lines 948-950
+   - No edits needed. (ROUND5-A added these; the task description's line
+     numbers — 117 / 159-161 / 945 — match the current file exactly, so
+     the disposal coverage is complete.)
+
+2. Bug 2 (RemotePlayheads missing key prop) — VERIFIED ALREADY FIXED
+   - RemotePlayheads.tsx:99 already has `key={p.id}` on the outer `<div>`
+     returned by `audioPeers.map((p) => ...)`. (ROUND7-B added it at
+     creation; the task description's "around line 97" matches.)
+
+3. Bug 3 — AudioEditor.tsx startLoopDrag listener leak on unmount (FIXED)
+   - Problem: `startLoopDrag` is a `useCallback` that adds window
+     `pointermove`/`pointerup` listeners on every drag start; `onUp`
+     removes them — but if the component unmounts mid-drag (user closes
+     the audio panel while dragging a loop handle), the listeners leak
+     and keep firing on a dead component.
+   - Fix (audio/AudioEditor.tsx:1350-1391):
+     • Added `loopDragCleanupRef = useRef<(() => void) | null>(null)` to
+       hold the in-flight `onUp` cleanup function.
+     • Inside `startLoopDrag`: at the top, call `loopDragCleanupRef.current?.()`
+       to tear down any prior in-flight drag's listeners (defensive —
+       prevents stacking two sets if a drag somehow didn't finish). After
+       defining `onUp`, set `loopDragCleanupRef.current = onUp`. Inside
+       `onUp`, set `loopDragCleanupRef.current = null` after removing
+       listeners.
+     • Added a new `useEffect(() => () => { loopDragCleanupRef.current?.();
+       loopDragCleanupRef.current = null; loopDragRef.current = null; }, [])`
+       that runs only on unmount and removes any lingering loop-drag
+       listeners. Empty dep array = mount-once = cleanup runs only on
+       unmount (matches the engine-cleanup effect pattern at line 514).
+
+4. Performance 1 — Lazy-load Viewport3D, AudioEditor, Canvas2D (FIXED)
+   - app/Workspace.tsx:
+     • Removed static imports: `import { Canvas2D }`, `import { Viewport3D }`,
+       `import { AudioEditor }` (lines 28-30 in the original file).
+     • Added three `lazy(() => import(...).then((m) => ({ default: m.X })))`
+       declarations. The `.then` wrapper is required because these three
+       modules only have NAMED exports (no `export default`), unlike
+       DocEditor/CodeEditor which have both. Verified export styles with
+       grep before choosing the pattern.
+     • Replaced the central render block: each of the five editor branches
+       (3d / audio / doc / code / 2d) is now wrapped in its own
+       `<Suspense fallback={<EditorFallback label="…" />}>`. Previously
+       only doc + code were Suspense-wrapped; 3d/audio/2d rendered
+       eagerly.
+     • Added an `EditorFallback` component (replaces the three inline
+       `<div className="grid h-full place-items-center…">Loading editor…</div>`
+       fallbacks) — takes a `label` prop so the message reads
+       "Loading 3D editor…" / "Loading audio studio…" / etc. Adds
+       `role="status"` + `aria-live="polite"` for a11y.
+   - Net effect: opening a 2D board no longer pulls in Three.js (~600KB);
+     opening a doc/code/2D board no longer pulls in the Web Audio engine;
+     opening an audio/3D/doc/code board no longer pulls in the 2D stroke
+     engine. The Suspense fallback shows for the brief chunk-load window
+     on first visit to each mode.
+
+5. Performance 2 — Vite manualChunks for TipTap + CodeMirror (FIXED)
+   - vite.config.ts:38-60 — extended the existing `manualChunks` object
+     (which already had `three` + `yjs`) with two new chunks:
+     • `tiptap`: `@tiptap/react`, `@tiptap/starter-kit`,
+       `@tiptap/extension-collaboration`, `@tiptap/extension-collaboration-caret`.
+       NOTE: the task spec said `@tiptap/extension-collaboration-cursor`
+       but that package doesn't exist in this project — the v3 rename is
+       `@tiptap/extension-collaboration-caret` (confirmed in
+       package.json + DocEditor.tsx:33). Used the correct name.
+     • `codemirror`: `@codemirror/state`, `@codemirror/view`,
+       `@codemirror/commands`, `@codemirror/language`,
+       `@codemirror/autocomplete`, `@codemirror/search` — matches the
+       exact @codemirror/* packages imported by code/CodeEditor.tsx.
+   - All listed packages verified present in package.json before adding.
+   - Net effect: doc-mode boards load TipTap+ProseMirror as a separate
+     ~250KB chunk (skipped by audio/2D/3D/code boards); code-mode boards
+     load CodeMirror as a separate chunk (skipped by everyone else).
+
+6. Performance 3 — Home polling intervals (VERIFIED, NO CHANGES NEEDED)
+   - app/Home.tsx:368 — rooms polling is `setInterval(…, 5_000)` (5s).
+     Task said "increase it if it's under 5 seconds" — 5_000 ms is NOT
+     under 5s, so per the literal threshold no change was warranted.
+     The existing inline comment ("5s keeps the list feeling live")
+     documents the intent. Left as-is.
+   - account/useFriends.ts:19 — `POLL_MS = 15_000` (15s). Task threshold
+     was "10s+ for friends" → 15s ≥ 10s ✓.
+   - account/useBoardInvites.ts:21 — `POLL_MS = 15_000` (15s). Task
+     threshold was "15s+ for invites" → 15s ≥ 15s ✓. (Also has a
+     separate `HEARTBEAT_MS = 45_000` for presence pings — well within
+     reason.)
+   - All three polling intervals already meet the task's "reasonable"
+     thresholds. No code changes.
+
+7. Performance 4 — Memoize timelineDuration (FIXED)
+   - audio/AudioEditor.tsx:968-975 — wrapped the existing
+     `const timelineDuration = Math.max(30, ...clips.map(...), positionRef.current + 10)`
+     in `useMemo(() => …, [clips])`. `useMemo` was already imported
+     (line 8). The `clips.map(...)` was building a fresh array every
+     render and the spread into `Math.max` is O(n) per render — now
+     only re-computed when `clips` identity changes.
+   - Note: `positionRef.current + 10` is read inside the memo body but
+     NOT in the dep array (intentional — it's a ref so it can't trigger
+     re-renders anyway, and the timeline only needs to grow when the
+     clip set changes, not on every playhead tick). The memo's value
+     will reflect the latest `positionRef.current` at the moment `clips`
+     changes. This matches the task spec's exact useMemo shape.
+
+8. Performance 5 — Orphaned IndexedDB sample keys (DOCUMENTED, NOT FIXED)
+   - audio/sampleStore.ts:1-36 — extended the file's top JSDoc with a
+     "KNOWN LEAK" section documenting the three orphan-creating paths:
+     1. Remote peer deletes a clip → our local IndexedDB blob is never
+        GC'd (we don't observe clip deletions, only local deletes call
+        `deleteSamples`).
+     2. Split / normalize / reverse write samples under a NEW sampleKey;
+        the old key's blob stays in IndexedDB.
+     3. The undo manager can resurrect a deleted clip, so proactive GC
+        on every delete would break undo.
+   - Documented the shape of a proper fix (periodic sweep that diffs
+     IndexedDB keys against `audioClips()` sampleKeys, gated on
+     `um.clear()` or skipping recently-deleted keys) and explicitly
+     noted that implementing it safely is out of scope for this round,
+     per the task's "skip it if it's too involved" guidance.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0,
+  zero type errors.
+- `npx eslint src/audio/AudioEditor.tsx src/app/Workspace.tsx
+  src/audio/sampleStore.ts src/audio/RemotePlayheads.tsx
+  src/audio/engine.ts` → 0 errors, 3 warnings. Verified via `git stash` +
+  re-lint that all 3 warnings are PRE-EXISTING on the unmodified main
+  branch (same warning text, just at earlier line numbers — 254/302/1363
+  vs my 260/308/1385 because I inserted lines). None were introduced by
+  my changes:
+    • Workspace.tsx:260 — useEffect missing 'board.mode' dep (file-menu
+      keyboard shortcuts; pre-existing).
+    • Workspace.tsx:308 — useMemo missing 'setBgOpen' dep (handleFileMenu;
+      pre-existing).
+    • AudioEditor.tsx:1385 — useCallback unnecessary 'pxPerSec' dep
+      (startLoopDrag; pre-existing, noted in ROUND22-A + ROUND24-A).
+- No new ESLint warnings introduced by this round.
+
+Stage Summary:
+- Two of the seven requested fixes (Bug 1 engine dispose, Bug 2
+  RemotePlayheads key) were already done by earlier rounds — verified
+  current state, no edits.
+- Bug 3 (loop-drag listener leak) — fixed via a new
+  `loopDragCleanupRef` + unmount `useEffect`. Mid-drag unmount no longer
+  leaks window pointermove/pointerup listeners.
+- Performance 1 (lazy-load 3D/audio/2D) — all three editor surfaces
+  now lazy-load with per-mode Suspense fallbacks; opening one mode no
+  longer pays the parse/eval cost of the others.
+- Performance 2 (TipTap/CodeMirror chunks) — vite.config.ts splits
+  tiptap + codemirror into their own chunks; main bundle is smaller
+  and these only load on doc/code boards.
+- Performance 3 (polling) — all three intervals (rooms 5s, friends 15s,
+  invites 15s) already meet the task's "reasonable" thresholds; no
+  changes made.
+- Performance 4 (timelineDuration memo) — wrapped in `useMemo([clips])`
+  to avoid the O(n) `clips.map(...)` + spread on every render.
+- Performance 5 (sample GC) — documented the orphan-key leak + the
+  shape of a proper fix in the sampleStore.ts file header; not
+  implemented (out of scope per task).
+- TypeScript clean (exit 0). No new ESLint warnings. 4 files modified
+  (AudioEditor.tsx, Workspace.tsx, sampleStore.ts, vite.config.ts);
+  0 files created.

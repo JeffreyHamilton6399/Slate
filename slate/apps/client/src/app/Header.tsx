@@ -100,9 +100,11 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
             File
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent>
+        <DropdownMenuContent align="start">
+          {/* Project */}
           <DropdownMenuItem onSelect={() => onFileMenu('new')}>New project…</DropdownMenuItem>
           <DropdownMenuSeparator />
+          {/* Save / Open */}
           <DropdownMenuItem onSelect={() => onFileMenu('save')} shortcut="Ctrl+S">
             Save
           </DropdownMenuItem>
@@ -111,14 +113,17 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onFileMenu('open')}>Open…</DropdownMenuItem>
           <DropdownMenuSeparator />
+          {/* Import / Export / Print / Background */}
           <DropdownMenuItem onSelect={() => onFileMenu('import')}>Import…</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onFileMenu('export')}>Export…</DropdownMenuItem>
-          {(board?.mode !== '3d' && board?.mode !== 'audio') && (
+          {board?.mode !== '3d' && board?.mode !== 'audio' && (
             <DropdownMenuItem onSelect={() => onFileMenu('print')} shortcut="Ctrl+P">
               Print
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem onSelect={() => onFileMenu('background')}>Background…</DropdownMenuItem>
           <DropdownMenuSeparator />
+          {/* Board / Help / Install */}
           <DropdownMenuItem onSelect={() => onFileMenu('board-settings')}>
             Board settings…
           </DropdownMenuItem>
@@ -131,41 +136,63 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
       <div className="flex-1" />
 
-      {/* Only surfaces when something needs attention; a healthy connection
-          shows nothing (transitions arrive as toasts). */}
-      <ConnectionPill status={status} />
+      {/* Right cluster — ConnectionPill (only when not connected), Share,
+          Settings, Leave. Wraps in overflow-x-auto so a very narrow phone
+          can scroll the cluster instead of pushing layout off-screen. */}
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+        {/* Only surfaces when something needs attention; a healthy connection
+            shows nothing (transitions arrive as toasts). */}
+        <ConnectionPill status={status} />
 
-      {/* Share collapses to an icon — the tooltip and toast carry the intent. */}
-      <Tooltip content="Copy an invite link to this board">
-        <Button
-          variant="icon"
-          size="none"
-          onClick={() => shareBoard(board)}
-          aria-label="Share board"
-          className="text-accent hover:bg-accent/10"
-        >
-          <Share2 size={15} />
-        </Button>
-      </Tooltip>
+        {/* Share collapses to an icon — the tooltip and toast carry the intent. */}
+        <Tooltip content="Copy an invite link to this board">
+          <Button
+            variant="icon"
+            size="none"
+            onClick={() => shareBoard(board)}
+            aria-label="Share board"
+            className="shrink-0 text-accent hover:bg-accent/10"
+          >
+            <Share2 size={15} />
+          </Button>
+        </Tooltip>
 
-      <HeaderDivider />
+        {/* Desktop-only divider between Share and the app cluster. */}
+        <HeaderDivider />
 
-      {/* App cluster: panels (mobile) · settings · leave */}
-      <div className="flex items-center gap-1">
+        {/* App cluster: panels (mobile) · settings · leave */}
         {isMobile && (
           <Tooltip content="Panels">
-            <Button variant="icon" size="none" onClick={() => setMobileDrawer(true)} aria-label="Panels">
+            <Button
+              variant="icon"
+              size="none"
+              onClick={() => setMobileDrawer(true)}
+              aria-label="Panels"
+              className="shrink-0"
+            >
               <Menu size={16} />
             </Button>
           </Tooltip>
         )}
         <Tooltip content="Settings">
-          <Button variant="icon" size="none" onClick={() => setSettingsOpen(true)} aria-label="Settings">
+          <Button
+            variant="icon"
+            size="none"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            className="shrink-0"
+          >
             <Settings size={16} />
           </Button>
         </Tooltip>
         <Tooltip content="Leave board">
-          <Button variant="icon" size="none" onClick={onLeave} aria-label="Leave board" className="text-text-dim hover:text-danger">
+          <Button
+            variant="icon"
+            size="none"
+            onClick={onLeave}
+            aria-label="Leave board"
+            className="shrink-0 text-text-dim hover:text-danger"
+          >
             <LogOut size={16} />
           </Button>
         </Tooltip>

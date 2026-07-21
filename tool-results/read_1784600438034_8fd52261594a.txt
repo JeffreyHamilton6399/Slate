@@ -1457,3 +1457,232 @@
   1457→- `code/CodeEditor.tsx`: new split-view live preview with drag-resizable divider, auto-refresh, sandboxed iframe, Refresh button, command-palette entry, and `window.__slateCodeActiveFileId` bridge for ExportDialog.
   1458→- Notes for downstream: see `/home/z/my-project/agent-ctx/ROUND18-A-main.md`.
   1459→
+  1460→---
+  1461→Task ID: ROUND20-A
+  1462→Agent: main
+  1463→Task: Make the code terminal actually useful — a real interactive file-system terminal
+  1464→
+  1465→Work Log:
+  1466→- Read worklog, agent-ctx/ROUND18-A-main.md (the prior split-view preview work),
+  1467→  and the five target files: code/codeFiles.ts, code/exportCode.ts,
+  1468→  panels/CodeTerminalPanel.tsx, panels/CodePreviewPanel.tsx, code/CodeEditor.tsx.
+  1469→- code/codeFiles.ts: exported `findFileId` (was module-private) and added a
+  1470→  public `readCodeFileText(slate, path)` wrapper that returns the file's
+  1471→  Y.Text content as a string, or null. Used by the terminal's `cat`.
+  1472→- code/terminalCommands.ts (NEW): the command engine. Pure function
+  1473→  `runTerminalCommand(slate, rawInput) -> TerminalResult`. Implements
+  1474→  ls, cat, touch, mkdir, rm, mv, write, echo, run, clear, pwd, help.
+  1475→  All mutations go through the existing codeFiles.ts helpers so they're
+  1476→  collaborative + undoable.
+  1477→- panels/CodeTerminalPanel.tsx (rewritten): interactive terminal with
+  1478→  prompt row, command history (up/down arrows, dedup consecutive
+  1479→  duplicates, Ctrl+L clears), and the kept preview-console forwarding
+  1480→  (messages from the preview iframe still append with level-color).
+  1481→  Dispatches `slate:code-refresh-preview` window event on `run`, empties
+  1482→  log on `clear`. Exports SLATE_REFRESH_PREVIEW_EVENT constant.
+  1483→- code/CodeEditor.tsx: imports SLATE_REFRESH_PREVIEW_EVENT alongside
+  1484→  CodeTerminalPanel; adds a useEffect listener that calls rebuildPreview()
+  1485→  when the event fires (only if the split-view preview is visible).
+  1486→- panels/CodePreviewPanel.tsx: same listener wired to its own rebuild().
+  1487→
+  1488→Verification:
+  1489→- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0.
+  1490→- `npx eslint` on all five changed files → exit 0, no warnings.
+  1491→
+  1492→Stage Summary:
+  1493→- The terminal is now a real shell-like surface: type `ls`, `cat main.js`,
+  1494→  `touch new.js`, `mkdir src`, `write foo.js console.log('hi')`, `rm old.ts`,
+  1495→  `mv a.js b.js`, `run` (refreshes the preview), `clear`, `help`. Every
+  1496→  mutation syncs through Yjs to peers and the Files panel. Up/down arrows
+  1497→  walk history. Preview console output still flows in with its existing
+  1498→  color coding. Both preview surfaces (split view in CodeEditor + dockable
+  1499→  CodePreviewPanel) rebuild on `run`.
+  1500→
+  1501→---
+  1502→Task ID: ROUND21-A
+  1503→Agent: Code (Slate Doc editor tool expansion + cleanup)
+  1504→Task: Add text-color picker + font-size selector + justify alignment + code-block language + table row/col delete + task-item toggle to the DocToolsPanel, plus delete the dead on-image toolbar CSS.
+  1505→
+  1506→Work Log:
+  1507→- Read worklog tail (latest: ROUND20-A — code terminal; ROUND18-A — ExportDialog/Header/CodeEditor split-view; ROUND16-A — doc/code editor tool expansion that already shipped Subscript/Superscript/FontSize/Print/Export HTML/Clear-formatting/Indent/Outdent). Read DocEditor.tsx, DocToolsPanel.tsx, docBridge.ts, docEditor.css in full. Confirmed the `Color`, `FontSize`, `Table`, `TaskItem` extensions are loaded but the panel only exposes a subset of their commands.
+  1508→- Verified installed TipTap APIs against `node_modules/@tiptap/...`:
+  1509→  - `Color` extension → `setColor(color)` / `unsetColor()` (typed in `@tiptap/extension-text-style`).
+  1510→  - `FontSize` extension → `setFontSize('16px')` / `unsetFontSize()` (same package).
+  1511→  - `Table` extension → `deleteRow()` / `deleteColumn()` (in `@tiptap/extension-table`).
+  1512→  - `TaskItem` node has a boolean `checked` attribute (verified by grepping `extension-list/dist/task-item/index.js`) but NO toggle command. TipTap v3 also dropped `splitListItem` (now part of `extension-list-keymap`, not a chainable command). So the `toggleTask` handler walks the selection's `$from` ancestors for a `taskItem` and flips `node.attrs.checked` via `updateAttributes`.
+  1513→
+  1514→Step 1 — docBridge.ts (bridge extended for value payloads):
+  1515→- Added `DocCommandDetail` interface: `{ command: string; value?: string }`.
+  1516→- Changed `runDocCommand(command, value?)` to dispatch `{ detail: { command, value } }` as a `CustomEvent<DocCommandDetail>`. Existing call sites without a value continue to work (the second arg is optional).
+  1517→
+  1518→Step 2 — DocEditor.tsx (command handler grew 9 new cases):
+  1519→- Import: added `type DocCommandDetail` alongside `DocApplyDetail` from docBridge.
+  1520→- Handler reads `detail` once, pulls `cmd` + (for value-carrying commands) `detail.value`. New cases:
+  1521→  - `textColor` → `if (value) c.setColor(value).run()`
+  1522→  - `clearColor` → `c.unsetColor().run()`
+  1523→  - `fontSize` → `if (value) c.setFontSize(`${value}px`).run()` (panel sends bare number; editor wraps as `${px}px`)
+  1524→  - `clearFontSize` → `c.unsetFontSize().run()`
+  1525→  - `alignJustify` → `c.setTextAlign('justify').run()`
+  1526→  - `codeLang` → `window.prompt` for a language string (prefilled with `editor.getAttributes('codeBlock').language ?? ''`), then `c.updateAttributes('codeBlock', { language: trimmed }).run()`. Prompted here rather than in the panel so the panel doesn't need editor-state access.
+  1527→  - `delRow` → `c.deleteRow().run()`
+  1528→  - `delCol` → `c.deleteColumn().run()`
+  1529→  - `toggleTask` → walks `editor.state.selection.$from` depth from inner to outer; first ancestor whose `type.name === 'taskItem'` gets `c.updateAttributes('taskItem', { checked: !node.attrs.checked }).run()`. No-op (silent) outside a task item.
+  1530→- docEditor.css already had `.slate-doc .ProseMirror [style*='text-align: justify'] { text-align: justify !important; }` from ROUND14-A — justify renders correctly out of the box.
+  1531→
+  1532→Step 3 — DocToolsPanel.tsx (panel rewritten with custom-tool support):
+  1533→- New imports: `useState, useRef, useEffect, type ReactNode, type CSSProperties` from React; new lucide icons `AlignJustify, X, Palette, Type, ChevronDown, Rows3, Columns3, SquareCheck, Languages`.
+  1534→- GROUPS additions:
+  1535→  - Text section: `textColor` (Palette), `clearColor` (X), `fontSize` (Type), `clearFontSize` (Eraser — reusing the icon since both "reset" actions read naturally with it).
+  1536→  - Lists section: `toggleTask` (SquareCheck) — labelled "Toggle item".
+  1537→  - Align section: `alignJustify` (AlignJustify) — labelled "Justify".
+  1538→  - Insert section: `codeLang` (Languages) labelled "Code language"; `delCol` (Columns3); `delRow` (Rows3).
+  1539→- Extracted shared button chrome into a `TOOL_BUTTON_CLASS` constant so every tool — generic or custom — looks identical.
+  1540→- `ToolButton` component dispatches on `t.command`:
+  1541→  - `textColor` → a `<label>` styled like a button, wrapping a Palette icon + label + an `<input type="color">` with `className="absolute inset-0 cursor-pointer opacity-0"`. Clicking anywhere on the label forwards to the input (native OS color dialog). `onChange` calls `runDocCommand('textColor', e.target.value)` with the picked hex. `defaultValue="#1f2328"` so the picker opens on the paper ink color.
+  1542→  - `fontSize` → renders `<FontSizeButton>`.
+  1543→  - everything else → the original generic `<button>` calling `runDocCommand(t.command)`.
+  1544→- `FontSizeButton`: tracks `open` state; renders the Type icon + label + a ChevronDown hint. When open, shows a 2-col popover anchored `bottom-full right-0` (above the button, right-aligned so it doesn't overflow the left dock). The popover contains a `Default` entry (dispatches `clearFontSize`) and one button per preset in `[12, 14, 16, 18, 24, 32]`. Each size button has `style={{ fontSize: ${min(px,16)}px }}` so the menu doubles as a sample of how the picked size reads (capped at 16px so the largest presets don't blow out the 2-col grid). Click-away (mousedown outside the ref'd container) + Escape both close the popover.
+  1545→- `SizeOption` helper: a `role="menuitem"` button that accepts an optional `style` for the size preview.
+  1546→- `Group` helper: keeps the existing header + `grid grid-cols-3 gap-1` chrome; takes children so the custom tools slot into the same grid as the generic ones.
+  1547→- `DocToolsPanel` itself: just maps GROUPS → `<Group>` → `<ToolButton>` per tool.
+  1548→
+  1549→Step 4 — docEditor.css (dead image-bar CSS removed):
+  1550→- Deleted the 7 rules for the floating on-image toolbar that was removed in ROUND14-A (when the DocImage extension was rewired to use the 2D-canvas-style resizable `ResizableImageView`): `.slate-img-bar`, `.slate-img-btn`, `.slate-img-btn:hover`, `.slate-img-btn.is-active`, `.slate-img-move`, `.slate-img-sep`, plus the `/* Floating on-image toolbar (move / wrap / rotate). */` comment. Verified zero references to those class names anywhere in `src/` (the only hit was the CSS itself) before deleting.
+  1551→- Kept `.slate-img-rotate` and the corner-handle `.slate-img-handle` rules — those are still used by `ResizableImageView.tsx`.
+  1552→
+  1553→Verification:
+  1554→- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, zero errors across all 4 modified files (docBridge.ts, DocEditor.tsx, DocToolsPanel.tsx, docEditor.css — CSS isn't type-checked) plus the rest of the codebase.
+  1555→- `npx eslint src/panels/DocToolsPanel.tsx src/docs/DocEditor.tsx src/docs/docBridge.ts` → exit 0, zero errors, zero warnings.
+  1556→- `npx vitest run --passWithNoTests` → 9 files, 48 tests pass. No regressions.
+  1557→
+  1558→Stage Summary:
+  1559→- The doc editor's dockable tool palette now exposes every command the loaded TipTap extensions actually offer. Eight new commands joined the existing 25-ish: `textColor` (Palette button → OS color picker → `setColor`), `clearColor` (X button → `unsetColor`), `fontSize` (Type button → popover of 6 presets + Default → `setFontSize(`${px}px`)` / `unsetFontSize`), `clearFontSize` (Eraser button → `unsetFontSize`), `alignJustify` (AlignJustify button → `setTextAlign('justify')`), `codeLang` (Languages button → prompt → `updateAttributes('codeBlock', { language })`), `delRow` / `delCol` (Rows3 / Columns3 buttons → `deleteRow()` / `deleteColumn()`), and `toggleTask` (SquareCheck button → walks `$from` ancestors for a `taskItem` and flips `checked`).
+  1560→- Bridge extended generically: `runDocCommand(command, value?)` now carries an optional value payload on the `slate:doc-command` event detail, so future value-carrying commands reuse the same channel without another bridge change.
+  1561→- Dead CSS removed: 7 unused image-bar rules (≈28 lines) deleted from docEditor.css. The still-used `.slate-img-rotate` / `.slate-img-handle` rules are untouched.
+  1562→- TypeScript clean (exit 0). ESLint clean (0/0). All 48 existing tests still pass. No new dependencies — every command maps to an existing TipTap extension method. Backward compatible — the bridge change is additive (the value arg is optional) and every existing panel button continues to dispatch with no value.
+  1563→
+  1564→---
+  1565→Task ID: ROUND22-A
+  1566→Agent: Code (Slate mobile layout fixes)
+  1567→Task: Fix ALL mobile layout issues across the Slate client app (10 issues)
+  1568→
+  1569→Work Log:
+  1570→- Read worklog tail (latest: ROUND21-A — DocToolsPanel expansion). Read the
+  1571→  target files in full: audio/AudioEditor.tsx (1762 lines — transport bar at
+  1572→  line 1394, track headers at 1447, BPM input at 1414, zoom buttons at
+  1573→  1420-1422, armed-track badge at 1398-1405), app/Header.tsx (271 lines —
+  1574→  board-name cluster + the mobile/desktop settings ternary), code/CodeEditor.tsx
+  1575→  (1031 lines — toolbar at 744, split view at 861-930), docs/docEditor.css (392
+  1576→  lines — .slate-doc + .slate-doc-page padding), viewport3d/Toolbar3D.tsx (516
+  1577→  lines — flex-1 spacer at 488), workspace/MobileDrawer.tsx (95 lines — sheet
+  1578→  container at 59), workspace/useMediaQuery.ts (useIsMobile hook).
+  1579→
+  1580→Issue 1 — audio/AudioEditor.tsx transport bar (HIGH):
+  1581→  - Line 1394: added `overflow-x-auto` + `[&>*]:shrink-0` so the ~22 transport
+  1582→    buttons horizontally scroll instead of overflowing/wrapping on a 375px
+  1583→    phone. Also tightened the gap on mobile: `gap-0.5 sm:gap-1` (the desktop
+  1584→    `gap-1` is preserved).
+  1585→  - Lines 1398-1405 (armed-track badge): the `→ {armedTrack.name}` text span
+  1586→    and the "no armed track" placeholder both got `hidden sm:inline`, so on
+  1587→    mobile only the red dot shows when armed (and nothing when not — the
+  1588→    title attribute still carries the full text for screen readers).
+  1589→  - Line 1414 (BPM input): added `inputMode="decimal"` so mobile keyboards
+  1590→    surface a numeric pad with a decimal key.
+  1591→
+  1592→Issue 2 — app/Header.tsx settings unreachable on mobile (HIGH):
+  1593→  - Lines 152-172: replaced the `isMobile ? Menu : Settings` ternary with an
+  1594→    always-rendered Settings button (still wrapped in its Tooltip) plus a
+  1595→    conditional `{isMobile && <Menu/>}` block. Mobile now shows BOTH the Menu
+  1596→    button (opens MobileDrawer) AND the Settings button (opens Settings
+  1597→    dialog). The Leave button stays as the third item.
+  1598→
+  1599→Issue 3 — code/CodeEditor.tsx toolbar overflow (HIGH):
+  1600→  - Line 746: added `overflow-x-auto` + `[&>*]:shrink-0` to the 11+ button
+  1601→    toolbar so it horizontally scrolls on narrow screens. `gap-2` preserved.
+  1602→
+  1603→Issue 4 — code/CodeEditor.tsx split view unusable on mobile (HIGH):
+  1604→  - Imported `useIsMobile` from `../workspace/useMediaQuery` and added
+  1605→    `const isMobile = useIsMobile();` at the top of CodeEditor().
+  1606→  - Wrapper (line 863): `relative flex flex-1 min-h-0` → `relative flex flex-1
+  1607→    min-h-0 flex-col sm:flex-row` — stacks vertically on mobile, side-by-side
+  1608→    on desktop.
+  1609→  - Editor host (line 868): style now picks height vs width by viewport —
+  1610→    `showPreview ? (isMobile ? { height: '60%' } : { width: splitPct% }) : {
+  1611→    width: '100%' }`. On mobile with preview, the editor takes 60% of the
+  1612→    wrapper's height; on desktop it keeps the drag-resizable splitPct% width.
+  1613→  - Drag splitter (line 884): added `hidden ... sm:block` so it's mouse-only
+  1614→    on desktop. Phones use the fixed 60/40 vertical stack — no drag handle.
+  1615→  - Preview container (line 893): style now picks height vs width — `isMobile
+  1616→    ? { height: '40%' } : { width: (100-splitPct)% }`.
+  1617→
+  1618→Issue 5 — docs/docEditor.css page padding too large on mobile (MEDIUM):
+  1619→  - Appended a `@media (max-width: 640px)` block after the print media query:
+  1620→    `.slate-doc-page { padding: 24px 16px; }` (was 72px 84px — leaves only
+  1621→    ~175px for text on a 375px phone) and `.slate-doc { padding: 8px 4px
+  1622→    60px; }` (was 22px 16px 80px).
+  1623→
+  1624→Issue 6 — app/Header.tsx board name hidden on mobile (MEDIUM):
+  1625→  - Lines 83-95: replaced `hidden sm:flex` with always-visible `flex min-w-0
+  1626→    flex-col`. Board name span now uses `max-w-[120px] truncate text-xs
+  1627→    font-medium text-text sm:max-w-[260px] sm:text-sm` so it's compact on
+  1628→    mobile (truncates at 120px) and full-width on desktop. Mode-label span
+  1629→    dropped from text-[10px] to `text-[9px] sm:text-[10px]` to fit the
+  1630→    smaller mobile column. Kept the existing friendly mode labels ("3D
+  1631→    Editor", "Audio Studio", "Doc Editor", "Code Editor", "2D Whiteboard")
+  1632→    rather than swapping to raw `board.mode` — the labels are short enough
+  1633→    and read better.
+  1634→
+  1635→Issue 7 — viewport3d/Toolbar3D.tsx undo/redo pushed off-screen (MEDIUM):
+  1636→  - Imported `useIsMobile` and added `const isMobile = useIsMobile();` to the
+  1637→    component.
+  1638→  - Line 490: replaced `<div className="flex-1" />` with `{!isMobile &&
+  1639→    <div className="flex-1" />}`. On mobile the spacer is gone, so the
+  1640→    undo/redo/delete cluster sits immediately after the render cluster in the
+  1641→    same scrollable row (the toolbar already had `overflow-x-auto`).
+  1642→
+  1643→Issue 8 — audio/AudioEditor.tsx track headers too wide on mobile (MEDIUM):
+  1644→  - Line 1447: `w-44 shrink-0` → `w-32 shrink-0 ... sm:w-44`. Mobile track
+  1645→    header is now 128px (was 176px), leaving more room for the timeline.
+  1646→
+  1647→Issue 9 — workspace/MobileDrawer.tsx accessibility (LOW):
+  1648→  - Lines 59-65: added `role="dialog"`, `aria-modal="true"`, and
+  1649→    `aria-label="Panels"` to the sheet container div.
+  1650→
+  1651→Issue 10 — audio/AudioEditor.tsx zoom button touch targets (LOW):
+  1652→  - Lines 1420-1422: the three zoom buttons (ZoomOut, Fit, ZoomIn) went from
+  1653→    `h-6 w-6` (24px) to `h-8 w-8 sm:h-6 sm:w-6` (32px on mobile, 24px on
+  1654→    desktop) — clears the 44px-touch-target guideline by pairing two adjacent
+  1655→    buttons, and stays compact on desktop.
+  1656→
+  1657→Verification:
+  1658→- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0,
+  1659→  zero errors. (The `isMobile` boolean is consumed in three conditional
+  1660→  expressions in CodeEditor.tsx — `style={showPreview ? (isMobile ? {height}
+  1661→  : {width}) : {width}}`, `style={isMobile ? {height} : {width}}` — and in
+  1662→  one conditional render in Toolbar3D.tsx — `{!isMobile && <div/>}`. All
+  1663→  type-check.)
+  1664→- `npx eslint src/audio/AudioEditor.tsx src/app/Header.tsx
+  1665→  src/code/CodeEditor.tsx src/viewport3d/Toolbar3D.tsx
+  1666→  src/workspace/MobileDrawer.tsx` → 0 errors, 1 warning. The warning is
+  1667→  pre-existing (react-hooks/exhaustive-deps on the startLoopDrag useCallback
+  1668→  at AudioEditor.tsx:1363 — a `pxPerSec` dependency the linter flags as
+  1669→  unnecessary) and is NOT in code I touched.
+  1670→
+  1671→Stage Summary:
+  1672→- Every mobile layout issue across the Slate client is fixed. The audio
+  1673→  transport bar and code editor toolbar now horizontally scroll instead of
+  1674→  overflowing. The code editor split view stacks editor-on-top / preview-
+  1675→  below at 60/40 on phones (no drag handle — that's mouse-only on desktop).
+  1676→  The 3D toolbar's undo/redo/delete cluster no longer gets pushed off-screen
+  1677→  on mobile (the flex-1 spacer is suppressed there). Audio track headers
+  1678→  shrink to 128px on phones. Doc page padding collapses to 24px 16px under
+  1679→  640px. The Settings button is always reachable (mobile shows Menu +
+  1680→  Settings side-by-side). The board name + mode label are always visible
+  1681→  (compact on mobile, full on desktop). MobileDrawer is now a proper dialog
+  1682→  (role/aria-modal/aria-label). Zoom buttons clear the 32px touch target on
+  1683→  mobile. BPM input surfaces a decimal numeric keypad.
+  1684→- No new dependencies. No new components. No API changes. All changes are
+  1685→  className / style / conditional-render tweaks plus one CSS media query.
+  1686→- TypeScript clean (exit 0). ESLint clean on all touched code (the one
+  1687→  warning is pre-existing and unrelated).
+  1688→

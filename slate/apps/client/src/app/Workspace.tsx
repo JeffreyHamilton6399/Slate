@@ -18,7 +18,7 @@ import { useIsMobile } from '../workspace/useMediaQuery';
 import { usePanelRegistry } from '../workspace/panelRegistry';
 import { useAppStore } from './store';
 import { Header, type FileMenuAction } from './Header';
-import { SettingsDialog } from './Settings';
+import { ProfileDialog } from './ProfileDialog';
 import { BoardSettingsDialog } from './BoardSettings';
 import { NewProjectDialog } from './NewProjectDialog';
 import { useSlateRoom } from '../sync/useSlateRoom';
@@ -356,7 +356,7 @@ export function Workspace() {
         </div>
         {!isMobile && <FloatingPanels />}
         {isMobile && <MobileDrawer />}
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+        <ProfileDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialTab="settings" />
         <ShortcutsOverlay open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
         <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
         <ImportDialog open={importOpen} onOpenChange={setImportOpen} />

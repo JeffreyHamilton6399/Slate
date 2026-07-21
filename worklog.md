@@ -1685,3 +1685,42 @@ Stage Summary:
   className / style / conditional-render tweaks plus one CSS media query.
 - TypeScript clean (exit 0). ESLint clean on all touched code (the one
   warning is pre-existing and unrelated).
+
+---
+Task ID: ROUND23-A
+Agent: main
+Task: Fix Header, Settings, and File menu (replace SettingsDialog with ProfileDialog, add Background to File menu, clean up header, verify ProfileDialog layout)
+
+Work Log:
+- Read previous worklog + Workspace.tsx, Header.tsx, ProfileDialog.tsx, Settings.tsx, BackgroundDialog.tsx, BoardSettings.tsx.
+- Confirmed ProfileDialog already exports `initialTab?: ProfileTab` (default 'profile') with a useEffect that resets the tab when `open` flips true — no Task-1 prop addition needed.
+- Confirmed ProfileDialog already satisfies all Task 5 layout requirements (verified, not edited):
+  - `max-w-5xl w-[95vw] p-0` + inner `flex max-h-[85vh] min-h-[300px] flex-col sm:flex-row`
+  - Content `min-w-0 flex-1 overflow-y-auto p-6`
+  - Tab rail `flex ... border-b ... sm:w-56 sm:flex-col sm:border-b-0 sm:border-r` (horizontal on mobile, vertical sidebar on sm+)
+  - Settings tab `grid gap-x-8 gap-y-5 sm:grid-cols-2`
+
+Changes made:
+
+1. apps/client/src/app/Workspace.tsx
+   - `import { SettingsDialog } from './Settings'` → `import { ProfileDialog } from './ProfileDialog'`
+   - `<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />` → `<ProfileDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialTab="settings" />`
+   - In-board Settings button now opens the modern tabbed ProfileDialog (Profile / Friends / Settings) defaulting to the Settings tab.
+
+2. apps/client/src/app/Header.tsx
+   - File menu: added `align="start"`, added a `Background…` item emitting `onFileMenu('background')` between `Print` and the divider before `Board settings…`. Print stays mode-conditional (hidden 3D/audio); Background unconditional (shared `paper` meta applies to every mode).
+   - Re-grouped items with explicit section comments: New project… │ Save/Save as…/Open… │ Import…/Export…/Print/Background… │ Board settings…/Keyboard shortcuts/Install app… — board background now reachable directly via File → Background… (one click).
+   - Right cluster: consolidated previously loose ConnectionPill + Share + HeaderDivider + app-cluster div into a single `<div className="flex min-w-0 items-center gap-1 overflow-x-auto">`. `overflow-x-auto` + `min-w-0` lets a narrow phone scroll the cluster instead of pushing layout off-screen. Each interactive button now carries `shrink-0` so icons keep their hit area. HeaderDivider stays desktop-only (`hidden sm:block`).
+   - Order matches spec: ConnectionPill (only renders when not connected) → Share → divider (desktop) → [Panels mobile-only] → Settings → Leave. Settings button calls `setSettingsOpen(true)`, now wired to ProfileDialog via Task 1.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` — only pre-existing environment errors (`vite-plugin-pwa/client`, `vite/client` type defs not installed in sandbox); zero matches for Workspace.tsx|Header.tsx|ProfileDialog.tsx|Settings.tsx.
+- No test code written.
+
+Stage Summary:
+- In-board Settings → modern ProfileDialog (Settings tab) — done.
+- File → Background… added — done.
+- File menu reorganized with dividers — done.
+- Header right cluster consolidated with overflow-x-auto + shrink-0; desktop-only divider preserved — done.
+- ProfileDialog layout already correct — verified, no edits needed.
+- TypeScript clean for all touched files.

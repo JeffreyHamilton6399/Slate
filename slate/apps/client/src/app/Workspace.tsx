@@ -39,7 +39,6 @@ const CodeEditor = lazy(() => import('../code/CodeEditor'));
 const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ default: m.Viewport3D })));
 const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
 const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
-const DiagramEditor = lazy(() => import('../diagram/DiagramEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -354,10 +353,6 @@ export function Workspace() {
               ) : board.mode === 'code' ? (
                 <Suspense fallback={<EditorFallback label="code editor" />}>
                   <CodeEditor />
-                </Suspense>
-              ) : board.mode === 'diagram' ? (
-                <Suspense fallback={<div className="grid h-full place-items-center text-sm text-text-dim">Loading editor…</div>}>
-                  <DiagramEditor />
                 </Suspense>
               ) : (
                 <Suspense fallback={<EditorFallback label="canvas" />}>

@@ -68,6 +68,7 @@ const FORMAT_INFO: Record<string, string> = {
   html: 'HTML — standalone web page with inline styles.',
   zip: 'ZIP — all files bundled for download.',
   file: 'Single file — download the active file.',
+  pdf: 'PDF — prints each slide to its own page (uses your browser’s print-to-PDF).',
 };
 
 type ExportFormat =
@@ -80,30 +81,33 @@ type ExportFormat =
   | 'md'
   | 'html'
   | 'zip'
-  | 'file';
+  | 'file'
+  | 'pdf';
 
 /** Default format per board mode — used when the dialog opens or the mode
  *  changes so a stale format from another mode is never selected. */
 function defaultFormatForMode(
-  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | undefined,
+  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | 'presentation' | undefined,
 ): ExportFormat {
   if (mode === '3d') return 'glb';
   if (mode === 'audio') return 'wav';
   if (mode === 'doc') return 'md';
   if (mode === 'code') return 'zip';
   if (mode === 'diagram') return 'svg';
+  if (mode === 'presentation') return 'html';
   return 'png';
 }
 
 export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const room = useRoom();
   const board = useAppStore((s) => s.currentBoard);
-  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram';
+  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | 'presentation';
   const is3d = mode === '3d';
   const isAudio = mode === 'audio';
   const isDoc = mode === 'doc';
   const isCode = mode === 'code';
   const isDiagram = mode === 'diagram';
+  const isPresentation = mode === 'presentation';
   const [format, setFormat] = useState<ExportFormat>(defaultFormatForMode(mode));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -138,6 +142,20 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           downloadText(html, `${boardName}.html`, 'text/html');
         } else {
           throw new Error(`Unsupported doc format: ${format}`);
+        }
+      } else if (isPresentation) {
+        // Presentation mode — a single standalone HTML file (one `<section>`
+        // per slide) or a PDF via a hidden iframe + window.print() with
+        // per-slide page-break CSS. Slides are read straight from the Yjs
+        // slides array (no PresentationEditor instance is reachable here).
+        const boardName = board?.name ?? 'presentation';
+        const html = presentationDeckToHtml(room.slate, boardName);
+        if (format === 'html') {
+          downloadText(html, `${boardName}.html`, 'text/html');
+        } else if (format === 'pdf') {
+          await printHtmlInIframe(html);
+        } else {
+          throw new Error(`Unsupported presentation format: ${format}`);
         }
       } else if (isDiagram) {
         // Diagram mode — SVG (vector) or a PNG rasterized from it, both framed
@@ -273,8 +291,10 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           ? (['zip', 'file'] as const)
           : isDiagram
             ? (['svg', 'png'] as const)
-            : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
-  const raster = !is3d && !isAudio && !isDoc && !isCode && !isDiagram && format !== 'svg' && format !== 'mp4';
+            : isPresentation
+              ? (['html', 'pdf'] as const)
+              : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
+  const raster = !is3d && !isAudio && !isDoc && !isCode && !isDiagram && !isPresentation && format !== 'svg' && format !== 'mp4';
 
   const description = isAudio
     ? 'Export the audio mix to a file.'
@@ -286,7 +306,9 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           ? 'Export this project to a file.'
           : isDiagram
             ? 'Export this diagram to a file.'
-            : 'Export this canvas to a file.';
+            : isPresentation
+              ? 'Export this presentation to a file.'
+              : 'Export this canvas to a file.';
 
   return (
     <Dialog
@@ -428,6 +450,16 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           </div>
         )}
 
+        {isPresentation && (
+          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+            <p className="text-[11px] text-text-dim">
+              {format === 'html'
+                ? 'Builds a standalone HTML file — one full-viewport <section> per slide, with the deck’s backgrounds, content, and speaker notes inline. Opens in any browser; shareable as a single file.'
+                : 'Opens the deck in a hidden iframe and calls window.print() with per-slide page-break CSS — choose “Save as PDF” in your browser’s print dialog to produce a PDF (one slide per page).'}
+            </p>
+          </div>
+        )}
+
         {busy && progress > 0 && (
           <div className="flex items-center gap-2 text-[11px] text-text-dim">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg-4">
@@ -515,6 +547,118 @@ function docMarkdownToStandaloneHtml(boardName: string, md: string): string {
 <pre>${esc(md)}</pre>
 </body>
 </html>`;
+}
+
+/** Build a standalone HTML document for a presentation deck — one full-
+ *  viewport `<section>` per slide, with the slide's background, content,
+ *  and (if present) speaker notes inline. Mirrors the export path the
+ *  PresentationEditor's toolbar button uses, but reads straight from Yjs
+ *  (the dialog can't reach the editor instance). */
+function presentationDeckToHtml(
+  slate: ReturnType<typeof useRoom>['slate'],
+  boardName: string,
+): string {
+  const arr = slate.slides();
+  const slides: { content: string; background: string; notes: string; transition: string }[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const m = arr.get(i);
+    slides.push({
+      content: (m.get('content') as string | undefined) ?? '',
+      background: (m.get('background') as string | undefined) ?? '#0c0c0e',
+      notes: (m.get('notes') as string | undefined) ?? '',
+      transition: (m.get('transition') as string | undefined) ?? 'none',
+    });
+  }
+  const escAttr = (v: string) => v.replace(/"/g, '&quot;');
+  const escText = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const sections = slides
+    .map(
+      (s, i) =>
+        `<section class="slide" data-index="${i}" data-transition="${escAttr(s.transition)}" style="background:${escAttr(s.background)};">` +
+        `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
+        (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escText(s.notes)}</aside>` : '') +
+        '</section>',
+    )
+    .join('\n');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escText(boardName)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #000; font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #fff; }
+  .slide {
+    width: 100vw; height: 100vh; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 6%; position: relative; page-break-after: always;
+  }
+  .slide-inner { width: 100%; max-width: 1280px; line-height: 1.5; font-size: 1.4rem; }
+  .slide-inner h1 { font-size: 2.6em; margin: 0 0 0.5em; font-weight: 700; }
+  .slide-inner h2 { font-size: 2em; margin: 0 0 0.5em; font-weight: 700; }
+  .slide-inner h3 { font-size: 1.5em; margin: 0 0 0.4em; font-weight: 700; }
+  .slide-inner ul, .slide-inner ol { padding-left: 1.4em; }
+  .slide-inner .placeholder { opacity: 0.4; font-style: italic; }
+  .notes { position: absolute; bottom: 1rem; left: 1rem; right: 1rem; font-size: 0.85rem; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem; border-radius: 4px; }
+  @media print {
+    body { background: #fff; }
+    .notes { display: none; }
+    .slide { page-break-after: always; }
+  }
+</style>
+</head>
+<body>
+${sections}
+</body>
+</html>`;
+}
+
+/** Print a standalone HTML string via a hidden iframe — avoids popup
+ *  blockers (the iframe is same-origin) and keeps the print CSS scoped to
+ *  the iframe's document so the host app's styles don't bleed in. Resolves
+ *  after the print dialog closes (or after a 30s timeout fallback). */
+function printHtmlInIframe(html: string): Promise<void> {
+  return new Promise((resolve) => {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.visibility = 'hidden';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      resolve();
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    // Give the iframe a tick to lay out before calling print — some browsers
+    // fire `afterprint` immediately if the doc isn't ready, producing a
+    // blank print. A short rAF + setTimeout covers both Chromium and Firefox.
+    const cleanup = () => {
+      iframe.remove();
+      resolve();
+    };
+    iframe.contentWindow?.addEventListener('afterprint', cleanup, { once: true });
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch {
+        // ignore — fall through to the timeout fallback
+      }
+      // Fallback in case `afterprint` never fires (older Safari etc.).
+      setTimeout(cleanup, 30000);
+    }, 200);
+  });
 }
 
 interface Read2DResult {

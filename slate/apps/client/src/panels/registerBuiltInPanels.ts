@@ -24,6 +24,7 @@ import { DocToolsPanel } from './DocToolsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
 import { DiagramToolsPanel } from './DiagramToolsPanel';
+import { PresentationToolsPanel } from './PresentationToolsPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -176,6 +177,17 @@ export function registerBuiltInPanels(): void {
   // Terminal is NOT a dockable panel — it lives as a bottom strip inside the
   // CodeEditor (toggle in the editor toolbar), VS Code / bolt style.
 
+  // Presentation: the tools palette (slide ops, text formatting, design,
+  // actions) lives top-left in the left dock — mirrors the doc/diagram layout.
+  // The AI assistant keeps its right-dock spot from the registration below.
+  registerPanel({
+    id: 'presentation-tools',
+    title: 'Tools',
+    defaultSide: 'left',
+    render: PresentationToolsPanel,
+    order: 0,
+    mode: 'presentation',
+  });
   // AI Assistant is registered PER MODE: a panel's dock spot is global to its
   // id, so one shared 'both' panel can't be left in code AND right elsewhere.
   registerPanel({ id: 'ai-code', title: 'AI Assistant', defaultSide: 'left', render: AiChatPanel, order: 2, mode: 'code' });
@@ -183,9 +195,7 @@ export function registerBuiltInPanels(): void {
   registerPanel({ id: 'ai-3d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '3d' });
   registerPanel({ id: 'ai-doc', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'doc' });
   registerPanel({ id: 'ai-diagram', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'diagram' });
-  // Presentation: no presentation-specific panels yet — the AI Assistant
-  // (bottom-right) is the only one. Mirrors the diagram/doc layout so the
-  // editor's slide navigator on the left + canvas in the middle stays clear.
+  // Presentation AI assistant — right dock, same as the other writing modes.
   registerPanel({ id: 'ai-presentation', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'presentation' });
   // Audio: Audio Assets lives top-left (above Audio Settings + Instrument);
   // the AI assistant goes bottom-right so it never crowds the dock tabs.

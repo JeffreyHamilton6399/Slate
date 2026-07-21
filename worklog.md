@@ -2555,3 +2555,130 @@ Stage Summary:
   is intentionally permissive so a future TipTap-backed editor can
   upgrade `content` from HTML string to ProseMirror JSON without
   breaking the snapshot format.
+
+---
+Task ID: ROUND32-A
+Agent: main
+Task: Upgrade the Presentation editor to be fully polished with lots of tools
+
+Work Log:
+- Read /home/z/my-project/worklog.md (latest: ROUND31-A added the
+  minimal PresentationEditor). Read in full: the existing
+  PresentationEditor.tsx (487 lines, minimal contenteditable +
+  execCommand + basic toolbar), docs/docBridge.ts (the bridge
+  pattern to mirror), panels/DocToolsPanel.tsx (the panel layout to
+  mirror), panels/registerBuiltInPanels.ts (registration site),
+  files/ExportDialog.tsx (export dialog to extend), sync/doc.ts
+  (slides() accessor), sync/provider.ts (room.room is the board
+  name — there's no room.board), workspace/panelRegistry.tsx
+  (AppMode = DocMode | 'both'), app/store.ts (currentBoard.mode is
+  DocMode), packages/sync-protocol/src/schema.ts (DocMode already
+  includes 'presentation' from ROUND31-A).
+
+Step 1 — presentationBridge.ts (NEW):
+- `PRESENTATION_COMMAND_EVENT = 'slate:presentation-command'`
+- `PresentationCommandDetail { command: string; value?: string }`
+- `runPresentationCommand(command, value?)` dispatches a CustomEvent.
+- Mirrors docBridge.ts (same shape, different event name so the two
+  editors don't cross-talk).
+
+Step 2 — PresentationToolsPanel.tsx (NEW):
+- Mirrors DocToolsPanel structure: grouped 4-col tool grids.
+- Groups: Slide (add/duplicate/delete/move left/move right), Text
+  (H1/H2/bold/italic/underline/strike/text color/clear format),
+  Lists (bullet/numbered), Align (left/center/right), Design
+  (background swatches + font size popover), Actions (present /
+  export HTML).
+- Text color = label-wrapped native `<input type="color">`.
+- Font size = popover with 12/14/16/18/24/32/48/64px + "Default".
+- Background swatches = 10 solids + 3 gradients (sunset/ocean/forest).
+- Add Slide = a templates popover (blank/title/title+content/two-
+  column/section divider).
+
+Step 3 — PresentationEditor.tsx (REWRITTEN):
+- Command listener subscribes to PRESENTATION_COMMAND_EVENT and
+  routes to slide mutations / execCommand / design / actions.
+- Font size: range.surroundContents(<span style="font-size:Npx">)
+  with extract+insert fallback (avoids the legacy 1-7 fontSize
+  scale).
+- Slide templates: templateHtml(id) returns inline-styled HTML;
+  addSlideInternal(templateId) seeds the slide's content.
+- Drag-to-reorder: pointerdown on `<li data-slide-idx>` starts a
+  drag; document-level pointermove uses elementFromPoint +
+  closest('[data-slide-idx]') to track the drop target; pointerup
+  calls moveSlideTo. 4px movement threshold distinguishes click vs
+  drag (suppresses the click-after-drag selection). Did NOT use
+  setPointerCapture (it would swallow sibling pointerenter events).
+- Right-click context menu: ContextMenu popover with
+  Add/Duplicate/Move left/Move right/Delete, disabled at boundaries.
+- Speaker notes: toggle button opens a textarea below the slide,
+  bound to the slide's `notes` Y.Map field with the same debounced-
+  commit + selfNotesCommitRef pattern as content (separate timer).
+- Slide transitions: `<select>` for none/fade/slide/zoom, stored in
+  the slide's `transition` field. In present mode, the slide
+  container carries `present-transition-{id}` class + a
+  `key={presentKey}` that bumps on navigation to re-trigger the CSS
+  @keyframes (pFade/pSlide/pZoom).
+- Export HTML: builds a standalone HTML file (one `<section>` per
+  slide, inline styles, @media print page-break-per-slide), downloads
+  as {boardName}.html.
+- Keyboard shortcuts (only when not presenting + not editing text
+  for nav/delete): Ctrl+Shift+N new, Ctrl+Shift+D duplicate,
+  Ctrl+Shift+P present, Arrow/PageUp/Down navigate, Delete/Backspace
+  deletes slide.
+- Present mode: slide counter (top-left), progress bar (bottom),
+  click-to-advance on backdrop, transitions, prev/next/exit
+  controls (bottom-right, hover to reveal).
+- Editing surface: 16:9 aspect, centered with shadow-xl, background
+  color OR gradient applied via activeBgStyle helper, click to edit,
+  empty-contenteditable placeholder via
+  [data-placeholder]:empty::before.
+- Slide navigator: slide numbers on thumbnails (inside a tiny bg
+  swatch), drag-to-reorder with ring indicator on drop target,
+  right-click context menu, accent border on active slide, ↻
+  indicator on slides with a non-none transition.
+- Slide Y.Map shape now { id, content, background, notes, transition
+  } — readSlide defensively coerces transition to the union.
+
+Step 4 — registerBuiltInPanels.ts:
+- Imported PresentationToolsPanel.
+- Registered `presentation-tools` (left dock, order 0, mode
+  'presentation') BEFORE `ai-presentation` so it's the first tab in
+  the left zone (mirrors doc-tools / diagram-tools placement).
+- Updated the ai-presentation comment (was "no presentation-specific
+  panels yet").
+
+Step 5 — ExportDialog.tsx:
+- Added 'presentation' to the mode union + defaultFormatForMode
+  (→ 'html').
+- Added 'pdf' to ExportFormat + FORMAT_INFO.
+- Added isPresentation flag.
+- Added presentation export branch in onExport: reads slides from
+  room.slate.slides() via new presentationDeckToHtml(slate,
+  boardName) helper; 'html' downloads, 'pdf' calls
+  printHtmlInIframe(html).
+- Added presentationDeckToHtml helper — builds the same standalone
+  HTML the PresentationEditor's toolbar export uses.
+- Added printHtmlInIframe helper — hidden 0x0 iframe, writes HTML,
+  waits 200ms, calls iframe.contentWindow.print(), cleans up on
+  afterprint (or 30s timeout fallback for Safari). Avoids popup
+  blockers + keeps print CSS scoped.
+- Added 'presentation' to the formats ternary (→ ['html', 'pdf']),
+  the raster exclusion, the description branch, and an info box.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` →
+  EXIT 0, zero type errors.
+- Dev server log tail: only routine /health 404 and / 200 entries;
+  no compile errors after the edits.
+
+Stage Summary:
+- 2 files created (presentationBridge.ts, PresentationToolsPanel.tsx).
+- 3 files modified (PresentationEditor.tsx rewritten end-to-end,
+  registerBuiltInPanels.ts, ExportDialog.tsx).
+- The presentation editor now matches the polish of the doc editor:
+  full left-dock tools palette, 5 slide templates, drag-to-reorder
+  thumbnails with right-click context menu, speaker notes, slide
+  transitions, present mode with progress bar + transitions, HTML
+  export, PDF export via hidden-iframe print, full keyboard
+  shortcuts. TypeScript clean.

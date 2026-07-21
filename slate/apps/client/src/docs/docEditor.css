@@ -389,3 +389,11 @@
     color: #000 !important;
   }
 }
+
+/* Mobile — the desktop page padding (72px 84px) leaves only ~175px for text
+   on a 375px phone. Shrink the desk + paper margins so long paragraphs don't
+   wrap to one word per line. */
+@media (max-width: 640px) {
+  .slate-doc-page { padding: 24px 16px; }
+  .slate-doc { padding: 8px 4px 60px; }
+}

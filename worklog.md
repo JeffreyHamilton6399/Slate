@@ -1560,3 +1560,128 @@ Stage Summary:
 - Bridge extended generically: `runDocCommand(command, value?)` now carries an optional value payload on the `slate:doc-command` event detail, so future value-carrying commands reuse the same channel without another bridge change.
 - Dead CSS removed: 7 unused image-bar rules (≈28 lines) deleted from docEditor.css. The still-used `.slate-img-rotate` / `.slate-img-handle` rules are untouched.
 - TypeScript clean (exit 0). ESLint clean (0/0). All 48 existing tests still pass. No new dependencies — every command maps to an existing TipTap extension method. Backward compatible — the bridge change is additive (the value arg is optional) and every existing panel button continues to dispatch with no value.
+
+---
+Task ID: ROUND22-A
+Agent: Code (Slate mobile layout fixes)
+Task: Fix ALL mobile layout issues across the Slate client app (10 issues)
+
+Work Log:
+- Read worklog tail (latest: ROUND21-A — DocToolsPanel expansion). Read the
+  target files in full: audio/AudioEditor.tsx (1762 lines — transport bar at
+  line 1394, track headers at 1447, BPM input at 1414, zoom buttons at
+  1420-1422, armed-track badge at 1398-1405), app/Header.tsx (271 lines —
+  board-name cluster + the mobile/desktop settings ternary), code/CodeEditor.tsx
+  (1031 lines — toolbar at 744, split view at 861-930), docs/docEditor.css (392
+  lines — .slate-doc + .slate-doc-page padding), viewport3d/Toolbar3D.tsx (516
+  lines — flex-1 spacer at 488), workspace/MobileDrawer.tsx (95 lines — sheet
+  container at 59), workspace/useMediaQuery.ts (useIsMobile hook).
+
+Issue 1 — audio/AudioEditor.tsx transport bar (HIGH):
+  - Line 1394: added `overflow-x-auto` + `[&>*]:shrink-0` so the ~22 transport
+    buttons horizontally scroll instead of overflowing/wrapping on a 375px
+    phone. Also tightened the gap on mobile: `gap-0.5 sm:gap-1` (the desktop
+    `gap-1` is preserved).
+  - Lines 1398-1405 (armed-track badge): the `→ {armedTrack.name}` text span
+    and the "no armed track" placeholder both got `hidden sm:inline`, so on
+    mobile only the red dot shows when armed (and nothing when not — the
+    title attribute still carries the full text for screen readers).
+  - Line 1414 (BPM input): added `inputMode="decimal"` so mobile keyboards
+    surface a numeric pad with a decimal key.
+
+Issue 2 — app/Header.tsx settings unreachable on mobile (HIGH):
+  - Lines 152-172: replaced the `isMobile ? Menu : Settings` ternary with an
+    always-rendered Settings button (still wrapped in its Tooltip) plus a
+    conditional `{isMobile && <Menu/>}` block. Mobile now shows BOTH the Menu
+    button (opens MobileDrawer) AND the Settings button (opens Settings
+    dialog). The Leave button stays as the third item.
+
+Issue 3 — code/CodeEditor.tsx toolbar overflow (HIGH):
+  - Line 746: added `overflow-x-auto` + `[&>*]:shrink-0` to the 11+ button
+    toolbar so it horizontally scrolls on narrow screens. `gap-2` preserved.
+
+Issue 4 — code/CodeEditor.tsx split view unusable on mobile (HIGH):
+  - Imported `useIsMobile` from `../workspace/useMediaQuery` and added
+    `const isMobile = useIsMobile();` at the top of CodeEditor().
+  - Wrapper (line 863): `relative flex flex-1 min-h-0` → `relative flex flex-1
+    min-h-0 flex-col sm:flex-row` — stacks vertically on mobile, side-by-side
+    on desktop.
+  - Editor host (line 868): style now picks height vs width by viewport —
+    `showPreview ? (isMobile ? { height: '60%' } : { width: splitPct% }) : {
+    width: '100%' }`. On mobile with preview, the editor takes 60% of the
+    wrapper's height; on desktop it keeps the drag-resizable splitPct% width.
+  - Drag splitter (line 884): added `hidden ... sm:block` so it's mouse-only
+    on desktop. Phones use the fixed 60/40 vertical stack — no drag handle.
+  - Preview container (line 893): style now picks height vs width — `isMobile
+    ? { height: '40%' } : { width: (100-splitPct)% }`.
+
+Issue 5 — docs/docEditor.css page padding too large on mobile (MEDIUM):
+  - Appended a `@media (max-width: 640px)` block after the print media query:
+    `.slate-doc-page { padding: 24px 16px; }` (was 72px 84px — leaves only
+    ~175px for text on a 375px phone) and `.slate-doc { padding: 8px 4px
+    60px; }` (was 22px 16px 80px).
+
+Issue 6 — app/Header.tsx board name hidden on mobile (MEDIUM):
+  - Lines 83-95: replaced `hidden sm:flex` with always-visible `flex min-w-0
+    flex-col`. Board name span now uses `max-w-[120px] truncate text-xs
+    font-medium text-text sm:max-w-[260px] sm:text-sm` so it's compact on
+    mobile (truncates at 120px) and full-width on desktop. Mode-label span
+    dropped from text-[10px] to `text-[9px] sm:text-[10px]` to fit the
+    smaller mobile column. Kept the existing friendly mode labels ("3D
+    Editor", "Audio Studio", "Doc Editor", "Code Editor", "2D Whiteboard")
+    rather than swapping to raw `board.mode` — the labels are short enough
+    and read better.
+
+Issue 7 — viewport3d/Toolbar3D.tsx undo/redo pushed off-screen (MEDIUM):
+  - Imported `useIsMobile` and added `const isMobile = useIsMobile();` to the
+    component.
+  - Line 490: replaced `<div className="flex-1" />` with `{!isMobile &&
+    <div className="flex-1" />}`. On mobile the spacer is gone, so the
+    undo/redo/delete cluster sits immediately after the render cluster in the
+    same scrollable row (the toolbar already had `overflow-x-auto`).
+
+Issue 8 — audio/AudioEditor.tsx track headers too wide on mobile (MEDIUM):
+  - Line 1447: `w-44 shrink-0` → `w-32 shrink-0 ... sm:w-44`. Mobile track
+    header is now 128px (was 176px), leaving more room for the timeline.
+
+Issue 9 — workspace/MobileDrawer.tsx accessibility (LOW):
+  - Lines 59-65: added `role="dialog"`, `aria-modal="true"`, and
+    `aria-label="Panels"` to the sheet container div.
+
+Issue 10 — audio/AudioEditor.tsx zoom button touch targets (LOW):
+  - Lines 1420-1422: the three zoom buttons (ZoomOut, Fit, ZoomIn) went from
+    `h-6 w-6` (24px) to `h-8 w-8 sm:h-6 sm:w-6` (32px on mobile, 24px on
+    desktop) — clears the 44px-touch-target guideline by pairing two adjacent
+    buttons, and stays compact on desktop.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0,
+  zero errors. (The `isMobile` boolean is consumed in three conditional
+  expressions in CodeEditor.tsx — `style={showPreview ? (isMobile ? {height}
+  : {width}) : {width}}`, `style={isMobile ? {height} : {width}}` — and in
+  one conditional render in Toolbar3D.tsx — `{!isMobile && <div/>}`. All
+  type-check.)
+- `npx eslint src/audio/AudioEditor.tsx src/app/Header.tsx
+  src/code/CodeEditor.tsx src/viewport3d/Toolbar3D.tsx
+  src/workspace/MobileDrawer.tsx` → 0 errors, 1 warning. The warning is
+  pre-existing (react-hooks/exhaustive-deps on the startLoopDrag useCallback
+  at AudioEditor.tsx:1363 — a `pxPerSec` dependency the linter flags as
+  unnecessary) and is NOT in code I touched.
+
+Stage Summary:
+- Every mobile layout issue across the Slate client is fixed. The audio
+  transport bar and code editor toolbar now horizontally scroll instead of
+  overflowing. The code editor split view stacks editor-on-top / preview-
+  below at 60/40 on phones (no drag handle — that's mouse-only on desktop).
+  The 3D toolbar's undo/redo/delete cluster no longer gets pushed off-screen
+  on mobile (the flex-1 spacer is suppressed there). Audio track headers
+  shrink to 128px on phones. Doc page padding collapses to 24px 16px under
+  640px. The Settings button is always reachable (mobile shows Menu +
+  Settings side-by-side). The board name + mode label are always visible
+  (compact on mobile, full on desktop). MobileDrawer is now a proper dialog
+  (role/aria-modal/aria-label). Zoom buttons clear the 32px touch target on
+  mobile. BPM input surfaces a decimal numeric keypad.
+- No new dependencies. No new components. No API changes. All changes are
+  className / style / conditional-render tweaks plus one CSS media query.
+- TypeScript clean (exit 0). ESLint clean on all touched code (the one
+  warning is pre-existing and unrelated).

@@ -82,11 +82,13 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
     >
       <div className="flex items-center gap-2 min-w-0">
         <BrandMark />
-        <div className="hidden sm:flex flex-col leading-tight min-w-0">
-          <span className="text-sm font-semibold truncate max-w-[260px]">
+        {/* Always-visible board title — compact on phones (truncate at ~120px)
+            so the user knows which board/mode they're in even on a 375px screen. */}
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="max-w-[120px] truncate text-xs font-medium text-text sm:max-w-[260px] sm:text-sm">
             {board?.name ?? 'Slate'}
           </span>
-          <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
+          <span className="text-[9px] font-mono uppercase tracking-wider text-text-dim sm:text-[10px]">
             {board?.mode === '3d' ? '3D Editor' : board?.mode === 'audio' ? 'Audio Studio' : board?.mode === 'doc' ? 'Doc Editor' : board?.mode === 'code' ? 'Code Editor' : '2D Whiteboard'}
           </span>
         </div>
@@ -148,21 +150,20 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
       <HeaderDivider />
 
-      {/* App cluster: panels (mobile) · settings (desktop) · leave */}
+      {/* App cluster: panels (mobile) · settings · leave */}
       <div className="flex items-center gap-1">
-        {isMobile ? (
+        {isMobile && (
           <Tooltip content="Panels">
             <Button variant="icon" size="none" onClick={() => setMobileDrawer(true)} aria-label="Panels">
               <Menu size={16} />
             </Button>
           </Tooltip>
-        ) : (
-          <Tooltip content="Settings">
-            <Button variant="icon" size="none" onClick={() => setSettingsOpen(true)} aria-label="Settings">
-              <Settings size={16} />
-            </Button>
-          </Tooltip>
         )}
+        <Tooltip content="Settings">
+          <Button variant="icon" size="none" onClick={() => setSettingsOpen(true)} aria-label="Settings">
+            <Settings size={16} />
+          </Button>
+        </Tooltip>
         <Tooltip content="Leave board">
           <Button variant="icon" size="none" onClick={onLeave} aria-label="Leave board" className="text-text-dim hover:text-danger">
             <LogOut size={16} />

@@ -57,6 +57,9 @@ export function MobileDrawer() {
         aria-hidden
       />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Panels"
         className="fixed inset-x-0 bottom-0 z-[201] flex max-h-[80vh] flex-col surface rounded-t-lg rounded-b-none border-b-0 animate-slide-up shadow-2xl"
         style={{ paddingBottom: 'var(--safe-bottom, 0px)' }}
       >

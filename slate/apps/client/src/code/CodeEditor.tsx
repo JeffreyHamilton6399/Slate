@@ -61,6 +61,7 @@ import {
 import { colorForPeerId } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
+import { useIsMobile } from '../workspace/useMediaQuery';
 import { listCodeFiles, codeZipBlob } from './exportCode';
 import { buildPreview, type PreviewFile } from './preview';
 import { CodeTerminalPanel, SLATE_REFRESH_PREVIEW_EVENT } from '../panels/CodeTerminalPanel';
@@ -149,6 +150,7 @@ function fontTheme(px: number): Extension {
 export function CodeEditor() {
   const room = useRoom();
   const board = useAppStore((s) => s.currentBoard);
+  const isMobile = useIsMobile();
   const [, bump] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [langName, setLangName] = useState('Plain text');
@@ -741,7 +743,7 @@ export function CodeEditor() {
             })}
           </div>
         )}
-        <div className="flex items-center gap-2 border-b border-border bg-bg-2 px-3 py-1.5">
+        <div className="flex items-center gap-2 overflow-x-auto border-b border-border bg-bg-2 px-3 py-1.5 [&>*]:shrink-0">
           <span className="truncate font-mono text-xs text-text">{activeName || '—'}</span>
           <div className="flex-1" />
           {/* Word wrap toggle — behind a Compartment so the editor survives
@@ -858,12 +860,12 @@ export function CodeEditor() {
             <TerminalSquare size={13} />
           </button>
         </div>
-        <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0">
+        <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0 flex-col sm:flex-row">
           {activeId ? (
             <div
               ref={hostRef}
               className="slate-code-host h-full min-w-0"
-              style={showPreview ? { width: `${splitPct}%` } : { width: '100%' }}
+              style={showPreview ? (isMobile ? { height: '60%' } : { width: `${splitPct}%` }) : { width: '100%' }}
             />
           ) : (
             <div className="grid h-full w-full place-items-center text-sm text-text-dim">
@@ -877,7 +879,8 @@ export function CodeEditor() {
               {/* Drag-resizable splitter — clamps the split to [20%, 80%].
                   The startSplitDrag handler sets a global cursor + disables
                   text selection while dragging so the user gets clear
-                  feedback. */}
+                  feedback. Hidden on mobile (mouse-only) — phones use the
+                  fixed 60/40 vertical stack instead. */}
               <div
                 role="separator"
                 aria-orientation="vertical"
@@ -885,11 +888,11 @@ export function CodeEditor() {
                 onMouseDown={startSplitDrag}
                 onDoubleClick={() => setSplitPct(50)}
                 title="Drag to resize · double-click to reset"
-                className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-accent/50 transition-colors"
+                className="hidden w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-accent/50 sm:block"
               />
               <div
                 className="flex min-w-0 flex-col"
-                style={{ width: `${100 - splitPct}%` }}
+                style={isMobile ? { height: '40%' } : { width: `${100 - splitPct}%` }}
               >
                 <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1">
                   <Eye size={11} className="text-accent" />

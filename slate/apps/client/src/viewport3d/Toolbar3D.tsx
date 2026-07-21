@@ -45,6 +45,7 @@ import { runEditOp, type EditOp } from './editModeTools';
 import type { SlateRoom } from '../sync/provider';
 import { useScene3DStore, type GizmoMode, type ShadingMode } from './store';
 import type { SceneSnapshot } from './scene';
+import { useIsMobile } from '../workspace/useMediaQuery';
 
 interface Toolbar3DProps {
   room: SlateRoom;
@@ -170,6 +171,7 @@ export function Toolbar3D({
   const selection = useScene3DStore((s) => s.selection);
   const clearSelection = useScene3DStore((s) => s.clearSelection);
   const setSelection = useScene3DStore((s) => s.setSelection);
+  const isMobile = useIsMobile();
 
   return (
     <div className="absolute left-2 right-2 top-2 z-10 flex items-center gap-1 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-2 py-1 shadow-lg backdrop-blur [&>*]:shrink-0">
@@ -485,7 +487,10 @@ export function Toolbar3D({
           <Clapperboard size={14} />
         </Button>
       </Tooltip>
-      <div className="flex-1" />
+      {/* On mobile the spacer pushes undo/redo/delete off-screen, so skip it
+          there — the toolbar already scrolls horizontally, and a flex-1 spacer
+          inside a scroll strip would just inflate the scroll width. */}
+      {!isMobile && <div className="flex-1" />}
       <Tooltip content="Undo (Ctrl+Z)">
         <Button variant="icon" size="none" onClick={() => room.undo.undo()}>
           <Undo2 size={14} />

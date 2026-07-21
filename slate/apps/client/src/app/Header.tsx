@@ -91,7 +91,7 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
             {board?.name ?? 'Slate'}
           </span>
           <span className="text-[9px] font-mono uppercase tracking-wider text-text-dim sm:text-[10px]">
-            {board?.mode === '3d' ? '3D Editor' : board?.mode === 'audio' ? 'Audio Studio' : board?.mode === 'doc' ? 'Doc Editor' : board?.mode === 'code' ? 'Code Editor' : board?.mode === 'diagram' ? 'Diagram' : '2D Whiteboard'}
+            {board?.mode === '3d' ? '3D Editor' : board?.mode === 'audio' ? 'Audio Studio' : board?.mode === 'doc' ? 'Doc Editor' : board?.mode === 'code' ? 'Code Editor' : board?.mode === 'diagram' ? 'Diagram' : board?.mode === 'presentation' ? 'Presentation' : '2D Whiteboard'}
           </span>
         </div>
       </div>

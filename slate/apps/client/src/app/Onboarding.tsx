@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, Workflow as WorkflowIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Presentation as PresentationIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
 import { Dialog } from '../ui/Dialog';
@@ -75,7 +75,7 @@ export function Onboarding() {
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     const linkModeRaw = params.get('mode');
     const linkMode: DocMode | null =
-      linkModeRaw === '3d' || linkModeRaw === '2d' || linkModeRaw === 'audio' || linkModeRaw === 'doc' || linkModeRaw === 'code' || linkModeRaw === 'diagram' ? linkModeRaw : null;
+      linkModeRaw === '3d' || linkModeRaw === '2d' || linkModeRaw === 'audio' || linkModeRaw === 'doc' || linkModeRaw === 'code' || linkModeRaw === 'diagram' || linkModeRaw === 'presentation' ? linkModeRaw : null;
 
     fetchRooms()
       .then((rs) => {
@@ -219,10 +219,10 @@ export function Onboarding() {
             />
             <IconToggle
               active={mode !== '2d'}
-              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : mode === 'doc' ? 'code' : mode === 'code' ? 'diagram' : '2d')}
-              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : mode === 'code' ? <BracesIcon size={15} /> : mode === 'diagram' ? <WorkflowIcon size={15} /> : <BoxIcon size={15} />}
+              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : mode === 'doc' ? 'code' : mode === 'code' ? 'diagram' : mode === 'diagram' ? 'presentation' : '2d')}
+              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : mode === 'code' ? <BracesIcon size={15} /> : mode === 'diagram' ? <WorkflowIcon size={15} /> : mode === 'presentation' ? <PresentationIcon size={15} /> : <BoxIcon size={15} />}
               offIcon={<PenLine size={15} />}
-              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : mode === 'doc' ? 'Doc' : mode === 'code' ? 'Code' : 'Diagram'}
+              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : mode === 'doc' ? 'Doc' : mode === 'code' ? 'Code' : mode === 'diagram' ? 'Diagram' : 'Slides'}
               offLabel="2D"
             />
           </div>

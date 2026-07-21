@@ -2469,3 +2469,89 @@ Stage Summary:
   order 0 and registered first; audio-settings → order 1;
   instrument → order 2; comments updated.
 - TypeScript clean. No behavioral change on desktop.
+
+---
+Task ID: ROUND31-A
+Agent: main
+Task: Fix audio editor mobile layout + add a new Presentation (slides) editor mode
+
+Work Log:
+- Read /home/z/my-project/worklog.md to absorb prior context (most recently
+  ROUND30-A, which fixed the 3D viewport + audio editor on mobile — that's
+  where `useIsMobile` got pulled into AudioEditor.tsx already, but the
+  transport bar + track header mobile cleanup was deferred).
+- Read the full AudioEditor.tsx (1796 lines) — transport bar at
+  lines 1431-1461, TrackHeader memo at 1620-1749, status bar at 1608-1613.
+- Read all the files touched by Task 2: schema.ts, constants.ts, sync/doc.ts,
+  files/snapshot.ts, app/Workspace.tsx, app/Home.tsx, app/Onboarding.tsx,
+  app/modeColors.ts, app/Header.tsx, app/App.tsx, panels/registerBuiltInPanels.ts,
+  workspace/panelRegistry.tsx, workspace/useMediaQuery.ts, sync/RoomContext.tsx,
+  utils/id.ts.
+
+Task 1 — Audio editor mobile layout cleanup:
+- Transport bar split into two rows on mobile via `{isMobile ? (<>
+  row1 row2 </>) : (single row)}`. Row 1 = SkipBack/Play/Record/position/
+  Split/Delete (larger touch targets h-8/h-9/h-10). Row 2 = Duplicate/Copy/
+  Paste/BPM/Metronome/Loop/Snap/Volume/Zoom-out/Fit/Zoom-in/Import/Track/MIDI
+  in a horizontally-scrollable strip. Desktop branch keeps the existing
+  single-row layout, minus the now-redundant `!isMobile &&` guards around
+  BPM and the master Volume slider (they're always visible on desktop).
+- TrackHeader memo now calls `useIsMobile()` and on mobile hides BOTH the
+  Audio↔MIDI kind toggle (still reachable via the transport's + MIDI
+  button) AND the volume/pan slider row (and the MIDI instrument picker).
+  Top row gets `h-full` on mobile so it vertically centers in the 60px
+  TRACK_H. Volume/pan still live in the Audio Settings panel.
+- Status bar: bumped from text-[8px] to text-[10px] with tracking-wider,
+  dropped the long keyboard cheat-sheet on mobile (replaced with the two
+  hints that still apply on touch — seek + Ctrl+scroll zoom).
+
+Task 2 — Presentation (slides) mode:
+- schema.ts: `DocMode` += 'presentation'; `SlateDocSnapshot.slides?:
+  { id; content; background }[]`.
+- constants.ts: `SLIDES_KEY = 'slides'`.
+- sync/doc.ts: `SlateDoc` interface + `createSlateDoc()` factory now
+  expose `slides: () => Y.Array<Y.Map<unknown>>` (top-level Yjs
+  container — same doctrine as scene3d/audio/diagram).
+- files/snapshot.ts: new `snapshotSlides()` helper; `snapshotDoc`
+  emits slides; `applySnapshot` clears + repopulates the Y.Array.
+- presentation/PresentationEditor.tsx (NEW): slide navigator on the
+  left (hidden on mobile), 16:9 editing surface with a contenteditable
+  div bound to the slide's `content` HTML string (250ms debounced
+  commit, selfCommitRef suppresses the Yjs observer's re-render of
+  our own edit so the caret doesn't jump), B/I/U + bullet/numbered
+  list via execCommand (no TipTap dep), background swatches, prev/next
+  + slide counter, fullscreen Present mode (←/→/Space navigate, Esc
+  exits, browser fullscreenchange event keeps state in sync).
+- Workspace.tsx: lazy-loaded PresentationEditor, added
+  `board.mode === 'presentation'` branch in the central editor switch.
+- Home.tsx + Onboarding.tsx: imported `Presentation` from lucide,
+  extended the IconToggle cycle (2d → 3d → audio → doc → code →
+  diagram → presentation → 2d), whitelisted 'presentation' in the
+  share-link `?mode=` parser.
+- modeColors.ts: presentation → orange-500 (badge /15, header /10,
+  text-orange-300). Distinct from amber-500 (audio) and red-500
+  (danger).
+- Header.tsx: mode label 'Presentation'.
+- App.tsx: linkMode from URL `?mode=` now recognizes doc/code/diagram/
+  presentation (the old ternary only handled 2d/3d/audio, so a
+  `?mode=presentation` share link silently fell back to '2d').
+- registerBuiltInPanels.ts: `registerPanel({ id: 'ai-presentation',
+  title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel,
+  order: 3, mode: 'presentation' })` — reuses the existing AI panel.
+
+Stage Summary:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0.
+- `cd /home/z/my-project/slate/apps/server && npx tsc --noEmit` → exit 0
+  (server imports DocMode from sync-protocol).
+- `cd /home/z/my-project/slate/packages/sync-protocol && npx tsc --noEmit`
+  → exit 0.
+- ESLint on the 11 modified client files: 0 errors. 3 pre-existing
+  warnings (Workspace.tsx missing-deps on the file-menu useEffect +
+  useMemo, AudioEditor.tsx unnecessary `pxPerSec` dep in startLoopDrag)
+  — not introduced by this change.
+- All Presentation editor UX kept deliberately minimal per the task
+  brief: no slide transitions, no animation timeline, no master slide,
+  no presenter notes. The Yjs schema (`{ id, content, background }`)
+  is intentionally permissive so a future TipTap-backed editor can
+  upgrade `content` from HTML string to ProseMirror JSON without
+  breaking the snapshot format.

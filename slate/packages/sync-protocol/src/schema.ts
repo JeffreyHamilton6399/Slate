@@ -5,7 +5,7 @@
  * the two.
  */
 
-export type DocMode = '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram';
+export type DocMode = '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | 'presentation';
 export type BoardVisibility = 'public' | 'private';
 
 export interface BoardMeta {
@@ -489,4 +489,8 @@ export interface SlateDocSnapshot {
     files: { id: string; name: string }[];
     contents: Record<string, string>;
   };
+  /** 'presentation' boards: ordered list of slides. Each slide is a simple
+   *  { id, content (HTML string), background (CSS color) } triple. Optional —
+   *  absent on snapshots from older clients and non-presentation boards. */
+  slides?: { id: string; content: string; background: string }[];
 }

@@ -70,7 +70,7 @@ export function App() {
     const cur = useAppStore.getState().currentBoard;
     if (!cur || cur.name === linkBoard) return;
     const rawMode = params.get('mode');
-    const linkMode = rawMode === '3d' ? '3d' : rawMode === '2d' ? '2d' : rawMode === 'audio' ? 'audio' : null;
+    const linkMode = rawMode === '3d' ? '3d' : rawMode === '2d' ? '2d' : rawMode === 'audio' ? 'audio' : rawMode === 'doc' ? 'doc' : rawMode === 'code' ? 'code' : rawMode === 'diagram' ? 'diagram' : rawMode === 'presentation' ? 'presentation' : null;
     window.history.replaceState(null, '', window.location.pathname);
     fetchRooms()
       .then((rooms) => {

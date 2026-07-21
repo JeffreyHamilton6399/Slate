@@ -183,6 +183,10 @@ export function registerBuiltInPanels(): void {
   registerPanel({ id: 'ai-3d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '3d' });
   registerPanel({ id: 'ai-doc', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'doc' });
   registerPanel({ id: 'ai-diagram', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'diagram' });
+  // Presentation: no presentation-specific panels yet — the AI Assistant
+  // (bottom-right) is the only one. Mirrors the diagram/doc layout so the
+  // editor's slide navigator on the left + canvas in the middle stays clear.
+  registerPanel({ id: 'ai-presentation', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'presentation' });
   // Audio: Audio Assets lives top-left (above Audio Settings + Instrument);
   // the AI assistant goes bottom-right so it never crowds the dock tabs.
   registerPanel({ id: 'ai-audio', title: 'AI Assistant', defaultSide: 'right-bottom', render: AiChatPanel, order: 3, mode: 'audio' });

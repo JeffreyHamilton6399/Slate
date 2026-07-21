@@ -40,6 +40,9 @@ const CodeEditor = lazy(() => import('../code/CodeEditor'));
 const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ default: m.Viewport3D })));
 const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
 const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
+// Presentation editor — lightweight (contenteditable, no TipTap / Three.js),
+// lazy-loaded so other boards skip the parse cost.
+const PresentationEditor = lazy(() => import('../presentation/PresentationEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { WelcomeOverlay } from './WelcomeOverlay';
 import { toast } from '../ui/Toast';
@@ -370,6 +373,10 @@ export function Workspace() {
               ) : board.mode === 'code' ? (
                 <Suspense fallback={<EditorFallback label="code editor" />}>
                   <CodeEditor />
+                </Suspense>
+              ) : board.mode === 'presentation' ? (
+                <Suspense fallback={<EditorFallback label="presentation editor" />}>
+                  <PresentationEditor />
                 </Suspense>
               ) : (
                 <Suspense fallback={<EditorFallback label="canvas" />}>

@@ -108,3 +108,8 @@ export const codeTextKey = (fileId: string): string => `code:text:${fileId}`;
  *  containers (see the doc.ts container doctrine). */
 export const DIAGRAM_NODES_KEY = 'diagram:nodes';
 export const DIAGRAM_EDGES_KEY = 'diagram:edges';
+
+/** Top-level Y.Array for 'presentation' boards: an ordered list of slide
+ *  Y.Maps ({ id, content, background }). Top-level + globally keyed so every
+ *  client resolves the same shared container (see doc.ts container doctrine). */
+export const SLIDES_KEY = 'slides';

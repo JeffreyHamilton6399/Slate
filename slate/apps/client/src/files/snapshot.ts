@@ -141,6 +141,10 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
       // not being integrated into the Yjs doc yet (happens on fresh boards).
       docText: safeDocTextToJson(slate),
       codeFiles: snapshotCodeFiles(slate),
+      // Presentation slides: ordered list of { id, content, background }.
+      // Cheap no-op (empty array) on other modes; captured unconditionally so
+      // a board that switched modes never silently loses its slides.
+      slides: snapshotSlides(slate),
     },
   };
 }
@@ -171,6 +175,24 @@ function snapshotCodeFiles(slate: SlateRoom['slate']): { files: { id: string; na
     // ignore — return what we have
   }
   return { files, contents };
+}
+
+/** Capture 'presentation' board slides: ordered { id, content, background }. */
+function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: string; background: string }[] {
+  const slides: { id: string; content: string; background: string }[] = [];
+  try {
+    const arr = slate.slides();
+    for (let i = 0; i < arr.length; i++) {
+      const m = arr.get(i);
+      const id = (m.get('id') as string | undefined) ?? `slide-${i}`;
+      const content = (m.get('content') as string | undefined) ?? '';
+      const background = (m.get('background') as string | undefined) ?? '#0c0c0e';
+      slides.push({ id, content, background });
+    }
+  } catch {
+    // ignore — return what we have
+  }
+  return slides;
 }
 
 export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
@@ -204,6 +226,9 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     diagramNodes.forEach((_, k) => diagramNodes.delete(k));
     const diagramEdges = slate.diagramEdges();
     diagramEdges.forEach((_, k) => diagramEdges.delete(k));
+    // Reset presentation slides array (clear + repopulate below).
+    const slides = slate.slides();
+    slides.delete(0, slides.length);
 
     // Re-hydrate.
     const meta = slate.meta();
@@ -249,6 +274,18 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
         }
       }
     } catch { /* code files not ready */ }
+    // Presentation slides (absent on snapshots from older clients).
+    try {
+      if (snap.slides) {
+        for (const s of snap.slides) {
+          const m = new Y.Map<unknown>();
+          m.set('id', s.id);
+          m.set('content', s.content);
+          m.set('background', s.background);
+          slides.push([m]);
+        }
+      }
+    } catch { /* slides not ready */ }
   });
 }
 

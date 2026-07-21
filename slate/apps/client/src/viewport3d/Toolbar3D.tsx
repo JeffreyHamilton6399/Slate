@@ -209,7 +209,7 @@ export function Toolbar3D({
           onClick={toggleGrid}
           aria-pressed={showGrid}
           className={
-            'flex h-7 w-7 items-center justify-center rounded-sm border ' +
+            'flex h-8 w-8 sm:h-7 sm:w-7 items-center justify-center rounded-sm border ' +
             (showGrid
               ? 'border-accent/60 bg-accent/15 text-accent'
               : 'border-transparent text-text-mid hover:bg-bg-3')
@@ -247,7 +247,7 @@ export function Toolbar3D({
                 if (yo && yo.get('meshId')) yo.set('smooth', !smooth);
               }}
               className={
-                'flex h-7 w-7 items-center justify-center rounded-sm border ' +
+                'flex h-8 w-8 sm:h-7 sm:w-7 items-center justify-center rounded-sm border ' +
                 (!isMesh
                   ? 'border-transparent text-text-mid opacity-40'
                   : smooth
@@ -352,7 +352,7 @@ export function Toolbar3D({
               variant="icon"
               size="none"
               disabled={selection.length === 0}
-              className={`h-7 w-7 p-0 ${selection.length === 0 ? 'opacity-40' : ''}`}
+              className={`h-8 w-8 sm:h-7 sm:w-7 p-0 ${selection.length === 0 ? 'opacity-40' : ''}`}
               onClick={() => {
                 if (selection.length === 0) return;
                 const copies = duplicateObjects(room.slate, selection);
@@ -428,7 +428,7 @@ export function Toolbar3D({
                 variant="icon"
                 size="none"
                 disabled={selection.length !== 1}
-                className={`h-7 w-7 p-0 ${selection.length !== 1 ? 'opacity-40' : ''}`}
+                className={`h-8 w-8 sm:h-7 sm:w-7 p-0 ${selection.length !== 1 ? 'opacity-40' : ''}`}
                 onClick={() => runToolbarEditOp(room, op, onStartMeshModal)}
               >
                 <Icon size={14} />
@@ -466,12 +466,12 @@ export function Toolbar3D({
       )}
       <div className="mx-1 h-5 w-px bg-border" />
       <Tooltip content="Frame selected (F)">
-        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={onFrameSelected}>
+        <Button variant="icon" size="none" className="h-8 w-8 sm:h-7 sm:w-7 p-0" onClick={onFrameSelected}>
           <Focus size={14} />
         </Button>
       </Tooltip>
       <Tooltip content="Render image — saves the viewport as PNG (Numpad 0 looks through a camera first)">
-        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={onRenderImage} aria-label="Render image">
+        <Button variant="icon" size="none" className="h-8 w-8 sm:h-7 sm:w-7 p-0" onClick={onRenderImage} aria-label="Render image">
           <Camera size={14} />
         </Button>
       </Tooltip>
@@ -479,7 +479,7 @@ export function Toolbar3D({
         <Button
           variant="icon"
           size="none"
-          className={`h-7 w-7 p-0 ${rendering ? 'text-danger' : ''}`}
+          className={`h-8 w-8 sm:h-7 sm:w-7 p-0 ${rendering ? 'text-danger' : ''}`}
           onClick={onRenderAnimation}
           disabled={rendering}
           aria-label="Render animation"
@@ -492,12 +492,12 @@ export function Toolbar3D({
           inside a scroll strip would just inflate the scroll width. */}
       {!isMobile && <div className="flex-1" />}
       <Tooltip content="Undo (Ctrl+Z)">
-        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={() => room.undo.undo()}>
+        <Button variant="icon" size="none" className="h-8 w-8 sm:h-7 sm:w-7 p-0" onClick={() => room.undo.undo()}>
           <Undo2 size={14} />
         </Button>
       </Tooltip>
       <Tooltip content="Redo (Ctrl+Shift+Z)">
-        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={() => room.undo.redo()}>
+        <Button variant="icon" size="none" className="h-8 w-8 sm:h-7 sm:w-7 p-0" onClick={() => room.undo.redo()}>
           <Redo2 size={14} />
         </Button>
       </Tooltip>
@@ -506,7 +506,7 @@ export function Toolbar3D({
           <Button
             variant="icon"
             size="none"
-            className="h-7 w-7 p-0"
+            className="h-8 w-8 sm:h-7 sm:w-7 p-0"
             onClick={() => {
               deleteObjects(room.slate, selection);
               clearSelection();

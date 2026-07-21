@@ -54,6 +54,7 @@ import { importModel } from '../files/import3d';
 import { setCameraFocus } from './cameraFocus';
 import { toast } from '../ui/Toast';
 import { useViewport3DShortcuts } from './useViewport3DShortcuts';
+import { useIsMobile } from '../workspace/useMediaQuery';
 import {
   applyDelta,
   axisDragAmount,
@@ -108,6 +109,7 @@ function darken(hex: string, factor: number): string {
 }
 
 export function Viewport3D({ room }: Viewport3DProps) {
+  const isMobile = useIsMobile();
   const [snapshot, setSnapshot] = useState<SceneSnapshot>(() =>
     readSceneSnapshot(room.slate),
   );
@@ -1161,15 +1163,20 @@ export function Viewport3D({ room }: Viewport3DProps) {
           snapshot={snapshot}
           selection={selection}
         />
-        <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
-          {/* hideNegativeAxes=false keeps all six spheres so the axis letters
-              stay visible no matter how the view is orbited. */}
-          <GizmoViewport
-            axisColors={['#f87171', '#22d3a5', '#7c6aff']}
-            labelColor="white"
-            hideNegativeAxes={false}
-          />
-        </GizmoHelper>
+        {/* On mobile the bottom-right corner overlaps the Timeline strip,
+            so the view gizmo is hidden — orbiting still gives a free axis
+            readout, and desktop gets the full Blender-style orientation cube. */}
+        {!isMobile && (
+          <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+            {/* hideNegativeAxes=false keeps all six spheres so the axis letters
+                stay visible no matter how the view is orbited. */}
+            <GizmoViewport
+              axisColors={['#f87171', '#22d3a5', '#7c6aff']}
+              labelColor="white"
+              hideNegativeAxes={false}
+            />
+          </GizmoHelper>
+        )}
       </Canvas>
       <Toolbar3D
         room={room}
@@ -1207,7 +1214,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
       )}
       {showTransformHud && flying && (
         <div
-          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-accent/60 bg-bg-2/95 px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg backdrop-blur"
+          className="pointer-events-none absolute left-1/2 bottom-16 sm:bottom-8 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-accent/60 bg-bg-2/95 px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg backdrop-blur"
           role="status"
         >
           Fly — WASD move · Q/E down/up · Shift fast · wheel speed ({flySpeed.toFixed(1)}) · release MMB to exit
@@ -1215,7 +1222,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
       )}
       {showTransformHud && editorMode === 'edit' && !modalLabelText && !flying && (
         <div
-          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-border bg-bg-2/95 px-3 py-1.5 text-xs text-text-dim backdrop-blur"
+          className="pointer-events-none absolute left-1/2 bottom-16 sm:bottom-8 z-20 -translate-x-1/2 rounded-md border border-border bg-bg-2/95 px-3 py-1.5 text-xs text-text-dim backdrop-blur"
           role="status"
         >
           {selection.length === 0
@@ -1229,7 +1236,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
       )}
       {showTransformHud && modalLabelText && (
         <div
-          className="pointer-events-none absolute left-1/2 bottom-8 z-20 -translate-x-1/2 rounded-md border border-accent/60 bg-bg-2/95 backdrop-blur px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg"
+          className="pointer-events-none absolute left-1/2 bottom-16 sm:bottom-8 z-20 -translate-x-1/2 rounded-md border border-accent/60 bg-bg-2/95 backdrop-blur px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-accent shadow-lg"
           role="status"
         >
           {modalLabelText} — LMB / Enter to confirm, RMB / Esc to cancel

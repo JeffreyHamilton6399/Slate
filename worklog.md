@@ -2372,3 +2372,100 @@ Stage Summary:
   empty-armed-track state is already silent (no red dot, fallback
   Record tooltip). No code changes needed for Task 3.
 - TypeScript clean (exit 0). Dev log clean.
+
+---
+Task ID: ROUND30-A
+Agent: Main
+Task: Fix 3D viewport + audio editor on mobile (4 sub-tasks)
+
+Work Log:
+- Read worklog (previous: ROUND28-A mobile header + 2D toolbar
+  repositioning) and listed /agent-ctx for prior round notes.
+- Read the four target files fully: audio/AudioEditor.tsx,
+  viewport3d/Toolbar3D.tsx, viewport3d/Viewport3D.tsx,
+  panels/registerBuiltInPanels.ts. Cross-checked
+  workspace/useMediaQuery.ts (useIsMobile =
+  max-width:768px AND portrait), workspace/MobileDrawer.tsx
+  (tab order = tabOrder.left → left-bottom → right →
+  right-bottom; auto-selects allTabs[0]), and dockStore.ts
+  (ensureTab appends in registration order; the `order` field
+  only affects the Dock "+ menu" sort, NOT the actual tab strip
+  order, so file registration order is what matters for the
+  MobileDrawer's first tab).
+
+Task 1 — AudioEditor transport bar:
+- Added `import { useIsMobile } from '../workspace/useMediaQuery';`
+  and `const isMobile = useIsMobile();` at the top of AudioEditor.
+- Gated the flex-1 spacer: `{!isMobile && <div className="flex-1" />}`
+  so Import / Track / MIDI are no longer pushed off-screen on mobile
+  (the transport strip already scrolls horizontally).
+- Fixed inverted zoom button sizing: changed
+  `h-8 w-8 ... sm:h-6 sm:w-6` → `h-7 w-7` on all three zoom
+  buttons (ZoomOut / Fit / ZoomIn). Same 28px target on every
+  breakpoint, no more "bigger on mobile, smaller on desktop".
+- Hid BPM input and master volume slider on mobile:
+  `{!isMobile && (<label>BPM...</label>)}` and
+  `{!isMobile && (<div>Volume2 + range</div>)}`. Both are still
+  reachable on mobile via per-track volume controls in TrackHeader
+  and via the Audio Settings panel; this just frees transport
+  horizontal space.
+
+Task 2 — 3D viewport mobile layout:
+- Toolbar3D.tsx: bumped all `h-7 w-7` square icon buttons to
+  `h-8 w-8 sm:h-7 sm:w-7` (32px touch target on mobile, back to
+  28px on desktop). Covers the grid toggle, smooth/flat toggle,
+  duplicate, the five PRIMARY_EDIT_OPS (extrude/inset/bevel/loop-
+  cut/subdivide), frame-selected, render-image, render-animation,
+  undo, redo, delete. The transform-tool pill and the
+  text-label buttons (Add/Object/Mesh/Mode/Shading/etc.) were
+  left alone — they're already wider pills, not 28px squares.
+- Viewport3D.tsx: imported useIsMobile; declared
+  `const isMobile = useIsMobile();` at the top of Viewport3D.
+- Bumped the three transform-HUD overlays (Fly hint, Edit-mode
+  hint, modal-tool label) from `bottom-8` to
+  `bottom-16 sm:bottom-8` so on mobile they clear the Timeline
+  strip (which sits at `bottom-2 left-2 right-2`).
+- Hid the GizmoHelper (axis-orientation cube) on mobile:
+  `{!isMobile && (<GizmoHelper alignment="bottom-right" ...>)}`.
+  Its bottom-right corner overlapped the Timeline + the FAB-style
+  add affordance on phones. Desktop keeps the full Blender-style
+  gizmo.
+
+Task 3 — audio-assets discoverable on mobile:
+- registerBuiltInPanels.ts: moved audio-assets from
+  `defaultSide: 'right', order: 0` to
+  `defaultSide: 'left', order: 0`, AND physically relocated its
+  registerPanel call to BEFORE audio-settings in the file. The
+  MobileDrawer collects tabs in `tabOrder.left` first (in
+  registration order, since ensureTab appends), so audio-assets
+  is now tab[0] of the left zone → the MobileDrawer auto-selects
+  it on open.
+- Bumped audio-settings order 0 → 1 and instrument order 1 → 2
+  (instrument was order 1; moving audio-settings to order 1 would
+  have collided). Final left-zone order: audio-assets (0),
+  audio-settings (1), instrument (2). Updated the per-panel
+  comments and the stale ai-audio "top-right default" comment.
+
+Task 4 — Import button on mobile:
+- No additional code change. The Task 1 spacer fix
+  (`{!isMobile && <div className="flex-1" />}`) already exposes
+  the Import / Track / MIDI buttons in the horizontally-scrolling
+  transport strip on mobile. Import is now one swipe away instead
+  of off-screen.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit`
+  → exit 0, no errors.
+
+Stage Summary:
+- 4 files modified, 0 files created, 0 new dependencies.
+- AudioEditor.tsx: +1 import, +1 hook call, gated spacer/BPM/
+  volume, normalized zoom button sizes.
+- Toolbar3D.tsx: 10 buttons bumped from h-7 w-7 to
+  h-8 w-8 sm:h-7 sm:w-7 (mobile touch targets).
+- Viewport3D.tsx: +1 import, +1 hook call, 3 HUD overlays raised
+  to bottom-16 sm:bottom-8, GizmoHelper hidden on mobile.
+- registerBuiltInPanels.ts: audio-assets moved to left dock with
+  order 0 and registered first; audio-settings → order 1;
+  instrument → order 2; comments updated.
+- TypeScript clean. No behavioral change on desktop.

@@ -112,22 +112,27 @@ export function registerBuiltInPanels(): void {
     mode: 'both',
   });
   // Members panel retired — the People widget covers roster + voice + host controls.
-  // Audio settings — left dock panel (clip/track properties + import).
+  // Audio assets — left dock tab, FIRST in the left zone so the MobileDrawer
+  // opens directly to it on phones (sample/loop browser is the most-tapped
+  // audio entry point). Desktop docks it at the top of the left rail, above
+  // Audio Settings + Instrument.
+  registerPanel({
+    id: 'audio-assets',
+    title: 'Audio Assets',
+    defaultSide: 'left',
+    render: AudioAssetsPanel,
+    order: 0,
+    mode: 'audio',
+  });
+  // Audio settings — left dock tab. Registered AFTER Audio Assets so the
+  // initial tab order on the left zone (which drives the MobileDrawer tab
+  // order) lands Audio Assets first; clip/track properties + import live here.
   registerPanel({
     id: 'audio-settings',
     title: 'Audio Settings',
     defaultSide: 'left',
     render: AudioSettingsPanel,
-    order: 0,
-    mode: 'audio',
-  });
-  // Audio assets — right dock panel.
-  registerPanel({
-    id: 'audio-assets',
-    title: 'Audio Assets',
-    defaultSide: 'right',
-    render: AudioAssetsPanel,
-    order: 0,
+    order: 1,
     mode: 'audio',
   });
   // Instrument — playable/customizable synth keyboard (piano etc.) that
@@ -138,7 +143,7 @@ export function registerBuiltInPanels(): void {
     title: 'Instrument',
     defaultSide: 'left',
     render: InstrumentPanel,
-    order: 1,
+    order: 2,
     mode: 'audio',
   });
   // Doc Tools — the 2D-style left "bar" for writing: quick structure/insert
@@ -178,6 +183,7 @@ export function registerBuiltInPanels(): void {
   registerPanel({ id: 'ai-3d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '3d' });
   registerPanel({ id: 'ai-doc', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'doc' });
   registerPanel({ id: 'ai-diagram', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'diagram' });
-  // Audio: Audio Assets stays the top-right default; the AI goes bottom-right.
+  // Audio: Audio Assets lives top-left (above Audio Settings + Instrument);
+  // the AI assistant goes bottom-right so it never crowds the dock tabs.
   registerPanel({ id: 'ai-audio', title: 'AI Assistant', defaultSide: 'right-bottom', render: AiChatPanel, order: 3, mode: 'audio' });
 }

@@ -28,6 +28,7 @@ import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE, librarySamplePcm } from './library'
 import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS, INSTRUMENT_PRESETS, loadCustomInstruments } from './instruments';
 import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
+import { useIsMobile } from '../workspace/useMediaQuery';
 
 /** True while the pointer is over the audio editor. Written here, read by the
  *  2D animation timeline so its Space handler yields to the audio transport
@@ -267,6 +268,7 @@ function invalidateWaveform(clipId: string): void {
 export function AudioEditor() {
   const room = useRoom();
   const slate = room.slate;
+  const isMobile = useIsMobile();
   const [version, setVersion] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [bpm, setBpmState] = useState(slate.audioBpm());
@@ -1443,16 +1445,16 @@ export function AudioEditor() {
         <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
         <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
-        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" inputMode="decimal" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+        {!isMobile && (<label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" inputMode="decimal" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>)}
         <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
         <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
         <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
         <div className="mx-1 h-5 w-px bg-border" />
-        <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 sm:h-6 sm:w-6" title="Zoom out"><ZoomOut size={12} /></button>
-        <button onClick={fitToWindow} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent sm:h-6 sm:w-6" title="Fit to window"><Maximize2 size={12} /></button>
-        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 sm:h-6 sm:w-6" title="Zoom in"><ZoomIn size={12} /></button>
-        <div className="flex-1" />
+        {!isMobile && (<div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>)}
+        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={fitToWindow} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
+        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
+        {!isMobile && <div className="flex-1" />}
         <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*,.mid,.midi" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
         <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
         <button onClick={() => addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add MIDI track"><Piano size={12} />MIDI</button>

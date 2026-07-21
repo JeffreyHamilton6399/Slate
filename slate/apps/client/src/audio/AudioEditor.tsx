@@ -28,7 +28,6 @@ import { AUDIO_LIBRARY, LIBRARY_SAMPLE_RATE, librarySamplePcm } from './library'
 import { instrumentKeyCapture, INSTRUMENT_CAPTURE_KEYS, INSTRUMENT_PRESETS, loadCustomInstruments } from './instruments';
 import { float32ToNumberArray } from './sampleStore';
 import { RemotePlayheads } from './RemotePlayheads';
-import { useIsMobile } from '../workspace/useMediaQuery';
 
 /** True while the pointer is over the audio editor. Written here, read by the
  *  2D animation timeline so its Space handler yields to the audio transport
@@ -268,7 +267,6 @@ function invalidateWaveform(clipId: string): void {
 export function AudioEditor() {
   const room = useRoom();
   const slate = room.slate;
-  const isMobile = useIsMobile();
   const [version, setVersion] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [bpm, setBpmState] = useState(slate.audioBpm());
@@ -1384,12 +1382,7 @@ export function AudioEditor() {
     loopDragCleanupRef.current = onUp;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  // Deps: only loopStart/loopEnd are read directly inside startLoopDrag —
-  // the px-per-second scale is read via pxRef.current (a ref that always
-  // points at the latest value) so the listener never needs to re-bind on a
-  // zoom change. Listing pxPerSec here would tear down + reattach the
-  // pointer listeners on every wheel-zoom, dropping in-flight drags.
-  }, [loopStart, loopEnd]);
+  }, [loopStart, loopEnd, pxPerSec]);
 
   // Unmount safety: if the user closes the audio panel (or navigates away)
   // while a loop-handle drag is in flight, the window pointermove/pointerup
@@ -1432,89 +1425,38 @@ export function AudioEditor() {
 
   return (
     <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac|mid|midi)$/i.test(f.name))) void handleFileImport(f); }}>
-      {/* Transport — two rows on mobile (primary transport + scrollable
-          secondary), one row on desktop. The split keeps the play/record/
-          split/delete actions reachable without horizontal scrolling on a
-          phone, while the rest (BPM, metronome, loop, volume, zoom, import,
-          track/MIDI add) scroll on a second line. */}
-      {isMobile ? (
-        <>
-          {/* Row 1: primary transport — SkipBack, Play, Record, position,
-              Split, Delete. Kept short so every button is reachable without
-              scrolling. */}
-          <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-2 px-2 py-1 [&>*]:shrink-0">
-            <button onClick={() => seek(0)} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
-            <button onClick={togglePlay} className={`flex h-10 w-10 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
-            <button onClick={() => void toggleRecord()} className={`flex h-9 w-9 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title={armedTrack ? `Record (R) → ${armedTrack.name}` : 'Record (R)'}><Mic size={15} /></button>
-            {armedTrack ? (
-              <span className="flex items-center rounded bg-bg-3 px-1 py-1" title={`Recording onto: ${armedTrack.name}`}>
-                <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
-              </span>
-            ) : null}
-            <span ref={posDisplayRef} className="min-w-[2.5rem] font-mono text-sm text-text">0.0s</span>
-            <div className="mx-0.5 h-5 w-px bg-border" />
-            <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
-            <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
-          </div>
-          {/* Row 2: secondary, scrollable — Duplicate, BPM, Metronome, Loop,
-              Snap, Volume, Zoom, Import, Track, MIDI. Horizontal scroll so
-              the row fits any width without wrapping. */}
-          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1 [&>*]:shrink-0">
-            <button onClick={() => void duplicateSelection()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate at playhead (D)"><Copy size={14} /></button>
-            <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
-            <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
-            <div className="mx-0.5 h-5 w-px bg-border" />
-            <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" inputMode="decimal" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-12 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
-            <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
-            <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
-            <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
-            <div className="mx-0.5 h-5 w-px bg-border" />
-            <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-16 accent-accent" /></div>
-            <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
-            <button onClick={fitToWindow} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
-            <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
-            <div className="mx-0.5 h-5 w-px bg-border" />
-            <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*,.mid,.midi" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
-            <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
-            <button onClick={() => addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add MIDI track"><Piano size={12} />MIDI</button>
-          </div>
-        </>
-      ) : (
-        /* Desktop: single row (existing layout). BPM + Volume always visible
-           since there's room; the trailing flex-1 spacer pushes Import /
-           Track / MIDI to the right edge of the toolbar. */
-        <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
-          <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
-          <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
-          <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title={armedTrack ? `Record (R) → ${armedTrack.name}` : 'Record (R)'}><Mic size={15} /></button>
-          {armedTrack ? (
-            <span className="flex items-center rounded bg-bg-3 px-1 py-1" title={`Recording onto: ${armedTrack.name}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
-            </span>
-          ) : null}
-          <span ref={posDisplayRef} className="min-w-[2rem] font-mono text-xs text-text">0.0s</span>
-          <div className="mx-1 h-5 w-px bg-border" />
-          <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
-          <button onClick={() => void duplicateSelection()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate at playhead (D)"><Copy size={14} /></button>
-          <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
-          <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
-          <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
-          <div className="mx-1 h-5 w-px bg-border" />
-          <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" inputMode="decimal" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
-          <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
-          <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
-          <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
-          <div className="mx-1 h-5 w-px bg-border" />
-          <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
-          <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom out"><ZoomOut size={12} /></button>
-          <button onClick={fitToWindow} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent" title="Fit to window"><Maximize2 size={12} /></button>
-          <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Zoom in"><ZoomIn size={12} /></button>
-          <div className="flex-1" />
-          <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*,.mid,.midi" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
-          <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
-          <button onClick={() => addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add MIDI track"><Piano size={12} />MIDI</button>
-        </div>
-      )}
+      {/* Transport */}
+      <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
+        <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
+        <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
+        <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title={armedTrack ? `Record (R) → ${armedTrack.name}` : 'Record (R)'}><Mic size={15} /></button>
+        {armedTrack ? (
+          <span className="flex items-center rounded bg-bg-3 px-1 py-1" title={`Recording onto: ${armedTrack.name}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
+          </span>
+        ) : null}
+        <span ref={posDisplayRef} className="min-w-[2rem] font-mono text-xs text-text">0.0s</span>
+        <div className="mx-1 h-5 w-px bg-border" />
+        <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
+        <button onClick={() => void duplicateSelection()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate at playhead (D)"><Copy size={14} /></button>
+        <button onClick={() => void copyClips()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Copy (Ctrl+C)"><ClipboardCopy size={14} /></button>
+        <button onClick={() => void pasteClips()} disabled={!hasClipboard} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Paste at playhead (Ctrl+V)"><ClipboardPaste size={14} /></button>
+        <button onClick={() => { selectedRef.current.forEach(id => deleteAudioClip(slate, id)); setSelectedClipIds(new Set()); }} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger disabled:opacity-30" title="Delete (Del)"><Trash2 size={14} /></button>
+        <div className="mx-1 h-5 w-px bg-border" />
+        <label className="flex items-center gap-1 text-[11px] text-text-dim">BPM<input type="number" inputMode="decimal" min={20} max={300} value={bpm} onChange={(e) => { setBpmState(Number(e.target.value)); setAudioBpm(slate, Number(e.target.value)); engineRef.current?.setBpm(Number(e.target.value)); }} className="w-14 rounded border border-border bg-bg-3 px-1 py-0.5 text-center font-mono text-xs text-text outline-none focus:border-accent" /></label>
+        <button onClick={() => { const n = !metronome; setMetronome(n); engineRef.current?.setMetronome(n); }} className={`flex h-7 w-7 items-center justify-center rounded ${metronome ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Metronome (M)"><Music size={13} /></button>
+        <button onClick={() => setLooping((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${looping ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Loop (L)"><Repeat size={13} /></button>
+        <button onClick={() => setSnapOn((n) => !n)} className={`flex h-7 w-7 items-center justify-center rounded ${snapOn ? 'bg-accent/20 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="Snap to grid & clips (hold Alt to bypass)"><Magnet size={13} /></button>
+        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="flex items-center gap-1"><Volume2 size={12} className="text-text-mid" /><input type="range" min={0} max={1} step={0.01} value={masterVol} onChange={(e) => { setMasterVol(Number(e.target.value)); engineRef.current?.setMasterVolume(Number(e.target.value)); }} className="w-14 accent-accent" /></div>
+        <button onClick={() => zoomAnchored(Math.max(MIN_PX_PER_SEC, pxRef.current / 1.3))} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 sm:h-6 sm:w-6" title="Zoom out"><ZoomOut size={12} /></button>
+        <button onClick={fitToWindow} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-accent sm:h-6 sm:w-6" title="Fit to window"><Maximize2 size={12} /></button>
+        <button onClick={() => zoomAnchored(Math.min(MAX_PX_PER_SEC, pxRef.current * 1.3))} className="flex h-8 w-8 items-center justify-center rounded text-text-mid hover:bg-bg-3 sm:h-6 sm:w-6" title="Zoom in"><ZoomIn size={12} /></button>
+        <div className="flex-1" />
+        <label className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3"><Upload size={12} />Import<input type="file" accept="audio/*,.mid,.midi" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFileImport(f); e.target.value = ''; }} /></label>
+        <button onClick={() => addAudioTrack(slate)} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"><Plus size={12} />Track</button>
+        <button onClick={() => addAudioTrack(slate, { kind: 'midi', instrumentId: SOUNDFONT_PIANO_ID, name: 'MIDI Track' })} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add MIDI track"><Piano size={12} />MIDI</button>
+      </div>
 
       {/* Track area */}
       <div
@@ -1660,19 +1602,12 @@ export function AudioEditor() {
         </div>
       </div>
 
-      {/* Status — track + clip counts, transport state, and (desktop only)
-          the keyboard cheat sheet. Slightly larger than the original (10px
-          vs 8px) so it's actually readable; mobile drops the keyboard hint
-          string since the row would scroll horizontally and the hints aren't
-          useful without a keyboard anyway. */}
-      <div className="flex shrink-0 items-center gap-2 border-t border-border px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
+      {/* Status */}
+      <div className="flex shrink-0 items-center gap-2 border-t border-border px-2 py-0.5 text-[8px] font-mono uppercase text-text-dim">
         <span>{tracks.length}T · {clips.length}C</span>
         {recording && <span className="text-danger">● Rec</span>}
         {playing && <span className="text-accent">▶ Play</span>}
-        {!isMobile && (
-          <span className="ml-auto normal-case tracking-normal">Space · Ctrl+Z=Undo · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
-        )}
-        {isMobile && <span className="ml-auto">←→=Seek · Ctrl+Scroll=Zoom</span>}
+        <span className="ml-auto">Space · Ctrl+Z=Undo · C=Split · D=Dup · Ctrl+C/V=Copy/Paste · Del · R=Rec · L=Loop · M=Met · ←→=Seek · Ctrl+Scroll=Zoom</span>
       </div>
     </div>
   );
@@ -1685,11 +1620,6 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
   slate: ReturnType<typeof useRoom>['slate'];
   engineRef: React.RefObject<AudioEngine | null>;
 }) {
-  // Mobile: hide the volume/pan sliders (and the MIDI instrument picker row).
-  // Those live in the Audio Settings panel — keeping them off the cramped
-  // 128px mobile track header frees the top row for the controls the user
-  // actually needs at-a-glance (name + mute/solo/arm + delete).
-  const isMobile = useIsMobile();
   const [vol, setVol] = useState(track.volume);
   const [pan, setPan] = useState(track.pan);
   // Separate drag flags per slider — the previous single shared `isDraggingRef`
@@ -1766,59 +1696,51 @@ const TrackHeader = memo(function TrackHeader({ track, hasSolo, slate, engineRef
 
   return (
     <div className="border-b border-border/15 px-2 py-1" style={{ height: TRACK_H }}>
-      <div className={`flex items-center gap-0.5 ${isMobile ? 'h-full' : ''}`}>
+      <div className="flex items-center gap-0.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: track.color }} />
         <input type="text" value={track.name} onChange={(e) => update({ name: e.target.value })} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-text outline-none" />
         {/* Kind toggle: Audio (Volume2 icon) ↔ MIDI (Piano icon). Highlighted
-            when MIDI so the kind is visually distinct at a glance.
-            Hidden on mobile — use the transport bar's + MIDI button to add a
-            MIDI track instead. */}
-        {!isMobile && (
-          <button onClick={toggleKind} className={`flex h-4 w-4 items-center justify-center rounded ${isMidi ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title={isMidi ? 'MIDI track (click for Audio)' : 'Audio track (click for MIDI)'}>{isMidi ? <Piano size={9} /> : <Volume2 size={9} />}</button>
-        )}
+            when MIDI so the kind is visually distinct at a glance. */}
+        <button onClick={toggleKind} className={`flex h-4 w-4 items-center justify-center rounded ${isMidi ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title={isMidi ? 'MIDI track (click for Audio)' : 'Audio track (click for MIDI)'}>{isMidi ? <Piano size={9} /> : <Volume2 size={9} />}</button>
         <button onClick={() => update({ muted: !track.muted })} className={`flex h-4 w-4 items-center justify-center rounded ${track.muted && !hasSolo ? 'bg-warn/30 text-warn' : 'text-text-mid hover:bg-bg-3'}`} title="M">{track.muted ? <VolumeX size={9} /> : <Volume2 size={9} />}</button>
         <button onClick={() => update({ solo: !track.solo })} className={`flex h-4 w-4 items-center justify-center rounded ${track.solo ? 'bg-accent/30 text-accent' : 'text-text-mid hover:bg-bg-3'}`} title="S"><Headphones size={9} /></button>
         <button onClick={toggleArm} className={`flex h-4 w-4 items-center justify-center rounded ${track.armed ? 'bg-danger/30 text-danger' : 'text-text-mid hover:bg-bg-3'}`} title={isMidi ? 'Arm for MIDI take' : 'Arm'}><div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: track.armed ? 'currentColor' : 'transparent', border: '1px solid currentColor' }} /></button>
         <button onClick={() => deleteAudioTrack(slate, track.id)} className="flex h-4 w-4 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-danger" title="Del"><Trash2 size={9} /></button>
       </div>
       {/* MIDI tracks: instrument picker row replaces the pan slider row.
-          Audio tracks keep the original volume + pan slider row.
-          On mobile the whole row is hidden — the Audio Settings panel has
-          volume + pan, and MIDI instruments aren't critical on a phone. */}
-      {!isMobile && (
-        isMidi ? (
-          <div className="mt-0.5 flex items-center gap-1">
-            <Piano size={9} className="shrink-0 text-accent" aria-hidden />
-            <select
-              value={track.instrumentId ?? SOUNDFONT_PIANO_ID}
-              onChange={(e) => update({ instrumentId: e.target.value })}
-              className="min-w-0 flex-1 rounded-sm border border-border bg-bg-3 px-1 py-0.5 text-[9px] text-text outline-none focus:border-accent"
-              aria-label="Instrument"
-              title="Which instrument plays this track's MIDI clips"
-            >
-              <option value={SOUNDFONT_PIANO_ID}>Soundfont Piano</option>
-              <optgroup label="Synth presets">
-                {INSTRUMENT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </optgroup>
-              {(() => {
-                const customs = loadCustomInstruments();
-                return customs.length > 0 ? (
-                  <optgroup label="My instruments">
-                    {customs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </optgroup>
-                ) : null;
-              })()}
-            </select>
-          </div>
-        ) : (
-          <div className="mt-0.5 flex items-center gap-1">
-            <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
-            <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
-            <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
-            <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
-            <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
-          </div>
-        )
+          Audio tracks keep the original volume + pan slider row. */}
+      {isMidi ? (
+        <div className="mt-0.5 flex items-center gap-1">
+          <Piano size={9} className="shrink-0 text-accent" aria-hidden />
+          <select
+            value={track.instrumentId ?? SOUNDFONT_PIANO_ID}
+            onChange={(e) => update({ instrumentId: e.target.value })}
+            className="min-w-0 flex-1 rounded-sm border border-border bg-bg-3 px-1 py-0.5 text-[9px] text-text outline-none focus:border-accent"
+            aria-label="Instrument"
+            title="Which instrument plays this track's MIDI clips"
+          >
+            <option value={SOUNDFONT_PIANO_ID}>Soundfont Piano</option>
+            <optgroup label="Synth presets">
+              {INSTRUMENT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </optgroup>
+            {(() => {
+              const customs = loadCustomInstruments();
+              return customs.length > 0 ? (
+                <optgroup label="My instruments">
+                  {customs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </optgroup>
+              ) : null;
+            })()}
+          </select>
+        </div>
+      ) : (
+        <div className="mt-0.5 flex items-center gap-1">
+          <Volume2 size={9} className="shrink-0 text-text-dim" aria-hidden />
+          <input type="range" min={0} max={1} step={0.01} value={vol} aria-label="Volume" title="Volume" onPointerDown={onVolDown} onChange={(e) => onVol(Number(e.target.value))} onPointerUp={onVolEnd} className="h-1 min-w-0 flex-1 accent-accent" />
+          <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>L</span>
+          <input type="range" min={-1} max={1} step={0.01} value={pan} aria-label="Pan" title="Pan" onPointerDown={onPanDown} onChange={(e) => onPan(Number(e.target.value))} onPointerUp={onPanEnd} className="h-1 w-10 accent-accent" />
+          <span className="shrink-0 text-[8px] font-medium leading-none text-text-dim" aria-hidden>R</span>
+        </div>
       )}
     </div>
   );

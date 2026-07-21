@@ -10,12 +10,11 @@
  */
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { LayoutGrid, PanelLeft } from 'lucide-react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
 import { useDockStore } from '../workspace/dockStore';
-import { useIsMobile, useIsSmallScreen } from '../workspace/useMediaQuery';
+import { useIsMobile } from '../workspace/useMediaQuery';
 import { usePanelRegistry } from '../workspace/panelRegistry';
 import { useAppStore } from './store';
 import { Header, type FileMenuAction } from './Header';
@@ -40,11 +39,7 @@ const CodeEditor = lazy(() => import('../code/CodeEditor'));
 const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ default: m.Viewport3D })));
 const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
 const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
-// Presentation editor — lightweight (contenteditable, no TipTap / Three.js),
-// lazy-loaded so other boards skip the parse cost.
-const PresentationEditor = lazy(() => import('../presentation/PresentationEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
-import { WelcomeOverlay } from './WelcomeOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
 import { ImportDialog } from '../files/ImportDialog';
@@ -75,41 +70,19 @@ export function Workspace() {
   const setSidebarWidth = useDockStore((s) => s.setSidebarWidth);
   const setDockWidth = useDockStore((s) => s.setDockWidth);
   const ensureTab = useDockStore((s) => s.ensureTab);
-  const setMobileDrawer = useDockStore((s) => s.setMobileDrawer);
   const isMobile = useIsMobile();
-  const isSmallScreen = useIsSmallScreen();
-  // On a narrow landscape phone (e.g. 812×375) the desktop docks at their
-  // default 240/260px would eat ~500px of the canvas. Cap each dock to its
-  // persisted-or-minimum width so the editor keeps usable room. (The resizer
-  // still writes the underlying value, so a user who explicitly drags wider
-  // on a small screen sees it apply on a larger screen later.)
-  const smallLandscape = isSmallScreen && !isMobile;
-  // Cap each dock to 180/200 on a small landscape phone (e.g. 812×375)
-  // so the central editor keeps usable horizontal room — the default
-  // 240/260px would eat ~500px before the editor even renders. The
-  // resizer still writes the underlying value via setSidebarWidth /
-  // setDockWidth, so a user who explicitly drags wider on a small screen
-  // sees it apply on a larger screen later (the cap is render-only).
-  const effectiveSidebar = smallLandscape ? Math.min(sidebarWidth, 180) : sidebarWidth;
-  const effectiveDock = smallLandscape ? Math.min(dockWidth, 200) : dockWidth;
 
   const { room, status, awareness } = useSlateRoom(board.name, displayName);
   const autosave = useAutosave(room);
 
   // On first open, push default tabs based on mode + register fresh panels.
-  // SKIPPED on small landscape screens (e.g. 812×375 phone in landscape):
-  // the docks at their reduced width already eat ~380px, so auto-opening
-  // every panel for the mode would cover the canvas. The user opens the
-  // ones they need via the dock's `+` menu (or the small-landscape hint
-  // overlay rendered below the editor surface).
   const panels = usePanelRegistry((s) => s.panels);
   useEffect(() => {
-    if (smallLandscape) return;
     Object.values(panels).forEach((p) => {
       if (p.mode && p.mode !== 'both' && p.mode !== board.mode) return;
       ensureTab(p.defaultSide, p.id);
     });
-  }, [panels, board.mode, ensureTab, smallLandscape]);
+  }, [panels, board.mode, ensureTab]);
 
   // Initialize meta if this is the creator on a fresh board.
   useEffect(() => {
@@ -284,7 +257,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [room, setShortcutsOpen, board.mode]);
+  }, [room, setShortcutsOpen]);
 
   const handleFileMenu = useMemo(
     () => (action: FileMenuAction) => {
@@ -332,7 +305,7 @@ export function Workspace() {
           break;
       }
     },
-    [setShortcutsOpen, room, setBgOpen],
+    [setShortcutsOpen, room],
   );
 
   if (!room) {
@@ -361,7 +334,7 @@ export function Workspace() {
         />
         <div className="flex flex-1 min-h-0">
           {!isMobile && (
-            <Dock side="left" width={effectiveSidebar} onResize={setSidebarWidth} />
+            <Dock side="left" width={sidebarWidth} onResize={setSidebarWidth} />
           )}
           <main className="relative flex-1 min-w-0">
             <RecoverBoundary label="The editor">
@@ -381,10 +354,6 @@ export function Workspace() {
                 <Suspense fallback={<EditorFallback label="code editor" />}>
                   <CodeEditor />
                 </Suspense>
-              ) : board.mode === 'presentation' ? (
-                <Suspense fallback={<EditorFallback label="presentation editor" />}>
-                  <PresentationEditor />
-                </Suspense>
               ) : (
                 <Suspense fallback={<EditorFallback label="canvas" />}>
                   <Canvas2D room={room} />
@@ -392,48 +361,9 @@ export function Workspace() {
               )}
             </RecoverBoundary>
             <PeopleWidget awareness={awareness} room={room} />
-            {/* Small-landscape hint — when the desktop docks are visible but
-                auto-open is skipped (no tabs to show), surface a one-tap
-                "Open panels" affordance so the user isn't left guessing how
-                to reach the per-mode tools. Tapping the left dock's `+` menu
-                is the underlying action; this just makes the affordance
-                discoverable on a cramped landscape phone. */}
-            {smallLandscape && (
-              <button
-                type="button"
-                onClick={() => setMobileDrawer(true)}
-                aria-label="Open panels"
-                title="Open panels"
-                className="absolute left-4 top-4 z-30 flex items-center gap-1.5 rounded-md border border-border bg-bg-2/90 px-2.5 py-1.5 text-[11px] text-text-mid shadow-sm backdrop-blur hover:bg-bg-3 hover:text-text"
-              >
-                <PanelLeft size={13} />
-                Panels
-              </button>
-            )}
-            {/* Mobile FAB — a big always-visible "Panels" button at the
-                bottom-right of the canvas. The Header has a small Menu icon
-                too, but on a phone it's easy to miss mixed in with Share /
-                Settings / Leave. This FAB makes panels discoverable for
-                every mode (2D, 3D, audio, doc, code) without scrolling. */}
-            {isMobile && (
-              <button
-                type="button"
-                onClick={() => setMobileDrawer(true)}
-                aria-label="Open panels"
-                // bottom-16 (64px) clears the 2D bottom toolbar (bottom-2 +
-                // ~32px height → ends ~48px from bottom), the doc word-count
-                // footer (~24px), and the closed 3D timeline pill. The 2D
-                // left toolbar explicitly reserves bottom-16 for this zone.
-                // +safe-bottom so iOS home-indicator doesn't underlap the FAB.
-                style={{ bottom: 'calc(4rem + var(--safe-bottom, 0px))' }}
-                className="absolute right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition-transform hover:scale-105 active:scale-95"
-              >
-                <PanelsFabIcon />
-              </button>
-            )}
           </main>
           {!isMobile && (
-            <Dock side="right" width={effectiveDock} onResize={setDockWidth} />
+            <Dock side="right" width={dockWidth} onResize={setDockWidth} />
           )}
         </div>
         {!isMobile && <FloatingPanels />}
@@ -447,11 +377,6 @@ export function Workspace() {
         <BoardSettingsDialog open={boardSettingsOpen} onOpenChange={setBoardSettingsOpen} />
         <NewProjectDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
         <AutosaveBadge state={autosave} />
-        {/* One-time first-run welcome overlay. Mounts whenever the Workspace
-            mounts (i.e., whenever the user enters a board); it self-gates on
-            the `slate.onboarding.done` localStorage flag, so it only shows on
-            the very first board entry on this device, then never again. */}
-        <WelcomeOverlay />
       </div>
       </VoiceProvider>
     </RoomProvider>
@@ -500,11 +425,4 @@ function EditorFallback({ label }: { label: string }) {
       <span>Loading {label}…</span>
     </div>
   );
-}
-
-/** Icon for the mobile Panels FAB — a 4-square grid suggests "panels" without
- *  the ambiguity of the generic Menu (hamburger) icon, which a user might
- *  mistake for "settings" or "more". */
-function PanelsFabIcon() {
-  return <LayoutGrid size={22} />;
 }

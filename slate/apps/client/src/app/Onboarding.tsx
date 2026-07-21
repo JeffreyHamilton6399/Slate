@@ -22,6 +22,7 @@ import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
+import { modeBadgeClass, modeHeaderClass, modeTextClass } from './modeColors';
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -254,7 +255,7 @@ export function Onboarding() {
                   >
                     <Clock size={11} className="shrink-0 text-text-dim" />
                     <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
-                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'text-accent-2' : r.mode === 'diagram' ? 'text-sky-400' : 'text-green')}>
+                    <span className={cn('text-[9px] font-mono uppercase', modeTextClass(r.mode))}>
                       {r.mode}
                     </span>
                   </button>
@@ -276,12 +277,18 @@ export function Onboarding() {
                       setBoard(r.name);
                       setMode(r.mode);
                     }}
-                    className="w-full flex items-center justify-between rounded-sm px-2 py-1.5 text-sm text-text-mid hover:text-text hover:bg-bg-3"
+                    className="w-full flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-mid hover:text-text hover:bg-bg-3"
                   >
-                    <span className="font-mono truncate">{r.name}</span>
-                    <span className="text-xs text-text-dim">
-                      {r.members} · {r.mode}
+                    <span
+                      className={cn(
+                        'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
+                        modeBadgeClass(r.mode),
+                      )}
+                    >
+                      {r.mode}
                     </span>
+                    <span className="font-mono truncate flex-1 text-left">{r.name}</span>
+                    <span className="text-xs text-text-dim">{r.members}</span>
                   </button>
                 </li>
               ))}
@@ -307,7 +314,7 @@ export function Onboarding() {
                     }}
                     className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-bg-2 text-left hover:border-accent/50"
                   >
-                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'bg-accent-2/10 text-accent-2' : r.mode === 'diagram' ? 'bg-sky-500/10 text-sky-400' : 'bg-green/10 text-green')}>
+                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', modeHeaderClass(r.mode))}>
                       {r.mode.toUpperCase()}
                     </span>
                     <span className="flex flex-col gap-0.5 p-2">

@@ -28,7 +28,7 @@ export interface Friend {
   incoming: boolean;
   /** Presence: true when their heartbeat is recent (and they show it). */
   online: boolean;
-  /** Their one-line status ("🎨 sketching"), or null. */
+  /** Their one-line plain-text status (e.g. "Available"), or null. */
   statusText: string | null;
   /** Their short about-me, or null. */
   bio: string | null;

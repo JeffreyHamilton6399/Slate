@@ -27,7 +27,7 @@ interface AppState {
   avatarUrl: string;
   /** Short about-me shown on the profile ('' = none). */
   bio: string;
-  /** One-line status shown next to the name ('' = none). Emoji welcome. */
+  /** One-line plain-text status shown next to the name ('' = none). */
   statusText: string;
   /** Profile banner color (hex). */
   bannerColor: string;

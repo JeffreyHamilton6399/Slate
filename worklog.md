@@ -2048,3 +2048,24 @@ Stage Summary:
 - Task 3: Cloud is now source of truth — sign-in always overwrites local with cloud profile; ProfileDialog re-fetches on open.
 - Task 4: Donate + Friends removed from dropdown (badge moved to Profile item); Friends tab in ProfileDialog unchanged; clicking a friend opens a social-style profile card with banner, avatar, bio, status, email, days-on-Slate, online dot, Back/Remove actions.
 - 5 files modified, 0 files created, 0 new dependencies. TypeScript clean (exit 0 for modified files).
+
+---
+Task ID: ROUND27-A
+Agent: main (Z.ai Code)
+Task: Fix 4 Slate client UI issues — friends list grid, status emoji, mode card colors, general cleanup
+
+Work Log:
+- Read worklog (last entry: ROUND26-A) and the relevant files: ProfileDialog.tsx, Home.tsx, Onboarding.tsx, store.ts, friends.ts, Avatar.tsx, Header.tsx, tokens.css, tailwind-preset.ts.
+- Created `apps/client/src/app/modeColors.ts` — single source of truth for mode tints. Exports `modeBadgeClass(mode)` (compact pill, /15 opacity), `modeHeaderClass(mode)` (full-width card banner, /10 opacity), `modeTextClass(mode)` (text-only). Color per mode: 2D green, 3D accent, Audio warn, Doc blue-500, Code cyan-500, Diagram sky-500 (kept). Doc and Code no longer share a tint.
+- Task 1 (friends grid): rewrote `FriendList` in ProfileDialog.tsx as `<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">` and extracted a new `FriendCard` component. Each card: 44px avatar centered at top with online dot, display name (truncated) below, status text (small, truncated) below that. Whole card is a button that opens the profile view. Remove-friend button overlays the top-right corner on hover (bg-bg-3/90 backdrop-blur). Pending-requests list stays as a vertical `<ul>` because it needs inline Accept/Decline buttons.
+- Task 2 (status emoji): added `stripEmoji(s)` helper in ProfileDialog.tsx (six separate regex passes to satisfy eslint `no-misleading-character-class`). Changed status input placeholder from "🎨 What are you up to?" to "What are you up to?". The Save button now strips emoji before writing to local store + cloud, and resets the input to the cleaned value. The status display in ProfileTabView, FriendProfileView, and FriendCard subline is wrapped in `stripEmoji()` so already-stored emoji-prefixed statuses are cleaned on display. Updated JSDoc in store.ts ("Emoji welcome" → "plain-text") and friends.ts ("🎨 sketching" → "Available").
+- Task 3 (mode colors): Home.tsx now imports `modeBadgeClass` + `modeHeaderClass` from ./modeColors (deleted the local modeBadgeClass function). The All Projects dialog card header's inline ternary is replaced with `modeHeaderClass(r.mode)`. Onboarding.tsx imports `modeBadgeClass`, `modeHeaderClass`, `modeTextClass`; replaced inline ternaries in recents list (modeTextClass), All Projects dialog (modeHeaderClass), and added a colored mode badge to the Live public boards list (modeBadgeClass) — that list previously showed `{r.members} · {r.mode}` with no color.
+- Task 4 (cleanup): FriendProfileView tightened from gap-4 to gap-3, and the "Loading profile…" line moved into the stats row as an inline "Loading…" chip (no longer breaks the card→button visual flow). FriendList label uses mb-2 (was mb-1) to balance the larger tiles. Removed a leftover multi-line comment block in Home.tsx that described the old local modeBadgeClass function. Workspace header (Header.tsx) was already minimal — brand + board name + File menu + right-side cluster (connection pill, share, mobile panels, settings, leave) — no changes needed.
+- Verification: `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0. `npx eslint` on all 6 modified/created files → exit 0 (initial run flagged no-misleading-character-class on the combined emoji regex; fixed by splitting into one regex per pass). Dev server log: only routine /health 404s.
+
+Stage Summary:
+- 6 files modified, 1 file created (modeColors.ts), 0 new dependencies.
+- Friends list: 2-col / 3-col grid of compact square-ish cards (avatar top, name + status below, online dot, whole card clickable, hover remove button).
+- Status: plain-text only — emoji stripped on save + on display + emoji placeholder removed.
+- Mode colors: distinct tint per mode via shared modeColors.ts — applied consistently to Home recents, Home live boards, Home All Projects dialog, Onboarding recents, Onboarding live boards, Onboarding All Projects dialog.
+- FriendProfileView: tighter spacing, loading hint moved inline.

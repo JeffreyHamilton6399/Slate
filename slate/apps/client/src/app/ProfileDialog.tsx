@@ -46,6 +46,34 @@ import { AvatarCropper } from './AvatarCropper';
 
 export type ProfileTab = 'profile' | 'friends' | 'settings';
 
+/**
+ * Strip emoji / pictographic characters from a status string. The status field
+ * is plain-text only — friends see a short, scannable line next to the name, so
+ * a leading emoji (or any emoji) just adds noise. This runs on save AND on
+ * display so already-stored emoji-prefixed statuses are cleaned up too.
+ */
+function stripEmoji(s: string | null | undefined): string {
+  if (!s) return '';
+  // Strip emoji / pictographs so the status is plain text only. Friends see a
+  // short scannable line next to the name, so a leading emoji (or any emoji)
+  // just adds noise. This runs on save AND on display so already-stored
+  // emoji-prefixed statuses are cleaned up too.
+  //
+  // We run each character class separately because eslint's
+  // no-misleading-character-class rule flags ranges mixed with lone combining
+  // marks (variation selector, ZWJ, keycap) in the same class — they need to
+  // be applied in their own pass to actually strip the combining sequence.
+  return s
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{2B00}-\u{2BFF}]/gu, '')
+    .replace(/\u{FE0F}/gu, '')
+    .replace(/\u{200D}/gu, '')
+    .replace(/\u{20E3}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 interface ProfileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -266,7 +294,7 @@ function ProfileTabView() {
             onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = ''; }}
           />
           <p className="truncate text-xl font-bold text-text">{displayName || 'Anonymous'}</p>
-          {statusText && <p className="mt-0.5 truncate text-sm text-text-mid">{statusText}</p>}
+          {stripEmoji(statusText) && <p className="mt-0.5 truncate text-sm text-text-mid">{stripEmoji(statusText)}</p>}
           <p className="mt-0.5 truncate text-xs text-text-dim" title={email}>
             {email || 'Not signed in'}
           </p>
@@ -310,20 +338,24 @@ function ProfileTabView() {
               value={statusDraft}
               onChange={(e) => setStatusDraft(e.target.value)}
               maxLength={60}
-              placeholder="🎨 What are you up to?"
+              placeholder="What are you up to?"
             />
             <Button
               size="sm"
               onClick={() => {
-                setStatusText(statusDraft.trim());
-                syncProfile({ status: statusDraft.trim() });
+                // Strip any emoji so the status is plain text only — friends
+                // see a short scannable line next to the name, no pictographs.
+                const clean = stripEmoji(statusDraft);
+                setStatusDraft(clean);
+                setStatusText(clean);
+                syncProfile({ status: clean });
                 toast({ title: 'Status updated' });
               }}
             >
               Save
             </Button>
           </div>
-          <p className="mt-1 text-xs text-text-dim">A one-liner friends see next to your name.</p>
+          <p className="mt-1 text-xs text-text-dim">A short plain-text line friends see next to your name.</p>
         </div>
       </div>
 
@@ -735,7 +767,7 @@ function FriendProfileView({
   }, [profile?.createdAt]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <button
         type="button"
         onClick={onBack}
@@ -770,7 +802,7 @@ function FriendProfileView({
             </span>
           </div>
           <p className="truncate text-xl font-bold text-text">{displayName}</p>
-          {statusText && <p className="mt-0.5 truncate text-sm text-text-mid">{statusText}</p>}
+          {stripEmoji(statusText) && <p className="mt-0.5 truncate text-sm text-text-mid">{stripEmoji(statusText)}</p>}
           {email && (
             <p className="mt-0.5 truncate text-xs text-text-dim" title={email}>
               {email}
@@ -793,11 +825,10 @@ function FriendProfileView({
                 <span className="font-semibold text-text">{daysOnSlate}</span> day{daysOnSlate === 1 ? '' : 's'} on Slate
               </span>
             )}
+            {loading && <span className="text-text-dim">Loading…</span>}
           </div>
         </div>
       </div>
-
-      {loading && <p className="text-xs text-text-dim">Loading profile…</p>}
 
       <div className="flex justify-end">
         <Button
@@ -815,9 +846,12 @@ function FriendProfileView({
   );
 }
 
-/** One group of friend cards (Online / Offline), Discord-style. The avatar +
- *  name area is a button that opens the friend's profile detail view; the
- *  UserMinus button stays separate so it doesn't trigger navigation. */
+/** One group of friend cards (Online / Offline) in a responsive grid. Each
+ *  card is a square-ish, contact-directory-style tile: avatar centered at top,
+ *  display name below (truncated), status text below that (small, truncated),
+ *  and an online dot. The whole card is a button that opens the friend's
+ *  profile detail view; the UserMinus button overlays the corner on hover so
+ *  it doesn't compete with the click-to-open affordance. */
 function FriendList({
   label,
   friends,
@@ -831,50 +865,75 @@ function FriendList({
 }) {
   return (
     <div>
-      <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">{label}</p>
-      <ul className="flex flex-col gap-1">
+      <p className="mb-2 text-[10px] font-mono uppercase tracking-wider text-text-dim">{label}</p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {friends.map((f) => (
-          <li
-            key={f.userId}
-            className="group flex items-center gap-2.5 rounded-md border border-border bg-bg-2 px-2.5 py-2"
-          >
-            <button
-              type="button"
-              onClick={() => onSelect(f)}
-              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-              aria-label={`View ${f.displayName || 'Anonymous'}'s profile`}
-            >
-              <span className="relative shrink-0">
-                <Avatar url={f.avatarUrl} name={f.displayName} size={34} className={f.online ? '' : 'opacity-60 saturate-50'} />
-                <span
-                  className={
-                    'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
-                    (f.online ? 'bg-green' : 'bg-text-dim/50')
-                  }
-                  title={f.online ? 'Online' : 'Offline'}
-                />
-              </span>
-              <span className="min-w-0 flex-1">
-                <p className={'truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')}>
-                  {f.displayName || 'Anonymous'}
-                </p>
-                <p className="truncate text-[10px] text-text-dim">
-                  {f.statusText || f.bio || f.email || (f.online ? 'Online' : 'Offline')}
-                </p>
-              </span>
-            </button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="opacity-0 transition-opacity group-hover:opacity-100"
-              onClick={() => void onRemove(f.userId)}
-              aria-label={`Remove friend ${f.displayName}`}
-            >
-              <UserMinus size={12} />
-            </Button>
-          </li>
+          <FriendCard key={f.userId} friend={f} onSelect={onSelect} onRemove={onRemove} />
         ))}
-      </ul>
+      </div>
+    </div>
+  );
+}
+
+/** A single compact friend tile — square-ish card with avatar + name + status.
+ *  Click anywhere on the card (except the remove button) to open the profile. */
+function FriendCard({
+  friend: f,
+  onSelect,
+  onRemove,
+}: {
+  friend: ReturnType<typeof useFriends>['friends'][number];
+  onSelect: (friend: Friend) => void;
+  onRemove: (friendId: string) => Promise<void>;
+}) {
+  const status = stripEmoji(f.statusText);
+  const subline = status || f.bio || f.email || (f.online ? 'Online' : 'Offline');
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onSelect(f)}
+        aria-label={`View ${f.displayName || 'Anonymous'}'s profile`}
+        className={
+          'flex w-full flex-col items-center gap-1.5 rounded-lg border border-border bg-bg-2 p-3 text-center transition-colors hover:border-accent/50 hover:bg-bg-3 ' +
+          (f.online ? '' : 'opacity-80')
+        }
+      >
+        <span className="relative shrink-0">
+          <Avatar
+            url={f.avatarUrl}
+            name={f.displayName}
+            size={44}
+            className={f.online ? '' : 'opacity-70 saturate-50'}
+          />
+          <span
+            className={
+              'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-2 ' +
+              (f.online ? 'bg-green' : 'bg-text-dim/50')
+            }
+            title={f.online ? 'Online' : 'Offline'}
+          />
+        </span>
+        <p
+          className={
+            'w-full truncate text-xs font-semibold ' + (f.online ? 'text-text' : 'text-text-mid')
+          }
+          title={f.displayName || 'Anonymous'}
+        >
+          {f.displayName || 'Anonymous'}
+        </p>
+        <p className="w-full truncate text-[10px] text-text-dim" title={subline}>
+          {subline}
+        </p>
+      </button>
+      <button
+        type="button"
+        onClick={() => void onRemove(f.userId)}
+        aria-label={`Remove friend ${f.displayName}`}
+        className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-3/90 text-text-mid opacity-0 backdrop-blur transition-opacity hover:text-danger group-hover:opacity-100"
+      >
+        <UserMinus size={11} />
+      </button>
     </div>
   );
 }

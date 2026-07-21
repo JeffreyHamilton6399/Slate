@@ -34,6 +34,7 @@ import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
 import { ensureMyProfile, fetchMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
+import { modeBadgeClass, modeHeaderClass } from './modeColors';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -292,17 +293,6 @@ interface RecentProject {
   boardName: string;
   mode: DocMode;
   savedAt: number;
-}
-
-/** Mode-badge color classes — one place so every list renders modes alike.
- *  Doc and code share the accent-2 family (both "text" modes); the badge
- *  label tells them apart. */
-function modeBadgeClass(mode: DocMode): string {
-  if (mode === '3d') return 'bg-accent/15 text-accent';
-  if (mode === 'audio') return 'bg-warn/15 text-warn';
-  if (mode === 'doc' || mode === 'code') return 'bg-accent-2/15 text-accent-2';
-  if (mode === 'diagram') return 'bg-sky-500/15 text-sky-400';
-  return 'bg-green/15 text-green';
 }
 
 /** Signed-in home: recents grid + create + live boards. */
@@ -651,15 +641,7 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
                 <span
                   className={cn(
                     'grid h-16 w-full place-items-center text-xs font-bold tracking-wider',
-                    r.mode === '3d'
-                      ? 'bg-accent/10 text-accent'
-                      : r.mode === 'audio'
-                        ? 'bg-warn/10 text-warn'
-                        : r.mode === 'doc' || r.mode === 'code'
-                          ? 'bg-accent-2/10 text-accent-2'
-                          : r.mode === 'diagram'
-                            ? 'bg-sky-500/10 text-sky-400'
-                            : 'bg-green/10 text-green',
+                    modeHeaderClass(r.mode),
                   )}
                 >
                   {r.mode.toUpperCase()}

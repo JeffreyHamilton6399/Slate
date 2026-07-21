@@ -1,10 +1,14 @@
 /**
- * Workspace header: brand, board title, connection dot, File menu, share,
- * settings, leave. Voice + members live in the floating People widget.
+ * Workspace header: brand, board title, File menu, share, and a right-side
+ * cluster that splits by viewport — desktop keeps ConnectionPill · Share ·
+ * Settings · Leave as separate buttons; mobile collapses to Share + a
+ * "more" dropdown (Settings · Background · Shortcuts · Leave) because the
+ * bottom-right FAB now handles panels. Voice + members live in the floating
+ * People widget.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Menu, Settings, Share2, LogOut, WifiOff, FileText } from 'lucide-react';
+import { MoreVertical, Settings, Share2, LogOut, WifiOff, FileText } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import {
@@ -16,7 +20,6 @@ import {
 } from '../ui/DropdownMenu';
 import { useAppStore } from './store';
 import { useServerStatus } from '../sync/serverStatus';
-import { useDockStore } from '../workspace/dockStore';
 import { useIsMobile } from '../workspace/useMediaQuery';
 import type { ConnectionStatus } from '../sync/provider';
 import type { AwarenessState } from '@slate/sync-protocol';
@@ -45,7 +48,6 @@ export type FileMenuAction =
 export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) {
   const board = useAppStore((s) => s.currentBoard);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
-  const setMobileDrawer = useDockStore((s) => s.setMobileDrawer);
   const isMobile = useIsMobile();
   void awareness;
 
@@ -96,9 +98,9 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="ml-1 gap-1 px-2 py-1">
-            <FileText size={13} />
-            <span>File</span>
+          <Button variant="ghost" size="none" className="ml-1 sm:px-2 sm:py-1 sm:gap-1">
+            <FileText size={15} />
+            <span className="hidden sm:inline">File</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
@@ -137,66 +139,95 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
       <div className="flex-1" />
 
-      {/* Right cluster — ConnectionPill (only when not connected), Share,
-          Settings, Leave. Wraps in overflow-x-auto so a very narrow phone
-          can scroll the cluster instead of pushing layout off-screen. */}
+      {/* Right cluster — on mobile we collapse to Share + a "more" dropdown
+          (Settings, Background, Shortcuts, Leave). On desktop we keep the
+          full ConnectionPill · Share · divider · Settings · Leave row.
+          The FAB (bottom-right) handles panels on mobile so we no longer
+          need a Menu/Panels button here. ConnectionPill renders null when
+          the connection is healthy, so it shows up only when there's an
+          issue in either branch. */}
       <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-        {/* Only surfaces when something needs attention; a healthy connection
-            shows nothing (transitions arrive as toasts). */}
-        <ConnectionPill status={status} />
-
-        {/* Share collapses to an icon — the tooltip and toast carry the intent. */}
-        <Tooltip content="Copy an invite link to this board">
-          <Button
-            variant="icon"
-            size="none"
-            onClick={() => shareBoard(board)}
-            aria-label="Share board"
-            className="shrink-0 text-accent hover:bg-accent/10"
-          >
-            <Share2 size={15} />
-          </Button>
-        </Tooltip>
-
-        {/* Desktop-only divider between Share and the app cluster. */}
-        <HeaderDivider />
-
-        {/* App cluster: panels (mobile) · settings · leave */}
-        {isMobile && (
-          <Tooltip content="Panels">
-            <Button
-              variant="icon"
-              size="none"
-              onClick={() => setMobileDrawer(true)}
-              aria-label="Panels"
-              className="shrink-0"
-            >
-              <Menu size={16} />
-            </Button>
-          </Tooltip>
+        {isMobile ? (
+          <>
+            <ConnectionPill status={status} />
+            <Tooltip content="Copy an invite link to this board">
+              <Button
+                variant="icon"
+                size="none"
+                onClick={() => shareBoard(board)}
+                aria-label="Share board"
+                className="shrink-0 text-accent hover:bg-accent/10"
+              >
+                <Share2 size={15} />
+              </Button>
+            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="icon"
+                  size="none"
+                  aria-label="More actions"
+                  className="shrink-0"
+                >
+                  <MoreVertical size={16} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onFileMenu('background')}>
+                  Background…
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onFileMenu('shortcuts')}>
+                  Keyboard shortcuts
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem destructive onSelect={onLeave}>
+                  Leave board
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : (
+          <>
+            <ConnectionPill status={status} />
+            <Tooltip content="Copy an invite link to this board">
+              <Button
+                variant="icon"
+                size="none"
+                onClick={() => shareBoard(board)}
+                aria-label="Share board"
+                className="shrink-0 text-accent hover:bg-accent/10"
+              >
+                <Share2 size={15} />
+              </Button>
+            </Tooltip>
+            <HeaderDivider />
+            <Tooltip content="Settings">
+              <Button
+                variant="icon"
+                size="none"
+                onClick={() => setSettingsOpen(true)}
+                aria-label="Settings"
+                className="shrink-0"
+              >
+                <Settings size={16} />
+              </Button>
+            </Tooltip>
+            <Tooltip content="Leave board">
+              <Button
+                variant="icon"
+                size="none"
+                onClick={onLeave}
+                aria-label="Leave board"
+                className="shrink-0 text-text-dim hover:text-danger"
+              >
+                <LogOut size={16} />
+              </Button>
+            </Tooltip>
+          </>
         )}
-        <Tooltip content="Settings">
-          <Button
-            variant="icon"
-            size="none"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Settings"
-            className="shrink-0"
-          >
-            <Settings size={16} />
-          </Button>
-        </Tooltip>
-        <Tooltip content="Leave board">
-          <Button
-            variant="icon"
-            size="none"
-            onClick={onLeave}
-            aria-label="Leave board"
-            className="shrink-0 text-text-dim hover:text-danger"
-          >
-            <LogOut size={16} />
-          </Button>
-        </Tooltip>
       </div>
     </header>
   );

@@ -2250,3 +2250,125 @@ Stage Summary:
   indicator.
 - TypeScript clean (exit 0). ESLint clean on all touched code (the 2
   warnings are pre-existing and unrelated).
+
+---
+Task ID: ROUND29-A
+Agent: main (Z.ai Code)
+Task: Redesign mobile header (collapse Settings/Leave into a "more" dropdown) + move 2D style strip to top on mobile + audit AudioEditor for "no armed track" UI text
+
+Work Log:
+- Read previous worklog (latest: ROUND28-A) for context on the mobile FAB
+  that now handles panels. Read in full: app/Header.tsx (305 lines),
+  canvas2d/Toolbar.tsx (442 lines), audio/AudioEditor.tsx (1795 lines).
+  Also consulted ui/Button.tsx, ui/DropdownMenu.tsx,
+  workspace/useMediaQuery.ts, canvas2d/Canvas2D.tsx (around the
+  Canvas2DToolbar mount + Timeline2D mount), canvas2d/Timeline2D.tsx
+  (its `bottom-2 left-2 right-2` collapse/expand layout).
+
+Task 1 — Simplify the mobile header (app/Header.tsx):
+- Replaced the `Menu` lucide import with `MoreVertical` (the mobile
+  panels button is gone — the FAB at bottom-right handles panels now).
+- Removed the `useDockStore` import + the `setMobileDrawer` selector
+  inside Header (no longer used).
+- File button: was `variant="ghost" size="sm"` with `gap-1 px-2 py-1`
+  and an always-visible "File" label. Now `variant="ghost" size="none"`
+  with `ml-1 sm:px-2 sm:py-1 sm:gap-1`, FileText icon at size 15, and
+  `<span className="hidden sm:inline">File</span>`. So on mobile it's
+  icon-only (no padding, no label); on sm+ it gets the same padding +
+  label as before.
+- Right cluster: was a single always-rendered chain
+  (ConnectionPill · Share · HeaderDivider · mobile-panels-button ·
+  Settings · Leave). Now branches on `isMobile`:
+    • Mobile: ConnectionPill · Share · MoreVertical dropdown. The
+      dropdown contains Settings, Background…, Keyboard shortcuts,
+      a separator, and a destructive "Leave board" item. The
+      HeaderDivider is omitted on mobile (it's `hidden sm:block`
+      anyway, but it's no longer rendered at all on mobile so there's
+      no stray DOM).
+    • Desktop: ConnectionPill · Share · HeaderDivider · Settings ·
+      Leave (unchanged from before).
+  ConnectionPill still renders null when the connection is healthy,
+  so it shows only when there's an actual issue — in both branches.
+- Updated the file-top JSDoc to describe the new mobile/desktop split
+  and the FAB-handled-panels rationale.
+
+Task 2 — Move 2D style strip to top on mobile (canvas2d/Toolbar.tsx):
+- Style strip was at `bottom-36 left-2 right-2` on mobile (sitting
+  above the Timeline2D) and `sm:bottom-auto sm:left-1/2 sm:right-auto
+  sm:top-2 sm:-translate-x-1/2`. The mobile position crowded the
+  timeline and the user wanted the strip at the top on mobile (same
+  place it already is on desktop).
+- New style strip className:
+  `absolute left-2 right-2 top-2 z-20 flex items-center gap-1.5
+   overflow-x-auto rounded-md border border-border bg-bg-2/95 px-1.5
+   py-1 shadow-lg backdrop-blur sm:left-1/2 sm:right-auto sm:top-2
+   sm:-translate-x-1/2 sm:overflow-visible sm:z-10 sm:max-w-fit`
+  → On mobile it's a full-width bar pinned at the top of the canvas
+  (just below the workspace header). On sm+ it collapses back to the
+  centered pill at top-2.
+- Left rail was at `left-2 top-2 bottom-36 ... sm:bottom-2`. With the
+  style strip now occupying the top of the canvas on mobile, the rail
+  would overlap it. New className:
+  `absolute left-2 top-12 bottom-2 z-10 flex w-10 flex-col items-center
+   gap-1 overflow-y-auto rounded-md border border-border bg-bg-2/95
+   backdrop-blur p-1 shadow-lg sm:top-2`
+  → On mobile the rail starts at top-12 (48px), clearing the ~32px-tall
+  style strip + a 16px gap. The bottom is now `bottom-2` (was
+  `bottom-36`) because there's no longer a style strip reserved at the
+  bottom — the bottom is free for just the Timeline2D. On sm+ the rail
+  returns to top-2 (the centered style strip doesn't overlap the
+  left-aligned rail on wide screens).
+
+Task 3 — Audit AudioEditor for "no armed track" UI text:
+- Grepped the entire `src/audio/` subtree for `no armed`, `armed track`,
+  `no track`, `No track`, and `empty` (case-insensitive). The only
+  matches for "armed track" are:
+    • AudioEditor.tsx:891 — a code comment explaining what
+      `armedTrack` is.
+    • AudioEditor.tsx:895 — the `armedTrack` variable declaration
+      (`tracks.find((t) => t.armed) ?? null`).
+    • AudioEditor.tsx:1432 — the Record button's `title` attribute,
+      which shows `Record (R) → ${armedTrack.name}` when a track is
+      armed, or just `Record (R)` when none is.
+    • AudioEditor.tsx:1433-1437 — a conditional `<span>` next to the
+      Record button that renders a tiny red dot ONLY when an armed
+      track exists (renders nothing otherwise).
+- There is NO "no armed track" / "No track armed" / etc. text rendered
+  anywhere in the AudioEditor UI. The empty-armed-track state is
+  already silent (the red dot just doesn't appear, and the Record
+  button title falls back to "Record (R)"). No changes needed — Task 3
+  was a verification check and the UI is already clean.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` →
+  exit 0, zero type errors.
+- Dev server log (tail): only routine `/health 404` and `/ 200`
+  entries; no compile errors after the edits.
+- Manual reasoning on layout overlap (375px viewport):
+    • Mobile header now has BrandMark + compact board name + FileText
+      icon + Share2 icon + MoreVertical icon = 5 elements, all
+      icon-only or compact. Fits comfortably in 375px with the board
+      name truncated to max-w-[120px].
+    • Style strip at top-2 occupies y=8..~40. Left rail at top-12
+      starts at y=48 — 8px gap, no overlap. Left rail's 40px width
+      (left-2 + w-10) sits in the same horizontal band as the style
+      strip's left edge, but they're vertically separated.
+    • Bottom is now free for just the Timeline2D (which lives at
+      bottom-2 left-2 right-2 expanded, or bottom-2 left-1/2
+      collapsed). No more bottom-36 reservation.
+
+Stage Summary:
+- 2 files modified (app/Header.tsx, canvas2d/Toolbar.tsx), 0 files
+  created, 0 new dependencies.
+- Mobile header: BrandMark + board name + icon-only File button +
+  Share + MoreVertical dropdown (Settings · Background · Shortcuts ·
+  Leave). Desktop header unchanged (ConnectionPill · Share · divider ·
+  Settings · Leave).
+- 2D style strip is ALWAYS at the top on mobile (full-width bar) and
+  desktop (centered pill). Left rail moved from top-2/bottom-36 to
+  top-12/bottom-2 on mobile (clears the style strip + frees the
+  bottom for Timeline2D).
+- AudioEditor audit: no "no armed track" text elements exist — the
+  empty-armed-track state is already silent (no red dot, fallback
+  Record tooltip). No code changes needed for Task 3.
+- TypeScript clean (exit 0). Dev log clean.

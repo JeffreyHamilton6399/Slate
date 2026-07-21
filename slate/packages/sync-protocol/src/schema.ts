@@ -5,7 +5,7 @@
  * the two.
  */
 
-export type DocMode = '2d' | '3d' | 'audio' | 'doc' | 'code';
+export type DocMode = '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram';
 export type BoardVisibility = 'public' | 'private';
 
 export interface BoardMeta {
@@ -258,6 +258,65 @@ export interface ChatMessage {
   createdAt: number;
 }
 
+// ── Diagram / whiteboard editor schema (Miro / Excalidraw-style) ────────────
+
+/** A node in the diagram editor — a labelled shape placed on an infinite
+ *  canvas. Connectors (edges) link nodes by id. Beyond the original four,
+ *  the set now covers the common flowchart vocabulary: process/terminator
+ *  (pill), decision (diamond), data (parallelogram), database (cylinder),
+ *  preparation (hexagon), and a triangle. */
+export type DiagramNodeShape =
+  | 'rect'
+  | 'ellipse'
+  | 'diamond'
+  | 'note'
+  | 'pill'
+  | 'parallelogram'
+  | 'hexagon'
+  | 'cylinder'
+  | 'triangle';
+
+/** How a connector is drawn between its two node endpoints. */
+export type DiagramEdgeRouting = 'straight' | 'curved' | 'elbow';
+
+export interface DiagramNode {
+  id: string;
+  shape: DiagramNodeShape;
+  /** Top-left position in board coordinates. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Label text drawn (and wrapped) inside the node. */
+  text: string;
+  /** Body fill color. */
+  fill: string;
+  /** Border + text color. */
+  stroke: string;
+  createdAt: number;
+  authorId: string;
+}
+
+/** A directed connector between two nodes. Endpoints reference node ids and
+ *  the line is routed to each node's border at render time. */
+export interface DiagramEdge {
+  id: string;
+  /** Source node id. */
+  from: string;
+  /** Target node id (arrowhead end). */
+  to: string;
+  /** Optional label drawn at the midpoint. */
+  label: string;
+  /** Line color. */
+  stroke: string;
+  /** How the connector is routed. Optional for back-compat (absent = straight). */
+  routing?: DiagramEdgeRouting;
+  /** Draw the connector dashed. Optional for back-compat (absent = solid). */
+  dashed?: boolean;
+  createdAt: number;
+  authorId: string;
+}
+
 /** Server-side public-room registry info (also consumed by client). */
 export interface RoomInfo {
   name: string;
@@ -414,6 +473,12 @@ export interface SlateDocSnapshot {
   };
   notes: NoteSection[];
   chat: ChatMessage[];
+  /** Diagram boards: nodes + connectors. Optional — absent on snapshots from
+   *  older clients and non-diagram boards. */
+  diagram?: {
+    nodes: DiagramNode[];
+    edges: DiagramEdge[];
+  };
   /** Rich-text document ('doc' boards) as ProseMirror-shaped JSON — the
    *  y-prosemirror encoding of the doc:text fragment. Optional: absent on
    *  snapshots from older clients and non-doc boards. */

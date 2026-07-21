@@ -212,7 +212,7 @@ export function AiChatPanel() {
     }
   };
 
-  const modeLabel = board?.mode === 'doc' ? 'document' : board?.mode === 'code' ? 'code' : board?.mode === 'audio' ? 'audio project' : board?.mode === '3d' ? '3D scene' : 'canvas';
+  const modeLabel = board?.mode === 'doc' ? 'document' : board?.mode === 'code' ? 'code' : board?.mode === 'audio' ? 'audio project' : board?.mode === '3d' ? '3D scene' : board?.mode === 'diagram' ? 'diagram' : 'canvas';
 
   return (
     <div className="flex h-full flex-col">

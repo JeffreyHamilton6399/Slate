@@ -23,6 +23,7 @@ import { DocOutlinePanel } from './DocOutlinePanel';
 import { DocToolsPanel } from './DocToolsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
+import { DiagramToolsPanel } from './DiagramToolsPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -165,6 +166,8 @@ export function registerBuiltInPanels(): void {
   // editor-center / files+preview-right, bolt/Z.ai style).
   registerPanel({ id: 'code-files', title: 'Files', defaultSide: 'right', render: CodeFilesPanel, order: 0, mode: 'code' });
   registerPanel({ id: 'code-preview', title: 'Preview', defaultSide: 'right-bottom', render: CodePreviewPanel, order: 1, mode: 'code' });
+  // Diagram — the tools + node-style palette lands top-left (mirrors 2D Tools).
+  registerPanel({ id: 'diagram-tools', title: 'Tools', defaultSide: 'left', render: DiagramToolsPanel, order: 0, mode: 'diagram' });
   // Terminal is NOT a dockable panel — it lives as a bottom strip inside the
   // CodeEditor (toggle in the editor toolbar), VS Code / bolt style.
 
@@ -174,6 +177,7 @@ export function registerBuiltInPanels(): void {
   registerPanel({ id: 'ai-2d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '2d' });
   registerPanel({ id: 'ai-3d', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: '3d' });
   registerPanel({ id: 'ai-doc', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'doc' });
+  registerPanel({ id: 'ai-diagram', title: 'AI Assistant', defaultSide: 'right', render: AiChatPanel, order: 3, mode: 'diagram' });
   // Audio: Audio Assets stays the top-right default; the AI goes bottom-right.
   registerPanel({ id: 'ai-audio', title: 'AI Assistant', defaultSide: 'right-bottom', render: AiChatPanel, order: 3, mode: 'audio' });
 }

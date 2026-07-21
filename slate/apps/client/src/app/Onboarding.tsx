@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, Workflow as WorkflowIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
 import { Dialog } from '../ui/Dialog';
@@ -73,7 +73,7 @@ export function Onboarding() {
     const linkBoard = sanitizeBoardName(params.get('board') ?? '');
     const linkModeRaw = params.get('mode');
     const linkMode: DocMode | null =
-      linkModeRaw === '3d' || linkModeRaw === '2d' || linkModeRaw === 'audio' || linkModeRaw === 'doc' || linkModeRaw === 'code' ? linkModeRaw : null;
+      linkModeRaw === '3d' || linkModeRaw === '2d' || linkModeRaw === 'audio' || linkModeRaw === 'doc' || linkModeRaw === 'code' || linkModeRaw === 'diagram' ? linkModeRaw : null;
 
     fetchRooms()
       .then((rs) => {
@@ -215,10 +215,10 @@ export function Onboarding() {
             />
             <IconToggle
               active={mode !== '2d'}
-              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : mode === 'doc' ? 'code' : '2d')}
-              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : mode === 'code' ? <BracesIcon size={15} /> : <BoxIcon size={15} />}
+              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : mode === 'doc' ? 'code' : mode === 'code' ? 'diagram' : '2d')}
+              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : mode === 'code' ? <BracesIcon size={15} /> : mode === 'diagram' ? <WorkflowIcon size={15} /> : <BoxIcon size={15} />}
               offIcon={<PenLine size={15} />}
-              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : mode === 'doc' ? 'Doc' : 'Code'}
+              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : mode === 'doc' ? 'Doc' : mode === 'code' ? 'Code' : 'Diagram'}
               offLabel="2D"
             />
           </div>
@@ -254,7 +254,7 @@ export function Onboarding() {
                   >
                     <Clock size={11} className="shrink-0 text-text-dim" />
                     <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
-                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'text-accent-2' : 'text-green')}>
+                    <span className={cn('text-[9px] font-mono uppercase', r.mode === '3d' ? 'text-accent' : r.mode === 'audio' ? 'text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'text-accent-2' : r.mode === 'diagram' ? 'text-sky-400' : 'text-green')}>
                       {r.mode}
                     </span>
                   </button>
@@ -307,7 +307,7 @@ export function Onboarding() {
                     }}
                     className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-bg-2 text-left hover:border-accent/50"
                   >
-                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'bg-accent-2/10 text-accent-2' : 'bg-green/10 text-green')}>
+                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', r.mode === '3d' ? 'bg-accent/10 text-accent' : r.mode === 'audio' ? 'bg-warn/10 text-warn' : r.mode === 'doc' || r.mode === 'code' ? 'bg-accent-2/10 text-accent-2' : r.mode === 'diagram' ? 'bg-sky-500/10 text-sky-400' : 'bg-green/10 text-green')}>
                       {r.mode.toUpperCase()}
                     </span>
                     <span className="flex flex-col gap-0.5 p-2">

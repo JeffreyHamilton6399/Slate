@@ -26,6 +26,8 @@ import {
   DOC_TEXT_KEY,
   CODE_FILES_KEY,
   codeTextKey,
+  DIAGRAM_NODES_KEY,
+  DIAGRAM_EDGES_KEY,
   type BoardMeta,
   type DocMode,
 } from '@slate/sync-protocol';
@@ -63,6 +65,10 @@ export interface SlateDoc {
   codeFiles: () => Y.Map<Y.Map<unknown>>;
   /** A code file's shared text content (top-level Y.Text keyed by file id). */
   codeText: (fileId: string) => Y.Text;
+  /** 'diagram' boards: node id → Y.Map (a DiagramNode). */
+  diagramNodes: () => Y.Map<Y.Map<unknown>>;
+  /** 'diagram' boards: edge id → Y.Map (a DiagramEdge). */
+  diagramEdges: () => Y.Map<Y.Map<unknown>>;
 }
 
 export function createSlateDoc(): SlateDoc {
@@ -88,6 +94,8 @@ export function createSlateDoc(): SlateDoc {
     docText: () => doc.getXmlFragment(DOC_TEXT_KEY),
     codeFiles: () => doc.getMap<Y.Map<unknown>>(CODE_FILES_KEY),
     codeText: (fileId: string) => doc.getText(codeTextKey(fileId)),
+    diagramNodes: () => doc.getMap<Y.Map<unknown>>(DIAGRAM_NODES_KEY),
+    diagramEdges: () => doc.getMap<Y.Map<unknown>>(DIAGRAM_EDGES_KEY),
   };
 }
 

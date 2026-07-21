@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react';
-import { Box, PenLine } from 'lucide-react';
+import { Box, PenLine, Workflow } from 'lucide-react';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
@@ -22,7 +22,7 @@ export function NewProjectDialog({
 }) {
   const enterBoard = useAppStore((s) => s.enterBoard);
   const [name, setName] = useState('');
-  const [mode, setMode] = useState<'2d' | '3d'>('2d');
+  const [mode, setMode] = useState<'2d' | '3d' | 'diagram'>('2d');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
 
   const create = () => {
@@ -57,11 +57,12 @@ export function NewProjectDialog({
         </div>
         <div>
           <FieldLabel>Type</FieldLabel>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {(
               [
                 ['2d', '2D whiteboard', PenLine],
                 ['3d', '3D editor', Box],
+                ['diagram', 'Diagram', Workflow],
               ] as const
             ).map(([v, label, Icon]) => (
               <button

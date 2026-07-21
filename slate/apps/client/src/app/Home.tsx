@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Braces as BracesIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
+import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Trash2, FolderOpen, ChevronRight, Coffee, UserCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input, FieldLabel } from '../ui/Input';
@@ -301,6 +301,7 @@ function modeBadgeClass(mode: DocMode): string {
   if (mode === '3d') return 'bg-accent/15 text-accent';
   if (mode === 'audio') return 'bg-warn/15 text-warn';
   if (mode === 'doc' || mode === 'code') return 'bg-accent-2/15 text-accent-2';
+  if (mode === 'diagram') return 'bg-sky-500/15 text-sky-400';
   return 'bg-green/15 text-green';
 }
 
@@ -379,7 +380,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
     if (!linkBoard) return;
     const rawMode = params.get('mode');
     const linkMode: DocMode | null =
-      rawMode === '3d' || rawMode === '2d' || rawMode === 'audio' || rawMode === 'doc' || rawMode === 'code' ? rawMode : null;
+      rawMode === '3d' || rawMode === '2d' || rawMode === 'audio' || rawMode === 'doc' || rawMode === 'code' || rawMode === 'diagram' ? rawMode : null;
     window.history.replaceState(null, '', window.location.pathname);
     const join = (creator: boolean, mode: DocMode) =>
       enterBoard({
@@ -473,10 +474,10 @@ function Home({ email, userId }: { email: string; userId: string }) {
                 />
                 <IconToggle
                   active={createMode !== '2d'}
-                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : createMode === 'audio' ? 'doc' : createMode === 'doc' ? 'code' : '2d')}
-                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : createMode === 'doc' ? <FileTextIcon size={15} /> : createMode === 'code' ? <BracesIcon size={15} /> : <BoxIcon size={15} />}
+                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : createMode === 'audio' ? 'doc' : createMode === 'doc' ? 'code' : createMode === 'code' ? 'diagram' : '2d')}
+                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : createMode === 'doc' ? <FileTextIcon size={15} /> : createMode === 'code' ? <BracesIcon size={15} /> : createMode === 'diagram' ? <WorkflowIcon size={15} /> : <BoxIcon size={15} />}
                   offIcon={<PenLineIcon size={15} />}
-                  onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : createMode === 'doc' ? 'Doc' : 'Code'}
+                  onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : createMode === 'doc' ? 'Doc' : createMode === 'code' ? 'Code' : 'Diagram'}
                   offLabel="2D whiteboard"
                 />
                 <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
@@ -636,7 +637,9 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
                         ? 'bg-warn/10 text-warn'
                         : r.mode === 'doc' || r.mode === 'code'
                           ? 'bg-accent-2/10 text-accent-2'
-                          : 'bg-green/10 text-green',
+                          : r.mode === 'diagram'
+                            ? 'bg-sky-500/10 text-sky-400'
+                            : 'bg-green/10 text-green',
                   )}
                 >
                   {r.mode.toUpperCase()}

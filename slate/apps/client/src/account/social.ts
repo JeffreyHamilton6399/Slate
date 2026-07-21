@@ -91,7 +91,7 @@ export async function getIncomingInvites(userId: string): Promise<BoardInvite[]>
     fromName: byId.get(r.from_user)?.display_name ?? 'A friend',
     fromAvatar: byId.get(r.from_user)?.avatar_url ?? null,
     boardName: r.board_name,
-    mode: (r.mode === '3d' || r.mode === 'audio' || r.mode === 'doc' || r.mode === 'code' ? r.mode : '2d') as DocMode,
+    mode: (r.mode === '3d' || r.mode === 'audio' || r.mode === 'doc' || r.mode === 'code' || r.mode === 'diagram' ? r.mode : '2d') as DocMode,
     createdAt: Date.parse(r.created_at) || Date.now(),
   }));
 }

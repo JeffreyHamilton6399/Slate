@@ -17,6 +17,8 @@ import type {
   AudioClip,
   AudioTrack,
   ChatMessage,
+  DiagramEdge,
+  DiagramNode,
   DocMode,
   Layer,
   Material,
@@ -29,6 +31,8 @@ import type {
 } from '@slate/sync-protocol';
 import {
   chatMessageSchema,
+  diagramEdgeSchema,
+  diagramNodeSchema,
   layerSchema,
   materialSchema,
   meshDataSchema,
@@ -93,6 +97,16 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
     const parsed = chatMessageSchema.safeParse(plainObj(m));
     if (parsed.success) chat.push(parsed.data);
   });
+  const diagramNodes: DiagramNode[] = [];
+  slate.diagramNodes().forEach((m, id) => {
+    const parsed = diagramNodeSchema.safeParse({ ...plainObj(m), id });
+    if (parsed.success) diagramNodes.push(parsed.data);
+  });
+  const diagramEdges: DiagramEdge[] = [];
+  slate.diagramEdges().forEach((m, id) => {
+    const parsed = diagramEdgeSchema.safeParse({ ...plainObj(m), id });
+    if (parsed.success) diagramEdges.push(parsed.data);
+  });
 
   return {
     schema: SCHEMA_VERSION,
@@ -120,6 +134,7 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
       },
       notes,
       chat,
+      diagram: { nodes: diagramNodes, edges: diagramEdges },
       // Rich text for 'doc' boards (PM-shaped JSON). Cheap no-op ({} content)
       // on other modes; captured unconditionally so a board that switched
       // modes never silently loses its document. Guard against the fragment
@@ -185,6 +200,10 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     notes.delete(0, notes.length);
     const chat = slate.chat();
     chat.delete(0, chat.length);
+    const diagramNodes = slate.diagramNodes();
+    diagramNodes.forEach((_, k) => diagramNodes.delete(k));
+    const diagramEdges = slate.diagramEdges();
+    diagramEdges.forEach((_, k) => diagramEdges.delete(k));
 
     // Re-hydrate.
     const meta = slate.meta();
@@ -205,6 +224,11 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     }
     for (const n of snapshot.data.notes) notes.push([toYMap(n)]);
     for (const c of snapshot.data.chat) chat.push([toYMap(c)]);
+    // Diagram nodes + edges (absent on snapshots from older clients).
+    if (snap.diagram) {
+      for (const n of snap.diagram.nodes) diagramNodes.set(n.id, toYMap(n));
+      for (const e of snap.diagram.edges) diagramEdges.set(e.id, toYMap(e));
+    }
     // Rich-text document (absent on snapshots from older clients).
     try {
       if (snap.docText !== undefined) jsonToDocText(slate.docText(), snap.docText);

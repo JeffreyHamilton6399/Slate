@@ -30,7 +30,7 @@ export const boardMetaSchema = z.object({
   name: z.string().min(1).max(MAX_BOARD_NAME_LEN),
   topic: z.string().max(MAX_TOPIC_LEN),
   visibility: z.enum(['public', 'private']),
-  mode: z.enum(['2d', '3d', 'audio', 'doc', 'code']),
+  mode: z.enum(['2d', '3d', 'audio', 'doc', 'code', 'diagram']),
   paper: colorString,
   hostId: idSchema,
 });
@@ -194,6 +194,36 @@ export const noteSectionSchema = z.object({
   items: z.array(noteItemSchema).max(500),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
+});
+
+/** Diagram node validator — matches the DiagramNode interface in schema.ts. */
+export const diagramNodeSchema = z.object({
+  id: idSchema,
+  shape: z.enum(['rect', 'ellipse', 'diamond', 'note', 'pill', 'parallelogram', 'hexagon', 'cylinder', 'triangle']),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  w: z.number().finite(),
+  h: z.number().finite(),
+  text: z.string().max(5000),
+  fill: colorString,
+  stroke: colorString,
+  createdAt: z.number().int().nonnegative(),
+  authorId: idSchema,
+});
+
+/** Diagram edge (connector) validator — matches the DiagramEdge interface. */
+export const diagramEdgeSchema = z.object({
+  id: idSchema,
+  from: idSchema,
+  to: idSchema,
+  label: z.string().max(2000),
+  stroke: colorString,
+  // Optional with defaults so connectors saved by older clients (which lack
+  // these fields) still parse — they read back as straight + solid.
+  routing: z.enum(['straight', 'curved', 'elbow']).optional().default('straight'),
+  dashed: z.boolean().optional().default(false),
+  createdAt: z.number().int().nonnegative(),
+  authorId: idSchema,
 });
 
 export const chatMessageSchema = z.object({

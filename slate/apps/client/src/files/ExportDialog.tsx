@@ -31,6 +31,8 @@ import { useCanvasStore } from '../canvas2d/store';
 import { readAudioClip } from '../audio/scene';
 import { docFragmentToMarkdown } from '../docs/exportMarkdown';
 import { codeZipBlob, listCodeFiles } from '../code/exportCode';
+import { readNodes, readEdges } from '../diagram/model';
+import { diagramToSvg, diagramSvgToPng } from '../diagram/exportDiagram';
 import { toast } from '../ui/Toast';
 import {
   layerSchema,
@@ -83,23 +85,25 @@ type ExportFormat =
 /** Default format per board mode — used when the dialog opens or the mode
  *  changes so a stale format from another mode is never selected. */
 function defaultFormatForMode(
-  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | undefined,
+  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | undefined,
 ): ExportFormat {
   if (mode === '3d') return 'glb';
   if (mode === 'audio') return 'wav';
   if (mode === 'doc') return 'md';
   if (mode === 'code') return 'zip';
+  if (mode === 'diagram') return 'svg';
   return 'png';
 }
 
 export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const room = useRoom();
   const board = useAppStore((s) => s.currentBoard);
-  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code';
+  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram';
   const is3d = mode === '3d';
   const isAudio = mode === 'audio';
   const isDoc = mode === 'doc';
   const isCode = mode === 'code';
+  const isDiagram = mode === 'diagram';
   const [format, setFormat] = useState<ExportFormat>(defaultFormatForMode(mode));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -134,6 +138,20 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           downloadText(html, `${boardName}.html`, 'text/html');
         } else {
           throw new Error(`Unsupported doc format: ${format}`);
+        }
+      } else if (isDiagram) {
+        // Diagram mode — SVG (vector) or a PNG rasterized from it, both framed
+        // to the content bounds (independent of the live viewport).
+        const boardName = board?.name ?? 'slate-diagram';
+        const nodes = readNodes(room.slate.diagramNodes());
+        const edges = readEdges(room.slate.diagramEdges());
+        if (nodes.length === 0) throw new Error('Nothing to export — add a node first.');
+        const meta = readMeta(room.slate);
+        const svg = diagramToSvg(nodes, edges, meta.paper ?? '#0c0c0e');
+        if (format === 'svg') {
+          downloadText(svg, `${boardName}.svg`, 'image/svg+xml');
+        } else {
+          downloadBlob(await diagramSvgToPng(svg, 2), `${boardName}.png`);
         }
       } else if (isCode) {
         // Code mode — ZIP every file or download the active file's content.
@@ -253,8 +271,10 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         ? (['md', 'html'] as const)
         : isCode
           ? (['zip', 'file'] as const)
-          : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
-  const raster = !is3d && !isAudio && !isDoc && !isCode && format !== 'svg' && format !== 'mp4';
+          : isDiagram
+            ? (['svg', 'png'] as const)
+            : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
+  const raster = !is3d && !isAudio && !isDoc && !isCode && !isDiagram && format !== 'svg' && format !== 'mp4';
 
   const description = isAudio
     ? 'Export the audio mix to a file.'
@@ -264,7 +284,9 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         ? 'Export this document to a file.'
         : isCode
           ? 'Export this project to a file.'
-          : 'Export this canvas to a file.';
+          : isDiagram
+            ? 'Export this diagram to a file.'
+            : 'Export this canvas to a file.';
 
   return (
     <Dialog

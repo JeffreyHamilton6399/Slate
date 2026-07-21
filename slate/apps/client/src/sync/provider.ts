@@ -79,6 +79,8 @@ export class SlateRoom {
       this.slate.scene3dMeshes(),
       this.slate.scene3dMaterials(),
       this.slate.notes(),
+      this.slate.diagramNodes(),
+      this.slate.diagramEdges(),
     ] as unknown as Y.AbstractType<unknown>[];
     this.undo = new Y.UndoManager(tracked, {
       captureTimeout: 350,

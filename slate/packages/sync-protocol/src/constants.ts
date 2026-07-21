@@ -102,3 +102,9 @@ export const DOC_TEXT_KEY = 'doc:text';
  *  types) but costs only its retained text. */
 export const CODE_FILES_KEY = 'code:files';
 export const codeTextKey = (fileId: string): string => `code:text:${fileId}`;
+
+/** Top-level Y.Maps for 'diagram' boards: node id → Y.Map, edge id → Y.Map.
+ *  Top-level + globally keyed for the same reason as the scene/audio
+ *  containers (see the doc.ts container doctrine). */
+export const DIAGRAM_NODES_KEY = 'diagram:nodes';
+export const DIAGRAM_EDGES_KEY = 'diagram:edges';

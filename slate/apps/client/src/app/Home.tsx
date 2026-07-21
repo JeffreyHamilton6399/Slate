@@ -658,7 +658,9 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
               <button
                 type="button"
                 onClick={() => onDelete(r.boardName)}
-                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+                // Visible on mobile (no hover there); desktop reveals it on
+                // hover so the card looks clean by default.
+                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-100 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
                 aria-label={`Delete project ${r.boardName}`}
               >
                 <Trash2 size={11} />

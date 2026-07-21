@@ -22,7 +22,7 @@ import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
-import { modeBadgeClass, modeHeaderClass, modeTextClass } from './modeColors';
+import { modeBadgeClass, modeHeaderClass } from './modeColors';
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -37,6 +37,7 @@ export function Onboarding() {
   const [allProjectsOpen, setAllProjectsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
+  const [tos, setTos] = useState(false);
   const [savesVersion, setSavesVersion] = useState(0);
 
   // Build recents from local saves (max 3).
@@ -107,7 +108,8 @@ export function Onboarding() {
     const clean = sanitizeDisplayName(name) || 'Guest';
     // Board name is required — the user must name their project.
     const room = sanitizeBoardName(board);
-    if (!room) return;
+    // ToS must be accepted — mirrors the sign-up flow's required checkbox.
+    if (!room || !tos) return;
     setDisplayName(clean);
     enterBoard({
       name: room,
@@ -118,16 +120,16 @@ export function Onboarding() {
     });
   };
 
-  const canSubmit = sanitizeBoardName(board).length > 0;
+  const canSubmit = sanitizeBoardName(board).length > 0 && tos;
 
   return (
-    <div className="fixed inset-0 z-[1000] grid place-items-center p-6 bg-bg overflow-auto">
+    <div className="fixed inset-0 z-[1000] grid place-items-center p-3 bg-bg overflow-auto sm:p-6">
       {/* Ambient gradient backdrop */}
       <div className="pointer-events-none fixed inset-0 opacity-60">
         <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full bg-accent/20 blur-3xl" />
         <div className="absolute -bottom-40 -right-40 h-96 w-96 rounded-full bg-green/15 blur-3xl" />
       </div>
-      <div className="surface relative w-full max-w-md p-8 flex flex-col gap-5 shadow-[0_32px_80px_rgba(0,0,0,0.5),0_0_0_1px_var(--accent-glow)]">
+      <div className="surface relative w-full max-w-md p-5 flex flex-col gap-4 shadow-[0_32px_80px_rgba(0,0,0,0.5),0_0_0_1px_var(--accent-glow)] sm:p-8 sm:gap-5">
         <header className="flex items-center gap-3">
           <SlateMark />
           <div>
@@ -137,12 +139,13 @@ export function Onboarding() {
             <p className="text-xs text-text-dim">Real-time whiteboard &amp; 3D editor</p>
           </div>
           <div className="flex-1" />
-          {/* Quick donate text link — small, unobtrusive. */}
+          {/* Quick donate text link — small, unobtrusive. Hidden on very
+              small screens (also reachable from the guest dropdown). */}
           <a
             href="https://buymeacoffee.com/jeffreyscof"
             target="_blank"
             rel="noreferrer noopener"
-            className="flex items-center gap-1 text-[11px] text-text-dim transition-colors hover:text-accent"
+            className="hidden items-center gap-1 text-[11px] text-text-dim transition-colors hover:text-accent sm:flex"
             title="Support Slate — buy me a coffee"
           >
             <Coffee size={12} />
@@ -223,6 +226,27 @@ export function Onboarding() {
               offLabel="2D"
             />
           </div>
+          {/* Terms of Service acceptance — required to enter the board. Mirrors
+              the sign-up flow's checkbox so guests and accounts see the same
+              gate. Links to the TermsDialog (already mounted below). */}
+          <label className="flex items-start gap-2 text-xs text-text-mid">
+            <input
+              type="checkbox"
+              checked={tos}
+              onChange={(e) => setTos(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <span>
+              I agree to the{' '}
+              <button
+                type="button"
+                onClick={() => setTermsOpen(true)}
+                className="text-accent underline-offset-2 hover:underline"
+              >
+                Terms of Service &amp; Privacy Policy
+              </button>
+            </span>
+          </label>
           <Button type="submit" size="lg" className="mt-2 w-full" disabled={!canSubmit}>
             Enter board
           </Button>
@@ -255,7 +279,12 @@ export function Onboarding() {
                   >
                     <Clock size={11} className="shrink-0 text-text-dim" />
                     <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
-                    <span className={cn('text-[9px] font-mono uppercase', modeTextClass(r.mode))}>
+                    <span
+                      className={cn(
+                        'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
+                        modeBadgeClass(r.mode),
+                      )}
+                    >
                       {r.mode}
                     </span>
                   </button>
@@ -330,7 +359,9 @@ export function Onboarding() {
                       for (const e of listSaves()) if (e.boardName === r.boardName) deleteSave(e.id);
                       refreshSaves();
                     }}
-                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+                    // Visible on mobile (no hover there); desktop reveals it on
+                    // hover so the card looks clean by default.
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-100 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
                     aria-label="Delete project"
                   >
                     <Trash2 size={10} />

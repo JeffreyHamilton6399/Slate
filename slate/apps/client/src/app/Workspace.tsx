@@ -41,6 +41,7 @@ const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ 
 const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
 const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
+import { WelcomeOverlay } from './WelcomeOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
 import { ImportDialog } from '../files/ImportDialog';
@@ -387,7 +388,13 @@ export function Workspace() {
                 type="button"
                 onClick={() => setMobileDrawer(true)}
                 aria-label="Open panels"
-                className="absolute bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition-transform hover:scale-105 active:scale-95"
+                // bottom-16 (64px) clears the 2D bottom toolbar (bottom-2 +
+                // ~32px height → ends ~48px from bottom), the doc word-count
+                // footer (~24px), and the closed 3D timeline pill. The 2D
+                // left toolbar explicitly reserves bottom-16 for this zone.
+                // +safe-bottom so iOS home-indicator doesn't underlap the FAB.
+                style={{ bottom: 'calc(4rem + var(--safe-bottom, 0px))' }}
+                className="absolute right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition-transform hover:scale-105 active:scale-95"
               >
                 <PanelsFabIcon />
               </button>
@@ -408,6 +415,11 @@ export function Workspace() {
         <BoardSettingsDialog open={boardSettingsOpen} onOpenChange={setBoardSettingsOpen} />
         <NewProjectDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
         <AutosaveBadge state={autosave} />
+        {/* One-time first-run welcome overlay. Mounts whenever the Workspace
+            mounts (i.e., whenever the user enters a board); it self-gates on
+            the `slate.onboarding.done` localStorage flag, so it only shows on
+            the very first board entry on this device, then never again. */}
+        <WelcomeOverlay />
       </div>
       </VoiceProvider>
     </RoomProvider>

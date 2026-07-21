@@ -127,8 +127,9 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
       className="max-w-5xl w-[95vw] p-0"
     >
       <div className="flex max-h-[85vh] min-h-[300px] flex-col sm:flex-row">
-        {/* Tab rail */}
-        <nav className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
+        {/* Tab rail — horizontal scroll strip on mobile so the three tabs
+            always fit (even on a 320px screen), and a left rail on sm+. */}
+        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-2 sm:w-56 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
           <div className="mb-2 hidden items-center gap-2 px-1.5 sm:flex">
             <Avatar url={avatarUrl} name={displayName || email} size={38} />
             <div className="min-w-0">
@@ -143,7 +144,7 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
               onClick={() => setTab(id)}
               aria-current={tab === id}
               className={
-                'flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ' +
+                'flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ' +
                 (tab === id
                   ? 'bg-accent/15 text-accent'
                   : 'text-text-mid hover:bg-bg-3 hover:text-text')
@@ -156,7 +157,7 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
         </nav>
 
         {/* Content */}
-        <div className="min-w-0 flex-1 overflow-y-auto p-6">
+        <div className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
           {tab === 'profile' && <ProfileTabView />}
           {tab === 'friends' && (
             <section>

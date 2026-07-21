@@ -1,0 +1,816 @@
+     1→/**
+     2→ * Entry surface — the Photoshop-style start experience.
+     3→ *
+     4→ *   Accounts configured + signed out → SignIn (magic link).
+     5→ *   Accounts configured + signed in  → Home: recent projects (cloud-restored
+     6→ *     so they follow you across devices), new-board creation, live boards.
+     7→ *   Accounts not configured          → the classic account-less Onboarding.
+     8→ */
+     9→
+    10→import { useEffect, useState } from 'react';
+    11→import { Clock, Eye, EyeOff, LogOut, Plus, Users, Globe, Lock, Box as BoxIcon, PenLine as PenLineIcon, Music as MusicIcon, FileText as FileTextIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Trash2, FolderOpen, ChevronRight, UserCircle } from 'lucide-react';
+    12→import { Button } from '../ui/Button';
+    13→import { Dialog } from '../ui/Dialog';
+    14→import { Input, FieldLabel } from '../ui/Input';
+    15→import {
+    16→  DropdownMenu,
+    17→  DropdownMenuTrigger,
+    18→  DropdownMenuContent,
+    19→  DropdownMenuItem,
+    20→  DropdownMenuSeparator,
+    21→} from '../ui/DropdownMenu';
+    22→import { cn } from '../utils/cn';
+    23→import { sanitizeDisplayName, type DocMode } from '@slate/sync-protocol';
+    24→import { useAppStore } from './store';
+    25→import { Onboarding, SlateMark, sanitizeBoardName, randomBoardName } from './Onboarding';
+    26→import { Avatar } from './Avatar';
+    27→import { ProfileDialog, type ProfileTab } from './ProfileDialog';
+    28→import { AboutDialog } from './AboutDialog';
+    29→import { TermsDialog } from './TermsDialog';
+    30→import { fetchRooms, type PublicRoom } from '../sync/rooms';
+    31→import { listSaves, deleteSave } from '../files/snapshot';
+    32→import { accountsEnabled, supabase } from '../account/supabase';
+    33→import { useAccount } from '../account/useAccount';
+    34→import { restoreSavesFromCloud } from '../account/cloudSaves';
+    35→import { ensureMyProfile, fetchMyProfile } from '../account/friends';
+    36→import { useFriends } from '../account/useFriends';
+    37→import { modeBadgeClass, modeHeaderClass } from './modeColors';
+    38→
+    39→export function Entry() {
+    40→  const { user, loading } = useAccount();
+    41→  if (!accountsEnabled) return <Onboarding />;
+    42→  if (loading) {
+    43→    return (
+    44→      <div className="fixed inset-0 grid place-items-center bg-bg text-xs text-text-dim">
+    45→        Checking session…
+    46→      </div>
+    47→    );
+    48→  }
+    49→  if (!user) return <SignIn />;
+    50→  return <Home email={user.email ?? ''} userId={user.id} />;
+    51→}
+    52→
+    53→/** Email + password sign-in / sign-up (display name + ToS on sign-up). */
+    54→function SignIn() {
+    55→  const [tab, setTab] = useState<'signin' | 'signup'>('signin');
+    56→  const [email, setEmail] = useState('');
+    57→  const [password, setPassword] = useState('');
+    58→  const [confirm, setConfirm] = useState('');
+    59→  const [displayName, setDisplayNameField] = useState('');
+    60→  const [showPw, setShowPw] = useState(false);
+    61→  const [tos, setTos] = useState(false);
+    62→  const [termsOpen, setTermsOpen] = useState(false);
+    63→  const [busy, setBusy] = useState(false);
+    64→  const [error, setError] = useState<string | null>(null);
+    65→  const [notice, setNotice] = useState<string | null>(null);
+    66→  /** Set when a sign-in fails because the email is unconfirmed — enables Resend. */
+    67→  const [needsConfirm, setNeedsConfirm] = useState(false);
+    68→  const setDisplayName = useAppStore((s) => s.setDisplayName);
+    69→
+    70→  const base = email.includes('@') && password.length >= 6;
+    71→  const valid =
+    72→    tab === 'signin'
+    73→      ? base
+    74→      : base && password === confirm && sanitizeDisplayName(displayName).length > 0 && tos;
+    75→
+    76→  const submit = async (e?: React.FormEvent) => {
+    77→    e?.preventDefault();
+    78→    if (!supabase || !valid) return;
+    79→    setBusy(true);
+    80→    setError(null);
+    81→    setNotice(null);
+    82→    setNeedsConfirm(false);
+    83→    // Timeout so a misconfigured / unreachable Supabase never freezes the
+    84→    // form on "Working…" forever — the user can retry.
+    85→    const timeout = new Promise<never>((_, reject) =>
+    86→      setTimeout(() => reject(new Error('Request timed out — check your connection and retry.')), 20000),
+    87→    );
+    88→    try {
+    89→      if (tab === 'signin') {
+    90→        const race = await Promise.race([
+    91→          supabase.auth.signInWithPassword({ email, password }),
+    92→          timeout,
+    93→        ]);
+    94→        const err = race.error;
+    95→        if (err) {
+    96→          const unconfirmed = err.message === 'Email not confirmed';
+    97→          setNeedsConfirm(unconfirmed);
+    98→          setError(
+    99→            unconfirmed
+   100→              ? 'This account still needs its email confirmed — check your inbox (and spam) for the link, or resend it below.'
+   101→              : err.message,
+   102→          );
+   103→        }
+   104→      } else {
+   105→        const clean = sanitizeDisplayName(displayName);
+   106→        const race = await Promise.race([
+   107→          supabase.auth.signUp({
+   108→            email,
+   109→            password,
+   110→            options: { emailRedirectTo: window.location.origin, data: { display_name: clean } },
+   111→          }),
+   112→          timeout,
+   113→        ]);
+   114→        const err = race.error;
+   115→        if (err) setError(err.message);
+   116→        else {
+   117→          setDisplayName(clean);
+   118→          if (!race.data.session) {
+   119→            setNotice(
+   120→              `Account created. We sent a confirmation link to ${email} — click it, then sign in here.`,
+   121→            );
+   122→            setTab('signin');
+   123→          }
+   124→        }
+   125→      }
+   126→    } catch (err) {
+   127→      setError((err as Error).message || 'Something went wrong. Please retry.');
+   128→    }
+   129→    setBusy(false);
+   130→  };
+   131→
+   132→  const resendConfirmation = async () => {
+   133→    if (!supabase || !email.includes('@')) return;
+   134→    setBusy(true);
+   135→    setError(null);
+   136→    const { error: err } = await supabase.auth.resend({
+   137→      type: 'signup',
+   138→      email,
+   139→      options: { emailRedirectTo: window.location.origin },
+   140→    });
+   141→    setBusy(false);
+   142→    if (err) setError(err.message);
+   143→    else {
+   144→      setNeedsConfirm(false);
+   145→      setNotice(`Confirmation email re-sent to ${email}. Check your inbox and spam folder.`);
+   146→    }
+   147→  };
+   148→
+   149→  return (
+   150→    <div className="fixed inset-0 z-[1000] grid place-items-center p-6 bg-bg overflow-auto">
+   151→      <div className="surface w-full max-w-sm p-8 flex flex-col gap-5 shadow-[0_32px_80px_rgba(0,0,0,0.5),0_0_0_1px_var(--accent-glow)]">
+   152→        <header className="flex items-center gap-3">
+   153→          <SlateMark />
+   154→          <div>
+   155→            <h1 className="text-2xl font-bold bg-gradient-to-br from-text to-accent bg-clip-text text-transparent leading-tight">
+   156→              Slate
+   157→            </h1>
+   158→            <p className="text-xs text-text-dim">Real-time whiteboard &amp; 3D editor</p>
+   159→          </div>
+   160→        </header>
+   161→
+   162→        <div className="flex rounded-sm bg-bg-3 p-0.5">
+   163→          {(
+   164→            [
+   165→              ['signin', 'Sign in'],
+   166→              ['signup', 'Create account'],
+   167→            ] as const
+   168→          ).map(([v, label]) => (
+   169→            <button
+   170→              key={v}
+   171→              type="button"
+   172→              onClick={() => {
+   173→                setTab(v);
+   174→                setError(null);
+   175→                setNotice(null);
+   176→              }}
+   177→              className={cn(
+   178→                'flex-1 rounded-sm py-1.5 text-xs font-medium',
+   179→                tab === v ? 'bg-accent text-white' : 'text-text-dim hover:text-text',
+   180→              )}
+   181→            >
+   182→              {label}
+   183→            </button>
+   184→          ))}
+   185→        </div>
+   186→
+   187→        <form onSubmit={submit} className="flex flex-col gap-3">
+   188→          {tab === 'signup' && (
+   189→            <div>
+   190→              <FieldLabel>Display name</FieldLabel>
+   191→              <Input
+   192→                autoFocus
+   193→                maxLength={40}
+   194→                value={displayName}
+   195→                onChange={(e) => setDisplayNameField(e.target.value)}
+   196→                placeholder="How collaborators see you"
+   197→              />
+   198→            </div>
+   199→          )}
+   200→          <div>
+   201→            <FieldLabel>Email</FieldLabel>
+   202→            <Input
+   203→              autoFocus={tab === 'signin'}
+   204→              type="email"
+   205→              value={email}
+   206→              onChange={(e) => setEmail(e.target.value)}
+   207→              placeholder="you@example.com"
+   208→              autoComplete="email"
+   209→            />
+   210→          </div>
+   211→          <div>
+   212→            <FieldLabel>Password</FieldLabel>
+   213→            <div className="relative">
+   214→              <Input
+   215→                type={showPw ? 'text' : 'password'}
+   216→                value={password}
+   217→                onChange={(e) => setPassword(e.target.value)}
+   218→                placeholder={tab === 'signup' ? 'At least 6 characters' : '••••••••'}
+   219→                autoComplete={tab === 'signup' ? 'new-password' : 'current-password'}
+   220→                className="pr-8"
+   221→              />
+   222→              <button
+   223→                type="button"
+   224→                aria-label={showPw ? 'Hide password' : 'Show password'}
+   225→                onClick={() => setShowPw((v) => !v)}
+   226→                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-dim hover:text-text"
+   227→              >
+   228→                {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+   229→              </button>
+   230→            </div>
+   231→          </div>
+   232→          {tab === 'signup' && (
+   233→            <>
+   234→              <div>
+   235→                <FieldLabel>Re-enter password</FieldLabel>
+   236→                <Input
+   237→                  type={showPw ? 'text' : 'password'}
+   238→                  value={confirm}
+   239→                  onChange={(e) => setConfirm(e.target.value)}
+   240→                  placeholder="Same password again"
+   241→                  autoComplete="new-password"
+   242→                />
+   243→                {confirm.length > 0 && confirm !== password && (
+   244→                  <p className="mt-1 text-xs text-danger">Passwords don&apos;t match.</p>
+   245→                )}
+   246→              </div>
+   247→              <label className="flex items-start gap-2 text-xs text-text-mid">
+   248→                <input
+   249→                  type="checkbox"
+   250→                  checked={tos}
+   251→                  onChange={(e) => setTos(e.target.checked)}
+   252→                  className="mt-0.5 accent-accent"
+   253→                />
+   254→                <span>
+   255→                  I agree to the{' '}
+   256→                  <button
+   257→                    type="button"
+   258→                    onClick={() => setTermsOpen(true)}
+   259→                    className="text-accent underline-offset-2 hover:underline"
+   260→                  >
+   261→                    Terms of Service &amp; Privacy Policy
+   262→                  </button>
+   263→                </span>
+   264→              </label>
+   265→            </>
+   266→          )}
+   267→          <Button type="submit" size="lg" disabled={busy || !valid} className="w-full">
+   268→            {busy ? 'Working…' : tab === 'signin' ? 'Sign in' : 'Create account'}
+   269→          </Button>
+   270→          {error && <p className="text-xs text-danger">{error}</p>}
+   271→          {needsConfirm && (
+   272→            <button
+   273→              type="button"
+   274→              onClick={resendConfirmation}
+   275→              disabled={busy}
+   276→              className="self-start text-xs text-accent underline-offset-2 hover:underline disabled:opacity-50"
+   277→            >
+   278→              Resend confirmation email
+   279→            </button>
+   280→          )}
+   281→          {notice && <p className="text-xs text-text-mid">{notice}</p>}
+   282→        </form>
+   283→      </div>
+   284→      <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
+   285→    </div>
+   286→  );
+   287→}
+   288→
+   289→/** Placeholder legal terms — swap for real counsel-reviewed text before launch. */
+   290→/* TermsDialog moved to ./TermsDialog.tsx — shared with Home + Onboarding profile menus. */
+   291→
+   292→interface RecentProject {
+   293→  boardName: string;
+   294→  mode: DocMode;
+   295→  savedAt: number;
+   296→}
+   297→
+   298→/** Signed-in home: recents grid + create + live boards. */
+   299→function Home({ email, userId }: { email: string; userId: string }) {
+   300→  const enterBoard = useAppStore((s) => s.enterBoard);
+   301→  const displayName = useAppStore((s) => s.displayName);
+   302→  const setDisplayName = useAppStore((s) => s.setDisplayName);
+   303→  const [recents, setRecents] = useState<RecentProject[]>(() => recentsFromSaves());
+   304→  const [allProjects, setAllProjects] = useState<RecentProject[]>(() => allProjectsFromSaves());
+   305→  const [allProjectsOpen, setAllProjectsOpen] = useState(false);
+   306→  const [rooms, setRooms] = useState<PublicRoom[]>([]);
+   307→  const [board, setBoard] = useState('');
+   308→  const [visibility, setVisibility] = useState<'public' | 'private'>('public');
+   309→  const [createMode, setCreateMode] = useState<DocMode>('2d');
+   310→  const [profileOpen, setProfileOpen] = useState(false);
+   311→  const [profileTab, setProfileTab] = useState<ProfileTab>('profile');
+   312→  const [aboutOpen, setAboutOpen] = useState(false);
+   313→  const [cloudNote, setCloudNote] = useState('Syncing projects…');
+   314→
+   315→  // Social: friends (for the online section + request badge) and incoming
+   316→  // board invites (notifications + a join banner).
+   317→  // Friend-request badge on the avatar. Board invites are shown as their own
+   318→  // bottom-right notification (BoardInviteNotifications, mounted app-wide).
+   319→  const { incomingCount } = useFriends(userId);
+   320→  const notifCount = incomingCount;
+   321→
+   322→  /** Refresh both the recents widget + the All Projects dialog list. */
+   323→  const refreshSaves = () => {
+   324→    setRecents(recentsFromSaves());
+   325→    setAllProjects(allProjectsFromSaves());
+   326→  };
+   327→
+   328→  // Default the collaboration display name from the account email.
+   329→  useEffect(() => {
+   330→    if (!displayName) setDisplayName(sanitizeDisplayName(email.split('@')[0] ?? '') || 'Guest');
+   331→  }, [displayName, email, setDisplayName]);
+   332→
+   333→  // Pull cloud saves so recents follow the account across devices.
+   334→  useEffect(() => {
+   335→    let cancelled = false;
+   336→    void restoreSavesFromCloud(userId).then((r) => {
+   337→      if (cancelled) return;
+   338→      refreshSaves();
+   339→      setCloudNote(r.error ? `Cloud sync unavailable: ${r.error}` : '');
+   340→    });
+   341→    return () => {
+   342→      cancelled = true;
+   343→    };
+   344→  }, [userId]);
+   345→
+   346→  // Make sure this account has a profiles row on sign-in so FRIENDS can find
+   347→  // us by email — otherwise a user who never opened Profile to save a name is
+   348→  // invisible to "add friend by email".
+   349→  useEffect(() => {
+   350→    if (!userId) return;
+   351→    void ensureMyProfile(userId, email, useAppStore.getState().displayName);
+   352→  }, [userId, email]);
+   353→
+   354→  // Cross-device display-name sync: pull the cloud profile on sign-in and
+   355→  // OVERWRITE the local store with the cloud values. The cloud is the source
+   356→  // of truth — when a user changes their name on device A, device B picks it
+   357→  // up the next time they sign in. (Previously the local store only took the
+   358→  // cloud value when empty, so a device that had a stale localStorage name
+   359→  // never picked up the change.) Empty cloud values keep the local value.
+   360→  useEffect(() => {
+   361→    if (!userId) return;
+   362→    let cancelled = false;
+   363→    void fetchMyProfile(userId).then((prof) => {
+   364→      if (cancelled || !prof) return;
+   365→      const s = useAppStore.getState();
+   366→      if (prof.displayName) s.setDisplayName(prof.displayName);
+   367→      if (prof.avatarUrl) s.setAvatarUrl(prof.avatarUrl);
+   368→      if (prof.bio) s.setBio(prof.bio);
+   369→      if (prof.status) s.setStatusText(prof.status);
+   370→      if (prof.bannerColor) s.setBannerColor(prof.bannerColor);
+   371→    });
+   372→    return () => { cancelled = true; };
+   373→  }, [userId]);
+   374→
+   375→  useEffect(() => {
+   376→    fetchRooms().then(setRooms).catch(() => setRooms([]));
+   377→    // Poll for live board updates (visibility toggles, member counts) so
+   378→    // changes made by other users in their boards reflect here without a
+   379→    // manual refresh. 5s keeps the list feeling live.
+   380→    const interval = setInterval(() => {
+   381→      fetchRooms().then(setRooms).catch(() => {});
+   382→    }, 5_000);
+   383→    return () => clearInterval(interval);
+   384→  }, []);
+   385→
+   386→  // Honor share links (?board=…&mode=…) by joining straight away. Whether
+   387→  // we're the creator matters: creators bootstrap the first layer + meta.
+   388→  useEffect(() => {
+   389→    const params = new URLSearchParams(window.location.search);
+   390→    const linkBoard = sanitizeBoardName(params.get('board') ?? '');
+   391→    if (!linkBoard) return;
+   392→    const rawMode = params.get('mode');
+   393→    const linkMode: DocMode | null =
+   394→      rawMode === '3d' || rawMode === '2d' || rawMode === 'audio' || rawMode === 'doc' || rawMode === 'code' || rawMode === 'diagram' ? rawMode : null;
+   395→    window.history.replaceState(null, '', window.location.pathname);
+   396→    const join = (creator: boolean, mode: DocMode) =>
+   397→      enterBoard({
+   398→        name: linkBoard,
+   399→        mode,
+   400→        visibility: 'public',
+   401→        iAmCreator: creator,
+   402→        joinedAt: Date.now(),
+   403→      });
+   404→    fetchRooms()
+   405→      .then((rs) => {
+   406→        const found = rs.find((r) => r.name === linkBoard);
+   407→        join(!found, linkMode ?? found?.mode ?? '2d');
+   408→      })
+   409→      .catch(() => join(true, linkMode ?? '2d'));
+   410→  }, [enterBoard]);
+   411→
+   412→  const open = (name: string, m: DocMode, creator: boolean) =>
+   413→    enterBoard({ name, mode: m, visibility, iAmCreator: creator, joinedAt: Date.now() });
+   414→
+   415→  const create = (m: DocMode) => {
+   416→    const room = sanitizeBoardName(board) || randomBoardName();
+   417→    open(room, m, !rooms.some((r) => r.name === room));
+   418→  };
+   419→
+   420→  const greeting = displayName || (email.split('@')[0] ?? 'there');
+   421→
+   422→  // Live public boards: only public boards with at least one member. Private
+   423→  // boards and empty rooms disappear from the discovery list.
+   424→  const liveRooms = rooms.filter((r) => r.visibility === 'public' && r.members > 0);
+   425→
+   426→  return (
+   427→    <div className="fixed inset-0 overflow-auto bg-bg">
+   428→      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-10 px-6 py-8 sm:px-10">
+   429→        {/* Header */}
+   430→        <header className="flex items-center gap-3">
+   431→          <SlateMark />
+   432→          <span className="text-lg font-semibold tracking-tight">Slate</span>
+   433→          <div className="flex-1" />
+   434→          <ProfileMenu
+   435→            email={email}
+   436→            notifCount={notifCount}
+   437→            onOpenProfile={() => { setProfileTab('profile'); setProfileOpen(true); }}
+   438→          />
+   439→        </header>
+   440→
+   441→        {/* Hero + create cards */}
+   442→        <section className="flex flex-col gap-5">
+   443→          <div className="flex items-end justify-between gap-3">
+   444→            <div>
+   445→              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+   446→                Welcome back, <span className="text-accent">{greeting}</span>
+   447→              </h1>
+   448→              <p className="mt-1 text-sm text-text-dim">Start something new or pick up where you left off.</p>
+   449→            </div>
+   450→            <Button
+   451→              variant="ghost"
+   452→              size="sm"
+   453→              onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
+   454→              className="shrink-0 gap-1.5 text-text-mid hover:text-text"
+   455→              title="Browse all saved projects"
+   456→            >
+   457→              <FolderOpen size={14} />
+   458→              <span className="hidden sm:inline">All Projects</span>
+   459→              <span className="text-[10px] font-mono text-text-dim">({allProjects.length})</span>
+   460→            </Button>
+   461→          </div>
+   462→          {/* Create bar (left) + Recent widget (right) — side by side on lg so
+   463→              the widget sits in the bottom-right corner of the hero without
+   464→              overlapping the create controls. Stacks vertically on mobile. */}
+   465→          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+   466→            <div className="flex flex-1 flex-col gap-2">
+   467→              {/* Compressed create bar: name (capped, required) + icon toggles +
+   468→                  Create button. Compact single-row layout. */}
+   469→              <div className="flex flex-wrap items-center gap-2">
+   470→                <Input
+   471→                  maxLength={80}
+   472→                  value={board}
+   473→                  onChange={(e) => setBoard(e.target.value)}
+   474→                  placeholder="Project name"
+   475→                  className="min-w-0 max-w-xs flex-1"
+   476→                />
+   477→                <IconToggle
+   478→                  active={visibility === 'public'}
+   479→                  onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
+   480→                  onIcon={<Globe size={15} />}
+   481→                  offIcon={<Lock size={15} />}
+   482→                  onLabel="Public"
+   483→                  offLabel="Private"
+   484→                />
+   485→                <IconToggle
+   486→                  active={createMode !== '2d'}
+   487→                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : createMode === 'audio' ? 'doc' : createMode === 'doc' ? 'code' : createMode === 'code' ? 'diagram' : '2d')}
+   488→                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : createMode === 'doc' ? <FileTextIcon size={15} /> : createMode === 'code' ? <BracesIcon size={15} /> : createMode === 'diagram' ? <WorkflowIcon size={15} /> : <BoxIcon size={15} />}
+   489→                  offIcon={<PenLineIcon size={15} />}
+   490→                  onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : createMode === 'doc' ? 'Doc' : createMode === 'code' ? 'Code' : 'Diagram'}
+   491→                  offLabel="2D whiteboard"
+   492→                />
+   493→                <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
+   494→                  <Plus size={14} />
+   495→                  <span className="ml-1.5">Create</span>
+   496→                </Button>
+   497→              </div>
+   498→              {cloudNote && <span className="text-[11px] text-text-dim">{cloudNote}</span>}
+   499→            </div>
+   500→
+   501→            {/* Recent widget — compact floating panel in the bottom-right of
+   502→                the hero on lg+. Shows at most the 3 most recent projects as
+   503→                single-row clickable entries (mode badge + name + time ago). */}
+   504→            {recents.length > 0 && (
+   505→              <div className="w-full max-w-xs self-end lg:w-80">
+   506→                <div className="rounded-lg border border-border bg-bg-2/95 p-2 shadow-sm backdrop-blur">
+   507→                  <div className="mb-1 flex items-center justify-between px-0.5">
+   508→                    <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Recent</span>
+   509→                    <button
+   510→                      type="button"
+   511→                      onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
+   512→                      className="flex items-center gap-0.5 text-[10px] text-accent hover:underline"
+   513→                    >
+   514→                      View all <ChevronRight size={10} />
+   515→                    </button>
+   516→                  </div>
+   517→                  <ul className="flex flex-col gap-0.5">
+   518→                    {recents.map((r) => (
+   519→                      <li key={r.boardName}>
+   520→                        <button
+   521→                          type="button"
+   522→                          onClick={() => open(r.boardName, r.mode, false)}
+   523→                          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-bg-3"
+   524→                        >
+   525→                          <span
+   526→                            className={cn(
+   527→                              'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
+   528→                              modeBadgeClass(r.mode),
+   529→                            )}
+   530→                          >
+   531→                            {r.mode}
+   532→                          </span>
+   533→                          <span className="min-w-0 flex-1 truncate text-xs font-medium text-text">{r.boardName}</span>
+   534→                          <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-dim">
+   535→                            <Clock size={9} />
+   536→                            {timeAgo(r.savedAt)}
+   537→                          </span>
+   538→                        </button>
+   539→                      </li>
+   540→                    ))}
+   541→                  </ul>
+   542→                </div>
+   543→              </div>
+   544→            )}
+   545→          </div>
+   546→        </section>
+   547→
+   548→        {/* Live public boards */}
+   549→        <section>
+   550→          <h2 className="mb-3 text-sm font-semibold text-text">Live public boards</h2>
+   551→          {liveRooms.length === 0 ? (
+   552→            <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-text-dim">
+   553→              No public boards are live right now. Create one (set it Public) and share the link, or
+   554→              check back later.
+   555→            </p>
+   556→          ) : (
+   557→            <ul className="grid max-h-[50vh] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+   558→              {liveRooms.map((r) => (
+   559→                <li key={r.name}>
+   560→                  <button
+   561→                    type="button"
+   562→                    onClick={() => open(r.name, r.mode, false)}
+   563→                    className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-2 px-3 py-2 text-sm text-text-mid transition-colors hover:border-accent/40 hover:text-text"
+   564→                  >
+   565→                    <span
+   566→                      className={cn(
+   567→                        'rounded px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
+   568→                        modeBadgeClass(r.mode),
+   569→                      )}
+   570→                    >
+   571→                      {r.mode}
+   572→                    </span>
+   573→                    <span className="min-w-0 flex-1 truncate text-left">{r.name}</span>
+   574→                    <Users size={12} className="text-text-dim" />
+   575→                    <span className="font-mono text-xs">{r.members}</span>
+   576→                  </button>
+   577→                </li>
+   578→              ))}
+   579→            </ul>
+   580→          )}
+   581→        </section>
+   582→
+   583→        {/* Footer — the version/author line IS the About link (no separate
+   584→            About button). About holds feedback, donate, and Terms & Privacy. */}
+   585→        <footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">
+   586→          <button
+   587→            type="button"
+   588→            onClick={() => setAboutOpen(true)}
+   589→            className="underline-offset-2 hover:text-accent hover:underline"
+   590→            title="About Slate"
+   591→          >
+   592→            V1 · Jeffrey Hamilton
+   593→          </button>
+   594→        </footer>
+   595→      </div>
+   596→      <ProfileDialog
+   597→        open={profileOpen}
+   598→        onOpenChange={setProfileOpen}
+   599→        initialTab={profileTab}
+   600→      />
+   601→      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+   602→      <AllProjectsDialog
+   603→        open={allProjectsOpen}
+   604→        onOpenChange={setAllProjectsOpen}
+   605→        projects={allProjects}
+   606→        onOpen={(name, mode) => { open(name, mode, false); setAllProjectsOpen(false); }}
+   607→        onDelete={(name) => {
+   608→          if (!window.confirm(`Delete saved project "${name}"? This removes the local + cloud saves, not the live board itself.`)) return;
+   609→          deleteSaveByBoardName(name);
+   610→          refreshSaves();
+   611→        }}
+   612→      />
+   613→    </div>
+   614→  );
+   615→}
+   616→
+   617→/** Modal showing ALL saved projects in a grid with delete buttons. */
+   618→function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
+   619→  open: boolean;
+   620→  onOpenChange: (v: boolean) => void;
+   621→  projects: RecentProject[];
+   622→  onOpen: (name: string, mode: DocMode) => void;
+   623→  onDelete: (name: string) => void;
+   624→}) {
+   625→  return (
+   626→    <Dialog open={open} onOpenChange={onOpenChange} title="All Projects" description={`${projects.length} saved project${projects.length === 1 ? '' : 's'}`}>
+   627→      {projects.length === 0 ? (
+   628→        <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-text-dim">
+   629→          Nothing yet — create your first board on the home screen. Projects follow you on every
+   630→          device you sign in to.
+   631→        </div>
+   632→      ) : (
+   633→        <ul className="grid max-h-[60vh] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
+   634→          {projects.map((r) => (
+   635→            <li key={r.boardName} className="group relative">
+   636→              <button
+   637→                type="button"
+   638→                onClick={() => onOpen(r.boardName, r.mode)}
+   639→                className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
+   640→              >
+   641→                <span
+   642→                  className={cn(
+   643→                    'grid h-16 w-full place-items-center text-xs font-bold tracking-wider',
+   644→                    modeHeaderClass(r.mode),
+   645→                  )}
+   646→                >
+   647→                  {r.mode.toUpperCase()}
+   648→                </span>
+   649→                <span className="flex flex-col gap-0.5 p-2">
+   650→                  <span className="truncate text-xs font-medium text-text group-hover:text-accent">
+   651→                    {r.boardName}
+   652→                  </span>
+   653→                  <span className="flex items-center gap-1 text-[10px] text-text-dim">
+   654→                    <Clock size={9} /> {timeAgo(r.savedAt)}
+   655→                  </span>
+   656→                </span>
+   657→              </button>
+   658→              <button
+   659→                type="button"
+   660→                onClick={() => onDelete(r.boardName)}
+   661→                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-0 hover:text-danger group-hover:opacity-100"
+   662→                aria-label={`Delete project ${r.boardName}`}
+   663→              >
+   664→                <Trash2 size={11} />
+   665→              </button>
+   666→            </li>
+   667→          ))}
+   668→        </ul>
+   669→      )}
+   670→      <div className="flex justify-end pt-3">
+   671→        <Button variant="primary" size="sm" onClick={() => onOpenChange(false)}>
+   672→          Close
+   673→        </Button>
+   674→      </div>
+   675→    </Dialog>
+   676→  );
+   677→}
+   678→
+   679→/** Single-icon toggle: shows one icon when active, another when not. */
+   680→function IconToggle({
+   681→  active,
+   682→  onClick,
+   683→  onIcon,
+   684→  offIcon,
+   685→  onLabel,
+   686→  offLabel,
+   687→}: {
+   688→  active: boolean;
+   689→  onClick: () => void;
+   690→  onIcon: React.ReactNode;
+   691→  offIcon: React.ReactNode;
+   692→  onLabel: string;
+   693→  offLabel: string;
+   694→}) {
+   695→  return (
+   696→    <button
+   697→      type="button"
+   698→      title={active ? onLabel : offLabel}
+   699→      onClick={onClick}
+   700→      aria-pressed={active}
+   701→      aria-label={active ? onLabel : offLabel}
+   702→      className={cn(
+   703→        'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border transition-colors',
+   704→        active
+   705→          ? 'border-accent/60 bg-accent/15 text-accent'
+   706→          : 'border-border text-text-mid hover:bg-bg-3 hover:text-text',
+   707→      )}
+   708→    >
+   709→      {active ? onIcon : offIcon}
+   710→    </button>
+   711→  );
+   712→}
+   713→
+   714→/** Latest save per board, newest first — capped to the 3 most recent for the
+   715→ *  compact Recent widget in the hero corner. */
+   716→function recentsFromSaves(): RecentProject[] {
+   717→  return allProjectsFromSaves().slice(0, 3);
+   718→}
+   719→
+   720→/** Latest save per board, newest first — NO cap. Used by the All Projects
+   721→ *  dialog so the user can browse every saved project. */
+   722→function allProjectsFromSaves(): RecentProject[] {
+   723→  const byBoard = new Map<string, RecentProject>();
+   724→  for (const e of listSaves()) {
+   725→    const cur = byBoard.get(e.boardName);
+   726→    if (!cur || e.savedAt > cur.savedAt) {
+   727→      byBoard.set(e.boardName, { boardName: e.boardName, mode: e.mode, savedAt: e.savedAt });
+   728→    }
+   729→  }
+   730→  return [...byBoard.values()].sort((a, b) => b.savedAt - a.savedAt);
+   731→}
+   732→
+   733→/** Delete all saves for a board name. */
+   734→function deleteSaveByBoardName(boardName: string): void {
+   735→  for (const e of listSaves()) {
+   736→    if (e.boardName === boardName) deleteSave(e.id);
+   737→  }
+   738→}
+   739→
+   740→function timeAgo(t: number): string {
+   741→  const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+   742→  if (s < 60) return 'just now';
+   743→  const m = Math.floor(s / 60);
+   744→  if (m < 60) return `${m} min ago`;
+   745→  const h = Math.floor(m / 60);
+   746→  if (h < 24) return `${h} h ago`;
+   747→  const d = Math.floor(h / 24);
+   748→  return d === 1 ? 'yesterday' : `${d} days ago`;
+   749→}
+   750→
+   751→/**
+   752→ * Circular avatar button in the top-right of the Home header. The dropdown is
+   753→ * intentionally minimal — Profile opens the tabbed Profile screen (which holds
+   754→ * Friends, Settings, and Account). The notification badge on the avatar
+   755→ * itself surfaces incoming friend requests; tapping the avatar → Profile →
+   756→ * Friends tab is the path to act on them. Donate is reachable via the footer
+   757→ * About link. Closes on outside-click / item-select / Esc — handled by Radix.
+   758→ */
+   759→function ProfileMenu({
+   760→  email,
+   761→  notifCount,
+   762→  onOpenProfile,
+   763→}: {
+   764→  email: string;
+   765→  notifCount: number;
+   766→  onOpenProfile: () => void;
+   767→}) {
+   768→  const displayName = useAppStore((s) => s.displayName);
+   769→  const avatarUrl = useAppStore((s) => s.avatarUrl);
+   770→  return (
+   771→    <DropdownMenu>
+   772→      <DropdownMenuTrigger asChild>
+   773→        <button
+   774→          type="button"
+   775→          aria-label={notifCount > 0 ? `Account menu — ${notifCount} notifications` : 'Account menu'}
+   776→          className="relative flex rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
+   777→          title="Account"
+   778→        >
+   779→          <Avatar url={avatarUrl} name={displayName || email} size={34} />
+   780→          {notifCount > 0 && (
+   781→            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white ring-2 ring-bg">
+   782→              {notifCount > 9 ? '9+' : notifCount}
+   783→            </span>
+   784→          )}
+   785→        </button>
+   786→      </DropdownMenuTrigger>
+   787→      <DropdownMenuContent align="end" className="min-w-[220px]">
+   788→        <div className="px-2.5 py-1.5">
+   789→          <p className="text-[10px] font-mono uppercase tracking-wider text-text-dim">
+   790→            Signed in as
+   791→          </p>
+   792→          <p className="truncate text-xs font-medium text-text" title={email || 'Guest'}>
+   793→            {email || 'Guest'}
+   794→          </p>
+   795→        </div>
+   796→        <DropdownMenuSeparator />
+   797→        <DropdownMenuItem onSelect={onOpenProfile}>
+   798→          <UserCircle size={14} /> Profile
+   799→          {notifCount > 0 && (
+   800→            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white">
+   801→              {notifCount > 9 ? '9+' : notifCount}
+   802→            </span>
+   803→          )}
+   804→        </DropdownMenuItem>
+   805→        <DropdownMenuSeparator />
+   806→        <DropdownMenuItem
+   807→          destructive
+   808→          onSelect={() => void supabase?.auth.signOut()}
+   809→        >
+   810→          <LogOut size={14} /> Sign out
+   811→        </DropdownMenuItem>
+   812→      </DropdownMenuContent>
+   813→    </DropdownMenu>
+   814→  );
+   815→}
+   816→

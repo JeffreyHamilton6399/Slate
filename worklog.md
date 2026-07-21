@@ -2069,3 +2069,184 @@ Stage Summary:
 - Status: plain-text only — emoji stripped on save + on display + emoji placeholder removed.
 - Mode colors: distinct tint per mode via shared modeColors.ts — applied consistently to Home recents, Home live boards, Home All Projects dialog, Onboarding recents, Onboarding live boards, Onboarding All Projects dialog.
 - FriendProfileView: tighter spacing, loading hint moved inline.
+
+---
+Task ID: ROUND28-A
+Agent: main (Z.ai Code)
+Task: Fix 4 Slate client UI issues — doc page-break look, mode card colors for all modes, first-run onboarding (ToS + experience + tutorial), mobile UI cleanup
+
+Work Log:
+- Read previous worklog (latest: ROUND27-A) and the relevant target files
+  in full: docs/docEditor.css (407 lines), docs/DocEditor.tsx (407 lines),
+  app/modeColors.ts (75 lines), app/Home.tsx (815 lines), app/Onboarding.tsx
+  (468→500 lines after edits), app/Workspace.tsx (467→473 lines),
+  app/ProfileDialog.tsx (1007 lines). Also consulted packages/ui-tokens
+  tailwind-preset.ts + tokens.css, ui/Dialog.tsx, workspace/MobileDrawer.tsx,
+  app/PeopleWidget.tsx, app/TermsDialog.tsx.
+
+Changes made:
+
+1. Task 1 — DocEditor CSS mobile fallback (docs/docEditor.css)
+   - The desktop `.slate-doc-page` already had page-break guide lines via
+     `repeating-linear-gradient` every 1056px (11in @ 96dpi), plus 816px
+     width (8.5in), 72px×84px padding, paper background, drop shadow. So
+     the desktop "Google Docs separated pages" look was already in place
+     — verified, not re-implemented.
+   - The mobile `@media (max-width: 640px)` rule only changed `padding`
+     to `24px 16px`, leaving `min-height: 1056px` and the page-break
+     `background-image` intact. On a 375px phone, this forced a giant
+     empty paper sheet with horizontal divider lines dominating the
+     viewport.
+   - Fix: extended the mobile rule for `.slate-doc-page` to also set
+     `min-height: auto` and `background-image: none`. On mobile the paper
+     now flows as one continuous card with comfortable margins; desktop
+     keeps the multi-page guide-line look.
+
+2. Task 2 — Card colors for ALL modes (app/modeColors.ts, app/Onboarding.tsx)
+   - Diagnosis: modeColors.ts already had explicit `case '2d'`,
+     `case '3d'`, `case 'audio'` branches in all three functions — so
+     the "fallback returns empty string" hypothesis was wrong. The actual
+     bug: 2D/3D/audio used CSS-variable theme colors (`bg-green/15`,
+     `bg-accent/15`, `bg-warn/15`) while doc/code/diagram used Tailwind-
+     native palette colors. In Tailwind v3.4, the `/15` opacity modifier
+     on a CSS-variable color emits `color-mix(in srgb, var(--x) 15%,
+     transparent)` which renders more washed-out next to a Tailwind-native
+     tint (`rgb(R G B / 0.15)`). The visible symptom: "only doc/code/
+     diagram look colored".
+   - Fix: switched ALL six modes to Tailwind-native palette colors so the
+     opacity modifiers always compile to `rgb(... / α)`:
+     • 2D      → emerald-500 (close to brand --green #22d3a5)
+     • 3D      → violet-500  (close to brand --accent #7c6aff)
+     • Audio   → amber-500   (close to brand --warn #fbbf24)
+     • Doc     → blue-500    (kept)
+     • Code    → cyan-500    (kept)
+     • Diagram → sky-500     (kept)
+   - All three functions (modeBadgeClass /15, modeHeaderClass /10,
+     modeTextClass full color) updated.
+   - Onboarding.tsx recents: switched from `modeTextClass` (text-only, no
+     background) to `modeBadgeClass` (colored pill) so the recents rows
+     visually match Home's recents widget. Removed the now-unused
+     `modeTextClass` import.
+
+3. Task 3 — ToS + experience + tutorial
+   3a. ToS checkbox in Onboarding form (app/Onboarding.tsx)
+   - Added `tos` state. Added a checkbox + Terms link label between the
+     visibility/mode IconToggles and the Enter board button — same
+     pattern as the SignIn sign-up form (Home.tsx:247-264). The Terms
+     link opens the existing TermsDialog (already mounted at the bottom).
+   - `canSubmit` now requires `tos` in addition to a non-empty board name;
+     the `submit` handler also re-checks `!tos` and bails before
+     `enterBoard`.
+
+   3b. WelcomeOverlay component (NEW file: app/WelcomeOverlay.tsx)
+   - One-time first-run tutorial overlay shown the first time a user
+     enters a board on this device. Self-gates on the localStorage flag
+     `slate.onboarding.done` (read at mount time, so no flash-open-close).
+   - Exports:
+     • ONBOARDING_DONE_KEY = 'slate.onboarding.done'
+     • hasSeenOnboarding() — reads the flag
+     • markOnboardingDone() — sets the flag to '1'
+     • WelcomeOverlay — the component
+   - Flow (three steps, all in the same Radix Dialog at z-[1200]/z-[1201]):
+     Step 1 (welcome): icon badge + "Welcome to Slate" title + one-
+       paragraph pitch + Continue button.
+     Step 2 (experience): "Have you used Slate before?" with two
+       tappable cards: "No, it's new" → advance to tips; "Yes, jump in"
+       → dismiss (sets flag, closes overlay).
+     Step 3 (tips, only if user said No): 4 tip cards (Pick your mode /
+       Tools live in the panels / Everything syncs live / Save & export
+       anytime), each with an icon + 1-2 sentence body, then a "Got it —
+       start creating" button → dismiss.
+   - Skip path: RadixDialog.Close X button (top-right) + Escape key both
+     call dismiss() so the user is never trapped, and skipping still
+     sets the flag so the overlay never re-shows.
+   - Uses the same `surface` token + `animate-slide-up` as the shared
+     Dialog component for visual consistency.
+
+   3c. Wire WelcomeOverlay into Workspace (app/Workspace.tsx)
+   - Imported WelcomeOverlay from ./WelcomeOverlay.
+   - Mounted `<WelcomeOverlay />` at the end of the Workspace's outer
+     flex column, after `<AutosaveBadge />`. The component self-gates on
+     the localStorage flag — returns null if user has already seen the
+     tutorial.
+
+4. Task 4 — Mobile UI cleanup
+   4a. Onboarding card fits on 320px (app/Onboarding.tsx)
+   - Outer container padding: `p-6` → `p-3 sm:p-6` (24px → 12px on mobile).
+   - Card padding: `p-8` → `p-5 sm:p-8` (32px → 20px on mobile).
+   - Card gap: `gap-5` → `gap-4 sm:gap-5` (20px → 16px on mobile).
+   - Donate text link in the header: `flex` → `hidden sm:flex` (hidden on
+     phones; still reachable from the guest dropdown menu).
+   - On a 320px screen, the card now has 256px for content (was 208px).
+
+   4b. All Projects dialog delete button visible on mobile (Home.tsx +
+   Onboarding.tsx)
+   - Both dialogs had the delete button as `opacity-0 hover:text-danger
+     group-hover:opacity-100` — invisible by default, revealed on hover.
+     On touch devices there's no hover, so the button was permanently
+     invisible.
+   - Fix: changed class to `opacity-100 hover:text-danger sm:opacity-0
+     sm:group-hover:opacity-100` — visible by default on mobile, hidden
+     until hover on desktop. Same pattern in both files.
+
+   4c. ProfileDialog tabs work on mobile (app/ProfileDialog.tsx)
+   - Tab nav was `flex shrink-0 gap-1 border-b border-border p-3 sm:w-56
+     sm:flex-col`. On a 320px screen with the dialog at w-[95vw]=304px
+     and p-0, the three tabs (Profile/Friends/Settings, each ~95-105px
+     wide) couldn't fit horizontally.
+   - Fix: added `overflow-x-auto` + `sm:overflow-visible` so the strip
+     scrolls horizontally on mobile only. Added `shrink-0` to tab buttons
+     so they don't compress. Reduced nav padding to `p-2 sm:p-3`. Content
+     area padding reduced from `p-6` to `p-4 sm:p-6`.
+
+   4d. FAB doesn't overlap with bottom UI (app/Workspace.tsx)
+   - Diagnosis: FAB was at `absolute bottom-4 right-4` of <main>. On
+     mobile this overlapped with: the 2D bottom toolbar (bottom-2 left-2
+     right-2, ~32px tall → ends ~44px from bottom); the doc word-count
+     footer (~24px tall at bottom); the 3D Timeline panel when open.
+     MobileDrawer overlap was already fine (MobileDrawer z-[200]+, FAB
+     z-40 — drawer covers FAB when open).
+   - Fix: moved FAB from `bottom-4` to `bottom: calc(4rem +
+     var(--safe-bottom, 0px))` (64px + iOS safe-area inset). Clears the
+     2D bottom toolbar, the doc word-count footer, the closed 3D timeline
+     pill, and matches the 2D left toolbar's reserved `bottom-16` zone.
+     Added `var(--safe-bottom, 0px)` so the iOS home indicator doesn't
+     underlap the FAB on notched phones.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0,
+  zero type errors.
+- `npx eslint src/docs/docEditor.css src/app/modeColors.ts src/app/Onboarding.tsx
+  src/app/WelcomeOverlay.tsx src/app/Workspace.tsx src/app/ProfileDialog.tsx
+  src/app/Home.tsx` → 0 errors, 2 warnings. Both warnings are pre-existing
+  on the unmodified main branch (Workspace.tsx:277 useEffect missing
+  'board.mode' dep — file-menu keyboard shortcuts; Workspace.tsx:325 useMemo
+  missing 'setBgOpen' dep — handleFileMenu — both noted in ROUND25-A). The
+  docEditor.css "File ignored" line is just eslint having no CSS plugin
+  configured — not a real warning.
+- No new ESLint warnings introduced by this round.
+- Dev server log: only routine /health 404s; / 200 OK; no compile errors.
+
+Stage Summary:
+- 6 files modified, 1 file created (WelcomeOverlay.tsx), 0 new dependencies.
+- Task 1: docEditor.css mobile rule now disables page-break guide lines
+  and the 1056px min-height on phones; desktop "separated pages" look
+  (already implemented by an earlier round) unchanged.
+- Task 2: modeColors.ts switched all 6 modes to Tailwind-native palette
+  colors (emerald/violet/amber/blue/cyan/sky) so the /15 and /10 opacity
+  modifiers compile to proper rgb(... / α) instead of washed-out
+  color-mix. Onboarding recents switched from text-only modeTextClass to
+  colored-pill modeBadgeClass to match Home's recents widget.
+- Task 3: ToS checkbox (required) added to Onboarding form. New
+  WelcomeOverlay component shows a 3-step first-run tutorial gated by
+  localStorage['slate.onboarding.done'] — only shows once per device,
+  never nags, skip path also sets the flag. Wired into Workspace so it
+  appears the first time the user enters any board.
+- Task 4: Onboarding card padding shrunk on mobile; Donate link hidden on
+  mobile. All Projects dialog delete buttons now visible on mobile.
+  ProfileDialog tabs scroll horizontally on mobile with shrink-0 buttons.
+  FAB moved from bottom-4 to calc(4rem + var(--safe-bottom, 0px)) to clear
+  the 2D bottom toolbar, doc word-count footer, and respect the iOS home
+  indicator.
+- TypeScript clean (exit 0). ESLint clean on all touched code (the 2
+  warnings are pre-existing and unrelated).

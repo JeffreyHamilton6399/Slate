@@ -104,8 +104,8 @@ const initialState = {
   floats: {} as Record<string, FloatGeometry>,
   floatStack: [] as string[],
   closed: [] as string[],
-  sidebarWidth: 260,
-  dockWidth: 280,
+  sidebarWidth: 240,
+  dockWidth: 260,
   mobileDrawerOpen: false,
   mobileDrawerTab: null as string | null,
   dropHint: null as DockZone | null,
@@ -228,7 +228,7 @@ export const useDockStore = create<DockState>()(
     {
       name: 'slate.dock.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 7,
+      version: 8,
       migrate: (persisted, version) => {
         const p = persisted as Partial<DockState>;
         const state: DockState = {
@@ -283,6 +283,14 @@ export const useDockStore = create<DockState>()(
           // Doc gains a Tools bar top-left; the Outline drops to bottom-left
           // under it (mirrors 2D's tools-over-layers left column).
           relocate('doc-outline', 'left-bottom');
+        }
+        if (version < 8) {
+          // Tighten default dock widths to give the central editor more room
+          // (sidebar 260→240, dock 280→260). Only applied to users who never
+          // dragged the resizer (i.e. still on the old defaults); a user who
+          // chose their own width keeps it.
+          if (state.sidebarWidth === 260) state.sidebarWidth = 240;
+          if (state.dockWidth === 280) state.dockWidth = 260;
         }
         return state;
       },

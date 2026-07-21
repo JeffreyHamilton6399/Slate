@@ -174,7 +174,7 @@ export function Toolbar3D({
   const isMobile = useIsMobile();
 
   return (
-    <div className="absolute left-2 right-2 top-2 z-10 flex items-center gap-1 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-2 py-1 shadow-lg backdrop-blur [&>*]:shrink-0">
+    <div className="absolute left-2 right-2 top-2 z-10 flex items-center gap-0.5 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-2 py-1 shadow-lg backdrop-blur [&>*]:shrink-0">
       {/* Single toggle button: click to flip Object ↔ Edit (Tab also works).
  *          One button, not two — shows the CURRENT mode, click to switch. */}
       <Tooltip content={`Mode: ${editorMode} — click to toggle (Tab)`}>
@@ -352,7 +352,7 @@ export function Toolbar3D({
               variant="icon"
               size="none"
               disabled={selection.length === 0}
-              className={selection.length === 0 ? 'opacity-40' : undefined}
+              className={`h-7 w-7 p-0 ${selection.length === 0 ? 'opacity-40' : ''}`}
               onClick={() => {
                 if (selection.length === 0) return;
                 const copies = duplicateObjects(room.slate, selection);
@@ -428,7 +428,7 @@ export function Toolbar3D({
                 variant="icon"
                 size="none"
                 disabled={selection.length !== 1}
-                className={selection.length !== 1 ? 'opacity-40' : undefined}
+                className={`h-7 w-7 p-0 ${selection.length !== 1 ? 'opacity-40' : ''}`}
                 onClick={() => runToolbarEditOp(room, op, onStartMeshModal)}
               >
                 <Icon size={14} />
@@ -466,12 +466,12 @@ export function Toolbar3D({
       )}
       <div className="mx-1 h-5 w-px bg-border" />
       <Tooltip content="Frame selected (F)">
-        <Button variant="icon" size="none" onClick={onFrameSelected}>
+        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={onFrameSelected}>
           <Focus size={14} />
         </Button>
       </Tooltip>
       <Tooltip content="Render image — saves the viewport as PNG (Numpad 0 looks through a camera first)">
-        <Button variant="icon" size="none" onClick={onRenderImage} aria-label="Render image">
+        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={onRenderImage} aria-label="Render image">
           <Camera size={14} />
         </Button>
       </Tooltip>
@@ -479,10 +479,10 @@ export function Toolbar3D({
         <Button
           variant="icon"
           size="none"
+          className={`h-7 w-7 p-0 ${rendering ? 'text-danger' : ''}`}
           onClick={onRenderAnimation}
           disabled={rendering}
           aria-label="Render animation"
-          className={rendering ? 'text-danger' : undefined}
         >
           <Clapperboard size={14} />
         </Button>
@@ -492,12 +492,12 @@ export function Toolbar3D({
           inside a scroll strip would just inflate the scroll width. */}
       {!isMobile && <div className="flex-1" />}
       <Tooltip content="Undo (Ctrl+Z)">
-        <Button variant="icon" size="none" onClick={() => room.undo.undo()}>
+        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={() => room.undo.undo()}>
           <Undo2 size={14} />
         </Button>
       </Tooltip>
       <Tooltip content="Redo (Ctrl+Shift+Z)">
-        <Button variant="icon" size="none" onClick={() => room.undo.redo()}>
+        <Button variant="icon" size="none" className="h-7 w-7 p-0" onClick={() => room.undo.redo()}>
           <Redo2 size={14} />
         </Button>
       </Tooltip>
@@ -506,6 +506,7 @@ export function Toolbar3D({
           <Button
             variant="icon"
             size="none"
+            className="h-7 w-7 p-0"
             onClick={() => {
               deleteObjects(room.slate, selection);
               clearSelection();

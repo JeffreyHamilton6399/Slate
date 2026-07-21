@@ -27,7 +27,7 @@ export function Dialog({ open, onOpenChange, title, description, children, class
             // fight a caller's override by CSS source order. Only apply the
             // defaults when the caller didn't pass their own.
             !className?.includes('max-w-') && 'max-w-md',
-            !className?.includes('p-0') && 'p-6',
+            !className?.includes('p-0') && 'p-5',
             className,
           )}
         >

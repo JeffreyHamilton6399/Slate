@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Menu, Settings, Share2, LogOut, WifiOff } from 'lucide-react';
+import { Menu, Settings, Share2, LogOut, WifiOff, FileText } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import {
@@ -77,7 +77,7 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
   return (
     <header
-      className="flex h-[var(--header-h)] shrink-0 items-center gap-3 border-b border-border bg-bg-2 px-3"
+      className="flex h-[var(--header-h)] shrink-0 items-center gap-2 border-b border-border bg-bg-2 px-3"
       style={{ paddingTop: 'var(--safe-top, 0px)' }}
     >
       <div className="flex items-center gap-2 min-w-0">
@@ -96,8 +96,9 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="ml-1">
-            File
+          <Button variant="ghost" size="sm" className="ml-1 gap-1 px-2 py-1">
+            <FileText size={13} />
+            <span>File</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
@@ -265,8 +266,14 @@ function ConnectionPill({ status }: { status: ConnectionStatus }) {
 }
 
 function BrandMark() {
+  // SVG sized via Tailwind classes so the mark shrinks on a narrow phone
+  // (18px) and returns to its full 22px on the sm breakpoint and up.
   return (
-    <svg width="22" height="22" viewBox="0 0 32 32" aria-label="Slate">
+    <svg
+      viewBox="0 0 32 32"
+      aria-label="Slate"
+      className="h-[18px] w-[18px] shrink-0 sm:h-[22px] sm:w-[22px]"
+    >
       <rect width="32" height="32" rx="7" fill="#0c0c0e" />
       <rect x="3" y="3" width="26" height="26" rx="4" fill="none" stroke="#7c6aff" strokeWidth="1.8" />
       <path

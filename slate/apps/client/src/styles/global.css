@@ -70,7 +70,7 @@
   }
 
   /* Minimal, consistent motion on interactive controls: hover/active states
-     ease instead of snapping. Kept short (120ms) so the UI still feels
+     ease instead of snapping. Kept short (150ms) so the UI still feels
      immediate, and fully disabled for users who prefer reduced motion. */
   button,
   a,
@@ -78,11 +78,11 @@
   [role='menuitem'],
   [role='button'] {
     transition:
-      background-color 0.12s ease,
-      border-color 0.12s ease,
-      color 0.12s ease,
-      opacity 0.12s ease,
-      transform 0.08s ease;
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease,
+      opacity 0.15s ease,
+      transform 0.15s ease;
   }
   button:not(:disabled):active {
     transform: translateY(0.5px);
@@ -127,4 +127,103 @@
     position: absolute;
     inset: 0;
   }
+}
+
+/* Sleek micro-animations — subtle fades/scales on panels, dropdowns, dialogs,
+   and a slide-up sheet for the mobile drawer. All scoped to data attributes
+   or utility classes so they only apply where intended. The reduced-motion
+   guard at the top of this file clamps every animation to ~0ms for users who
+   opt out, so none of these are motion-safety hazards. */
+
+/* Tab/panel content fades in on each switch. The fade re-fires because the
+   panel body carries a React `key={activeTab}` so it remounts on switch. */
+[data-panel-content] {
+  animation: panelFadeIn 0.2s ease;
+}
+
+@keyframes panelFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Radix dropdowns: scale-in from 96% with a fade. The wrapper element is the
+   positioning anchor; the inner content is what actually animates. */
+[data-radix-popper-content-wrapper] > * {
+  animation: dropdownIn 0.15s ease;
+}
+
+@keyframes dropdownIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Radix dialog content: scale + slide-in with a soft easing curve. */
+[data-radix-dialog-content] {
+  animation: dialogIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Mobile drawer slides up from the bottom edge of the viewport. The sheet is
+   anchored to bottom:0, so a translateY(100%) start positions it just below
+   the fold and it eases into place. */
+[data-mobile-drawer] {
+  animation: drawerSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes drawerSlideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Hover-lift utility — apply `hover-lift` to any card-like surface to get a
+   subtle 2px rise on hover plus a smooth shadow transition. */
+.hover-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-2px);
 }

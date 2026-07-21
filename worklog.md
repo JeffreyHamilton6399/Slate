@@ -1724,3 +1724,73 @@ Stage Summary:
 - Header right cluster consolidated with overflow-x-auto + shrink-0; desktop-only divider preserved — done.
 - ProfileDialog layout already correct — verified, no edits needed.
 - TypeScript clean for all touched files.
+
+---
+Task ID: ROUND24-A
+Agent: main (Z.ai Code)
+Task: Fix landscape mobile + tighten UI + add sleek animations
+
+Work Log:
+
+Task 1 — Landscape mobile treated as desktop:
+- workspace/useMediaQuery.ts: `useIsMobile()` now reads
+  `(max-width: 768px) and (orientation: portrait)`. A phone in landscape
+  (e.g. 812×375) crosses the 768px threshold so it gets the full desktop
+  layout with docks; only portrait phones get the MobileDrawer / no-dock
+  mobile layout. Tablets (≥768px) and desktops are unaffected.
+
+Task 2 — UI tightening across the app:
+- app/Header.tsx:
+  - Root `<header>` gap reduced `gap-3` → `gap-2`.
+  - BrandMark SVG now sized via Tailwind classes (`h-[18px] w-[18px] sm:h-[22px] sm:w-[22px]`) instead of fixed width/height attrs, so the mark shrinks on phones and snaps back to 22px on the sm breakpoint.
+  - File button is now a compact icon + "File" text button: added `FileText` icon (size 13) and tightened padding to `px-2 py-1 gap-1` (was `ml-1` only, default sm padding).
+- workspace/dockStore.ts:
+  - Default `sidebarWidth` 260 → 240, `dockWidth` 280 → 260.
+  - Persist version bumped 7 → 8 with a migration that resets users still on the old defaults (260/280) to the new ones; users who dragged the resizer keep their width.
+- audio/AudioEditor.tsx transport bar:
+  - Removed the `sm:gap-1` modifier so the bar is always `gap-0.5` (was `gap-0.5 sm:gap-1`).
+  - Removed the "no armed track" placeholder span entirely (was `hidden sm:inline`); when no track is armed, nothing renders in that slot.
+  - Collapsed the armed-track badge to a single dot: removed the `→ {armedTrack.name}` text span, kept the red dot indicator (still has a `title` tooltip with the track name for screen readers).
+  - Position display tightened: `ml-1 min-w-[2.5rem]` → `min-w-[2rem]` (the parent gap already provides spacing).
+- canvas2d/Toolbar.tsx:
+  - Left rail width `w-11` → `w-10` (40px).
+  - Every tool/zoom/history button reduced `h-8 w-8` → `h-7 w-7`; icons `size={15}` → `size={14}`.
+  - Group dividers in the rail `w-6` → `w-5`.
+  - Style strip padding `px-2 py-1.5 gap-2` → `px-1.5 py-1 gap-1.5`.
+- viewport3d/Toolbar3D.tsx:
+  - Toolbar gap `gap-1` → `gap-0.5`.
+  - Every icon-only `<Button variant="icon" size="none">` now has explicit `h-7 w-7 p-0` (was relying on the variant's default `p-1.5` padding which produced an inconsistent ~26px size). Buttons affected: Duplicate, the five PRIMARY_EDIT_OPS (Extrude/Inset/Bevel/Loop-cut/Subdivide), Frame Selected, Render Image, Render Animation, Undo, Redo, Delete. Text-labeled buttons (Object/Edit, Shading, Add, Transform, Global/Local, Pivot, Select-mode, Object menu, Mesh menu) keep their own widths.
+- panels/DocToolsPanel.tsx:
+  - Tool grid `grid-cols-3` → `grid-cols-4`.
+  - Tool button padding `py-2` → `py-1.5` (via the shared TOOL_BUTTON_CLASS constant, so every tool — generic, textColor, fontSize — gets the tighter padding).
+- ui/Dialog.tsx:
+  - Default Dialog padding `p-6` → `p-5` (only applied when the caller didn't pass `p-0`).
+
+Task 3 — Sleek animations:
+- styles/global.css (new rules appended):
+  - Existing `button/a/[role=...]` transition bumped from `0.12s` to `0.15s` and the transform transition from `0.08s` to `0.15s` so all interactive elements share one consistent 150ms ease.
+  - `[data-panel-content]` — 200ms fade-in (opacity 0→1, translateY 4px→0). Applied to the Dock panel body, MobileDrawer body, and CodeEditor host; each carries a React `key={activeTab}` / `key={activeId}` so the element remounts on tab switch and the animation re-fires every time.
+  - `[data-radix-popper-content-wrapper] > *` — 150ms scale-in (0.96→1, opacity 0→1) on every Radix dropdown menu.
+  - `[data-radix-dialog-content]` — 200ms scale+slide-in with `cubic-bezier(0.16, 1, 0.3, 1)` (scale 0.97→1, translateY 8px→0). Replaces the default `animate-slide-up` Tailwind utility that the Dialog used to ride on, with a softer easing curve.
+  - `[data-mobile-drawer]` — 250ms slide-up from `translateY(100%)` to `0` with `cubic-bezier(0.16, 1, 0.3, 1)`. The MobileDrawer sheet swapped its old `animate-slide-up` class for this attribute so it gets the full bottom-edge→in slide instead of the 8px nudge the Tailwind utility does. (Close is still instant — the sheet unmounts immediately, which is acceptable per the task spec.)
+  - `slideUp` and `slideDown` keyframes (translateY 100%↔0) — exposed for any future element that wants to opt in via class.
+  - `.hover-lift` utility class — 200ms `transform` + `box-shadow` transition; `:hover` lifts the element 2px. Available for cards/dialogs to opt into.
+  - All animations are clamped to ~0ms by the existing `prefers-reduced-motion: reduce` block at the top of the file, so motion-sensitive users are unaffected.
+- workspace/MobileDrawer.tsx:
+  - Sheet container swapped `animate-slide-up` → `data-mobile-drawer` attribute.
+  - Panel body wrapper now `key={activeTab ?? 'empty'} data-panel-content`.
+- workspace/Dock.tsx:
+  - Panel body wrapper now `key={activeTab ?? 'empty'} data-panel-content`.
+- code/CodeEditor.tsx:
+  - Editor host `<div ref={hostRef}>` now also carries `key={activeId} data-panel-content`. The host already remounts/rebinds CodeMirror on file switch (the mount useEffect depends on `activeId`), so adding the key is safe and gives the fade-in for free.
+
+Verification:
+- `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, zero errors.
+- `npx eslint src/workspace/useMediaQuery.ts src/workspace/dockStore.ts src/workspace/Dock.tsx src/workspace/MobileDrawer.tsx src/app/Header.tsx src/audio/AudioEditor.tsx src/canvas2d/Toolbar.tsx src/viewport3d/Toolbar3D.tsx src/panels/DocToolsPanel.tsx src/ui/Dialog.tsx src/code/CodeEditor.tsx` → 0 errors, 1 warning. The warning is pre-existing (react-hooks/exhaustive-deps on AudioEditor.tsx:1363 — `pxPerSec` in startLoopDrag's useCallback dependency array) and was already noted in ROUND22-A; not in code I touched.
+- No new dependencies. No new components. No API changes.
+
+Stage Summary:
+- Landscape phones (812×375) now get the desktop dock layout instead of the cramped MobileDrawer + no-docks mobile layout. Only portrait phones remain "mobile".
+- Header, dock widths, audio transport, 2D toolbar, 3D toolbar, doc tools panel, and Dialog paddings are all tighter, giving the central editor more room and reducing visual noise.
+- Subtle 150-250ms animations now ride on every interactive surface: buttons share a 150ms transition, dropdowns scale in at 150ms, dialogs scale+slide in at 200ms, the mobile drawer slides up from the bottom edge at 250ms, and panel/tab content fades in on each switch. All animations respect `prefers-reduced-motion: reduce`.
+- TypeScript clean (exit 0). ESLint clean on all touched code (the one warning is pre-existing and unrelated).

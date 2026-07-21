@@ -17,5 +17,8 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export function useIsMobile(): boolean {
-  return useMediaQuery('(max-width: 768px)');
+  // Mobile = narrow screen in portrait. Landscape phones (812×375) get the
+  // full desktop layout with docks — the editor needs horizontal space and
+  // the dock panels are usable when the device is sideways.
+  return useMediaQuery('(max-width: 768px) and (orientation: portrait)');
 }

@@ -169,7 +169,7 @@ export function Canvas2DToolbar({
   return (
     <>
       <aside
-        className="absolute left-2 top-2 bottom-16 z-10 flex w-11 flex-col items-center gap-1 overflow-y-auto rounded-md border border-border bg-bg-2/95 backdrop-blur p-1 shadow-lg sm:bottom-2"
+        className="absolute left-2 top-2 bottom-16 z-10 flex w-10 flex-col items-center gap-1 overflow-y-auto rounded-md border border-border bg-bg-2/95 backdrop-blur p-1 shadow-lg sm:bottom-2"
         role="toolbar"
         aria-label="Canvas tools"
       >
@@ -183,22 +183,22 @@ export function Canvas2DToolbar({
                   aria-pressed={tool === id}
                   aria-label={label}
                   className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-sm border',
+                    'flex h-7 w-7 items-center justify-center rounded-sm border',
                     tool === id
                       ? 'border-accent/60 bg-accent/15 text-accent'
                       : 'border-transparent text-text-mid hover:bg-bg-4 hover:text-text',
                   )}
                 >
-                  <Icon size={15} />
+                  <Icon size={14} />
                 </button>
               </Tooltip>
             ))}
-            <div className="my-1 h-px w-6 bg-border" />
+            <div className="my-1 h-px w-5 bg-border" />
           </div>
         )}
         {TOOL_GROUPS.map((group, gi) => (
           <div key={gi} className="flex flex-col items-center gap-0.5">
-            {gi > 0 && <div className="my-1 h-px w-6 bg-border" />}
+            {gi > 0 && <div className="my-1 h-px w-5 bg-border" />}
             {group.map(({ id, label, Icon, shortcut }) => (
               <Tooltip key={id} content={`${label} (${shortcut})`} side="right">
                 <button
@@ -207,13 +207,13 @@ export function Canvas2DToolbar({
                   aria-pressed={tool === id}
                   aria-label={label}
                   className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-sm border',
+                    'flex h-7 w-7 items-center justify-center rounded-sm border',
                     tool === id
                       ? 'border-accent/60 bg-accent/15 text-accent'
                       : 'border-transparent text-text-mid hover:bg-bg-4 hover:text-text',
                   )}
                 >
-                  <Icon size={15} />
+                  <Icon size={14} />
                 </button>
               </Tooltip>
             ))}
@@ -227,7 +227,7 @@ export function Canvas2DToolbar({
                       aria-label="Shapes"
                       aria-pressed={SHAPE_IDS.has(tool)}
                       className={cn(
-                        'flex h-8 w-8 items-center justify-center rounded-sm border',
+                        'flex h-7 w-7 items-center justify-center rounded-sm border',
                         SHAPE_IDS.has(tool)
                           ? 'border-accent/60 bg-accent/15 text-accent'
                           : 'border-transparent text-text-mid hover:bg-bg-4 hover:text-text',
@@ -236,9 +236,9 @@ export function Canvas2DToolbar({
                       {SHAPE_IDS.has(tool) && tool !== 'line' && tool !== 'arrow'
                         ? (() => {
                             const def = SHAPE_TOOLS.find((t) => t.id === tool);
-                            return def ? <def.Icon size={15} /> : <Shapes size={15} />;
+                            return def ? <def.Icon size={14} /> : <Shapes size={14} />;
                           })()
-                        : <Shapes size={15} />}
+                        : <Shapes size={14} />}
                     </button>
                   </DropdownMenuTrigger>
                 </Tooltip>
@@ -254,15 +254,15 @@ export function Canvas2DToolbar({
             )}
           </div>
         ))}
-        <div className="my-1 h-px w-6 bg-border" />
+        <div className="my-1 h-px w-5 bg-border" />
         <Tooltip content="Insert image… (or drag & drop / paste)" side="right">
           <button
             type="button"
             onClick={onInsertImage}
             aria-label="Insert image"
-            className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+            className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
           >
-            <ImagePlus size={15} />
+            <ImagePlus size={14} />
           </button>
         </Tooltip>
 
@@ -270,15 +270,15 @@ export function Canvas2DToolbar({
             mt-auto pushes them down so they stay reachable regardless of how
             many tools are favorited/pinned above. */}
         <div className="mt-auto flex flex-col items-center gap-0.5">
-          <div className="my-1 h-px w-6 bg-border" />
+          <div className="my-1 h-px w-5 bg-border" />
           <Tooltip content="Undo (Ctrl+Z)" side="right">
             <button
               type="button"
               onClick={onUndo}
               aria-label="Undo"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Undo2 size={15} />
+              <Undo2 size={14} />
             </button>
           </Tooltip>
           <Tooltip content="Redo (Ctrl+Shift+Z)" side="right">
@@ -286,9 +286,9 @@ export function Canvas2DToolbar({
               type="button"
               onClick={onRedo}
               aria-label="Redo"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Redo2 size={15} />
+              <Redo2 size={14} />
             </button>
           </Tooltip>
           <Tooltip content="Clear board" side="right">
@@ -296,20 +296,20 @@ export function Canvas2DToolbar({
               type="button"
               onClick={onClear}
               aria-label="Clear board"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Trash2 size={15} />
+              <Trash2 size={14} />
             </button>
           </Tooltip>
-          <div className="my-1 h-px w-6 bg-border" />
+          <div className="my-1 h-px w-5 bg-border" />
           <Tooltip content="Zoom out (-)" side="right">
             <button
               type="button"
               onClick={onZoomOut}
               aria-label="Zoom out"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Minus size={15} />
+              <Minus size={14} />
             </button>
           </Tooltip>
           <span
@@ -323,9 +323,9 @@ export function Canvas2DToolbar({
               type="button"
               onClick={onZoomIn}
               aria-label="Zoom in"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Plus size={15} />
+              <Plus size={14} />
             </button>
           </Tooltip>
           <Tooltip content="Fit (Ctrl+0)" side="right">
@@ -333,16 +333,16 @@ export function Canvas2DToolbar({
               type="button"
               onClick={onFit}
               aria-label="Fit"
-              className="flex h-8 w-8 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
+              className="flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-mid hover:bg-bg-4 hover:text-text"
             >
-              <Maximize2 size={15} />
+              <Maximize2 size={14} />
             </button>
           </Tooltip>
         </div>
       </aside>
 
       <div
-        className="absolute bottom-2 left-2 right-2 z-10 flex items-center gap-2 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-2 py-1.5 shadow-lg backdrop-blur sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-2 sm:-translate-x-1/2 sm:overflow-visible"
+        className="absolute bottom-2 left-2 right-2 z-10 flex items-center gap-1.5 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-1.5 py-1 shadow-lg backdrop-blur sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-2 sm:-translate-x-1/2 sm:overflow-visible"
         role="toolbar"
         aria-label="Style"
       >

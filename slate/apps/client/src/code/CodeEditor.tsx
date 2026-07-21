@@ -863,6 +863,8 @@ export function CodeEditor() {
         <div ref={editorWrapperRef} className="relative flex flex-1 min-h-0 flex-col sm:flex-row">
           {activeId ? (
             <div
+              key={activeId}
+              data-panel-content
               ref={hostRef}
               className="slate-code-host h-full min-w-0"
               style={showPreview ? (isMobile ? { height: '60%' } : { width: `${splitPct}%` }) : { width: '100%' }}

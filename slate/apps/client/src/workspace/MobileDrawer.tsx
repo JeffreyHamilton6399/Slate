@@ -60,7 +60,8 @@ export function MobileDrawer() {
         role="dialog"
         aria-modal="true"
         aria-label="Panels"
-        className="fixed inset-x-0 bottom-0 z-[201] flex max-h-[80vh] flex-col surface rounded-t-lg rounded-b-none border-b-0 animate-slide-up shadow-2xl"
+        data-mobile-drawer
+        className="fixed inset-x-0 bottom-0 z-[201] flex max-h-[80vh] flex-col surface rounded-t-lg rounded-b-none border-b-0 shadow-2xl"
         style={{ paddingBottom: 'var(--safe-bottom, 0px)' }}
       >
         <div className="flex items-center gap-1 border-b border-border px-2 py-2 overflow-x-auto">
@@ -87,7 +88,7 @@ export function MobileDrawer() {
             <X size={16} />
           </button>
         </div>
-        <div className="flex-1 overflow-auto p-3">
+        <div key={activeTab ?? 'empty'} data-panel-content className="flex-1 overflow-auto p-3">
           {activeTab ? <RenderPanel id={activeTab} /> : (
             <p className="text-xs text-text-dim text-center pt-6">No panels open.</p>
           )}

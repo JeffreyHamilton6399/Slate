@@ -1391,19 +1391,16 @@ export function AudioEditor() {
   return (
     <div className="flex h-full flex-col bg-bg overflow-hidden" onPointerEnter={() => { hoveredRef.current = true; }} onPointerLeave={() => { hoveredRef.current = false; }} onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); for (const f of [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(mp3|wav|ogg|m4a|flac|aac|mid|midi)$/i.test(f.name))) void handleFileImport(f); }}>
       {/* Transport */}
-      <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 sm:gap-1 [&>*]:shrink-0">
+      <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
         <button onClick={() => seek(0)} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3" title="Start"><SkipBack size={14} /></button>
         <button onClick={togglePlay} className={`flex h-9 w-9 items-center justify-center rounded-full text-white ${playing ? 'bg-warn' : 'bg-accent'} hover:opacity-80`} title="Play (Space)">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
         <button onClick={() => void toggleRecord()} className={`flex h-8 w-8 items-center justify-center rounded-full border ${recording ? 'border-danger bg-danger/20 text-danger animate-pulse' : 'border-border text-text-mid hover:bg-bg-3'}`} title={armedTrack ? `Record (R) → ${armedTrack.name}` : 'Record (R)'}><Mic size={15} /></button>
         {armedTrack ? (
-          <span className="flex items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 text-[10px] text-text-dim" title={`Recording onto: ${armedTrack.name}`}>
+          <span className="flex items-center rounded bg-bg-3 px-1 py-1" title={`Recording onto: ${armedTrack.name}`}>
             <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
-            <span className="hidden max-w-[8rem] truncate sm:inline">→ {armedTrack.name}</span>
           </span>
-        ) : (
-          <span className="hidden text-[10px] text-text-dim/70 sm:inline">no armed track</span>
-        )}
-        <span ref={posDisplayRef} className="ml-1 min-w-[2.5rem] font-mono text-xs text-text">0.0s</span>
+        ) : null}
+        <span ref={posDisplayRef} className="min-w-[2rem] font-mono text-xs text-text">0.0s</span>
         <div className="mx-1 h-5 w-px bg-border" />
         <button onClick={() => selectedRef.current.forEach(id => void splitAudioClip(slate, id, positionRef.current))} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Split (C)"><Scissors size={14} /></button>
         <button onClick={() => void duplicateSelection()} disabled={selectedClipIds.size === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Duplicate at playhead (D)"><Copy size={14} /></button>

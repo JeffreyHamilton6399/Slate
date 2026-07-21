@@ -173,7 +173,7 @@ function DockZoneSection({
         <AddTabMenu zone={zone} />
       </div>
       {!empty && (
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div key={activeTab ?? 'empty'} data-panel-content className="min-h-0 flex-1 overflow-auto p-3">
           {activeTab ? <RenderPanel id={activeTab} /> : <EmptyDock />}
         </div>
       )}

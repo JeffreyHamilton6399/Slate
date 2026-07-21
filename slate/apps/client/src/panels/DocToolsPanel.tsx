@@ -111,7 +111,7 @@ const FONT_SIZE_PRESETS = [12, 14, 16, 18, 24, 32];
 
 /** Shared button chrome so every tool — generic or custom — looks the same. */
 const TOOL_BUTTON_CLASS =
-  'flex flex-col items-center gap-1 rounded-md border border-border bg-bg-2 px-1 py-2 text-text-mid hover:border-accent/40 hover:bg-bg-3 hover:text-text';
+  'flex flex-col items-center gap-1 rounded-md border border-border bg-bg-2 px-1 py-1.5 text-text-mid hover:border-accent/40 hover:bg-bg-3 hover:text-text';
 
 function ToolButton({ t }: { t: Tool }) {
   // Text color: a label-wrapped native color input. Clicking anywhere on the
@@ -241,7 +241,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
       <h5 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-text-dim">{title}</h5>
-      <div className="grid grid-cols-3 gap-1">{children}</div>
+      <div className="grid grid-cols-4 gap-1">{children}</div>
     </div>
   );
 }

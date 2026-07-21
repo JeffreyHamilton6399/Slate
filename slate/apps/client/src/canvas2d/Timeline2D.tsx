@@ -212,7 +212,7 @@ export function Timeline2D({ selection: _selection }: TimelineProps) {
       <button
         type="button"
         onClick={() => { setUserToggled(true); setOpen(true); }}
-        className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-md border border-border bg-bg-2/95 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-text-dim shadow-lg backdrop-blur hover:text-text"
+        className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-md border border-border bg-bg-2/95 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-text-dim shadow-lg backdrop-blur hover:text-text sm:bottom-2"
       >
         <ChevronUp size={11} />
         <Film size={11} />

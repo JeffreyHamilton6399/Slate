@@ -169,7 +169,7 @@ export function Canvas2DToolbar({
   return (
     <>
       <aside
-        className="absolute left-2 top-2 bottom-16 z-10 flex w-10 flex-col items-center gap-1 overflow-y-auto rounded-md border border-border bg-bg-2/95 backdrop-blur p-1 shadow-lg sm:bottom-2"
+        className="absolute left-2 top-2 bottom-36 z-10 flex w-10 flex-col items-center gap-1 overflow-y-auto rounded-md border border-border bg-bg-2/95 backdrop-blur p-1 shadow-lg sm:bottom-2"
         role="toolbar"
         aria-label="Canvas tools"
       >
@@ -342,7 +342,7 @@ export function Canvas2DToolbar({
       </aside>
 
       <div
-        className="absolute bottom-2 left-2 right-2 z-10 flex items-center gap-1.5 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-1.5 py-1 shadow-lg backdrop-blur sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-2 sm:-translate-x-1/2 sm:overflow-visible"
+        className="absolute bottom-36 left-2 right-2 z-20 flex items-center gap-1.5 overflow-x-auto rounded-md border border-border bg-bg-2/95 px-1.5 py-1 shadow-lg backdrop-blur sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-2 sm:-translate-x-1/2 sm:overflow-visible sm:z-10"
         role="toolbar"
         aria-label="Style"
       >

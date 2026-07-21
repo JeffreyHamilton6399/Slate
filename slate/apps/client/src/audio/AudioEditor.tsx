@@ -1384,7 +1384,12 @@ export function AudioEditor() {
     loopDragCleanupRef.current = onUp;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [loopStart, loopEnd, pxPerSec]);
+  // Deps: only loopStart/loopEnd are read directly inside startLoopDrag —
+  // the px-per-second scale is read via pxRef.current (a ref that always
+  // points at the latest value) so the listener never needs to re-bind on a
+  // zoom change. Listing pxPerSec here would tear down + reattach the
+  // pointer listeners on every wheel-zoom, dropping in-flight drags.
+  }, [loopStart, loopEnd]);
 
   // Unmount safety: if the user closes the audio panel (or navigates away)
   // while a loop-handle drag is in flight, the window pointermove/pointerup

@@ -12,7 +12,7 @@
  * so the math never compounds and collaborators see the live transform.
  */
 
-import { useRef, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 import type { Shape, Stroke } from '@slate/sync-protocol';
 import type { CanvasEngine } from './engine';
 import { rotatedShapeAABB, shapeBounds, strokeBounds } from './geometry';
@@ -44,7 +44,7 @@ interface DragState {
   center: BoardPoint;
 }
 
-export function SelectionHandles({
+export const SelectionHandles = memo(function SelectionHandles({
   engine,
   selection,
   docVersion,
@@ -233,7 +233,7 @@ export function SelectionHandles({
       )}
     </div>
   );
-}
+});
 
 function collectSelected(
   engine: CanvasEngine | null,

@@ -284,7 +284,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [room, setShortcutsOpen]);
+  }, [room, setShortcutsOpen, board.mode]);
 
   const handleFileMenu = useMemo(
     () => (action: FileMenuAction) => {
@@ -332,7 +332,7 @@ export function Workspace() {
           break;
       }
     },
-    [setShortcutsOpen, room],
+    [setShortcutsOpen, room, setBgOpen],
   );
 
   if (!room) {

@@ -33,7 +33,7 @@
  * writes back to Yjs on a 250ms debounce so typing stays smooth.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
   Plus, Trash2, Copy as CopyIcon, ChevronLeft, ChevronRight,
@@ -792,6 +792,34 @@ ${sections}
           if (color) exec('foreColor', color);
           break;
         }
+        case 'clearColor': {
+          // Reset the selection's inline color to the inherited value. We
+          // can't pass `inherit`/`unset` through execCommand('foreColor')
+          // (browsers clamp it to a hex), so we walk the selected elements
+          // and strip `color` from their inline style — same trick the
+          // `clearFontSize` command uses. Forward-compatible: the panel
+          // doesn't ship a clearColor button today, but a future "clear
+          // color" affordance can dispatch this without needing another
+          // listener edit.
+          const el = editorRef.current;
+          if (el) {
+            el.focus();
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0) {
+              const range = sel.getRangeAt(0);
+              const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
+              let node: Node | null = walker.currentNode;
+              while (node) {
+                if (node instanceof HTMLElement && range.intersectsNode(node)) {
+                  if (node.style.color) node.style.color = '';
+                }
+                node = walker.nextNode();
+              }
+            }
+            commitContent();
+          }
+          break;
+        }
         case 'clearFormat':
           exec('removeFormat');
           exec('formatBlock', 'div');
@@ -845,7 +873,7 @@ ${sections}
     };
     window.addEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
     return () => window.removeEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
-  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml]);
+  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml, commitContent]);
 
   // ── Drag-to-reorder in the slide navigator ────────────────────────────
   /** Refs read inside document-level pointer handlers (which don't re-bind
@@ -1062,57 +1090,21 @@ ${sections}
             </div>
             <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
               {slides.map((s, i) => (
-                <li
+                <SlideThumbnail
                   key={s.id}
-                  data-slide-idx={i}
-                  onPointerDown={(e) => startDrag(i, e)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ idx: i, x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Suppress the click that follows a drag — otherwise
-                      // releasing a drag would also switch the active slide
-                      // to the drop target (confusing UX).
-                      if (dragStateRef.current?.moved) return;
-                      setCurrent(i);
-                    }}
-                    className={`group mb-1.5 flex w-full flex-col gap-1 rounded-sm border p-1 text-left transition-colors ${
-                      i === current ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40 hover:bg-bg-3'
-                    } ${dragOver === i && dragStateRef.current?.from !== i ? 'ring-2 ring-accent/60' : ''}`}
-                  >
-                    <span className="flex items-center gap-1 text-[9px] font-mono text-text-dim">
-                      <span
-                        className="flex h-3 w-3 items-center justify-center rounded-sm text-[7px] font-bold text-text-mid"
-                        style={s.background.startsWith('linear-gradient')
-                          ? { backgroundImage: s.background }
-                          : { backgroundColor: s.background }}
-                      >
-                        {i + 1}
-                      </span>
-                      {s.transition !== 'none' && (
-                        <span className="opacity-60" title={`Transition: ${s.transition}`}>↻</span>
-                      )}
-                      {s.animation !== 'none' && (
-                        <span className="opacity-60" title={`Animation: ${s.animation}`}>✨</span>
-                      )}
-                    </span>
-                    <span
-                      className="block aspect-video w-full overflow-hidden rounded-sm border border-border/50"
-                      style={s.background.startsWith('linear-gradient')
-                        ? { backgroundImage: s.background }
-                        : { backgroundColor: s.background }}
-                    >
-                      <span
-                        className="block h-full w-full origin-top-left scale-[0.18] text-[7px] text-text opacity-80"
-                        dangerouslySetInnerHTML={{ __html: s.content || '<span style="opacity:0.4">Blank slide</span>' }}
-                      />
-                    </span>
-                  </button>
-                </li>
+                  index={i}
+                  id={s.id}
+                  content={s.content}
+                  background={s.background}
+                  transition={s.transition}
+                  animation={s.animation}
+                  isActive={i === current}
+                  isDragOver={dragOver === i && dragStateRef.current?.from !== i}
+                  dragMoved={!!dragStateRef.current?.moved}
+                  onActivate={setCurrent}
+                  onDragStart={startDrag}
+                  onContextMenu={(idx, e) => setContextMenu({ idx, x: e.clientX, y: e.clientY })}
+                />
               ))}
             </ul>
           </aside>
@@ -1377,6 +1369,89 @@ function ToolbarButton({ onClick, title, Icon }: { onClick: () => void; title: s
     </button>
   );
 }
+
+/** Slide-navigator thumbnail. Memoized so a deck-wide re-render (e.g.
+ *  bumping `current` to navigate, or a remote peer editing slide 3) doesn't
+ *  re-render EVERY thumbnail — only the slide whose content/background/
+ *  transition/animation changed, plus the old + new "active" rows.
+ *
+ *  Props are deliberately primitive (string/boolean/number + stable
+ *  callbacks) so the default shallow comparison catches every real change
+ *  and skips the rest. The `<li>` wrapper lives here so its
+ *  `data-slide-idx` + drag/context handlers ship with the memoized subtree. */
+const SlideThumbnail = memo(function SlideThumbnail({
+  index, id, content, background, transition, animation,
+  isActive, isDragOver, dragMoved,
+  onActivate, onDragStart, onContextMenu,
+}: {
+  index: number;
+  id: string;
+  content: string;
+  background: string;
+  transition: TransitionId;
+  animation: AnimationId;
+  isActive: boolean;
+  isDragOver: boolean;
+  /** Read from `dragStateRef.current?.moved` at render time so the click
+   *  handler can suppress the post-drag click without forcing a re-render
+   *  mid-drag (the ref mutates freely during the drag). */
+  dragMoved: boolean;
+  onActivate: (index: number) => void;
+  onDragStart: (index: number, e: React.PointerEvent) => void;
+  onContextMenu: (index: number, e: React.MouseEvent) => void;
+}) {
+  void id;
+  const bgStyle = background.startsWith('linear-gradient')
+    ? { backgroundImage: background }
+    : { backgroundColor: background };
+  return (
+    <li
+      data-slide-idx={index}
+      onPointerDown={(e) => onDragStart(index, e)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(index, e);
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          // Suppress the click that follows a drag — otherwise releasing a
+          // drag would also switch the active slide to the drop target.
+          if (dragMoved) return;
+          onActivate(index);
+        }}
+        className={`group mb-1.5 flex w-full flex-col gap-1 rounded-sm border p-1 text-left transition-colors ${
+          isActive ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40 hover:bg-bg-3'
+        } ${isDragOver ? 'ring-2 ring-accent/60' : ''}`}
+      >
+        <span className="flex items-center gap-1 text-[9px] font-mono text-text-dim">
+          <span
+            className="flex h-3 w-3 items-center justify-center rounded-sm text-[7px] font-bold text-text-mid"
+            style={bgStyle}
+          >
+            {index + 1}
+          </span>
+          {transition !== 'none' && (
+            <span className="opacity-60" title={`Transition: ${transition}`}>↻</span>
+          )}
+          {animation !== 'none' && (
+            <span className="opacity-60" title={`Animation: ${animation}`}>✨</span>
+          )}
+        </span>
+        <span
+          className="block aspect-video w-full overflow-hidden rounded-sm border border-border/50"
+          style={bgStyle}
+        >
+          <span
+            className="block h-full w-full origin-top-left scale-[0.18] text-[7px] text-text opacity-80"
+            dangerouslySetInnerHTML={{ __html: content || '<span style="opacity:0.4">Blank slide</span>' }}
+          />
+        </span>
+      </button>
+    </li>
+  );
+});
 
 /** Right-click context menu for a slide thumbnail. Renders as a fixed-position
  *  popover at the click coords; closes on outside click / Escape. */

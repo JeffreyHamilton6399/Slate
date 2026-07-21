@@ -1568,7 +1568,11 @@ function ViewPresets({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [camera, controls]);
+    // lookThroughRef is a stable ref container (the inner callback is
+    // re-attached by the effect above whenever camera/controls change, so
+    // always reads the latest camera state). Listed here only to satisfy
+    // exhaustive-deps — it never changes identity.
+  }, [camera, controls, lookThroughRef]);
   return null;
 }
 

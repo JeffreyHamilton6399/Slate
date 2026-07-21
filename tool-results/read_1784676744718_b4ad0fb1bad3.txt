@@ -1,0 +1,744 @@
+     1→/**
+     2→ * Export dialog — pick a format and download. Format options depend on
+     3→ * the current board mode.
+     4→ *
+     5→ *   2D    → png / jpg / webp / svg / mp4 (canvas animation)
+     6→ *   3D    → glb / gltf / obj / stl / ply / fbx / mp4 (animation render)
+     7→ *   Audio → wav (offline mixdown) / mp3 (192 kbps MP3, offline encode)
+     8→ *   Doc   → md (Markdown) / html (standalone web page)
+     9→ *   Code  → zip (all files) / file (the active file)
+    10→ *
+    11→ * Audio mode previously fell through to the 2D branch and produced blank
+    12→ * PNGs — it now renders the mix via OfflineAudioContext (WAV) or encodes
+    13→ * an MP3 with lamejs from the same offline-rendered buffer. Doc and code
+    14→ * modes used to be silently cast to '2d' and offer PNG/JPG/MP4 (wrong);
+    15→ * they now have their own format lists and export branches.
+    16→ */
+    17→
+    18→import { useEffect, useState } from 'react';
+    19→import { Download } from 'lucide-react';
+    20→import { Dialog } from '../ui/Dialog';
+    21→import { Button } from '../ui/Button';
+    22→import { useRoom } from '../sync/RoomContext';
+    23→import { useAppStore } from '../app/store';
+    24→import { exportRaster, exportSvg, type RasterFormat } from './export2d';
+    25→import { export3D, type ThreeDFormat } from './export3d';
+    26→import { export2dVideo } from './export2dVideo';
+    27→import { exportAudioWav, exportAudioMp3 } from './exportAudio';
+    28→import { readSceneSnapshot } from '../viewport3d/scene';
+    29→import { useScene3DStore } from '../viewport3d/store';
+    30→import { useCanvasStore } from '../canvas2d/store';
+    31→import { readAudioClip } from '../audio/scene';
+    32→import { docFragmentToMarkdown } from '../docs/exportMarkdown';
+    33→import { codeZipBlob, listCodeFiles } from '../code/exportCode';
+    34→import { readNodes, readEdges } from '../diagram/model';
+    35→import { diagramToSvg, diagramSvgToPng } from '../diagram/exportDiagram';
+    36→import { toast } from '../ui/Toast';
+    37→import {
+    38→  layerSchema,
+    39→  shapeSchema,
+    40→  strokeSchema,
+    41→  type Layer,
+    42→  type Shape,
+    43→  type Stroke,
+    44→} from '@slate/sync-protocol';
+    45→import { readMeta } from '../sync/doc';
+    46→
+    47→interface ExportDialogProps {
+    48→  open: boolean;
+    49→  onOpenChange: (v: boolean) => void;
+    50→}
+    51→
+    52→/** Per-format descriptions, Photoshop/Blender export-dialog style. */
+    53→const FORMAT_INFO: Record<string, string> = {
+    54→  png: 'Lossless raster — best for sharing; supports transparency.',
+    55→  jpg: 'Small lossy raster — no transparency.',
+    56→  webp: 'Modern raster — small files, supports transparency.',
+    57→  svg: 'Vector — infinite resolution, editable in Illustrator/Figma.',
+    58→  mp4: 'Video — captures the timeline / animation playback.',
+    59→  glb: 'Binary glTF — the standard for web/game engines (one file).',
+    60→  gltf: 'JSON glTF — human-readable scene + materials.',
+    61→  obj: 'Wavefront OBJ — universal mesh interchange (transforms baked).',
+    62→  stl: '3D-printing mesh — geometry only.',
+    63→  ply: 'Point/mesh research format — geometry only.',
+    64→  fbx: 'Autodesk FBX — DCC interchange (Blender, Maya, Unity).',
+    65→  wav: 'Audio mixdown — lossless 16-bit PCM, plays anywhere.',
+    66→  mp3: 'Audio mixdown — 192 kbps MP3, tiny files, plays everywhere.',
+    67→  md: 'Markdown — plain text with formatting preserved.',
+    68→  html: 'HTML — standalone web page with inline styles.',
+    69→  zip: 'ZIP — all files bundled for download.',
+    70→  file: 'Single file — download the active file.',
+    71→  pdf: 'PDF — prints each slide to its own page (uses your browser’s print-to-PDF).',
+    72→};
+    73→
+    74→type ExportFormat =
+    75→  | RasterFormat
+    76→  | 'svg'
+    77→  | 'mp4'
+    78→  | 'wav'
+    79→  | 'mp3'
+    80→  | ThreeDFormat
+    81→  | 'md'
+    82→  | 'html'
+    83→  | 'zip'
+    84→  | 'file'
+    85→  | 'pdf';
+    86→
+    87→/** Default format per board mode — used when the dialog opens or the mode
+    88→ *  changes so a stale format from another mode is never selected. */
+    89→function defaultFormatForMode(
+    90→  mode: '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | 'presentation' | undefined,
+    91→): ExportFormat {
+    92→  if (mode === '3d') return 'glb';
+    93→  if (mode === 'audio') return 'wav';
+    94→  if (mode === 'doc') return 'md';
+    95→  if (mode === 'code') return 'zip';
+    96→  if (mode === 'diagram') return 'svg';
+    97→  if (mode === 'presentation') return 'html';
+    98→  return 'png';
+    99→}
+   100→
+   101→export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
+   102→  const room = useRoom();
+   103→  const board = useAppStore((s) => s.currentBoard);
+   104→  const mode = (board?.mode ?? '2d') as '2d' | '3d' | 'audio' | 'doc' | 'code' | 'diagram' | 'presentation';
+   105→  const is3d = mode === '3d';
+   106→  const isAudio = mode === 'audio';
+   107→  const isDoc = mode === 'doc';
+   108→  const isCode = mode === 'code';
+   109→  const isDiagram = mode === 'diagram';
+   110→  const isPresentation = mode === 'presentation';
+   111→  const [format, setFormat] = useState<ExportFormat>(defaultFormatForMode(mode));
+   112→  const [busy, setBusy] = useState(false);
+   113→  const [progress, setProgress] = useState(0);
+   114→  // 2D settings (Photoshop-style).
+   115→  const [scale, setScale] = useState(1);
+   116→  const [transparent, setTransparent] = useState(false);
+   117→  const [quality, setQuality] = useState(0.92);
+   118→  // 3D settings (Blender-style).
+   119→  const [selectedOnly, setSelectedOnly] = useState(false);
+   120→
+   121→  // Reset the format whenever the board mode changes — a stale 'glb' from a
+   122→  // 3D board would silently produce nothing on an audio board, etc.
+   123→  useEffect(() => {
+   124→    setFormat(defaultFormatForMode(mode));
+   125→  }, [mode]);
+   126→
+   127→  const onExport = async () => {
+   128→    if (busy) return;
+   129→    setBusy(true);
+   130→    setProgress(0);
+   131→    try {
+   132→      if (isDoc) {
+   133→        // Doc mode — Markdown or a standalone HTML page built from the
+   134→        // Y.XmlFragment (no TipTap instance is reachable from the dialog).
+   135→        const boardName = board?.name ?? 'document';
+   136→        if (format === 'md') {
+   137→          const md = docFragmentToMarkdown(room.slate.docText());
+   138→          downloadText(md, `${boardName}.md`, 'text/markdown');
+   139→        } else if (format === 'html') {
+   140→          const md = docFragmentToMarkdown(room.slate.docText());
+   141→          const html = docMarkdownToStandaloneHtml(boardName, md);
+   142→          downloadText(html, `${boardName}.html`, 'text/html');
+   143→        } else {
+   144→          throw new Error(`Unsupported doc format: ${format}`);
+   145→        }
+   146→      } else if (isPresentation) {
+   147→        // Presentation mode — a single standalone HTML file (one `<section>`
+   148→        // per slide) or a PDF via a hidden iframe + window.print() with
+   149→        // per-slide page-break CSS. Slides are read straight from the Yjs
+   150→        // slides array (no PresentationEditor instance is reachable here).
+   151→        const boardName = board?.name ?? 'presentation';
+   152→        const html = presentationDeckToHtml(room.slate, boardName);
+   153→        if (format === 'html') {
+   154→          downloadText(html, `${boardName}.html`, 'text/html');
+   155→        } else if (format === 'pdf') {
+   156→          await printHtmlInIframe(html);
+   157→        } else {
+   158→          throw new Error(`Unsupported presentation format: ${format}`);
+   159→        }
+   160→      } else if (isDiagram) {
+   161→        // Diagram mode — SVG (vector) or a PNG rasterized from it, both framed
+   162→        // to the content bounds (independent of the live viewport).
+   163→        const boardName = board?.name ?? 'slate-diagram';
+   164→        const nodes = readNodes(room.slate.diagramNodes());
+   165→        const edges = readEdges(room.slate.diagramEdges());
+   166→        if (nodes.length === 0) throw new Error('Nothing to export — add a node first.');
+   167→        const meta = readMeta(room.slate);
+   168→        const svg = diagramToSvg(nodes, edges, meta.paper ?? '#0c0c0e');
+   169→        if (format === 'svg') {
+   170→          downloadText(svg, `${boardName}.svg`, 'image/svg+xml');
+   171→        } else {
+   172→          downloadBlob(await diagramSvgToPng(svg, 2), `${boardName}.png`);
+   173→        }
+   174→      } else if (isCode) {
+   175→        // Code mode — ZIP every file or download the active file's content.
+   176→        const boardName = board?.name ?? 'slate-code';
+   177→        if (format === 'zip') {
+   178→          const all = listCodeFiles(room.slate);
+   179→          if (all.length === 0) throw new Error('Nothing to export — add a file first.');
+   180→          downloadBlob(codeZipBlob(room.slate), `${boardName}.zip`);
+   181→        } else if (format === 'file') {
+   182→          // Pick the active file from the CodeEditor's window-level state if
+   183→          // available, otherwise fall back to the first file in the map.
+   184→          const all = listCodeFiles(room.slate);
+   185→          const activeId =
+   186→            (window as unknown as { __slateCodeActiveFileId?: string }).__slateCodeActiveFileId
+   187→            ?? all[0]?.id;
+   188→          const active = all.find((f) => f.id === activeId) ?? all[0];
+   189→          if (!active) throw new Error('Nothing to export — add a file first.');
+   190→          downloadText(
+   191→            room.slate.codeText(active.id).toString(),
+   192→            active.name,
+   193→            'text/plain',
+   194→          );
+   195→        } else {
+   196→          throw new Error(`Unsupported code format: ${format}`);
+   197→        }
+   198→      } else if (isAudio) {
+   199→        // Audio mode — WAV mixdown or MP3 (lamejs) encode, both offline.
+   200→        const duration = computeAudioDuration(room.slate);
+   201→        if (duration <= 0) throw new Error('Nothing to export — add some audio clips first.');
+   202→        if (format === 'wav') {
+   203→          await exportAudioWav({ slate: room.slate, duration, onProgress: setProgress });
+   204→        } else if (format === 'mp3') {
+   205→          await exportAudioMp3({ slate: room.slate, duration, onProgress: setProgress });
+   206→        } else {
+   207→          throw new Error(`Unsupported audio format: ${format}`);
+   208→        }
+   209→      } else if (is3d) {
+   210→        if (format === 'mp4') {
+   211→          // The dialog doesn't own the 3D canvas — hand off to the viewport's
+   212→          // existing render-animation flow (it captures + downloads itself).
+   213→          window.dispatchEvent(new CustomEvent('slate:export-3d-animation'));
+   214→          toast({ title: 'Rendering animation', description: 'Capturing the 3D viewport…' });
+   215→        } else {
+   216→          const snap = readSceneSnapshot(room.slate);
+   217→          const selection = new Set(useScene3DStore.getState().selection);
+   218→          const objects =
+   219→            selectedOnly && selection.size > 0
+   220→              ? snap.objects.filter((o) => selection.has(o.id))
+   221→              : snap.objects;
+   222→          if (objects.length === 0) throw new Error('Nothing selected to export.');
+   223→          const blob = await export3D(format as ThreeDFormat, {
+   224→            objects,
+   225→            meshes: snap.meshes,
+   226→            materials: snap.materials,
+   227→            boardName: board?.name ?? 'slate',
+   228→          });
+   229→          downloadBlob(blob, `${board?.name ?? 'slate'}.${format}`);
+   230→        }
+   231→      } else {
+   232→        // 2D mode.
+   233→        if (format === 'mp4') {
+   234→          // Grab the live 2D canvas (the minimap canvas carries an aria-label,
+   235→          // so skip it) and record it while stepping through the timeline.
+   236→          const canvas = document.querySelector<HTMLCanvasElement>('canvas:not([aria-label])')
+   237→            ?? document.querySelector<HTMLCanvasElement>('canvas');
+   238→          if (!canvas || typeof canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+   239→            throw new Error('This browser can’t record the canvas.');
+   240→          }
+   241→          const store = useCanvasStore.getState();
+   242→          await export2dVideo({
+   243→            canvas,
+   244→            fps: store.animFps,
+   245→            duration: store.animDuration,
+   246→            onProgress: setProgress,
+   247→          });
+   248→        } else if (format === 'svg') {
+   249→          const { layers, shapesByLayer, strokesByLayer } = read2DScene(room);
+   250→          const meta = readMeta(room.slate);
+   251→          downloadText(
+   252→            exportSvg({ layers, shapesByLayer, strokesByLayer, paper: meta.paper ?? '#0c0c0e' }),
+   253→            `${board?.name ?? 'slate'}.svg`,
+   254→            'image/svg+xml',
+   255→          );
+   256→        } else {
+   257→          const { layers, shapesByLayer, strokesByLayer } = read2DScene(room);
+   258→          const meta = readMeta(room.slate);
+   259→          const blob = await exportRaster({
+   260→            layers,
+   261→            shapesByLayer,
+   262→            strokesByLayer,
+   263→            paper: meta.paper ?? '#0c0c0e',
+   264→            format: format as RasterFormat,
+   265→            scale,
+   266→            transparent,
+   267→            quality,
+   268→            maxSize: 8192,
+   269→          });
+   270→          downloadBlob(blob, `${board?.name ?? 'slate'}.${format}`);
+   271→        }
+   272→      }
+   273→      toast({ title: 'Export complete' });
+   274→      onOpenChange(false);
+   275→    } catch (err) {
+   276→      console.error(err);
+   277→      toast({ title: 'Export failed', description: (err as Error).message, variant: 'error' });
+   278→    } finally {
+   279→      setBusy(false);
+   280→      setProgress(0);
+   281→    }
+   282→  };
+   283→
+   284→  const formats: readonly ExportFormat[] = isAudio
+   285→    ? (['wav', 'mp3'] as const)
+   286→    : is3d
+   287→      ? (['glb', 'gltf', 'obj', 'stl', 'ply', 'fbx', 'mp4'] as const)
+   288→      : isDoc
+   289→        ? (['md', 'html'] as const)
+   290→        : isCode
+   291→          ? (['zip', 'file'] as const)
+   292→          : isDiagram
+   293→            ? (['svg', 'png'] as const)
+   294→            : isPresentation
+   295→              ? (['html', 'pdf'] as const)
+   296→              : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
+   297→  const raster = !is3d && !isAudio && !isDoc && !isCode && !isDiagram && !isPresentation && format !== 'svg' && format !== 'mp4';
+   298→
+   299→  const description = isAudio
+   300→    ? 'Export the audio mix to a file.'
+   301→    : is3d
+   302→      ? 'Export this 3D scene to a file.'
+   303→      : isDoc
+   304→        ? 'Export this document to a file.'
+   305→        : isCode
+   306→          ? 'Export this project to a file.'
+   307→          : isDiagram
+   308→            ? 'Export this diagram to a file.'
+   309→            : isPresentation
+   310→              ? 'Export this presentation to a file.'
+   311→              : 'Export this canvas to a file.';
+   312→
+   313→  return (
+   314→    <Dialog
+   315→      open={open}
+   316→      onOpenChange={onOpenChange}
+   317→      title="Export"
+   318→      description={description}
+   319→    >
+   320→      <div className="flex flex-col gap-3">
+   321→        <div>
+   322→          <label className="field-label">Format</label>
+   323→          <div className="grid grid-cols-3 gap-1">
+   324→            {formats.map((f) => (
+   325→              <button
+   326→                key={f}
+   327→                type="button"
+   328→                onClick={() => setFormat(f)}
+   329→                aria-pressed={format === f}
+   330→                className={
+   331→                  'rounded-sm border px-2 py-1.5 text-xs uppercase font-mono tracking-wider ' +
+   332→                  (format === f
+   333→                    ? 'border-accent/60 bg-accent/15 text-accent'
+   334→                    : 'border-border text-text-mid hover:bg-bg-3')
+   335→                }
+   336→              >
+   337→                {f}
+   338→              </button>
+   339→            ))}
+   340→          </div>
+   341→          <p className="mt-1.5 min-h-8 text-xs text-text-dim">{FORMAT_INFO[format]}</p>
+   342→        </div>
+   343→
+   344→        {raster && (
+   345→          <div className="flex flex-col gap-2.5 rounded-sm border border-border bg-bg-3 p-2.5">
+   346→            <div className="flex items-center gap-2">
+   347→              <span className="field-label m-0 w-16">Size</span>
+   348→              <div className="flex rounded-sm bg-bg-4 p-0.5">
+   349→                {[1, 2, 4].map((s) => (
+   350→                  <button
+   351→                    key={s}
+   352→                    type="button"
+   353→                    onClick={() => setScale(s)}
+   354→                    aria-pressed={scale === s}
+   355→                    className={
+   356→                      'rounded-sm px-2.5 py-1 text-xs font-mono ' +
+   357→                      (scale === s ? 'bg-accent/20 text-accent' : 'text-text-dim hover:text-text')
+   358→                    }
+   359→                  >
+   360→                    {s}x
+   361→                  </button>
+   362→                ))}
+   363→              </div>
+   364→            </div>
+   365→            {format !== 'jpg' && (
+   366→              <label className="flex items-center gap-2 text-xs text-text-mid">
+   367→                <input
+   368→                  type="checkbox"
+   369→                  checked={transparent}
+   370→                  onChange={(e) => setTransparent(e.target.checked)}
+   371→                  className="accent-accent"
+   372→                />
+   373→                Transparent background
+   374→              </label>
+   375→            )}
+   376→            {format !== 'png' && (
+   377→              <label className="flex items-center gap-2 text-xs text-text-mid">
+   378→                <span className="field-label m-0 w-16">Quality</span>
+   379→                <input
+   380→                  type="range"
+   381→                  min={0.4}
+   382→                  max={1}
+   383→                  step={0.02}
+   384→                  value={quality}
+   385→                  onChange={(e) => setQuality(Number(e.target.value))}
+   386→                  className="flex-1 accent-accent"
+   387→                />
+   388→                <span className="w-8 text-right font-mono">{Math.round(quality * 100)}</span>
+   389→              </label>
+   390→            )}
+   391→          </div>
+   392→        )}
+   393→
+   394→        {is3d && format !== 'mp4' && (
+   395→          <div className="flex flex-col gap-2 rounded-sm border border-border bg-bg-3 p-2.5">
+   396→            <label className="flex items-center gap-2 text-xs text-text-mid">
+   397→              <input
+   398→                type="checkbox"
+   399→                checked={selectedOnly}
+   400→                onChange={(e) => setSelectedOnly(e.target.checked)}
+   401→                className="accent-accent"
+   402→              />
+   403→              Selected objects only
+   404→            </label>
+   405→            <p className="text-[11px] text-text-dim">
+   406→              Scale: 1 unit = 1 m. Lights and cameras are not exported.
+   407→            </p>
+   408→          </div>
+   409→        )}
+   410→
+   411→        {is3d && format === 'mp4' && (
+   412→          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+   413→            <p className="text-[11px] text-text-dim">
+   414→              Renders the 3D animation timeline to a video. MP4 (H.264) is
+   415→              preferred; browsers without MP4 encoding fall back to WebM.
+   416→              Make sure your scene has keyframes — the render button checks for them.
+   417→            </p>
+   418→          </div>
+   419→        )}
+   420→
+   421→        {isAudio && (
+   422→          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+   423→            <p className="text-[11px] text-text-dim">
+   424→              {format === 'wav'
+   425→                ? 'Renders every clip offline (fast) and encodes a 16-bit stereo WAV — bit-exact, no realtime wait.'
+   426→                : 'Renders every clip offline (fast) and encodes a 192 kbps MP3 with lamejs — tiny files, plays everywhere.'}
+   427→              {' '}
+   428→              Per-track volume/pan/mute/solo and per-clip gain/pan/speed are honoured.
+   429→            </p>
+   430→          </div>
+   431→        )}
+   432→
+   433→        {isDoc && (
+   434→          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+   435→            <p className="text-[11px] text-text-dim">
+   436→              {format === 'md'
+   437→                ? 'Serializes the document to Markdown — headings, lists, code blocks, links, and inline marks preserved. Images embedded as data URLs are referenced by name.'
+   438→                : 'Wraps the document in a standalone HTML page — portable, opens in any browser. Rich formatting is preserved as Markdown inside a styled <pre> block (no TipTap instance is reachable from the dialog).'}
+   439→            </p>
+   440→          </div>
+   441→        )}
+   442→
+   443→        {isCode && (
+   444→          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+   445→            <p className="text-[11px] text-text-dim">
+   446→              {format === 'zip'
+   447→                ? 'Bundles every file in the project into a single .zip archive (stored, not compressed — code is already small). Duplicate names get a " (n)" suffix.'
+   448→                : 'Downloads the active file exactly as it lives in the shared Yjs document — every synced keystroke included.'}
+   449→            </p>
+   450→          </div>
+   451→        )}
+   452→
+   453→        {isPresentation && (
+   454→          <div className="rounded-sm border border-border bg-bg-3 p-2.5">
+   455→            <p className="text-[11px] text-text-dim">
+   456→              {format === 'html'
+   457→                ? 'Builds a standalone HTML file — one full-viewport <section> per slide, with the deck’s backgrounds, content, and speaker notes inline. Opens in any browser; shareable as a single file.'
+   458→                : 'Opens the deck in a hidden iframe and calls window.print() with per-slide page-break CSS — choose “Save as PDF” in your browser’s print dialog to produce a PDF (one slide per page).'}
+   459→            </p>
+   460→          </div>
+   461→        )}
+   462→
+   463→        {busy && progress > 0 && (
+   464→          <div className="flex items-center gap-2 text-[11px] text-text-dim">
+   465→            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg-4">
+   466→              <div
+   467→                className="h-full bg-accent transition-[width] duration-150"
+   468→                style={{ width: `${Math.round(progress * 100)}%` }}
+   469→              />
+   470→            </div>
+   471→            <span className="font-mono">{Math.round(progress * 100)}%</span>
+   472→          </div>
+   473→        )}
+   474→
+   475→        <div className="flex justify-end gap-2 pt-2">
+   476→          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+   477→            Cancel
+   478→          </Button>
+   479→          <Button variant="primary" onClick={onExport} disabled={busy}>
+   480→            <Download size={13} />
+   481→            <span className="ml-1.5">
+   482→              {busy
+   483→                ? progress > 0
+   484→                  ? `Exporting ${Math.round(progress * 100)}%…`
+   485→                  : 'Exporting…'
+   486→                : 'Export'}
+   487→            </span>
+   488→          </Button>
+   489→        </div>
+   490→      </div>
+   491→    </Dialog>
+   492→  );
+   493→}
+   494→
+   495→/** Compute the audio mixdown duration from the latest clip end (matches the
+   496→ *  AudioEditor's timelineDuration math, minus the live playhead padding). */
+   497→function computeAudioDuration(slate: ReturnType<typeof useRoom>['slate']): number {
+   498→  let max = 0;
+   499→  slate.audioClips().forEach((m, id) => {
+   500→    const c = readAudioClip(m, id);
+   501→    if (!c) return;
+   502→    const end = c.start + c.duration;
+   503→    if (end > max) max = end;
+   504→  });
+   505→  // Small tail so reverb/ring-off isn't cut, and never less than a beat.
+   506→  return Math.max(1, max + 0.5);
+   507→}
+   508→
+   509→function downloadBlob(blob: Blob, name: string): void {
+   510→  const url = URL.createObjectURL(blob);
+   511→  const a = document.createElement('a');
+   512→  a.href = url;
+   513→  a.download = name;
+   514→  a.click();
+   515→  setTimeout(() => URL.revokeObjectURL(url), 500);
+   516→}
+   517→
+   518→function downloadText(text: string, name: string, mime: string): void {
+   519→  downloadBlob(new Blob([text], { type: mime }), name);
+   520→}
+   521→
+   522→/** Build a standalone HTML document from a doc's Markdown. We don't have
+   523→ *  access to the DocEditor's TipTap instance from the dialog, so the editor's
+   524→ *  rich HTML (the export path the toolbar uses) isn't reachable here. Instead
+   525→ *  we serialize the Y.XmlFragment to Markdown (cheap, dependency-free) and
+   526→ *  wrap it in a `<pre>` block inside a basic styled page. Not a perfect
+   527→ *  rendering of the rich text, but a portable, readable, self-contained file.
+   528→ *
+   529→ *  The `<title>` is HTML-escaped; the body is HTML-escaped (so the markdown
+   530→ *  shows up as text rather than being parsed by the browser). */
+   531→function docMarkdownToStandaloneHtml(boardName: string, md: string): string {
+   532→  const esc = (s: string) =>
+   533→    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+   534→  return `<!DOCTYPE html>
+   535→<html lang="en">
+   536→<head>
+   537→<meta charset="utf-8" />
+   538→<meta name="viewport" content="width=device-width, initial-scale=1" />
+   539→<title>${esc(boardName)}</title>
+   540→<style>
+   541→  body { font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; color: #1a1a1a; background: #fff; max-width: 780px; margin: 2rem auto; padding: 0 1.5rem; font-size: 14px; line-height: 1.6; }
+   542→  pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+   543→  h1, h2, h3 { font-weight: 700; }
+   544→</style>
+   545→</head>
+   546→<body>
+   547→<pre>${esc(md)}</pre>
+   548→</body>
+   549→</html>`;
+   550→}
+   551→
+   552→/** Build a standalone HTML document for a presentation deck — one full-
+   553→ *  viewport `<section>` per slide, with the slide's background, content,
+   554→ *  and (if present) speaker notes inline. Mirrors the export path the
+   555→ *  PresentationEditor's toolbar button uses, but reads straight from Yjs
+   556→ *  (the dialog can't reach the editor instance). */
+   557→function presentationDeckToHtml(
+   558→  slate: ReturnType<typeof useRoom>['slate'],
+   559→  boardName: string,
+   560→): string {
+   561→  const arr = slate.slides();
+   562→  const slides: { content: string; background: string; textColor: string; notes: string; transition: string; animation: string }[] = [];
+   563→  for (let i = 0; i < arr.length; i++) {
+   564→    const m = arr.get(i);
+   565→    slides.push({
+   566→      content: (m.get('content') as string | undefined) ?? '',
+   567→      background: (m.get('background') as string | undefined) ?? '#0c0c0e',
+   568→      textColor: (m.get('textColor') as string | undefined) ?? '',
+   569→      notes: (m.get('notes') as string | undefined) ?? '',
+   570→      transition: (m.get('transition') as string | undefined) ?? 'none',
+   571→      animation: (m.get('animation') as string | undefined) ?? 'none',
+   572→    });
+   573→  }
+   574→  const escAttr = (v: string) => v.replace(/"/g, '&quot;');
+   575→  const escText = (s: string) =>
+   576→    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+   577→  const sections = slides
+   578→    .map(
+   579→      (s, i) => {
+   580→        // Inline `color` carries the slide's textColor (set by a theme) so
+   581→        // the exported deck preserves the visual styling without external CSS.
+   582→        const colorStyle = s.textColor ? `color:${escAttr(s.textColor)};` : '';
+   583→        return (
+   584→          `<section class="slide" data-index="${i}" data-transition="${escAttr(s.transition)}" data-animation="${escAttr(s.animation)}" style="background:${escAttr(s.background)};${colorStyle}">` +
+   585→          `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
+   586→          (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escText(s.notes)}</aside>` : '') +
+   587→          '</section>'
+   588→        );
+   589→      },
+   590→    )
+   591→    .join('\n');
+   592→  return `<!DOCTYPE html>
+   593→<html lang="en">
+   594→<head>
+   595→<meta charset="utf-8" />
+   596→<meta name="viewport" content="width=device-width, initial-scale=1" />
+   597→<title>${escText(boardName)}</title>
+   598→<style>
+   599→  * { box-sizing: border-box; }
+   600→  body { margin: 0; background: #000; font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #fff; }
+   601→  .slide {
+   602→    width: 100vw; height: 100vh; min-height: 100vh;
+   603→    display: flex; align-items: center; justify-content: center;
+   604→    padding: 6%; position: relative; page-break-after: always;
+   605→  }
+   606→  .slide-inner { width: 100%; max-width: 1280px; line-height: 1.5; font-size: 1.4rem; }
+   607→  .slide-inner h1 { font-size: 2.6em; margin: 0 0 0.5em; font-weight: 700; }
+   608→  .slide-inner h2 { font-size: 2em; margin: 0 0 0.5em; font-weight: 700; }
+   609→  .slide-inner h3 { font-size: 1.5em; margin: 0 0 0.4em; font-weight: 700; }
+   610→  .slide-inner ul, .slide-inner ol { padding-left: 1.4em; }
+   611→  .slide-inner .placeholder { opacity: 0.4; font-style: italic; }
+   612→  .notes { position: absolute; bottom: 1rem; left: 1rem; right: 1rem; font-size: 0.85rem; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem; border-radius: 4px; }
+   613→  @media print {
+   614→    body { background: #fff; }
+   615→    .notes { display: none; }
+   616→    .slide { page-break-after: always; }
+   617→  }
+   618→</style>
+   619→</head>
+   620→<body>
+   621→${sections}
+   622→</body>
+   623→</html>`;
+   624→}
+   625→
+   626→/** Print a standalone HTML string via a hidden iframe — avoids popup
+   627→ *  blockers (the iframe is same-origin) and keeps the print CSS scoped to
+   628→ *  the iframe's document so the host app's styles don't bleed in. Resolves
+   629→ *  after the print dialog closes (or after a 30s timeout fallback). */
+   630→function printHtmlInIframe(html: string): Promise<void> {
+   631→  return new Promise((resolve) => {
+   632→    const iframe = document.createElement('iframe');
+   633→    iframe.setAttribute('aria-hidden', 'true');
+   634→    iframe.style.position = 'fixed';
+   635→    iframe.style.right = '0';
+   636→    iframe.style.bottom = '0';
+   637→    iframe.style.width = '0';
+   638→    iframe.style.height = '0';
+   639→    iframe.style.border = '0';
+   640→    iframe.style.visibility = 'hidden';
+   641→    document.body.appendChild(iframe);
+   642→    const doc = iframe.contentWindow?.document;
+   643→    if (!doc) {
+   644→      iframe.remove();
+   645→      resolve();
+   646→      return;
+   647→    }
+   648→    doc.open();
+   649→    doc.write(html);
+   650→    doc.close();
+   651→    // Give the iframe a tick to lay out before calling print — some browsers
+   652→    // fire `afterprint` immediately if the doc isn't ready, producing a
+   653→    // blank print. A short rAF + setTimeout covers both Chromium and Firefox.
+   654→    const cleanup = () => {
+   655→      iframe.remove();
+   656→      resolve();
+   657→    };
+   658→    iframe.contentWindow?.addEventListener('afterprint', cleanup, { once: true });
+   659→    setTimeout(() => {
+   660→      try {
+   661→        iframe.contentWindow?.focus();
+   662→        iframe.contentWindow?.print();
+   663→      } catch {
+   664→        // ignore — fall through to the timeout fallback
+   665→      }
+   666→      // Fallback in case `afterprint` never fires (older Safari etc.).
+   667→      setTimeout(cleanup, 30000);
+   668→    }, 200);
+   669→  });
+   670→}
+   671→
+   672→interface Read2DResult {
+   673→  layers: Layer[];
+   674→  shapesByLayer: Map<string, Shape[]>;
+   675→  strokesByLayer: Map<string, Stroke[]>;
+   676→}
+   677→
+   678→function read2DScene(room: ReturnType<typeof useRoom>): Read2DResult {
+   679→  const layers: Layer[] = [];
+   680→  room.slate.layers().forEach((m) => {
+   681→    const candidate = {
+   682→      id: m.get('id'),
+   683→      name: m.get('name'),
+   684→      visible: m.get('visible'),
+   685→      locked: m.get('locked'),
+   686→      opacity: m.get('opacity'),
+   687→    };
+   688→    const parsed = layerSchema.safeParse(candidate);
+   689→    if (parsed.success) layers.push(parsed.data);
+   690→  });
+   691→  const shapesByLayer = new Map<string, Shape[]>();
+   692→  const strokesByLayer = new Map<string, Stroke[]>();
+   693→  for (const l of layers) {
+   694→    shapesByLayer.set(l.id, []);
+   695→    strokesByLayer.set(l.id, []);
+   696→  }
+   697→  room.slate.shapes().forEach((m) => {
+   698→    const parsed = shapeSchema.safeParse({
+   699→      id: m.get('id'),
+   700→      kind: m.get('kind'),
+   701→      layerId: m.get('layerId'),
+   702→      x: m.get('x'),
+   703→      y: m.get('y'),
+   704→      w: m.get('w'),
+   705→      h: m.get('h'),
+   706→      rotation: m.get('rotation'),
+   707→      stroke: m.get('stroke'),
+   708→      fill: m.get('fill'),
+   709→      strokeWidth: m.get('strokeWidth'),
+   710→      strokeOpacity: m.get('strokeOpacity'),
+   711→      text: m.get('text'),
+   712→      fontSize: m.get('fontSize'),
+   713→      createdAt: m.get('createdAt'),
+   714→      authorId: m.get('authorId'),
+   715→    });
+   716→    if (!parsed.success) return;
+   717→    const lid = shapesByLayer.has(parsed.data.layerId)
+   718→      ? parsed.data.layerId
+   719→      : layers[layers.length - 1]?.id;
+   720→    if (!lid) return;
+   721→    shapesByLayer.get(lid)!.push(parsed.data);
+   722→  });
+   723→  room.slate.strokes().forEach((m) => {
+   724→    const parsed = strokeSchema.safeParse({
+   725→      id: m.get('id'),
+   726→      kind: m.get('kind'),
+   727→      layerId: m.get('layerId'),
+   728→      color: m.get('color'),
+   729→      size: m.get('size'),
+   730→      opacity: m.get('opacity'),
+   731→      points: m.get('points'),
+   732→      createdAt: m.get('createdAt'),
+   733→      authorId: m.get('authorId'),
+   734→    });
+   735→    if (!parsed.success) return;
+   736→    const lid = strokesByLayer.has(parsed.data.layerId)
+   737→      ? parsed.data.layerId
+   738→      : layers[layers.length - 1]?.id;
+   739→    if (!lid) return;
+   740→    strokesByLayer.get(lid)!.push(parsed.data);
+   741→  });
+   742→  return { layers, shapesByLayer, strokesByLayer };
+   743→}
+   744→

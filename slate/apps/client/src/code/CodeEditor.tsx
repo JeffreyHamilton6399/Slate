@@ -617,6 +617,13 @@ export function CodeEditor() {
   // collapses into one iframe refresh. Only runs while the preview is
   // visible — a hidden iframe rebuilding in the background burns cycles for
   // nothing.
+  //
+  // Performance: the doc.on('update') handler does NO heavy work — it only
+  // clears + resets a 400ms setTimeout (O(1) per call). The actual rebuild
+  // (which walks every file, inlines all <link>/<script> refs, and
+  // setState's the iframe srcDoc) is the debounced tail end, so 10 peers
+  // typing simultaneously collapse into one rebuild ~400ms after the last
+  // keystroke, not 10 rebuilds/sec.
   useEffect(() => {
     if (!showPreview) return;
     const fileMap = room.slate.codeFiles();

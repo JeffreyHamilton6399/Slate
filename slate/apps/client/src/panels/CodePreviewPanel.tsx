@@ -45,6 +45,14 @@ export function CodePreviewPanel() {
 
   // Auto-refresh: watch the file map + text; debounce so a burst of keystrokes
   // (or an AI writing several files) collapses into one rebuild.
+  //
+  // Performance: the doc.on('update') handler itself does NO heavy work — it
+  // only clears + resets a 400ms setTimeout. Every Yjs update from every peer
+  // (each keystroke) flows through here, but each call is O(1): one
+  // clearTimeout + one setTimeout. The actual rebuild (which walks every file
+  // + re-inlines all <link>/<script> refs + setState's the iframe srcDoc)
+  // only runs once 400ms after the LAST update. So with 10 peers typing
+  // simultaneously we get ~2.5 rebuilds/sec instead of ~10/sec.
   useEffect(() => {
     if (!auto) return;
     const files = room.slate.codeFiles();

@@ -108,6 +108,9 @@ function SignIn() {
             email,
             password,
             options: { emailRedirectTo: window.location.origin, data: { display_name: clean } },
+            // ^ On Vercel, window.location.origin is the production URL (e.g.
+            //   https://slate-client.vercel.app). The Supabase dashboard must
+            //   have this URL in Authentication → URL Configuration → Redirect URLs.
           }),
           timeout,
         ]);
@@ -137,6 +140,7 @@ function SignIn() {
       type: 'signup',
       email,
       options: { emailRedirectTo: window.location.origin },
+      // ^ Same as signUp — Supabase dashboard must allow this URL in Redirect URLs.
     });
     setBusy(false);
     if (err) setError(err.message);
@@ -578,19 +582,19 @@ function Home({ email, userId }: { email: string; userId: string }) {
             <span className="h-1.5 w-1.5 rounded-full bg-green live-pulse" aria-hidden />
           </div>
           {liveRooms.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border bg-bg-2/40 px-4 py-8 text-center">
+            <div className="rounded-lg border border-dashed border-border bg-bg-2/40 px-4 py-6 text-center">
               <p className="text-xs text-text-dim">No public boards are live right now.</p>
               <p className="mt-1 text-[11px] text-text-dim/70">Create one (set it Public) and share the link, or check back later.</p>
             </div>
           ) : (
-            <ul className="grid max-h-[50vh] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+            <ul className="grid max-h-[28vh] grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
               {liveRooms.map((r) => (
                 <li key={r.name}>
                   <button
                     type="button"
                     onClick={() => open(r.name, r.mode, false)}
                     className={cn(
-                      'hover-lift group flex w-full items-center gap-2.5 rounded-lg border border-border bg-bg-2 px-3 py-2.5 text-left text-sm text-text-mid transition-all hover:bg-bg-3/60 hover:text-text',
+                      'group flex w-full items-center gap-2 rounded-md border border-border bg-bg-2 px-2.5 py-1.5 text-left text-sm text-text-mid transition-all hover:bg-bg-3/60 hover:text-text',
                       modeHoverBorderClass(r.mode),
                     )}
                   >
@@ -604,8 +608,8 @@ function Home({ email, userId }: { email: string; userId: string }) {
                       {r.mode}
                     </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{r.name}</span>
-                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-bg-3/70 px-1.5 py-0.5 text-[10px] text-text-mid">
-                      <Users size={10} className="text-text-dim" />
+                    <span className="flex shrink-0 items-center gap-1 text-[10px] text-text-dim">
+                      <Users size={10} />
                       <span className="font-mono">{r.members}</span>
                     </span>
                   </button>

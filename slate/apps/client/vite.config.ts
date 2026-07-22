@@ -33,6 +33,12 @@ export default defineConfig({
     // publish the readable source. Set to true locally when debugging a
     // production-only issue.
     sourcemap: false,
+    // The main entry pulls in React + the shared Radix UI primitive layer +
+    // lucide-react icons (used app-wide), and those split chunks together
+    // land near the warning threshold. We split them deliberately (below);
+    // bump the limit so a clean production build doesn't print a noisy
+    // "chunk size exceeds 500 kB" warning for chunks we intentionally sized.
+    chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -57,6 +63,27 @@ export default defineConfig({
             '@codemirror/autocomplete',
             '@codemirror/search',
           ],
+          // Radix UI primitives — shared across every dialog/dropdown/menu
+          // in the app. Splitting them out of the main chunk keeps the
+          // initial load leaner (the main bundle no longer ships the entire
+          // primitive layer up front; it streams in parallel). Every
+          // @radix-ui/* package we depend on is listed here.
+          radix: [
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-dropdown-menu',
+            '@radix-ui/react-popover',
+            '@radix-ui/react-slider',
+            '@radix-ui/react-switch',
+            '@radix-ui/react-tabs',
+            '@radix-ui/react-toast',
+            '@radix-ui/react-tooltip',
+          ],
+          // lucide-react — icon library imported app-wide. Tree-shaking
+          // already keeps per-route icon counts low, but the shared runtime
+          // (icon base + the handful of icons used on the Home / Header
+          // surfaces that everyone hits) is non-trivial; its own chunk
+          // means it caches independently of app code.
+          icons: ['lucide-react'],
         },
       },
     },

@@ -39,6 +39,13 @@ const CodeEditor = lazy(() => import('../code/CodeEditor'));
 const Viewport3D = lazy(() => import('../viewport3d/Viewport3D').then((m) => ({ default: m.Viewport3D })));
 const AudioEditor = lazy(() => import('../audio/AudioEditor').then((m) => ({ default: m.AudioEditor })));
 const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ default: m.Canvas2D })));
+// Presentation + Diagram editors — same idea: presentation pulls in the
+// slide contenteditable engine + export pipeline; diagram pulls in the SVG
+// canvas + connector routing. Both ship default exports so plain `import()`
+// works (no `.then` wrapper needed). Lazy so opening a 2D / 3D / audio / doc
+// / code board never pays the parse/eval cost of either.
+const PresentationEditor = lazy(() => import('../presentation/PresentationEditor'));
+const DiagramEditor = lazy(() => import('../diagram/DiagramEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';
 import { ExportDialog } from '../files/ExportDialog';
@@ -353,6 +360,14 @@ export function Workspace() {
               ) : board.mode === 'code' ? (
                 <Suspense fallback={<EditorFallback label="code editor" />}>
                   <CodeEditor />
+                </Suspense>
+              ) : board.mode === 'presentation' ? (
+                <Suspense fallback={<EditorFallback label="presentation editor" />}>
+                  <PresentationEditor />
+                </Suspense>
+              ) : board.mode === 'diagram' ? (
+                <Suspense fallback={<EditorFallback label="diagram editor" />}>
+                  <DiagramEditor />
                 </Suspense>
               ) : (
                 <Suspense fallback={<EditorFallback label="canvas" />}>

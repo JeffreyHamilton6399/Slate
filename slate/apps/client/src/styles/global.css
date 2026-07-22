@@ -223,6 +223,7 @@
    subtle 2px rise on hover plus a smooth shadow transition. */
 .hover-lift {
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  will-change: transform;
 }
 .hover-lift:hover {
   transform: translateY(-2px);
@@ -243,6 +244,7 @@
 }
 .hero-rise {
   animation: heroRise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
 }
 
 /* Staggered rise — same motion as hero-rise but with a small delay so chained
@@ -259,6 +261,7 @@
 }
 .stagger-rise {
   animation: staggerRise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
 }
 
 /* Live pulse — a soft breathing dot for boards that currently have members.
@@ -276,4 +279,11 @@
 }
 .live-pulse {
   animation: livePulse 1.8s ease-in-out infinite;
+}
+
+/* Content-visibility: skip rendering off-screen elements in long scrollable
+   lists. The intrinsic size hint prevents scrollbar jumpiness. */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 500px;
 }

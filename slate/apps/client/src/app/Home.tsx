@@ -587,7 +587,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
               <p className="mt-1 text-[11px] text-text-dim/70">Create one (set it Public) and share the link, or check back later.</p>
             </div>
           ) : (
-            <ul className="grid max-h-[28vh] grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
+            <ul className="cv-auto grid max-h-[28vh] grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
               {liveRooms.map((r) => (
                 <li key={r.name}>
                   <button

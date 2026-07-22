@@ -87,3 +87,50 @@ export function modeTextClass(mode: DocMode): string {
       return 'text-emerald-300';
   }
 }
+
+/**
+ * Gradient banner — a richer top-strip / banner tint than `modeHeaderClass`.
+ * Uses a diagonal gradient from a stronger tint to transparent so cards feel
+ * layered (Linear/Vercel-style). Same Tailwind-native palette as the rest of
+ * this file so the opacity modifiers compile to real `rgb(… / α)` values.
+ */
+export function modeGradientClass(mode: DocMode): string {
+  switch (mode) {
+    case '3d':
+      return 'bg-gradient-to-br from-violet-500/30 via-violet-500/10 to-transparent';
+    case 'audio':
+      return 'bg-gradient-to-br from-amber-500/30 via-amber-500/10 to-transparent';
+    case 'doc':
+      return 'bg-gradient-to-br from-blue-500/30 via-blue-500/10 to-transparent';
+    case 'code':
+      return 'bg-gradient-to-br from-cyan-500/30 via-cyan-500/10 to-transparent';
+    case 'diagram':
+      return 'bg-gradient-to-br from-sky-500/30 via-sky-500/10 to-transparent';
+    case 'presentation':
+      return 'bg-gradient-to-br from-orange-500/30 via-orange-500/10 to-transparent';
+    case '2d':
+    default:
+      return 'bg-gradient-to-br from-emerald-500/30 via-emerald-500/10 to-transparent';
+  }
+}
+
+/** Hover border tint — a card's border shifts to the mode color on hover. */
+export function modeHoverBorderClass(mode: DocMode): string {
+  switch (mode) {
+    case '3d':
+      return 'hover:border-violet-500/60';
+    case 'audio':
+      return 'hover:border-amber-500/60';
+    case 'doc':
+      return 'hover:border-blue-500/60';
+    case 'code':
+      return 'hover:border-cyan-500/60';
+    case 'diagram':
+      return 'hover:border-sky-500/60';
+    case 'presentation':
+      return 'hover:border-orange-500/60';
+    case '2d':
+    default:
+      return 'hover:border-emerald-500/60';
+  }
+}

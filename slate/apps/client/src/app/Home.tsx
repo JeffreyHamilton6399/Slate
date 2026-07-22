@@ -34,7 +34,7 @@ import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
 import { ensureMyProfile, fetchMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
-import { modeBadgeClass, modeHeaderClass } from './modeColors';
+import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -425,7 +425,14 @@ function Home({ email, userId }: { email: string; userId: string }) {
 
   return (
     <div className="fixed inset-0 overflow-auto bg-bg">
-      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-10 px-6 py-8 sm:px-10">
+      {/* Ambient page backdrop — two soft, fixed accent glows so the dark
+          canvas feels layered instead of flat. Pointer-events-none so it
+          never blocks clicks; low opacity keeps it subtle on every screen. */}
+      <div className="pointer-events-none fixed inset-0 opacity-50" aria-hidden>
+        <div className="absolute -top-40 left-[15%] h-96 w-96 rounded-full bg-accent/12 blur-3xl" />
+        <div className="absolute top-1/3 -right-40 h-[28rem] w-[28rem] rounded-full bg-green/10 blur-3xl" />
+      </div>
+      <div className="relative mx-auto flex min-h-full w-full max-w-5xl flex-col gap-10 px-6 py-8 sm:px-10">
         {/* Header */}
         <header className="flex items-center gap-3">
           <SlateMark />
@@ -438,25 +445,35 @@ function Home({ email, userId }: { email: string; userId: string }) {
           />
         </header>
 
-        {/* Hero + create cards */}
-        <section className="flex flex-col gap-5">
-          <div className="flex items-end justify-between gap-3">
+        {/* Hero + create cards — fades + slides in on mount (.hero-rise) so
+            the first paint feels alive without being flashy. */}
+        <section className="hero-rise relative flex flex-col gap-5">
+          {/* Local ambient glow behind the heading — sits above the page
+              backdrop, below the content (relative children stack on top). */}
+          <div className="pointer-events-none absolute -top-12 left-0 h-44 w-2/3 rounded-full bg-accent/15 blur-3xl" aria-hidden />
+          <div className="pointer-events-none absolute -top-6 right-8 h-32 w-1/2 rounded-full bg-green/10 blur-3xl" aria-hidden />
+          <div className="relative flex items-end justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-                Welcome back, <span className="text-accent">{greeting}</span>
+              <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+                Welcome back,{' '}
+                <span className="bg-gradient-to-br from-accent to-accent-2 bg-clip-text text-transparent">
+                  {greeting}
+                </span>
               </h1>
-              <p className="mt-1 text-sm text-text-dim">Start something new or pick up where you left off.</p>
+              <p className="mt-1.5 text-sm text-text-dim">Start something new or pick up where you left off.</p>
             </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
-              className="shrink-0 gap-1.5 text-text-mid hover:text-text"
+              className="shrink-0 gap-1.5 rounded-md text-text-mid hover:border-accent/50 hover:text-text"
               title="Browse all saved projects"
             >
               <FolderOpen size={14} />
               <span className="hidden sm:inline">All Projects</span>
-              <span className="text-[10px] font-mono text-text-dim">({allProjects.length})</span>
+              <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent/15 px-1 text-[10px] font-mono font-bold text-accent">
+                {allProjects.length}
+              </span>
             </Button>
           </div>
           {/* Create bar (left) + Recent widget (right) — side by side on lg so
@@ -464,16 +481,18 @@ function Home({ email, userId }: { email: string; userId: string }) {
               overlapping the create controls. Stacks vertically on mobile. */}
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div className="flex flex-1 flex-col gap-2">
-              {/* Compressed create bar: name (capped, required) + icon toggles +
-                  Create button. Compact single-row layout. */}
-              <div className="flex flex-wrap items-center gap-2">
+              {/* Premium create bar — a single rounded surface that holds the
+                  name input + toggles + Create button. The input blends in
+                  (transparent border) and the whole bar highlights on focus. */}
+              <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border-2 bg-bg-2/70 p-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.28)] backdrop-blur-sm transition-colors focus-within:border-accent/50">
                 <Input
                   maxLength={80}
                   value={board}
                   onChange={(e) => setBoard(e.target.value)}
-                  placeholder="Project name"
-                  className="min-w-0 max-w-xs flex-1"
+                  placeholder="Name your project…"
+                  className="min-w-0 max-w-xs flex-1 border-transparent bg-bg-3/70 shadow-none focus:border-transparent focus:shadow-none"
                 />
+                <span className="mx-0.5 hidden h-5 w-px bg-border-2 sm:block" aria-hidden />
                 <IconToggle
                   active={visibility === 'public'}
                   onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
@@ -490,7 +509,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
                   onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : createMode === 'doc' ? 'Doc' : createMode === 'code' ? 'Code' : createMode === 'diagram' ? 'Diagram' : 'Presentation'}
                   offLabel="2D whiteboard"
                 />
-                <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()}>
+                <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()} className="ml-0.5">
                   <Plus size={14} />
                   <span className="ml-1.5">Create</span>
                 </Button>
@@ -499,29 +518,34 @@ function Home({ email, userId }: { email: string; userId: string }) {
             </div>
 
             {/* Recent widget — compact floating panel in the bottom-right of
-                the hero on lg+. Shows at most the 3 most recent projects as
-                single-row clickable entries (mode badge + name + time ago). */}
+                the hero on lg+. Each entry is a mini-card with a gradient
+                mode accent on the left edge, a colored mode pill, and a
+                time-ago. Hover lifts the row + tints its border to the mode. */}
             {recents.length > 0 && (
               <div className="w-full max-w-xs self-end lg:w-80">
-                <div className="rounded-lg border border-border bg-bg-2/95 p-2 shadow-sm backdrop-blur">
-                  <div className="mb-1 flex items-center justify-between px-0.5">
+                <div className="rounded-lg border border-border bg-bg-2/80 p-2 shadow-[0_4px_20px_rgba(0,0,0,0.25)] backdrop-blur-sm">
+                  <div className="mb-1.5 flex items-center justify-between px-1">
                     <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Recent</span>
                     <button
                       type="button"
                       onClick={() => { setAllProjects(allProjectsFromSaves()); setAllProjectsOpen(true); }}
-                      className="flex items-center gap-0.5 text-[10px] text-accent hover:underline"
+                      className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/10"
                     >
                       View all <ChevronRight size={10} />
                     </button>
                   </div>
-                  <ul className="flex flex-col gap-0.5">
+                  <ul className="flex flex-col gap-1">
                     {recents.map((r) => (
                       <li key={r.boardName}>
                         <button
                           type="button"
                           onClick={() => open(r.boardName, r.mode, false)}
-                          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-bg-3"
+                          className={cn(
+                            'group relative flex w-full items-center gap-2 overflow-hidden rounded-md border border-transparent px-2 py-1.5 text-left transition-all hover:-translate-y-px hover:bg-bg-3/70',
+                            modeHoverBorderClass(r.mode),
+                          )}
                         >
+                          <span className={cn('absolute inset-y-0 left-0 w-0.5', modeGradientClass(r.mode))} aria-hidden />
                           <span
                             className={cn(
                               'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
@@ -532,7 +556,7 @@ function Home({ email, userId }: { email: string; userId: string }) {
                           </span>
                           <span className="min-w-0 flex-1 truncate text-xs font-medium text-text">{r.boardName}</span>
                           <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-dim">
-                            <Clock size={9} />
+                            <Clock size={9} className="text-text-dim transition-colors group-hover:text-text-mid" />
                             {timeAgo(r.savedAt)}
                           </span>
                         </button>
@@ -545,34 +569,45 @@ function Home({ email, userId }: { email: string; userId: string }) {
           </div>
         </section>
 
-        {/* Live public boards */}
-        <section>
-          <h2 className="mb-3 text-sm font-semibold text-text">Live public boards</h2>
+        {/* Live public boards — staggered rise so it cascades in after the
+            hero. Each row lifts on hover + tints its border to the mode color;
+            a breathing green dot signals the board is genuinely live. */}
+        <section className="stagger-rise" style={{ animationDelay: '120ms' }}>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-text">Live public boards</h2>
+            <span className="h-1.5 w-1.5 rounded-full bg-green live-pulse" aria-hidden />
+          </div>
           {liveRooms.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-text-dim">
-              No public boards are live right now. Create one (set it Public) and share the link, or
-              check back later.
-            </p>
+            <div className="rounded-lg border border-dashed border-border bg-bg-2/40 px-4 py-8 text-center">
+              <p className="text-xs text-text-dim">No public boards are live right now.</p>
+              <p className="mt-1 text-[11px] text-text-dim/70">Create one (set it Public) and share the link, or check back later.</p>
+            </div>
           ) : (
-            <ul className="grid max-h-[50vh] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+            <ul className="grid max-h-[50vh] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
               {liveRooms.map((r) => (
                 <li key={r.name}>
                   <button
                     type="button"
                     onClick={() => open(r.name, r.mode, false)}
-                    className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-2 px-3 py-2 text-sm text-text-mid transition-colors hover:border-accent/40 hover:text-text"
+                    className={cn(
+                      'hover-lift group flex w-full items-center gap-2.5 rounded-lg border border-border bg-bg-2 px-3 py-2.5 text-left text-sm text-text-mid transition-all hover:bg-bg-3/60 hover:text-text',
+                      modeHoverBorderClass(r.mode),
+                    )}
                   >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green live-pulse" aria-hidden />
                     <span
                       className={cn(
-                        'rounded px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
+                        'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider',
                         modeBadgeClass(r.mode),
                       )}
                     >
                       {r.mode}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-left">{r.name}</span>
-                    <Users size={12} className="text-text-dim" />
-                    <span className="font-mono text-xs">{r.members}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{r.name}</span>
+                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-bg-3/70 px-1.5 py-0.5 text-[10px] text-text-mid">
+                      <Users size={10} className="text-text-dim" />
+                      <span className="font-mono">{r.members}</span>
+                    </span>
                   </button>
                 </li>
               ))}
@@ -580,17 +615,24 @@ function Home({ email, userId }: { email: string; userId: string }) {
           )}
         </section>
 
-        {/* Footer — the version/author line IS the About link (no separate
-            About button). About holds feedback, donate, and Terms & Privacy. */}
-        <footer className="mt-auto flex flex-col items-center gap-1 pt-4 text-[11px] text-text-dim">
-          <button
-            type="button"
-            onClick={() => setAboutOpen(true)}
-            className="underline-offset-2 hover:text-accent hover:underline"
-            title="About Slate"
-          >
-            V1 · Jeffrey Hamilton
-          </button>
+        {/* Footer — subtle gradient rule above an elegant version line + an
+            About pill (the About dialog holds feedback, donate, and Terms). */}
+        <footer className="mt-auto flex flex-col items-center gap-3 pt-6 text-[11px] text-text-dim">
+          <div className="h-px w-full max-w-md bg-gradient-to-r from-transparent via-border-2 to-transparent" aria-hidden />
+          <div className="flex items-center gap-2">
+            <span className="text-text-dim/80">V1</span>
+            <span className="text-text-dim/40">·</span>
+            <span className="text-text-dim/80">Jeffrey Hamilton</span>
+            <span className="text-text-dim/40">·</span>
+            <button
+              type="button"
+              onClick={() => setAboutOpen(true)}
+              className="rounded-full border border-border-2 bg-bg-2/60 px-2.5 py-0.5 text-[10px] font-medium text-text-mid transition-colors hover:border-accent/50 hover:text-accent"
+              title="About Slate"
+            >
+              About
+            </button>
+          </div>
         </footer>
       </div>
       <ProfileDialog
@@ -625,9 +667,10 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title="All Projects" description={`${projects.length} saved project${projects.length === 1 ? '' : 's'}`}>
       {projects.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-text-dim">
-          Nothing yet — create your first board on the home screen. Projects follow you on every
-          device you sign in to.
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-bg-2/40 p-10 text-center">
+          <FolderOpen size={22} className="text-text-dim/60" />
+          <p className="text-xs text-text-dim">Nothing yet — create your first board on the home screen.</p>
+          <p className="text-[11px] text-text-dim/70">Projects follow you on every device you sign in to.</p>
         </div>
       ) : (
         <ul className="grid max-h-[60vh] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
@@ -636,18 +679,21 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
               <button
                 type="button"
                 onClick={() => onOpen(r.boardName, r.mode)}
-                className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left transition-colors hover:border-accent/50"
+                className={cn(
+                  'hover-lift flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left',
+                  modeHoverBorderClass(r.mode),
+                )}
               >
                 <span
                   className={cn(
-                    'grid h-16 w-full place-items-center text-xs font-bold tracking-wider',
-                    modeHeaderClass(r.mode),
+                    'relative grid h-16 w-full place-items-center text-xs font-bold tracking-wider',
+                    modeGradientClass(r.mode),
                   )}
                 >
-                  {r.mode.toUpperCase()}
+                  <span className={cn('font-mono', modeTextClass(r.mode))}>{r.mode.toUpperCase()}</span>
                 </span>
-                <span className="flex flex-col gap-0.5 p-2">
-                  <span className="truncate text-xs font-medium text-text group-hover:text-accent">
+                <span className="flex flex-col gap-1 p-2.5">
+                  <span className="truncate text-xs font-semibold text-text transition-colors group-hover:text-accent">
                     {r.boardName}
                   </span>
                   <span className="flex items-center gap-1 text-[10px] text-text-dim">
@@ -660,7 +706,7 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
                 onClick={() => onDelete(r.boardName)}
                 // Visible on mobile (no hover there); desktop reveals it on
                 // hover so the card looks clean by default.
-                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-100 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
+                className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-bg-2/90 text-text-mid opacity-100 backdrop-blur-sm transition-colors hover:border-danger/50 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
                 aria-label={`Delete project ${r.boardName}`}
               >
                 <Trash2 size={11} />
@@ -678,7 +724,6 @@ function AllProjectsDialog({ open, onOpenChange, projects, onOpen, onDelete }: {
   );
 }
 
-/** Single-icon toggle: shows one icon when active, another when not. */
 function IconToggle({
   active,
   onClick,
@@ -702,10 +747,10 @@ function IconToggle({
       aria-pressed={active}
       aria-label={active ? onLabel : offLabel}
       className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border transition-colors',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-all',
         active
-          ? 'border-accent/60 bg-accent/15 text-accent'
-          : 'border-border text-text-mid hover:bg-bg-3 hover:text-text',
+          ? 'border-accent/70 bg-accent/20 text-accent shadow-[0_0_0_2px_var(--accent-glow)]'
+          : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
       )}
     >
       {active ? onIcon : offIcon}
@@ -775,10 +820,10 @@ function ProfileMenu({
         <button
           type="button"
           aria-label={notifCount > 0 ? `Account menu — ${notifCount} notifications` : 'Account menu'}
-          className="relative flex rounded-full p-0.5 ring-2 ring-accent/50 transition-all hover:ring-accent/80"
+          className="relative flex rounded-full p-0.5 ring-2 ring-accent/60 shadow-[0_0_18px_var(--accent-glow)] transition-all hover:ring-accent hover:shadow-[0_0_26px_var(--accent-glow)]"
           title="Account"
         >
-          <Avatar url={avatarUrl} name={displayName || email} size={34} />
+          <Avatar url={avatarUrl} name={displayName || email} size={38} />
           {notifCount > 0 && (
             <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold text-white ring-2 ring-bg">
               {notifCount > 9 ? '9+' : notifCount}

@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Presentation as PresentationIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, User } from 'lucide-react';
+import { Box as BoxIcon, Globe, Lock, PenLine, Music as MusicIcon, Braces as BracesIcon, Workflow as WorkflowIcon, Presentation as PresentationIcon, FolderOpen, Clock, Trash2, Coffee, Info, FileText, Users, User } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, FieldLabel } from '../ui/Input';
 import { Dialog } from '../ui/Dialog';
@@ -22,7 +22,7 @@ import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
-import { modeBadgeClass, modeHeaderClass } from './modeColors';
+import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -129,9 +129,11 @@ export function Onboarding() {
         <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full bg-accent/20 blur-3xl" />
         <div className="absolute -bottom-40 -right-40 h-96 w-96 rounded-full bg-green/15 blur-3xl" />
       </div>
-      <div className="surface relative w-full max-w-md p-5 flex flex-col gap-4 shadow-[0_32px_80px_rgba(0,0,0,0.5),0_0_0_1px_var(--accent-glow)] sm:p-8 sm:gap-5">
-        <header className="flex items-center gap-3">
-          <SlateMark />
+      <div className="surface relative w-full max-w-md p-5 flex flex-col gap-4 shadow-[0_32px_80px_rgba(0,0,0,0.55),0_0_0_1px_var(--accent-glow),0_0_70px_-12px_var(--accent-glow)] sm:p-8 sm:gap-5">
+        {/* Gradient top accent — a thin line that crowns the card. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px rounded-t-lg bg-gradient-to-r from-transparent via-accent/70 to-transparent" aria-hidden />
+        <header className="relative flex items-center gap-3">
+          <SlateMark size={40} />
           <div>
             <h1 className="text-2xl font-bold bg-gradient-to-br from-text to-accent bg-clip-text text-transparent leading-tight">
               Slate
@@ -260,7 +262,7 @@ export function Onboarding() {
               <button
                 type="button"
                 onClick={() => setAllProjectsOpen(true)}
-                className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-dim hover:text-text"
+                className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-text-dim transition-colors hover:bg-bg-3 hover:text-text"
               >
                 <FolderOpen size={11} />
                 All ({allProjects.length})
@@ -275,10 +277,12 @@ export function Onboarding() {
                       setDisplayName(sanitizeDisplayName(name) || 'Guest');
                       enterBoard({ name: r.boardName, mode: r.mode, visibility: 'public', iAmCreator: false, joinedAt: Date.now() });
                     }}
-                    className="w-full flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-mid hover:text-text hover:bg-bg-3"
+                    className={cn(
+                      'group relative w-full flex items-center gap-2 overflow-hidden rounded-md border border-transparent px-2 py-1.5 text-sm text-text-mid transition-all hover:-translate-y-px hover:bg-bg-3/70 hover:text-text',
+                      modeHoverBorderClass(r.mode),
+                    )}
                   >
-                    <Clock size={11} className="shrink-0 text-text-dim" />
-                    <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
+                    <span className={cn('absolute inset-y-0 left-0 w-0.5', modeGradientClass(r.mode))} aria-hidden />
                     <span
                       className={cn(
                         'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
@@ -286,6 +290,11 @@ export function Onboarding() {
                       )}
                     >
                       {r.mode}
+                    </span>
+                    <span className="font-mono truncate flex-1 text-left">{r.boardName}</span>
+                    <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-dim">
+                      <Clock size={9} className="text-text-dim transition-colors group-hover:text-text-mid" />
+                      {timeAgo(r.savedAt)}
                     </span>
                   </button>
                 </li>
@@ -295,8 +304,11 @@ export function Onboarding() {
         )}
 
         {rooms.length > 0 && (
-          <div className="border-t border-border pt-4 max-h-44 overflow-y-auto">
-            <div className="panel-title mb-2">Live public boards</div>
+          <div className="border-t border-border pt-4 max-h-48 overflow-y-auto">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="panel-title">Live public boards</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-green live-pulse" aria-hidden />
+            </div>
             <ul className="flex flex-col gap-1">
               {rooms.map((r) => (
                 <li key={r.name}>
@@ -306,18 +318,25 @@ export function Onboarding() {
                       setBoard(r.name);
                       setMode(r.mode);
                     }}
-                    className="w-full flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-mid hover:text-text hover:bg-bg-3"
+                    className={cn(
+                      'group flex w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-text-mid transition-all hover:-translate-y-px hover:bg-bg-3/70 hover:text-text',
+                      modeHoverBorderClass(r.mode),
+                    )}
                   >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green live-pulse" aria-hidden />
                     <span
                       className={cn(
-                        'shrink-0 rounded px-1 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
+                        'shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider',
                         modeBadgeClass(r.mode),
                       )}
                     >
                       {r.mode}
                     </span>
                     <span className="font-mono truncate flex-1 text-left">{r.name}</span>
-                    <span className="text-xs text-text-dim">{r.members}</span>
+                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-bg-3/70 px-1.5 py-0.5 text-[10px] text-text-mid">
+                      <Users size={10} className="text-text-dim" />
+                      <span className="font-mono">{r.members}</span>
+                    </span>
                   </button>
                 </li>
               ))}
@@ -329,9 +348,13 @@ export function Onboarding() {
       <Dialog open={allProjectsOpen} onOpenChange={setAllProjectsOpen} title="All Projects" description={`${allProjects.length} saved project${allProjects.length === 1 ? '' : 's'}`}>
         <div className="max-h-[50vh] overflow-y-auto">
           {allProjects.length === 0 ? (
-            <p className="py-8 text-center text-xs text-text-dim">No saved projects yet.</p>
+            <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-bg-2/40 p-10 text-center">
+              <FolderOpen size={22} className="text-text-dim/60" />
+              <p className="text-xs text-text-dim">No saved projects yet.</p>
+              <p className="text-[11px] text-text-dim/70">Create one above to get started.</p>
+            </div>
           ) : (
-            <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {allProjects.map((r) => (
                 <li key={r.boardName} className="group relative">
                   <button
@@ -341,13 +364,16 @@ export function Onboarding() {
                       enterBoard({ name: r.boardName, mode: r.mode, visibility: 'public', iAmCreator: false, joinedAt: Date.now() });
                       setAllProjectsOpen(false);
                     }}
-                    className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-bg-2 text-left hover:border-accent/50"
+                    className={cn(
+                      'hover-lift flex w-full flex-col overflow-hidden rounded-lg border border-border bg-bg-2 text-left',
+                      modeHoverBorderClass(r.mode),
+                    )}
                   >
-                    <span className={cn('grid h-12 place-items-center text-xs font-bold tracking-wider', modeHeaderClass(r.mode))}>
-                      {r.mode.toUpperCase()}
+                    <span className={cn('relative grid h-16 place-items-center text-xs font-bold tracking-wider', modeGradientClass(r.mode))}>
+                      <span className={cn('font-mono', modeTextClass(r.mode))}>{r.mode.toUpperCase()}</span>
                     </span>
-                    <span className="flex flex-col gap-0.5 p-2">
-                      <span className="truncate text-xs font-medium text-text">{r.boardName}</span>
+                    <span className="flex flex-col gap-1 p-2.5">
+                      <span className="truncate text-xs font-semibold text-text transition-colors group-hover:text-accent">{r.boardName}</span>
                       <span className="flex items-center gap-1 text-[10px] text-text-dim">
                         <Clock size={9} /> {timeAgo(r.savedAt)}
                       </span>
@@ -361,10 +387,10 @@ export function Onboarding() {
                     }}
                     // Visible on mobile (no hover there); desktop reveals it on
                     // hover so the card looks clean by default.
-                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm bg-bg-2/80 text-text-mid opacity-100 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
+                    className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-bg-2/90 text-text-mid opacity-100 backdrop-blur-sm transition-colors hover:border-danger/50 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
                     aria-label="Delete project"
                   >
-                    <Trash2 size={10} />
+                    <Trash2 size={11} />
                   </button>
                 </li>
               ))}
@@ -418,10 +444,10 @@ function IconToggle({
         aria-pressed={active}
         aria-label={active ? onLabel : offLabel}
         className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-sm border transition-colors',
+          'flex h-9 w-9 items-center justify-center rounded-md border transition-all',
           active
-            ? 'border-accent/60 bg-accent/15 text-accent'
-            : 'border-border text-text-mid hover:bg-bg-3 hover:text-text',
+            ? 'border-accent/70 bg-accent/20 text-accent shadow-[0_0_0_2px_var(--accent-glow)]'
+            : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
         )}
       >
         {active ? onIcon : offIcon}
@@ -438,9 +464,9 @@ function Tooltip({ content, children }: { content: string; children: React.React
   );
 }
 
-export function SlateMark() {
+export function SlateMark({ size = 32 }: { size?: number }) {
   return (
-    <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden>
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
       <rect width="32" height="32" rx="7" fill="#0c0c0e" />
       <rect x="3" y="3" width="26" height="26" rx="4" fill="none" stroke="#7c6aff" strokeWidth="1.8" />
       <path

@@ -3124,3 +3124,47 @@ Behavioral changes:
 - The 4 pre-existing ESLint warnings are gone (0 errors, 0 warnings
   total). No intentional omissions were marked as eslint-disable — all
   4 were legitimately missing/extra deps that were safe to fix.
+
+---
+Task ID: ROUND35-A
+Agent: Code (Home/Onboarding polish)
+Task: Make the Slate Home + Onboarding screens look fancy and polished (Linear/Vercel/Figma-tier).
+
+Work Log:
+- Read worklog.md (prior context), Home.tsx, Onboarding.tsx, modeColors.ts, global.css, ui-tokens (tokens.css + tailwind-preset.ts), Button/Input/Avatar components, and tsconfig to confirm strictness (no noUnusedLocals, so unused exports are safe).
+- Extended `apps/client/src/app/modeColors.ts` with three new mode-aware helpers (same Tailwind-native palette as the existing ones so opacity modifiers compile to real rgb()):
+  - `modeGradientClass(mode)` — diagonal gradient banner (`from-X/30 via-X/10 to-transparent`) for card top-strips, richer than the flat `modeHeaderClass`.
+  - `modeHoverBorderClass(mode)` — `hover:border-X/60` so a card's border tints to its mode color on hover.
+  - (initially added `modeGlowRgba` too, then removed it — unused after deciding to express glows via `var(--accent-glow)` utilities instead of inline styles; kept the file lean.)
+- Extended `apps/client/src/styles/global.css` with three scoped animations (all clamped by the existing `prefers-reduced-motion` guard):
+  - `.hero-rise` — fade-in + 14px slide-up (0.55s cubic-bezier(0.16,1,0.3,1), `both` fill) for the Home hero.
+  - `.stagger-rise` — same motion, used with `animationDelay` so the live-boards section cascades in after the hero.
+  - `.live-pulse` — soft 1.8s breathing dot for live boards / section header.
+  - Also added `border-color` to the `.hover-lift` transition list so border-glow on hover animates smoothly.
+- Reworked `apps/client/src/app/Home.tsx` (all logic/state/hooks untouched — JSX + classes only):
+  - Hero: added a fixed ambient page backdrop (two blurred accent/green glows, pointer-events-none, opacity-50), plus two local glows behind the heading. Heading bumped to `text-3xl sm:text-4xl` with the name rendered as an accent→accent-2 gradient-clip text. Section wrapped in `.hero-rise`.
+  - Create bar: now a single premium rounded-lg surface (`border-border-2 bg-bg-2/70 backdrop-blur-sm shadow-[0_4px_24px...]`) holding the input + a divider + toggles + Create button. The Input blends in (`border-transparent bg-bg-3/70 shadow-none focus:border-transparent focus:shadow-none`) and the bar itself highlights via `focus-within:border-accent/50`.
+  - "All Projects" button: count is now a real accent pill badge (`rounded-full bg-accent/15 text-accent`) instead of parenthesised mono text.
+  - Recent widget: each row is a mini-card — gradient mode accent bar on the left edge (`modeGradientClass`), colored mode pill, name, time-ago with Clock icon; hover does `-translate-y-px` + `modeHoverBorderClass` for the border-glow. "View all" link restyled as a pill.
+  - Live public boards: section wrapped in `.stagger-rise` (120ms delay), header gets a live-pulse dot, each row uses `hover-lift` + `modeHoverBorderClass`, mode chip is a `rounded-full` pill, member count moved into a pill with a Users icon, and a per-row live-pulse dot signals presence.
+  - Empty state for live boards upgraded to a two-line centered card.
+  - All Projects dialog: cards now `hover-lift` with mode-tinted hover border, top strip uses the gradient banner (`modeGradientClass`) with the mode label in `modeTextClass`, taller strip (h-16), p-2.5 body, board name turns accent on hover, delete button restyled as a rounded-full bordered chip with backdrop blur + danger hover. Empty state: FolderOpen icon + two-line message.
+  - Footer: split the old single "V1 · Jeffrey Hamilton" About link into an elegant version line ("V1 · Jeffrey Hamilton · About") with a gradient rule above and the About action as its own `rounded-full` pill button (border + hover→accent).
+  - ProfileMenu avatar: enlarged to 38px, ring strengthened to `ring-accent/60`, added a `shadow-[0_0_18px_var(--accent-glow)]` glow that intensifies on hover (theme-adaptive via the CSS var).
+  - IconToggle (Home): active state now `rounded-md border-accent/70 bg-accent/20` with a `shadow-[0_0_0_2px_var(--accent-glow)]` ring; inactive uses `border-border-2` with hover border/bg/text transitions.
+- Reworked `apps/client/src/app/Onboarding.tsx` (logic untouched):
+  - Card: deeper shadow + layered `0_0_70px_-12px_var(--accent-glow)` outer glow + a thin gradient top-accent line (`via-accent/70`) crowning the card. Header marked `relative` so it sits above the accent line.
+  - SlateMark: added an optional `size` prop (default 32) and used `size={40}` in the Onboarding header (Home/SignIn keep 32).
+  - IconToggle: same premium active treatment as Home (rounded-md, accent ring glow).
+  - Recents list: rows now mini-cards with gradient left-accent bar, mode pill first, time-ago with Clock icon, hover lift + mode-tinted border glow; "All" button restyled as a pill.
+  - Live public boards: header gets a live-pulse dot; rows get hover lift + mode-tinted border, rounded-full mode pill, member count in a pill with a Users icon, per-row live-pulse dot. (Added `Users` to the lucide import.)
+  - All Projects dialog: same card redesign as Home — hover-lift, gradient strip with `modeTextClass` label, p-2.5 body, accent-on-hover board name, rounded-full bordered delete chip, two-line empty state with FolderOpen icon.
+- Imports: swapped `modeHeaderClass` for `modeGradientClass, modeHoverBorderClass, modeTextClass` in both files (no dangling `modeHeaderClass` references remain in Home/Onboarding; it's still exported from modeColors for any external use). Added `Users` to Onboarding's lucide import.
+- Verified with `cd /home/z/my-project/slate/apps/client && npx tsc --noEmit` → exit 0, no errors.
+
+Stage Summary:
+- No functionality changed — all state, effects, handlers, props, and dialog wiring are identical. Pure presentation pass.
+- No new dependencies added; everything uses existing Tailwind utilities, the existing `--accent-glow`/`--accent`/`--green` CSS vars, the existing `modeColors.ts` palette, and three new scoped keyframes in global.css.
+- Responsive: the hero glows use percentage widths / fixed blur circles that scale; the create bar still `flex-wrap`s on mobile; recents stack below the create bar on small screens; live-boards grid is 1-col on mobile / 2-col on sm+; footer wraps gracefully.
+- Reduced-motion safe: the three new animations are all covered by the `prefers-reduced-motion` guard at the top of global.css (clamped to ~0ms).
+- Files touched: `apps/client/src/app/modeColors.ts`, `apps/client/src/styles/global.css`, `apps/client/src/app/Home.tsx`, `apps/client/src/app/Onboarding.tsx`.

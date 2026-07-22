@@ -222,8 +222,58 @@
 /* Hover-lift utility — apply `hover-lift` to any card-like surface to get a
    subtle 2px rise on hover plus a smooth shadow transition. */
 .hover-lift {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .hover-lift:hover {
   transform: translateY(-2px);
+}
+
+/* Hero rise — fade-in + slide-up on mount. Used on the Home hero block so the
+   first paint feels alive without being flashy. `both` fill-mode keeps the
+   element hidden (opacity 0) until the animation starts, avoiding a flash. */
+@keyframes heroRise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.hero-rise {
+  animation: heroRise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Staggered rise — same motion as hero-rise but with a small delay so chained
+   sections (recents, live boards, footer) cascade in after the hero. */
+@keyframes staggerRise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.stagger-rise {
+  animation: staggerRise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Live pulse — a soft breathing dot for boards that currently have members.
+   Two-stage opacity + scale keeps it subtle (not a flashing alert). */
+@keyframes livePulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+.live-pulse {
+  animation: livePulse 1.8s ease-in-out infinite;
 }

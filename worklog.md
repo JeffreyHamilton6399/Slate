@@ -1979,3 +1979,65 @@ Stage Summary:
 - TypeScript clean (exit 0). No new ESLint warnings. 4 files modified
   (AudioEditor.tsx, Workspace.tsx, sampleStore.ts, vite.config.ts);
   0 files created.
+
+---
+Task ID: ROUND37-A
+Agent: main (Z.ai Code)
+Task: Make the slides editor actually good — simplify tools, draggable shapes, everything works
+
+Work Log:
+- Read worklog + PresentationEditor.tsx + PresentationToolsPanel.tsx + presentationBridge.ts to map existing structure.
+- **Toolbar (top of editor) — trimmed to essentials:**
+  - Kept: Bold, Italic, Underline (icon buttons via exec).
+  - Added: Text Size dropdown (Small/Medium/Large/Title → dispatches `textSize` command with size id; editor maps to 14/18/24/40px and wraps selection in `<span style="font-size:Npx">`).
+  - Kept: Text color (native color input behind Palette icon label).
+  - Kept: Bullet list icon.
+  - Added: Add Slide split-button dropdown — main button adds Blank slide; chevron opens template menu (Blank/Title/Title+Content/Two Column). Calls `addSlideInternal(tpl)` directly.
+  - Kept: Background swatches (8 colors).
+  - Kept: Prev/Next slide navigation + counter (for usability).
+  - Kept: Notes toggle (UI state, not a command).
+  - Kept: Present button (accent-filled, primary action).
+  - Removed: Duplicate, Delete, h1/h2/h3, Strikethrough, Numbered list, Align L/C/R, Clear format, Shape buttons (rect/circle/arrow/line), Image, Transition dropdown, Animation dropdown, Theme dropdown, Export button — all moved to dock panel or removed.
+- **Dock tools panel (PresentationToolsPanel.tsx) — full rewrite, 5 minimal groups:**
+  - **Slide:** New, Duplicate, Delete, Move Left, Move Right (commands: `newSlide`/`duplicateSlide`/`deleteSlide`/`moveLeft`/`moveRight`).
+  - **Text:** Bold, Italic, Underline, Text Color, Bullet List, Numbered List, Align Left/Center/Right (commands: `bold`/`italic`/`underline`/`textColor`/`bulletList`/`orderedList`/`alignLeft`/`alignCenter`/`alignRight`).
+  - **Insert:** Rectangle, Circle, Image (commands: `shapeRect`/`shapeCircle`/`image`).
+  - **Design:** Background swatches (14 solids + gradients, dispatch `background` with value) + Theme presets (Dark/Light/Blue/Sunset, dispatch `theme` with id).
+  - **Present:** Present, Export HTML (commands: `present`/`exportHtml`).
+  - Removed: Animation picker, Font Size presets, Clear Format, Clear Color, Strikethrough, Code, Arrow/Line shapes, Section Divider template, Transition picker.
+- **Draggable shapes (slate-shape divs):**
+  - `insertShape('rect'|'circle')` now appends a `<div class="slate-shape" data-shape="..." contenteditable="false" style="position:absolute;left:100px;top:100px;width:120px;height:80px;background:#7c6aff;border-radius:8px;z-index:10;cursor:move">` directly to the contenteditable (was previously a wrapper with `top:20%;left:10%`). Removed arrow/line cases.
+  - On insert, the new shape is auto-selected (`setSelectedShapeEl` + `setShapeSel`) so the user can drag/resize immediately.
+  - Added `onSlidePointerDown` on the slide container: detects `.slate-shape` via `closest()`, selects it, reads its geometry, and starts a window-level pointer drag that updates `style.left`/`style.top` + `setShapeSel` state (so the overlay tracks), then `commitContent()` on pointerup (250ms debounced → Yjs).
+  - Click outside any shape deselects + focuses the contenteditable.
+- **Resizable shapes (4 corner handles):**
+  - Added `ShapeSelectionOverlay` component (sibling of contenteditable, inside slide container) — renders an accent outline + 4 corner handles (NW/NE/SW/SE) at the selected shape's geometry.
+  - Each handle has `pointer-events:auto` (the outline box is `pointer-events:none` so it doesn't block shape clicks).
+  - `startShapeResize(corner, e)` records the shape's original left/top/width/height + the pointer start, then on window pointermove updates width/height (and left/top for the appropriate corners) with a 20px minimum, then `commitContent()` on pointerup.
+  - The overlay's `geom` prop is synced to `shapeSel` state, which is updated on every drag/resize tick → overlay tracks the shape live.
+- **Selectable shapes + Delete key:**
+  - Click a shape → selected (accent outline + 4 handles). Click outside → deselected.
+  - Delete/Backspace key (when not editing text) removes the selected shape via `deleteSelectedShape()` (DOM `remove()` + commit). If no shape selected, Delete deletes the current slide (legacy behavior).
+- **Clean editing UX:**
+  - Contenteditable `data-placeholder` updated to "Click to add text" (was "Click to add slide content…"). Existing `:empty::before` CSS rule shows it when empty.
+  - Contenteditable now `position: relative` + `overflow-hidden` (was `overflow-auto`) so `.slate-shape` children position relative to the slide surface.
+  - Shapes have `z-index: 10` (inline) + `box-sizing: border-box` + `user-select: none` (CSS) → shapes sit above text content and don't get text-selected.
+  - Slide container keeps `aspect-video` (16:9).
+  - Present mode: shapes render via `dangerouslySetInnerHTML` (visible) but `.present-mode .slate-shape { pointer-events: none }` CSS rule disables their drag handles (not editable). Added `present-mode` class to the present container + `relative` to the inner slide div so shapes position correctly.
+  - When the contenteditable's innerHTML is replaced from Yjs (remote edit / slide change), the `selectedShapeEl` ref is cleared (the old DOM node no longer exists).
+- **All command handlers in switch statement:**
+  - Toolbar commands: `bold`, `italic`, `underline`, `textSize` (with size id value), `textColor` (with hex), `bulletList`, `addSlide` (with template value), `background` (with color value), `present` — all handled.
+  - Dock commands: `newSlide`, `duplicateSlide`, `deleteSlide`, `moveLeft`, `moveRight`, `bold`, `italic`, `underline`, `textColor`, `bulletList`, `orderedList`, `alignLeft`, `alignCenter`, `alignRight`, `shapeRect`, `shapeCircle`, `image`, `background`, `theme` (with id value), `present`, `exportHtml` — all handled.
+  - Legacy command aliases kept for backward compat: `addSlideTemplate`→`addSlide`, `moveSlideLeft`/`moveSlideRight`→`moveLeft`/`moveRight`, `setBackground`→`background`, `applyTheme`→`theme`, `insertShape`→`shapeRect`/`shapeCircle`, `insertImage`→`image`.
+- Added new helper components: `TextSizeDropdown`, `AddSlideDropdown`, `ShapeSelectionOverlay`.
+- Added `runPresentationCommand` import (used by TextSizeDropdown).
+- Cleaned up unused imports (Trash2, CopyIcon, FileCode2, Strikethrough, Heading1-3, Eraser, ListOrdered, AlignLeft/Center/Right, Square, CircleIcon, ArrowRight, Minus, ImageIcon).
+- Converted `TRANSITIONS` and `ANIMATIONS` constants to inline `TransitionId` / `AnimationId` union types (constants were unused after removing the toolbar's transition/animation dropdowns — eliminated the eslint warnings).
+- TypeScript `tsc --noEmit` clean (0 errors). ESLint clean (0 errors, 0 warnings).
+
+Stage Summary:
+- 2 files modified (PresentationEditor.tsx, PresentationToolsPanel.tsx).
+- Toolbar trimmed to 9 essential controls; dock panel reorganized into 5 minimal groups.
+- Shapes are now real draggable + resizable + selectable objects (slate-shape divs with inline absolute positioning, 4 corner resize handles, accent selection outline, Delete-to-remove).
+- Every toolbar + dock command has a handler in the editor's switch statement.
+- Editing UX cleaned: "Click to add text" placeholder, click-outside-deselect, shape z-index above text, 16:9 aspect preserved, present-mode shapes visible-but-not-editable.

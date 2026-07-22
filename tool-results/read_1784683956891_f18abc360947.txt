@@ -1,0 +1,1545 @@
+     1→/**
+     2→ * PresentationEditor — Google Slides / PowerPoint-style slide editor.
+     3→ *
+     4→ * Major upgrade from the minimal first cut. Still uses a contenteditable +
+     5→ * execCommand (no TipTap) for slide content, but now ships:
+     6→ *
+     7→ *   - A complete tool palette (left dock's PresentationToolsPanel) that
+     8→ *     dispatches `slate:presentation-command` window events. This component
+     9→ *     is the single listener — it routes each command to either a slide
+    10→ *     mutation (add/duplicate/delete/move/template) or a `document.execCommand`
+    11→ *     formatting call on the focused contenteditable.
+    12→ *   - Five slide templates (blank / title / title+content / two-column /
+    13→ *     section divider) selectable from the Add Slide button.
+    14→ *   - Drag-to-reorder thumbnails in the slide navigator (pointer events,
+    15→ *     no dnd-kit). Right-click a thumbnail for a context menu
+    16→ *     (add / duplicate / delete / move left / move right).
+    17→ *   - Speaker notes per slide (toggle below the editor; stored in the
+    18→ *     Y.Map as `notes`).
+    19→ *   - Slide transition selector (none / fade / slide / zoom) stored in the
+    20→ *     Y.Map as `transition`; applied in present mode via CSS keyframes.
+    21→ *   - Export to a single standalone HTML file (one `<section>` per slide).
+    22→ *   - Keyboard shortcuts: ←/→ + PageUp/Down navigate, Ctrl+Shift+N new,
+    23→ *     Ctrl+Shift+D duplicate, Ctrl+Shift+P present, Delete (when not
+    24→ *     editing text) deletes the slide.
+    25→ *   - Polished present mode: transitions between slides, slide counter,
+    26→ *     progress bar, click-to-advance, Esc exits.
+    27→ *
+    28→ * Each slide is a Y.Map with `{ id, content (HTML), background (color or
+    29→ * gradient), notes (string), transition ('none'|'fade'|'slide'|'zoom') }`.
+    30→ * Slides live in the top-level Y.Array keyed by SLIDES_KEY (`slides`) so
+    31→ * every client resolves the same shared container (sync/doc.ts container
+    32→ * doctrine). The contenteditable binds directly to `content` — `onInput`
+    33→ * writes back to Yjs on a 250ms debounce so typing stays smooth.
+    34→ */
+    35→
+    36→import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    37→import * as Y from 'yjs';
+    38→import {
+    39→  Plus, Trash2, Copy as CopyIcon, ChevronLeft, ChevronRight,
+    40→  Play as PlayIcon, X, StickyNote as NotesIcon, FileCode2,
+    41→  Bold, Italic, Underline as UnderlineIcon, Strikethrough,
+    42→  Heading1, Heading2, Heading3, Palette, Eraser,
+    43→  List as ListIcon, ListOrdered, AlignLeft, AlignCenter, AlignRight,
+    44→  Square, Circle as CircleIcon, ArrowRight, Minus,
+    45→  Image as ImageIcon, Eye,
+    46→  type LucideIcon,
+    47→} from 'lucide-react';
+    48→import { useRoom } from '../sync/RoomContext';
+    49→import { makeId } from '../utils/id';
+    50→import { useIsMobile } from '../workspace/useMediaQuery';
+    51→import { toast } from '../ui/Toast';
+    52→import {
+    53→  PRESENTATION_COMMAND_EVENT,
+    54→  type PresentationCommandDetail,
+    55→} from './presentationBridge';
+    56→
+    57→/** Default background for a new slide. */
+    58→const DEFAULT_BG = '#0c0c0e';
+    59→
+    60→/** Toolbar swatches — keep a short list inline so the editor has its own
+    61→ *  quick picker (the full grid lives in PresentationToolsPanel). */
+    62→const BG_SWATCHES = [
+    63→  DEFAULT_BG,
+    64→  '#ffffff',
+    65→  '#1a1a1d',
+    66→  '#f6f5f0',
+    67→  '#1e293b',
+    68→  '#fef3c7',
+    69→  '#dbeafe',
+    70→  '#dcfce7',
+    71→];
+    72→
+    73→const TRANSITIONS = [
+    74→  { id: 'none', label: 'None' },
+    75→  { id: 'fade', label: 'Fade' },
+    76→  { id: 'slide', label: 'Slide' },
+    77→  { id: 'zoom', label: 'Zoom' },
+    78→] as const;
+    79→type TransitionId = (typeof TRANSITIONS)[number]['id'];
+    80→
+    81→/** Slide ANIMATIONS — distinct from transitions: a transition fires when
+    82→ *  navigating BETWEEN slides (the new slide's entrance animation), while an
+    83→ *  animation is the in-slide content reveal. They stack (a slide can have
+    84→ *  transition=fade AND animation=slide-up). */
+    85→const ANIMATIONS = [
+    86→  { id: 'none', label: 'None' },
+    87→  { id: 'fade-in', label: 'Fade In' },
+    88→  { id: 'slide-up', label: 'Slide Up' },
+    89→  { id: 'zoom-in', label: 'Zoom In' },
+    90→  { id: 'bounce', label: 'Bounce' },
+    91→] as const;
+    92→type AnimationId = (typeof ANIMATIONS)[number]['id'];
+    93→
+    94→function isAnimationId(v: unknown): v is AnimationId {
+    95→  return v === 'none' || v === 'fade-in' || v === 'slide-up' || v === 'zoom-in' || v === 'bounce';
+    96→}
+    97→
+    98→/** Quick theme presets — set the background AND the default text color in
+    99→ *  one tap. Themes apply to the active slide (not the whole deck) so the user
+   100→ *  can mix-and-match per section. The text color is applied to the slide's
+   101→ *  contenteditable via inline `color` style on the wrapper. */
+   102→const THEMES: { id: string; label: string; bg: string; color: string }[] = [
+   103→  { id: 'dark', label: 'Dark', bg: '#0c0c0e', color: '#f5f5f7' },
+   104→  { id: 'light', label: 'Light', bg: '#ffffff', color: '#1a1a1d' },
+   105→  { id: 'blue', label: 'Blue', bg: '#1e3a8a', color: '#ffffff' },
+   106→  { id: 'sunset', label: 'Sunset', bg: 'linear-gradient(135deg, #f97316 0%, #db2777 100%)', color: '#ffffff' },
+   107→  { id: 'forest', label: 'Forest', bg: 'linear-gradient(135deg, #065f46 0%, #064e3b 100%)', color: '#f0fdf4' },
+   108→  { id: 'slate', label: 'Slate', bg: '#1e293b', color: '#e2e8f0' },
+   109→];
+   110→
+   111→interface Slide {
+   112→  id: string;
+   113→  content: string;
+   114→  background: string;
+   115→  /** Inline text color override (set when a theme is applied) — empty string
+   116→   *  means "no override, use the default". */
+   117→  textColor: string;
+   118→  notes: string;
+   119→  transition: TransitionId;
+   120→  animation: AnimationId;
+   121→}
+   122→
+   123→/** Read a slide Y.Map as a plain object (defensive — fields may be missing
+   124→ *  on a freshly-added slide before its first commit). */
+   125→function readSlide(m: Y.Map<unknown>, fallbackId: string): Slide {
+   126→  const transition = (m.get('transition') as TransitionId | undefined) ?? 'none';
+   127→  const animation = m.get('animation');
+   128→  return {
+   129→    id: (m.get('id') as string | undefined) ?? fallbackId,
+   130→    content: (m.get('content') as string | undefined) ?? '',
+   131→    background: (m.get('background') as string | undefined) ?? DEFAULT_BG,
+   132→    textColor: (m.get('textColor') as string | undefined) ?? '',
+   133→    notes: (m.get('notes') as string | undefined) ?? '',
+   134→    transition: (transition === 'none' || transition === 'fade' || transition === 'slide' || transition === 'zoom')
+   135→      ? transition
+   136→      : 'none',
+   137→    animation: isAnimationId(animation) ? animation : 'none',
+   138→  };
+   139→}
+   140→
+   141→/** HTML templates for the five slide layouts. Inserted verbatim into the
+   142→ *  contenteditable, then committed to Yjs like any other edit. Inline
+   143→ *  styles so the markup round-trips through the slide's `content` HTML
+   144→ *  string with no external CSS dependency. */
+   145→function templateHtml(id: string): string {
+   146→  switch (id) {
+   147→    case 'title':
+   148→      return (
+   149→        '<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;text-align:center;">' +
+   150→        '<h1 style="font-size:3.2em;margin:0 0 0.4em;font-weight:700;">Slide Title</h1>' +
+   151→        '<p style="font-size:1.3em;opacity:0.7;margin:0;">Subtitle or presenter name</p>' +
+   152→        '</div>'
+   153→      );
+   154→    case 'title+content':
+   155→      return (
+   156→        '<h1 style="font-size:2.4em;margin:0 0 0.6em;font-weight:700;">Slide Title</h1>' +
+   157→        '<p style="font-size:1.2em;line-height:1.5;margin:0;">Start writing your content here…</p>' +
+   158→        '<ul style="font-size:1.1em;line-height:1.6;margin:0.6em 0 0 1.4em;">' +
+   159→        '<li>First point</li><li>Second point</li><li>Third point</li></ul>'
+   160→      );
+   161→    case 'two-column':
+   162→      return (
+   163→        '<h1 style="font-size:2.2em;margin:0 0 0.6em;font-weight:700;">Slide Title</h1>' +
+   164→        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2em;">' +
+   165→        '<div><h3 style="margin:0 0 0.3em;font-size:1.3em;">Left column</h3><p style="margin:0;line-height:1.5;">Content for the left side…</p></div>' +
+   166→        '<div><h3 style="margin:0 0 0.3em;font-size:1.3em;">Right column</h3><p style="margin:0;line-height:1.5;">Content for the right side…</p></div>' +
+   167→        '</div>'
+   168→      );
+   169→    case 'section':
+   170→      return (
+   171→        '<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;text-align:center;">' +
+   172→        '<h1 style="font-size:4em;margin:0;font-weight:800;letter-spacing:-0.02em;">Section</h1>' +
+   173→        '<p style="font-size:1.2em;opacity:0.6;margin-top:0.4em;">Divider</p>' +
+   174→        '</div>'
+   175→      );
+   176→    case 'blank':
+   177→    default:
+   178→      return '';
+   179→  }
+   180→}
+   181→
+   182→export function PresentationEditor() {
+   183→  const room = useRoom();
+   184→  const slate = room.slate;
+   185→  const isMobile = useIsMobile();
+   186→  const slidesArr = useMemo(() => slate.slides(), [slate]);
+   187→  const [version, setVersion] = useState(0);
+   188→  const [current, setCurrent] = useState(0);
+   189→  const [presenting, setPresenting] = useState(false);
+   190→  const [notesOpen, setNotesOpen] = useState(false);
+   191→  /** Tracks the present-mode slide separately so transitions can fire on
+   192→   *  navigation (changing `presentKey` remounts the slide container and
+   193→   *  re-runs the CSS keyframe animation). */
+   194→  const [presentKey, setPresentKey] = useState(0);
+   195→  /** Presenter view overlay (small speaker-notes panel at the bottom of
+   196→   *  present mode) — toggleable from a button in the present chrome. */
+   197→  const [presenterNotes, setPresenterNotes] = useState(false);
+   198→  /** Elapsed-time counter for present mode — set when starting present,
+   199→   *  cleared when leaving. Updated once per second by an interval below. */
+   200→  const [presentElapsed, setPresentElapsed] = useState(0);
+   201→  const presentStartRef = useRef<number | null>(null);
+   202→  /** Image-file picker — hidden input; the Image button in the toolbar
+   203→   *  clicks it. On change, the file is read as a data URL and inserted as
+   204→   *  an <img> into the contenteditable. */
+   205→  const imageInputRef = useRef<HTMLInputElement | null>(null);
+   206→  /** Context-menu state for the slide navigator (right-click). Null hides
+   207→   *  the menu; otherwise holds the target slide index + screen coords. */
+   208→  const [contextMenu, setContextMenu] = useState<{ idx: number; x: number; y: number } | null>(null);
+   209→  /** Debounce timer for committing contenteditable HTML back to Yjs. Typing
+   210→   *  on every keystroke would thrash the Yjs doc — 250ms after the last
+   211→   *  keystroke is responsive enough for live collab and keeps the wire quiet. */
+   212→  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   213→  /** Notes debounce timer — same pattern, separate timer so editing notes
+   214→   *  doesn't reset the content debounce and vice versa. */
+   215→  const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   216→  /** True while the contenteditable is the source of the in-flight commit.
+   217→   *  Without this, the Yjs observer would call applyRemoteContent() every
+   218→   *  time we wrote our own edit back, clobbering the cursor position. */
+   219→  const selfCommitRef = useRef(false);
+   220→  /** Same flag for notes — suppresses the observer's notes re-render while
+   221→   *  the textarea is the source of the in-flight notes commit. */
+   222→  const selfNotesCommitRef = useRef(false);
+   223→  /** The contenteditable element for the active slide. */
+   224→  const editorRef = useRef<HTMLDivElement | null>(null);
+   225→  /** The speaker-notes textarea. */
+   226→  const notesRef = useRef<HTMLTextAreaElement | null>(null);
+   227→  /** The present-mode fullscreen container. */
+   228→  const presentRef = useRef<HTMLDivElement | null>(null);
+   229→
+   230→  // ── Yjs subscription ──────────────────────────────────────────────────
+   231→  useEffect(() => {
+   232→    let pending = false;
+   233→    const bump = () => {
+   234→      if (pending) return;
+   235→      pending = true;
+   236→      requestAnimationFrame(() => {
+   237→        pending = false;
+   238→        setVersion((v) => v + 1);
+   239→      });
+   240→    };
+   241→    const observer = () => {
+   242→      if (selfCommitRef.current) {
+   243→        selfCommitRef.current = false;
+   244→        return;
+   245→      }
+   246→      bump();
+   247→    };
+   248→    slidesArr.observeDeep(observer);
+   249→    const late = setTimeout(bump, 200);
+   250→    return () => {
+   251→      clearTimeout(late);
+   252→      slidesArr.unobserveDeep(observer);
+   253→    };
+   254→  }, [slidesArr]);
+   255→
+   256→  // Read slides fresh every render (driven by `version` bumps).
+   257→  const slides: Slide[] = useMemo(() => {
+   258→    void version;
+   259→    const list: Slide[] = [];
+   260→    for (let i = 0; i < slidesArr.length; i++) {
+   261→      list.push(readSlide(slidesArr.get(i), `slide-${i}`));
+   262→    }
+   263→    return list;
+   264→  }, [slidesArr, version]);
+   265→
+   266→  // Seed an empty deck with one blank slide so the user has something to
+   267→  // click into. First writer wins across peers (id collision-free IDs keep
+   268→  // the Yjs merge clean).
+   269→  useEffect(() => {
+   270→    if (slidesArr.length === 0) {
+   271→      addSlideInternal('blank');
+   272→    }
+   273→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   274→  }, [slidesArr]);
+   275→
+   276→  // Clamp `current` if slides were deleted (e.g. by a peer).
+   277→  useEffect(() => {
+   278→    if (current > slides.length - 1) {
+   279→      setCurrent(Math.max(0, slides.length - 1));
+   280→    }
+   281→  }, [slides.length, current]);
+   282→
+   283→  // Sync the contenteditable's innerHTML to the Yjs value when the current
+   284→  // slide changes — UNLESS the edit originated from the contenteditable
+   285→  // itself (avoids caret jumps).
+   286→  useEffect(() => {
+   287→    const el = editorRef.current;
+   288→    if (!el) return;
+   289→    const slide = slides[current];
+   290→    if (!slide) return;
+   291→    if (el.innerHTML !== slide.content) {
+   292→      el.innerHTML = slide.content;
+   293→    }
+   294→  }, [slides, current]);
+   295→
+   296→  // Sync the notes textarea to the Yjs value when the current slide changes
+   297→  // (same caret-jump guard as the content editor).
+   298→  useEffect(() => {
+   299→    const el = notesRef.current;
+   300→    if (!el) return;
+   301→    const slide = slides[current];
+   302→    if (!slide) return;
+   303→    if (el.value !== slide.notes) {
+   304→      el.value = slide.notes;
+   305→    }
+   306→  }, [slides, current, notesOpen]);
+   307→
+   308→  // ── Mutations ─────────────────────────────────────────────────────────
+   309→
+   310→  /** Core "add a slide" — used both by the toolbar's quick-add and the
+   311→   *  template picker. Inserts after `current`, switches to it. */
+   312→  const addSlideInternal = useCallback((templateId: string) => {
+   313→    const id = makeId('slide');
+   314→    const m = new Y.Map<unknown>();
+   315→    m.set('id', id);
+   316→    m.set('content', templateHtml(templateId));
+   317→    m.set('background', DEFAULT_BG);
+   318→    m.set('textColor', '');
+   319→    m.set('notes', '');
+   320→    m.set('transition', 'none');
+   321→    m.set('animation', 'none');
+   322→    const insertAt = Math.min(slidesArr.length, current + 1);
+   323→    slidesArr.insert(insertAt, [m]);
+   324→    setCurrent(insertAt);
+   325→  }, [slidesArr, current]);
+   326→
+   327→  const addSlide = useCallback(() => addSlideInternal('blank'), [addSlideInternal]);
+   328→
+   329→  const deleteSlide = useCallback((idx: number) => {
+   330→    if (slidesArr.length <= 1) {
+   331→      toast({ title: 'Cannot delete', description: 'A presentation needs at least one slide.', variant: 'error' });
+   332→      return;
+   333→    }
+   334→    slidesArr.delete(idx, 1);
+   335→    setCurrent((c) => Math.max(0, Math.min(c, slidesArr.length - 1)));
+   336→  }, [slidesArr]);
+   337→
+   338→  const duplicateSlide = useCallback((idx: number) => {
+   339→    const src = slidesArr.get(idx);
+   340→    if (!src) return;
+   341→    const m = new Y.Map<unknown>();
+   342→    m.set('id', makeId('slide'));
+   343→    m.set('content', (src.get('content') as string | undefined) ?? '');
+   344→    m.set('background', (src.get('background') as string | undefined) ?? DEFAULT_BG);
+   345→    m.set('textColor', (src.get('textColor') as string | undefined) ?? '');
+   346→    m.set('notes', (src.get('notes') as string | undefined) ?? '');
+   347→    m.set('transition', (src.get('transition') as TransitionId | undefined) ?? 'none');
+   348→    m.set('animation', isAnimationId(src.get('animation')) ? src.get('animation') as AnimationId : 'none');
+   349→    slidesArr.insert(idx + 1, [m]);
+   350→    setCurrent(idx + 1);
+   351→  }, [slidesArr]);
+   352→
+   353→  /** Move a slide by one slot in either direction. Implemented as a swap so
+   354→   *  the slide's Y.Map identity (and thus its observer wiring) is preserved. */
+   355→  const moveSlide = useCallback((idx: number, dir: -1 | 1) => {
+   356→    const target = idx + dir;
+   357→    if (target < 0 || target >= slidesArr.length) return;
+   358→    const a = slidesArr.get(idx);
+   359→    const b = slidesArr.get(target);
+   360→    if (!a || !b) return;
+   361→    // Delete the later one first so the earlier index stays valid.
+   362→    const [hi, lo] = idx < target ? [target, idx] : [idx, target];
+   363→    slidesArr.delete(hi, 1);
+   364→    slidesArr.delete(lo, 1);
+   365→    // Re-insert in swapped order at the lower index.
+   366→    slidesArr.insert(lo, [b, a]);
+   367→    setCurrent(target);
+   368→  }, [slidesArr]);
+   369→
+   370→  /** Drag-to-reorder: move slide `from` to position `to` (final index after
+   371→   *  the move). Preserves the Y.Map identity by delete-then-reinsert. */
+   372→  const moveSlideTo = useCallback((from: number, to: number) => {
+   373→    if (from === to || from < 0 || to < 0 || from >= slidesArr.length || to >= slidesArr.length) return;
+   374→    const m = slidesArr.get(from);
+   375→    if (!m) return;
+   376→    slidesArr.delete(from, 1);
+   377→    slidesArr.insert(to, [m]);
+   378→    setCurrent(to);
+   379→  }, [slidesArr]);
+   380→
+   381→  /** Commit the contenteditable's HTML back to the current slide's `content`
+   382→   *  field. Debounced 250ms after the last keystroke so typing stays smooth. */
+   383→  const commitContent = useCallback(() => {
+   384→    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+   385→    commitTimerRef.current = setTimeout(() => {
+   386→      const el = editorRef.current;
+   387→      const slide = slidesArr.get(current);
+   388→      if (!el || !slide) return;
+   389→      const html = el.innerHTML;
+   390→      selfCommitRef.current = true;
+   391→      slide.set('content', html);
+   392→    }, 250);
+   393→  }, [slidesArr, current]);
+   394→
+   395→  /** Commit the notes textarea's value back to the current slide's `notes`
+   396→   *  field. Same debounced-commit pattern as content. */
+   397→  const commitNotes = useCallback(() => {
+   398→    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+   399→    notesTimerRef.current = setTimeout(() => {
+   400→      const el = notesRef.current;
+   401→      const slide = slidesArr.get(current);
+   402→      if (!el || !slide) return;
+   403→      selfNotesCommitRef.current = true;
+   404→      slide.set('notes', el.value);
+   405→    }, 250);
+   406→  }, [slidesArr, current]);
+   407→
+   408→  /** Set the background color (or gradient) of the current slide. Immediate
+   409→   *  commit — the user picked a swatch, the change should land now. */
+   410→  const setBackground = useCallback((bg: string) => {
+   411→    const slide = slidesArr.get(current);
+   412→    if (!slide) return;
+   413→    selfCommitRef.current = true;
+   414→    slide.set('background', bg);
+   415→  }, [slidesArr, current]);
+   416→
+   417→  /** Set the transition for the current slide. Immediate commit. */
+   418→  const setTransition = useCallback((t: TransitionId) => {
+   419→    const slide = slidesArr.get(current);
+   420→    if (!slide) return;
+   421→    selfCommitRef.current = true;
+   422→    slide.set('transition', t);
+   423→  }, [slidesArr, current]);
+   424→
+   425→  /** Set the animation for the current slide. Immediate commit. */
+   426→  const setAnimation = useCallback((a: AnimationId) => {
+   427→    const slide = slidesArr.get(current);
+   428→    if (!slide) return;
+   429→    selfCommitRef.current = true;
+   430→    slide.set('animation', a);
+   431→  }, [slidesArr, current]);
+   432→
+   433→  /** Apply a quick theme preset: sets both the slide background AND the
+   434→   *  default text color in one go. The text color is stored separately so a
+   435→   *  user can override it later by picking a different text color without
+   436→   *  losing the background. */
+   437→  const applyTheme = useCallback((themeId: string) => {
+   438→    const slide = slidesArr.get(current);
+   439→    if (!slide) return;
+   440→    const theme = THEMES.find((t) => t.id === themeId);
+   441→    if (!theme) return;
+   442→    selfCommitRef.current = true;
+   443→    slide.set('background', theme.bg);
+   444→    slide.set('textColor', theme.color);
+   445→  }, [slidesArr, current]);
+   446→
+   447→  /** Insert a shape (rect / circle / arrow / line) at the cursor. Shapes are
+   448→   *  absolutely positioned <div>s with inline styles, so they live inside the
+   449→   *  same contenteditable HTML and round-trip through Yjs like any other
+   450→   *  content. The default position is `top:20%; left:10%` — the user drags
+   451→   *  them by editing the inline style (no separate shape layer needed). */
+   452→  const insertShape = useCallback((shape: 'rect' | 'circle' | 'arrow' | 'line') => {
+   453→    const el = editorRef.current;
+   454→    if (!el) return;
+   455→    el.focus();
+   456→    let html = '';
+   457→    // Place the shape inside a positioned wrapper so the absolute coords are
+   458→    // relative to the slide (the contenteditable fills the slide).
+   459→    const wrap = (inner: string) =>
+   460→      `<div data-shape="${shape}" style="position:absolute;top:20%;left:10%;width:30%;height:30%;display:flex;align-items:center;justify-content:center;">${inner}</div>`;
+   461→    switch (shape) {
+   462→      case 'rect':
+   463→        html = wrap('<div style="width:100%;height:100%;background:#3b82f6;border:2px solid #1d4ed8;border-radius:4px;"></div>');
+   464→        break;
+   465→      case 'circle':
+   466→        html = wrap('<div style="width:100%;aspect-ratio:1/1;background:#10b981;border:2px solid #047857;border-radius:50%;"></div>');
+   467→        break;
+   468→      case 'arrow':
+   469→        // A right-pointing arrow built from a horizontal bar + a triangular
+   470→        // head via border-trick + transform. Inline styles only so it survives
+   471→        // the HTML string round-trip.
+   472→        html = wrap(
+   473→          '<div style="display:flex;align-items:center;width:100%;height:24px;">' +
+   474→          '<div style="flex:1;height:8px;background:#ef4444;"></div>' +
+   475→          '<div style="width:0;height:0;border-top:14px solid transparent;border-bottom:14px solid transparent;border-left:18px solid #ef4444;"></div>' +
+   476→          '</div>'
+   477→        );
+   478→        break;
+   479→      case 'line':
+   480→        html = wrap('<div style="width:100%;height:4px;background:#e5e7eb;border-radius:2px;"></div>');
+   481→        break;
+   482→    }
+   483→    // execCommand('insertHTML') inserts at the caret; placing the wrapper
+   484→    // before the caret keeps the cursor outside the shape so subsequent text
+   485→    // doesn't end up inside the shape div.
+   486→    document.execCommand('insertHTML', false, html);
+   487→    commitContent();
+   488→  }, [commitContent]);
+   489→
+   490→  /** Insert an image: read the picked file as a data URL, then insert an
+   491→   *  <img> into the contenteditable. Images are bounded to 60% of the slide
+   492→   *  width so they don't overflow the 16:9 surface; the user can resize by
+   493→   *  dragging the corner (browser default for contenteditable <img> selection).
+   494→   *  We don't offload to Supabase here (slides sync as a small Yjs doc; a
+   495→   *  ~500KB data URL is fine and keeps the deck self-contained for export). */
+   496→  const insertImageFile = useCallback((file: File) => {
+   497→    const el = editorRef.current;
+   498→    if (!el) return;
+   499→    if (!file.type.startsWith('image/')) {
+   500→      toast({ title: 'Not an image', description: 'Pick a PNG, JPG, GIF, or WebP file.', variant: 'error' });
+   501→      return;
+   502→    }
+   503→    const reader = new FileReader();
+   504→    reader.onload = () => {
+   505→      const src = typeof reader.result === 'string' ? reader.result : '';
+   506→      if (!src) return;
+   507→      el.focus();
+   508→      // Place the image at the caret with a max-width so it fits the slide.
+   509→      // `position:relative` keeps it in the text flow (not absolutely
+   510→      // positioned like shapes) so the user can drag it around naturally.
+   511→      const html = `<img src="${src}" alt="${file.name.replace(/"/g, '&quot;')}" style="max-width:60%;height:auto;border-radius:6px;display:inline-block;" />`;
+   512→      document.execCommand('insertHTML', false, html);
+   513→      commitContent();
+   514→    };
+   515→    reader.onerror = () => {
+   516→      toast({ title: 'Image read failed', description: 'The file could not be read.', variant: 'error' });
+   517→    };
+   518→    reader.readAsDataURL(file);
+   519→  }, [commitContent]);
+   520→
+   521→  // ── Formatting (execCommand — deprecated but still the simplest way to
+   522→  //  round-trip rich text through a contenteditable without ProseMirror). */
+   523→  const exec = useCallback((cmd: string, value?: string) => {
+   524→    editorRef.current?.focus();
+   525→    if (value !== undefined) {
+   526→      document.execCommand(cmd, false, value);
+   527→    } else {
+   528→      document.execCommand(cmd, false);
+   529→    }
+   530→    commitContent();
+   531→  }, [commitContent]);
+   532→
+   533→  /** Wrap the current selection in a <span style="font-size:Npx">…</span>.
+   534→   *  execCommand('fontSize') only accepts 1–7 (the legacy font-size scale),
+   535→   *  which is too coarse — we want exact px values, so we manipulate the
+   536→   *  selection's HTML directly. */
+   537→  const setFontSize = useCallback((px: number) => {
+   538→    const el = editorRef.current;
+   539→    if (!el) return;
+   540→    el.focus();
+   541→    const sel = window.getSelection();
+   542→    if (!sel || sel.rangeCount === 0) return;
+   543→    const range = sel.getRangeAt(0);
+   544→    if (range.collapsed) return; // nothing to wrap — silently no-op
+   545→    const span = document.createElement('span');
+   546→    span.style.fontSize = `${px}px`;
+   547→    try {
+   548→      range.surroundContents(span);
+   549→    } catch {
+   550→      // surroundContents fails when the range crosses element boundaries.
+   551→      // Fall back to extract + insert (preserves the selection's contents,
+   552→      // even if they span multiple inline elements).
+   553→      const frag = range.extractContents();
+   554→      span.appendChild(frag);
+   555→      range.insertNode(span);
+   556→    }
+   557→    sel.removeAllRanges();
+   558→    sel.addRange(range);
+   559→    commitContent();
+   560→  }, [commitContent]);
+   561→
+   562→  /** Clear the font size on the current selection: walk up from every text
+   563→   *  node inside the range and strip `font-size` from its parent's style. */
+   564→  const clearFontSize = useCallback(() => {
+   565→    const el = editorRef.current;
+   566→    if (!el) return;
+   567→    el.focus();
+   568→    const sel = window.getSelection();
+   569→    if (!sel || sel.rangeCount === 0) return;
+   570→    const range = sel.getRangeAt(0);
+   571→    const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
+   572→    let node: Node | null = walker.currentNode;
+   573→    while (node) {
+   574→      if (node instanceof HTMLElement && range.intersectsNode(node)) {
+   575→        if (node.style.fontSize) node.style.fontSize = '';
+   576→      }
+   577→      node = walker.nextNode();
+   578→    }
+   579→    commitContent();
+   580→  }, [commitContent]);
+   581→
+   582→  // ── Navigation ────────────────────────────────────────────────────────
+   583→
+   584→  const goPrev = useCallback(() => setCurrent((c) => Math.max(0, c - 1)), []);
+   585→  const goNext = useCallback(() => setCurrent((c) => Math.min(slidesArr.length - 1, c + 1)), [slidesArr.length]);
+   586→
+   587→  // ── Present (fullscreen) mode ─────────────────────────────────────────
+   588→
+   589→  const startPresent = useCallback(async () => {
+   590→    setPresenting(true);
+   591→    setPresentKey((k) => k + 1);
+   592→    // Start the elapsed-time counter — setPresentElapsed(0) resets it so a
+   593→    // resumed present session starts fresh.
+   594→    presentStartRef.current = Date.now();
+   595→    setPresentElapsed(0);
+   596→    requestAnimationFrame(() => {
+   597→      const el = presentRef.current;
+   598→      if (!el) return;
+   599→      const req = el.requestFullscreen?.bind(el);
+   600→      if (req) {
+   601→        req().catch(() => { /* user denied or unsupported — stay in-app */ });
+   602→      }
+   603→    });
+   604→  }, []);
+   605→
+   606→  const stopPresent = useCallback(() => {
+   607→    if (document.fullscreenElement) {
+   608→      document.exitFullscreen?.().catch(() => { /* ignore */ });
+   609→    }
+   610→    setPresenting(false);
+   611→    presentStartRef.current = null;
+   612→    setPresenterNotes(false);
+   613→  }, []);
+   614→
+   615→  // Tick the elapsed-time counter once per second while presenting. Stops
+   616→  // when the user exits present mode (presentStartRef clears). Uses
+   617→  // Date.now() - presentStartRef.current so a tab-throttled interval still
+   618→  // shows the right elapsed time after the tab is brought back to focus.
+   619→  useEffect(() => {
+   620→    if (!presenting) return;
+   621→    const id = window.setInterval(() => {
+   622→      if (presentStartRef.current == null) return;
+   623→      setPresentElapsed(Math.floor((Date.now() - presentStartRef.current) / 1000));
+   624→    }, 1000);
+   625→    return () => window.clearInterval(id);
+   626→  }, [presenting]);
+   627→
+   628→  // Sync `presenting` with the browser's fullscreen state so Esc (which the
+   629→  // browser handles itself) closes our overlay too.
+   630→  useEffect(() => {
+   631→    const onFsChange = () => {
+   632→      if (!document.fullscreenElement && presenting) setPresenting(false);
+   633→    };
+   634→    document.addEventListener('fullscreenchange', onFsChange);
+   635→    return () => document.removeEventListener('fullscreenchange', onFsChange);
+   636→  }, [presenting]);
+   637→
+   638→  // Present-mode keyboard navigation: ←/→/PageUp/PageDown/Space navigate,
+   639→  // Esc exits. Also re-fire the transition animation on each navigation by
+   640→  // bumping `presentKey`.
+   641→  useEffect(() => {
+   642→    if (!presenting) return;
+   643→    const onKey = (e: KeyboardEvent) => {
+   644→      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+   645→        e.preventDefault();
+   646→        if (current < slidesArr.length - 1) {
+   647→          setCurrent(current + 1);
+   648→          setPresentKey((k) => k + 1);
+   649→        } else {
+   650→          stopPresent();
+   651→        }
+   652→      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+   653→        e.preventDefault();
+   654→        setCurrent((c) => Math.max(0, c - 1));
+   655→        setPresentKey((k) => k + 1);
+   656→      } else if (e.key === 'Escape') {
+   657→        e.preventDefault();
+   658→        stopPresent();
+   659→      }
+   660→    };
+   661→    window.addEventListener('keydown', onKey);
+   662→    return () => window.removeEventListener('keydown', onKey);
+   663→  }, [presenting, current, slidesArr.length, stopPresent]);
+   664→
+   665→  // ── Editor-level keyboard shortcuts (only when NOT presenting) ────────
+   666→  useEffect(() => {
+   667→    if (presenting) return;
+   668→    const onKey = (e: KeyboardEvent) => {
+   669→      // Ctrl+Shift+N — new slide
+   670→      if (e.ctrlKey && e.shiftKey && (e.key === 'N' || e.key === 'n')) {
+   671→        e.preventDefault();
+   672→        addSlide();
+   673→        return;
+   674→      }
+   675→      // Ctrl+Shift+D — duplicate slide
+   676→      if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+   677→        e.preventDefault();
+   678→        duplicateSlide(current);
+   679→        return;
+   680→      }
+   681→      // Ctrl+Shift+P — present
+   682→      if (e.ctrlKey && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+   683→        e.preventDefault();
+   684→        void startPresent();
+   685→        return;
+   686→      }
+   687→      // ArrowLeft / ArrowRight / PageUp / PageDown — navigate slides, but
+   688→      // only when the user ISN'T editing text (so arrow keys in the
+   689→      // contenteditable still move the caret).
+   690→      const target = e.target as HTMLElement | null;
+   691→      const editing = target?.isContentEditable || target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+   692→      if (editing) return;
+   693→      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+   694→        e.preventDefault();
+   695→        goNext();
+   696→      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+   697→        e.preventDefault();
+   698→        goPrev();
+   699→      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+   700→        e.preventDefault();
+   701→        deleteSlide(current);
+   702→      }
+   703→    };
+   704→    window.addEventListener('keydown', onKey);
+   705→    return () => window.removeEventListener('keydown', onKey);
+   706→  }, [presenting, current, addSlide, duplicateSlide, startPresent, goNext, goPrev, deleteSlide]);
+   707→
+   708→  // ── Export deck as a single standalone HTML file ──────────────────────
+   709→  // Defined before the command listener because the listener calls it for
+   710→  // the `exportHtml` action.
+   711→  const exportHtml = useCallback(() => {
+   712→    const boardName = room.room ?? 'presentation';
+   713→    const sections = slides.map((s, i) => {
+   714→      const esc = (v: string) => v.replace(/"/g, '&quot;');
+   715→      // Inline `color` carries the slide's textColor (set by a theme) so the
+   716→      // exported deck preserves the visual styling without external CSS.
+   717→      const colorStyle = s.textColor ? `color:${esc(s.textColor)};` : '';
+   718→      return (
+   719→        `<section class="slide" data-index="${i}" data-transition="${esc(s.transition)}" data-animation="${esc(s.animation)}" style="background:${esc(s.background)};${colorStyle}">` +
+   720→        `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
+   721→        (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escapeHtml(s.notes)}</aside>` : '') +
+   722→        '</section>'
+   723→      );
+   724→    }).join('\n');
+   725→    const html = `<!DOCTYPE html>
+   726→<html lang="en">
+   727→<head>
+   728→<meta charset="utf-8" />
+   729→<meta name="viewport" content="width=device-width, initial-scale=1" />
+   730→<title>${escapeHtml(boardName)}</title>
+   731→<style>
+   732→  * { box-sizing: border-box; }
+   733→  body { margin: 0; background: #000; font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #fff; }
+   734→  .slide {
+   735→    width: 100vw; height: 100vh; min-height: 100vh;
+   736→    display: flex; align-items: center; justify-content: center;
+   737→    padding: 6%; position: relative; page-break-after: always;
+   738→  }
+   739→  .slide-inner { width: 100%; max-width: 1280px; line-height: 1.5; font-size: 1.4rem; }
+   740→  .slide-inner h1 { font-size: 2.6em; margin: 0 0 0.5em; font-weight: 700; }
+   741→  .slide-inner h2 { font-size: 2em; margin: 0 0 0.5em; font-weight: 700; }
+   742→  .slide-inner h3 { font-size: 1.5em; margin: 0 0 0.4em; font-weight: 700; }
+   743→  .slide-inner ul, .slide-inner ol { padding-left: 1.4em; }
+   744→  .slide-inner .placeholder { opacity: 0.4; font-style: italic; }
+   745→  .notes { position: absolute; bottom: 1rem; left: 1rem; right: 1rem; font-size: 0.85rem; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem; border-radius: 4px; }
+   746→  @media print {
+   747→    body { background: #fff; }
+   748→    .notes { display: none; }
+   749→  }
+   750→</style>
+   751→</head>
+   752→<body>
+   753→${sections}
+   754→</body>
+   755→</html>`;
+   756→    const blob = new Blob([html], { type: 'text/html' });
+   757→    const a = document.createElement('a');
+   758→    a.href = URL.createObjectURL(blob);
+   759→    a.download = `${boardName}.html`;
+   760→    a.click();
+   761→    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+   762→    toast({ title: 'Exported', description: `${slides.length} slide${slides.length === 1 ? '' : 's'} → ${boardName}.html` });
+   763→  }, [slides, room]);
+   764→
+   765→  // ── Command listener (PresentationToolsPanel bridge) ──────────────────
+   766→  useEffect(() => {
+   767→    const handler = (e: Event) => {
+   768→      const detail = (e as CustomEvent<PresentationCommandDetail>).detail;
+   769→      const cmd = detail?.command;
+   770→      if (!cmd) return;
+   771→      switch (cmd) {
+   772→        // Slide ops
+   773→        case 'addSlideTemplate': {
+   774→          const tpl = detail.value ?? 'blank';
+   775→          addSlideInternal(tpl);
+   776→          break;
+   777→        }
+   778→        case 'duplicateSlide': duplicateSlide(current); break;
+   779→        case 'deleteSlide': deleteSlide(current); break;
+   780→        case 'moveSlideLeft': moveSlide(current, -1); break;
+   781→        case 'moveSlideRight': moveSlide(current, 1); break;
+   782→        // Text formatting (execCommand — focuses the contenteditable first)
+   783→        case 'bold': exec('bold'); break;
+   784→        case 'italic': exec('italic'); break;
+   785→        case 'underline': exec('underline'); break;
+   786→        case 'strike': exec('strikeThrough'); break;
+   787→        case 'h1': exec('formatBlock', 'h1'); break;
+   788→        case 'h2': exec('formatBlock', 'h2'); break;
+   789→        case 'h3': exec('formatBlock', 'h3'); break;
+   790→        case 'textColor': {
+   791→          const color = detail.value;
+   792→          if (color) exec('foreColor', color);
+   793→          break;
+   794→        }
+   795→        case 'clearColor': {
+   796→          // Reset the selection's inline color to the inherited value. We
+   797→          // can't pass `inherit`/`unset` through execCommand('foreColor')
+   798→          // (browsers clamp it to a hex), so we walk the selected elements
+   799→          // and strip `color` from their inline style — same trick the
+   800→          // `clearFontSize` command uses. Forward-compatible: the panel
+   801→          // doesn't ship a clearColor button today, but a future "clear
+   802→          // color" affordance can dispatch this without needing another
+   803→          // listener edit.
+   804→          const el = editorRef.current;
+   805→          if (el) {
+   806→            el.focus();
+   807→            const sel = window.getSelection();
+   808→            if (sel && sel.rangeCount > 0) {
+   809→              const range = sel.getRangeAt(0);
+   810→              const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
+   811→              let node: Node | null = walker.currentNode;
+   812→              while (node) {
+   813→                if (node instanceof HTMLElement && range.intersectsNode(node)) {
+   814→                  if (node.style.color) node.style.color = '';
+   815→                }
+   816→                node = walker.nextNode();
+   817→              }
+   818→            }
+   819→            commitContent();
+   820→          }
+   821→          break;
+   822→        }
+   823→        case 'clearFormat':
+   824→          exec('removeFormat');
+   825→          exec('formatBlock', 'div');
+   826→          break;
+   827→        case 'bulletList': exec('insertUnorderedList'); break;
+   828→        case 'orderedList': exec('insertOrderedList'); break;
+   829→        case 'alignLeft': exec('justifyLeft'); break;
+   830→        case 'alignCenter': exec('justifyCenter'); break;
+   831→        case 'alignRight': exec('justifyRight'); break;
+   832→        case 'fontSize': {
+   833→          const px = Number(detail.value);
+   834→          if (px > 0) setFontSize(px);
+   835→          break;
+   836→        }
+   837→        case 'clearFontSize': clearFontSize(); break;
+   838→        // Design
+   839→        case 'setBackground': {
+   840→          const bg = detail.value;
+   841→          if (bg) setBackground(bg);
+   842→          break;
+   843→        }
+   844→        case 'setTransition': {
+   845→          const t = detail.value as TransitionId;
+   846→          if (t === 'none' || t === 'fade' || t === 'slide' || t === 'zoom') setTransition(t);
+   847→          break;
+   848→        }
+   849→        case 'setAnimation': {
+   850→          const a = detail.value;
+   851→          if (isAnimationId(a)) setAnimation(a);
+   852→          break;
+   853→        }
+   854→        case 'applyTheme': {
+   855→          const themeId = detail.value;
+   856→          if (themeId) applyTheme(themeId);
+   857→          break;
+   858→        }
+   859→        case 'insertShape': {
+   860→          const shape = detail.value;
+   861→          if (shape === 'rect' || shape === 'circle' || shape === 'arrow' || shape === 'line') insertShape(shape);
+   862→          break;
+   863→        }
+   864→        case 'insertImage': {
+   865→          imageInputRef.current?.click();
+   866→          break;
+   867→        }
+   868→        // Actions
+   869→        case 'present': void startPresent(); break;
+   870→        case 'exportHtml': exportHtml(); break;
+   871→        default: break;
+   872→      }
+   873→    };
+   874→    window.addEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
+   875→    return () => window.removeEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
+   876→  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml, commitContent]);
+   877→
+   878→  // ── Drag-to-reorder in the slide navigator ────────────────────────────
+   879→  /** Refs read inside document-level pointer handlers (which don't re-bind
+   880→   *  on every render). Holds the index being dragged + the index currently
+   881→   *  under the pointer + whether the pointer has moved past the drag
+   882→   *  threshold (so we can suppress the click that follows a drag). */
+   883→  const dragStateRef = useRef<{ from: number; over: number; moved: boolean; startX: number; startY: number } | null>(null);
+   884→  const [dragOver, setDragOver] = useState<number | null>(null);
+   885→  /** Tag each thumbnail `<li>` with `data-slide-idx` so the document-level
+   886→   *  pointermove handler can find which slide is under the pointer via
+   887→   *  `elementFromPoint` (we don't use pointer capture — it would swallow
+   888→   *  the enter events on sibling thumbnails). */
+   889→  const startDrag = useCallback((idx: number, e: React.PointerEvent) => {
+   890→    if (e.button !== 0) return; // only primary button
+   891→    dragStateRef.current = { from: idx, over: idx, moved: false, startX: e.clientX, startY: e.clientY };
+   892→    const onMove = (ev: PointerEvent) => {
+   893→      const st = dragStateRef.current;
+   894→      if (!st) return;
+   895→      // Mark as moved once the pointer crosses a small threshold so a
+   896→      // pure click (no drag) still selects the slide via the button's
+   897→      // onClick — but a real drag suppresses that click.
+   898→      if (!st.moved && Math.hypot(ev.clientX - st.startX, ev.clientY - st.startY) > 4) {
+   899→        st.moved = true;
+   900→      }
+   901→      if (!st.moved) return;
+   902→      const target = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+   903→      const li = target?.closest('[data-slide-idx]') as HTMLElement | null;
+   904→      const overIdx = li ? Number(li.dataset.slideIdx) : -1;
+   905→      if (overIdx >= 0 && overIdx !== st.over) {
+   906→        st.over = overIdx;
+   907→        setDragOver(overIdx);
+   908→      }
+   909→    };
+   910→    const onUp = () => {
+   911→      const st = dragStateRef.current;
+   912→      if (st && st.moved && st.over !== st.from) {
+   913→        moveSlideTo(st.from, st.over);
+   914→      }
+   915→      // Keep `moved` around for one tick so the click handler that fires
+   916→      // right after pointerup can read it and decide to suppress itself.
+   917→      setTimeout(() => {
+   918→        dragStateRef.current = null;
+   919→        setDragOver(null);
+   920→      }, 0);
+   921→      document.removeEventListener('pointermove', onMove);
+   922→      document.removeEventListener('pointerup', onUp);
+   923→    };
+   924→    document.addEventListener('pointermove', onMove);
+   925→    document.addEventListener('pointerup', onUp);
+   926→  }, [moveSlideTo]);
+   927→
+   928→  // ── Render ────────────────────────────────────────────────────────────
+   929→
+   930→  const activeSlide = slides[current];
+   931→  const slideCount = slides.length;
+   932→  const activeBg = activeSlide?.background ?? DEFAULT_BG;
+   933→  // CSS background: solid colors and gradients both work via the `background`
+   934→  // shorthand (we use `background` rather than `backgroundColor` so gradient
+   935→  // strings land on `backgroundImage`).
+   936→  const activeBgStyle = activeBg.startsWith('linear-gradient') || activeBg.startsWith('radial-gradient')
+   937→    ? { backgroundImage: activeBg }
+   938→    : { backgroundColor: activeBg };
+   939→
+   940→  return (
+   941→    <div className="flex h-full w-full flex-col bg-bg text-text overflow-hidden">
+   942→      {/* Toolbar — slide ops + inline formatting + background + navigation + present.
+   943→          Mobile-tightened: keeps the essentials (Add / Duplicate / Delete /
+   944→          Notes / Prev-Next / Export / Present) in the horizontally-scrolling
+   945→          strip; the inline-formatting + background + transition + animation +
+   946→          shapes + image + theme controls are desktop-only (the dock panel has
+   947→          the full set). */}
+   948→      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
+   949→        <button onClick={addSlide} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add slide (Ctrl+Shift+N)">
+   950→          <Plus size={12} /> Slide
+   951→        </button>
+   952→        <button onClick={() => duplicateSlide(current)} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3" title="Duplicate slide (Ctrl+Shift+D)">
+   953→          <CopyIcon size={12} /> Duplicate
+   954→        </button>
+   955→        <button onClick={() => deleteSlide(current)} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3 hover:text-danger" title="Delete slide">
+   956→          <Trash2 size={12} /> Delete
+   957→        </button>
+   958→        <button onClick={() => setNotesOpen((v) => !v)} className={`flex items-center gap-1 rounded border px-2 py-1 text-[11px] ${notesOpen ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Toggle speaker notes">
+   959→          <NotesIcon size={12} /> Notes
+   960→        </button>
+   961→        <div className="mx-1 h-5 w-px bg-border" />
+   962→        {/* Inline formatting + Insert (shapes/image) + design (bg/transition/
+   963→            animation/theme) — desktop only. Mobile users reach these from
+   964→            the dock's PresentationToolsPanel (or the FAB on portrait phones). */}
+   965→        {!isMobile && (
+   966→          <>
+   967→            <ToolbarButton onClick={() => exec('formatBlock', 'h1')} title="Heading 1" Icon={Heading1} />
+   968→            <ToolbarButton onClick={() => exec('formatBlock', 'h2')} title="Heading 2" Icon={Heading2} />
+   969→            <ToolbarButton onClick={() => exec('formatBlock', 'h3')} title="Heading 3" Icon={Heading3} />
+   970→            <ToolbarButton onClick={() => exec('bold')} title="Bold" Icon={Bold} />
+   971→            <ToolbarButton onClick={() => exec('italic')} title="Italic" Icon={Italic} />
+   972→            <ToolbarButton onClick={() => exec('underline')} title="Underline" Icon={UnderlineIcon} />
+   973→            <ToolbarButton onClick={() => exec('strikeThrough')} title="Strikethrough" Icon={Strikethrough} />
+   974→            <ToolbarButton onClick={() => exec('insertUnorderedList')} title="Bullet list" Icon={ListIcon} />
+   975→            <ToolbarButton onClick={() => exec('insertOrderedList')} title="Numbered list" Icon={ListOrdered} />
+   976→            <ToolbarButton onClick={() => exec('justifyLeft')} title="Align left" Icon={AlignLeft} />
+   977→            <ToolbarButton onClick={() => exec('justifyCenter')} title="Align center" Icon={AlignCenter} />
+   978→            <ToolbarButton onClick={() => exec('justifyRight')} title="Align right" Icon={AlignRight} />
+   979→            <ToolbarButton onClick={() => exec('removeFormat')} title="Clear formatting" Icon={Eraser} />
+   980→            {/* Text color: native color input behind a label (same pattern as
+   981→                DocToolsPanel / PresentationToolsPanel — kept inline so the
+   982→                user has a quick color picker without opening the dock). */}
+   983→            <label title="Text color" aria-label="Text color" className="relative flex h-7 w-7 cursor-pointer items-center justify-center rounded text-text-mid hover:bg-bg-3">
+   984→              <Palette size={14} />
+   985→              <input
+   986→                type="color"
+   987→                aria-label="Text color"
+   988→                className="absolute inset-0 cursor-pointer opacity-0"
+   989→                onChange={(e) => exec('foreColor', e.target.value)}
+   990→                defaultValue="#ffffff"
+   991→              />
+   992→            </label>
+   993→            <div className="mx-1 h-5 w-px bg-border" />
+   994→            {/* Insert — shapes + image. Shapes are absolutely positioned divs
+   995→                inside the contenteditable; images are <img> with a max-width. */}
+   996→            <ToolbarButton onClick={() => insertShape('rect')} title="Insert rectangle" Icon={Square} />
+   997→            <ToolbarButton onClick={() => insertShape('circle')} title="Insert circle" Icon={CircleIcon} />
+   998→            <ToolbarButton onClick={() => insertShape('arrow')} title="Insert arrow" Icon={ArrowRight} />
+   999→            <ToolbarButton onClick={() => insertShape('line')} title="Insert line" Icon={Minus} />
+  1000→            <ToolbarButton onClick={() => imageInputRef.current?.click()} title="Insert image" Icon={ImageIcon} />
+  1001→            <div className="mx-1 h-5 w-px bg-border" />
+  1002→          </>
+  1003→        )}
+  1004→        {/* Background swatches — desktop only (mobile uses the dock panel). */}
+  1005→        {!isMobile && (
+  1006→          <div className="flex items-center gap-0.5">
+  1007→            {BG_SWATCHES.map((bg) => (
+  1008→              <button
+  1009→                key={bg}
+  1010→                onClick={() => setBackground(bg)}
+  1011→                className={`h-5 w-5 rounded-full border ${activeBg === bg ? 'border-accent ring-1 ring-accent' : 'border-border'}`}
+  1012→                style={{ backgroundColor: bg }}
+  1013→                title={`Background: ${bg}`}
+  1014→                aria-label={`Set background ${bg}`}
+  1015→              />
+  1016→            ))}
+  1017→          </div>
+  1018→        )}
+  1019→        {/* Transition + Animation selectors + Theme quick-picker — desktop
+  1020→            only. Mobile uses the dock panel. */}
+  1021→        {!isMobile && (
+  1022→          <>
+  1023→            <div className="mx-1 h-5 w-px bg-border" />
+  1024→            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+  1025→              Transition
+  1026→              <select
+  1027→                value={activeSlide?.transition ?? 'none'}
+  1028→                onChange={(e) => setTransition(e.target.value as TransitionId)}
+  1029→                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+  1030→              >
+  1031→                {TRANSITIONS.map((t) => (
+  1032→                  <option key={t.id} value={t.id}>{t.label}</option>
+  1033→                ))}
+  1034→              </select>
+  1035→            </label>
+  1036→            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+  1037→              Animation
+  1038→              <select
+  1039→                value={activeSlide?.animation ?? 'none'}
+  1040→                onChange={(e) => setAnimation(e.target.value as AnimationId)}
+  1041→                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+  1042→              >
+  1043→                {ANIMATIONS.map((a) => (
+  1044→                  <option key={a.id} value={a.id}>{a.label}</option>
+  1045→                ))}
+  1046→              </select>
+  1047→            </label>
+  1048→            <label className="flex items-center gap-1 text-[10px] text-text-dim">
+  1049→              Theme
+  1050→              <select
+  1051→                value=""
+  1052→                onChange={(e) => { if (e.target.value) applyTheme(e.target.value); e.target.value = ''; }}
+  1053→                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
+  1054→                title="Apply a quick theme preset"
+  1055→              >
+  1056→                <option value="">Apply…</option>
+  1057→                {THEMES.map((t) => (
+  1058→                  <option key={t.id} value={t.id}>{t.label}</option>
+  1059→                ))}
+  1060→              </select>
+  1061→            </label>
+  1062→          </>
+  1063→        )}
+  1064→        <div className="mx-1 h-5 w-px bg-border" />
+  1065→        <button onClick={goPrev} disabled={current === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Previous slide (←)">
+  1066→          <ChevronLeft size={14} />
+  1067→        </button>
+  1068→        <span className="min-w-[3rem] text-center font-mono text-[11px] text-text-mid">
+  1069→          {current + 1} / {slideCount}
+  1070→        </span>
+  1071→        <button onClick={goNext} disabled={current >= slideCount - 1} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Next slide (→)">
+  1072→          <ChevronRight size={14} />
+  1073→        </button>
+  1074→        <div className="mx-1 h-5 w-px bg-border" />
+  1075→        <button onClick={exportHtml} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3" title="Export HTML">
+  1076→          <FileCode2 size={12} /> Export
+  1077→        </button>
+  1078→        <button onClick={startPresent} className="flex items-center gap-1 rounded bg-accent px-2 py-1 text-[11px] text-white hover:opacity-80" title="Present (Ctrl+Shift+P)">
+  1079→          <PlayIcon size={12} /> Present
+  1080→        </button>
+  1081→      </div>
+  1082→
+  1083→      {/* Body: navigator + main editing area */}
+  1084→      <div className="flex min-h-0 flex-1">
+  1085→        {/* Slide navigator — vertical thumbnail list. Hidden on mobile. */}
+  1086→        {!isMobile && (
+  1087→          <aside className="flex w-44 shrink-0 flex-col border-r border-border bg-bg-2">
+  1088→            <div className="border-b border-border px-2 py-1 text-[9px] font-mono uppercase text-text-dim">
+  1089→              Slides · drag to reorder
+  1090→            </div>
+  1091→            <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
+  1092→              {slides.map((s, i) => (
+  1093→                <SlideThumbnail
+  1094→                  key={s.id}
+  1095→                  index={i}
+  1096→                  id={s.id}
+  1097→                  content={s.content}
+  1098→                  background={s.background}
+  1099→                  transition={s.transition}
+  1100→                  animation={s.animation}
+  1101→                  isActive={i === current}
+  1102→                  isDragOver={dragOver === i && dragStateRef.current?.from !== i}
+  1103→                  dragMoved={!!dragStateRef.current?.moved}
+  1104→                  onActivate={setCurrent}
+  1105→                  onDragStart={startDrag}
+  1106→                  onContextMenu={(idx, e) => setContextMenu({ idx, x: e.clientX, y: e.clientY })}
+  1107→                />
+  1108→              ))}
+  1109→            </ul>
+  1110→          </aside>
+  1111→        )}
+  1112→
+  1113→        {/* Main editing surface — the current slide, centered, with a 16:9
+  1114→            aspect ratio. The contenteditable fills the slide; the user
+  1115→            clicks anywhere to edit. */}
+  1116→        <main className="flex min-w-0 flex-1 flex-col items-center justify-center overflow-auto bg-bg-3 p-2 sm:p-4">
+  1117→          <div
+  1118→            className="relative flex aspect-video w-full max-w-4xl items-center justify-center overflow-hidden rounded-lg border border-border shadow-xl"
+  1119→            style={activeBgStyle}
+  1120→          >
+  1121→            <div
+  1122→              ref={editorRef}
+  1123→              contentEditable
+  1124→              suppressContentEditableWarning
+  1125→              onInput={commitContent}
+  1126→              onBlur={() => {
+  1127→                if (commitTimerRef.current) {
+  1128→                  clearTimeout(commitTimerRef.current);
+  1129→                  commitTimerRef.current = null;
+  1130→                  const slide = slidesArr.get(current);
+  1131→                  if (slide && editorRef.current) {
+  1132→                    selfCommitRef.current = true;
+  1133→                    slide.set('content', editorRef.current.innerHTML);
+  1134→                  }
+  1135→                }
+  1136→                if (notesTimerRef.current) {
+  1137→                  clearTimeout(notesTimerRef.current);
+  1138→                  notesTimerRef.current = null;
+  1139→                  const slide = slidesArr.get(current);
+  1140→                  if (slide && notesRef.current) {
+  1141→                    selfNotesCommitRef.current = true;
+  1142→                    slide.set('notes', notesRef.current.value);
+  1143→                  }
+  1144→                }
+  1145→              }}
+  1146→              // The active slide's textColor (set by a theme) overrides the
+  1147→              // default text color via inline style. Empty string falls back
+  1148→              // to the inherited .text-text color.
+  1149→              className="h-full w-full overflow-auto p-[6%] outline-none"
+  1150→              style={{ caretColor: 'currentColor', color: activeSlide?.textColor || 'currentColor' }}
+  1151→              data-placeholder="Click to add slide content…"
+  1152→            />
+  1153→          </div>
+  1154→
+  1155→          {/* Speaker notes — collapsible textarea below the slide. Smaller
+  1156→              default height on mobile so it doesn't crowd the editor surface. */}
+  1157→          {notesOpen && (
+  1158→            <div className="mt-2 w-full max-w-4xl rounded-md border border-border bg-bg-2 p-2">
+  1159→              <div className="mb-1 flex items-center gap-2">
+  1160→                <NotesIcon size={12} className="text-text-dim" />
+  1161→                <span className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Speaker notes · slide {current + 1}</span>
+  1162→                <button
+  1163→                  onClick={() => setNotesOpen(false)}
+  1164→                  className="ml-auto text-text-dim hover:text-text"
+  1165→                  aria-label="Hide notes"
+  1166→                >
+  1167→                  <X size={12} />
+  1168→                </button>
+  1169→              </div>
+  1170→              <textarea
+  1171→                ref={notesRef}
+  1172→                onInput={commitNotes}
+  1173→                placeholder="Notes for this slide (presenter view only — not shown in the export)…"
+  1174→                className="h-16 w-full resize-y rounded border border-border bg-bg p-2 text-[12px] text-text outline-none focus:border-accent/40 sm:h-20"
+  1175→              />
+  1176→            </div>
+  1177→          )}
+  1178→        </main>
+  1179→      </div>
+  1180→
+  1181→      {/* Hidden image file input — the Image button (toolbar or dock panel)
+  1182→          clicks it. On change, the file is read as a data URL and inserted
+  1183→          as an <img> into the contenteditable. */}
+  1184→      <input
+  1185→        ref={imageInputRef}
+  1186→        type="file"
+  1187→        accept="image/*"
+  1188→        className="hidden"
+  1189→        onChange={(e) => {
+  1190→          const f = e.target.files?.[0];
+  1191→          e.target.value = '';
+  1192→          if (f) insertImageFile(f);
+  1193→        }}
+  1194→      />
+  1195→
+  1196→      {/* Status bar */}
+  1197→      <div className="flex shrink-0 items-center gap-3 border-t border-border bg-bg-2 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
+  1198→        <span>{slideCount} slide{slideCount === 1 ? '' : 's'}</span>
+  1199→        {activeSlide?.transition && activeSlide.transition !== 'none' && (
+  1200→          <span>transition: {activeSlide.transition}</span>
+  1201→        )}
+  1202→        {activeSlide?.animation && activeSlide.animation !== 'none' && (
+  1203→          <span>animation: {activeSlide.animation}</span>
+  1204→        )}
+  1205→        <span className="ml-auto hidden sm:inline">Click slide to edit · ←/→ navigate · Ctrl+Shift+N new · Ctrl+Shift+P present · Del deletes · Esc exits present</span>
+  1206→      </div>
+  1207→
+  1208→      {/* Slide-navigator context menu (right-click). Closes on any click
+  1209→          outside or on Escape. */}
+  1210→      {contextMenu && (
+  1211→        <ContextMenu
+  1212→          x={contextMenu.x}
+  1213→          y={contextMenu.y}
+  1214→          idx={contextMenu.idx}
+  1215→          canMoveLeft={contextMenu.idx > 0}
+  1216→          canMoveRight={contextMenu.idx < slides.length - 1}
+  1217→          canDelete={slides.length > 1}
+  1218→          onAdd={() => { addSlideInternal('blank'); setContextMenu(null); }}
+  1219→          onDuplicate={() => { duplicateSlide(contextMenu.idx); setContextMenu(null); }}
+  1220→          onDelete={() => { deleteSlide(contextMenu.idx); setContextMenu(null); }}
+  1221→          onMoveLeft={() => { moveSlide(contextMenu.idx, -1); setContextMenu(null); }}
+  1222→          onMoveRight={() => { moveSlide(contextMenu.idx, 1); setContextMenu(null); }}
+  1223→          onClose={() => setContextMenu(null)}
+  1224→        />
+  1225→      )}
+  1226→
+  1227→      {/* Present mode — fullscreen overlay showing only the current slide. */}
+  1228→      {presenting && (
+  1229→        <div
+  1230→          ref={presentRef}
+  1231→          className="fixed inset-0 z-[200] flex items-center justify-center bg-black"
+  1232→          // Click-to-advance: any click on the backdrop (not on a control)
+  1233→          // moves to the next slide, mirroring Keynote / PowerPoint.
+  1234→          onClick={(e) => {
+  1235→            if (e.target === e.currentTarget) {
+  1236→              if (current < slidesArr.length - 1) {
+  1237→                setCurrent(current + 1);
+  1238→                setPresentKey((k) => k + 1);
+  1239→              } else {
+  1240→                stopPresent();
+  1241→              }
+  1242→            }
+  1243→          }}
+  1244→        >
+  1245→          <div
+  1246→            key={presentKey}
+  1247→            // Transition + animation stack: the transition fires on the
+  1248→            // container (entrance), the animation fires on the inner content
+  1249→            // (reveal). Both re-trigger on navigation because presentKey
+  1250→            // remounts the wrapper.
+  1251→            className={`flex aspect-video h-full max-h-screen w-full max-w-[177vh] items-center justify-center overflow-hidden present-transition-${activeSlide?.transition ?? 'none'} present-animation-${activeSlide?.animation ?? 'none'}`}
+  1252→            style={activeBgStyle}
+  1253→          >
+  1254→            <div
+  1255→              className="h-full w-full overflow-auto p-[6%]"
+  1256→              style={{ color: activeSlide?.textColor || '#fff' }}
+  1257→              dangerouslySetInnerHTML={{ __html: activeSlide?.content ?? '' }}
+  1258→            />
+  1259→          </div>
+  1260→          {/* Slide counter + elapsed timer (top-left). The timer runs from
+  1261→              the moment `startPresent` set presentStartRef and ticks once
+  1262→              per second via the interval effect above. mm:ss format keeps
+  1263→              it compact in the corner. */}
+  1264→          <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 font-mono text-xs text-white sm:left-6 sm:top-6">
+  1265→            <span>{current + 1} / {slideCount}</span>
+  1266→            <span className="opacity-60">·</span>
+  1267→            <span title="Elapsed time">{formatElapsed(presentElapsed)}</span>
+  1268→          </div>
+  1269→          {/* Progress bar (bottom) — visual sense of how far through the deck. */}
+  1270→          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-1 bg-white/10">
+  1271→            <div
+  1272→              className="h-full bg-white transition-[width] duration-300"
+  1273→              style={{ width: `${slideCount > 0 ? ((current + 1) / slideCount) * 100 : 0}%` }}
+  1274→            />
+  1275→          </div>
+  1276→          {/* Presenter view overlay — speaker notes for the current slide in
+  1277→              a small panel at the bottom-left. Toggleable so it doesn't get
+  1278→              in the way of slides that don't use notes. */}
+  1279→          {presenterNotes && activeSlide?.notes && (
+  1280→            <div className="pointer-events-none absolute bottom-6 left-4 right-4 max-h-32 overflow-y-auto rounded-md bg-black/70 px-4 py-2 text-sm text-white/90 sm:left-6 sm:max-w-md">
+  1281→              <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-white/50">Notes · slide {current + 1}</div>
+  1282→              <div className="whitespace-pre-wrap">{activeSlide.notes}</div>
+  1283→            </div>
+  1284→          )}
+  1285→          {/* Present-mode controls — bottom-right. Always visible on mobile
+  1286→              (no hover state on touch); desktop shows them at 60% opacity
+  1287→              and brightens on hover. */}
+  1288→          <div className={`absolute bottom-4 right-4 flex items-center gap-2 transition-opacity ${isMobile ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>
+  1289→            {/* Presenter-view toggle — shows/hides the speaker-notes overlay. */}
+  1290→            <button
+  1291→              onClick={(e) => { e.stopPropagation(); setPresenterNotes((v) => !v); }}
+  1292→              className={`flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 ${presenterNotes ? 'bg-accent/80' : 'bg-white/10'}`}
+  1293→              aria-label="Toggle presenter notes"
+  1294→              aria-pressed={presenterNotes}
+  1295→              title="Toggle presenter notes"
+  1296→            >
+  1297→              <Eye size={18} />
+  1298→            </button>
+  1299→            <button
+  1300→              onClick={(e) => { e.stopPropagation(); goPrev(); setPresentKey((k) => k + 1); }}
+  1301→              disabled={current === 0}
+  1302→              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
+  1303→              aria-label="Previous slide"
+  1304→            >
+  1305→              <ChevronLeft size={20} />
+  1306→            </button>
+  1307→            <button
+  1308→              onClick={(e) => { e.stopPropagation(); if (current < slidesArr.length - 1) { setCurrent(current + 1); setPresentKey((k) => k + 1); } else { stopPresent(); } }}
+  1309→              disabled={current >= slideCount - 1}
+  1310→              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
+  1311→              aria-label="Next slide"
+  1312→            >
+  1313→              <ChevronRight size={20} />
+  1314→            </button>
+  1315→            <button
+  1316→              onClick={(e) => { e.stopPropagation(); stopPresent(); }}
+  1317→              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+  1318→              aria-label="Exit present mode"
+  1319→              title="Exit (Esc)"
+  1320→            >
+  1321→              <X size={20} />
+  1322→            </button>
+  1323→          </div>
+  1324→          {/* Inline transition + animation keyframes. Rendered once per
+  1325→              present session; the `key={presentKey}` on the slide container
+  1326→              re-triggers both on each navigation. */}
+  1327→          <style>{`
+  1328→            .present-transition-fade { animation: pFade 0.4s ease-out; }
+  1329→            .present-transition-slide { animation: pSlide 0.4s ease-out; }
+  1330→            .present-transition-zoom { animation: pZoom 0.4s ease-out; }
+  1331→            .present-animation-fade-in > div { animation: paFade 0.6s ease-out; }
+  1332→            .present-animation-slide-up > div { animation: paSlideUp 0.6s ease-out; }
+  1333→            .present-animation-zoom-in > div { animation: paZoom 0.6s ease-out; }
+  1334→            .present-animation-bounce > div { animation: paBounce 0.8s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  1335→            @keyframes pFade { from { opacity: 0; } to { opacity: 1; } }
+  1336→            @keyframes pSlide { from { transform: translateX(8%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  1337→            @keyframes pZoom { from { transform: scale(0.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  1338→            @keyframes paFade { from { opacity: 0; } to { opacity: 1; } }
+  1339→            @keyframes paSlideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  1340→            @keyframes paZoom { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  1341→            @keyframes paBounce { 0% { transform: translateY(-60px); opacity: 0; } 60% { transform: translateY(8px); opacity: 1; } 80% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
+  1342→          `}</style>
+  1343→        </div>
+  1344→      )}
+  1345→
+  1346→      {/* Inline CSS for the contenteditable placeholder (empty slide hint). */}
+  1347→      <style>{`
+  1348→        [data-placeholder]:empty::before {
+  1349→          content: attr(data-placeholder);
+  1350→          opacity: 0.4;
+  1351→          pointer-events: none;
+  1352→        }
+  1353→      `}</style>
+  1354→    </div>
+  1355→  );
+  1356→}
+  1357→
+  1358→/** Small icon-only toolbar button — keeps the toolbar compact. */
+  1359→function ToolbarButton({ onClick, title, Icon }: { onClick: () => void; title: string; Icon: LucideIcon }) {
+  1360→  return (
+  1361→    <button
+  1362→      type="button"
+  1363→      onClick={onClick}
+  1364→      title={title}
+  1365→      aria-label={title}
+  1366→      className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+  1367→    >
+  1368→      <Icon size={14} />
+  1369→    </button>
+  1370→  );
+  1371→}
+  1372→
+  1373→/** Slide-navigator thumbnail. Memoized so a deck-wide re-render (e.g.
+  1374→ *  bumping `current` to navigate, or a remote peer editing slide 3) doesn't
+  1375→ *  re-render EVERY thumbnail — only the slide whose content/background/
+  1376→ *  transition/animation changed, plus the old + new "active" rows.
+  1377→ *
+  1378→ *  Props are deliberately primitive (string/boolean/number + stable
+  1379→ *  callbacks) so the default shallow comparison catches every real change
+  1380→ *  and skips the rest. The `<li>` wrapper lives here so its
+  1381→ *  `data-slide-idx` + drag/context handlers ship with the memoized subtree. */
+  1382→const SlideThumbnail = memo(function SlideThumbnail({
+  1383→  index, id, content, background, transition, animation,
+  1384→  isActive, isDragOver, dragMoved,
+  1385→  onActivate, onDragStart, onContextMenu,
+  1386→}: {
+  1387→  index: number;
+  1388→  id: string;
+  1389→  content: string;
+  1390→  background: string;
+  1391→  transition: TransitionId;
+  1392→  animation: AnimationId;
+  1393→  isActive: boolean;
+  1394→  isDragOver: boolean;
+  1395→  /** Read from `dragStateRef.current?.moved` at render time so the click
+  1396→   *  handler can suppress the post-drag click without forcing a re-render
+  1397→   *  mid-drag (the ref mutates freely during the drag). */
+  1398→  dragMoved: boolean;
+  1399→  onActivate: (index: number) => void;
+  1400→  onDragStart: (index: number, e: React.PointerEvent) => void;
+  1401→  onContextMenu: (index: number, e: React.MouseEvent) => void;
+  1402→}) {
+  1403→  void id;
+  1404→  const bgStyle = background.startsWith('linear-gradient')
+  1405→    ? { backgroundImage: background }
+  1406→    : { backgroundColor: background };
+  1407→  return (
+  1408→    <li
+  1409→      data-slide-idx={index}
+  1410→      onPointerDown={(e) => onDragStart(index, e)}
+  1411→      onContextMenu={(e) => {
+  1412→        e.preventDefault();
+  1413→        onContextMenu(index, e);
+  1414→      }}
+  1415→    >
+  1416→      <button
+  1417→        type="button"
+  1418→        onClick={() => {
+  1419→          // Suppress the click that follows a drag — otherwise releasing a
+  1420→          // drag would also switch the active slide to the drop target.
+  1421→          if (dragMoved) return;
+  1422→          onActivate(index);
+  1423→        }}
+  1424→        className={`group mb-1.5 flex w-full flex-col gap-1 rounded-sm border p-1 text-left transition-colors ${
+  1425→          isActive ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40 hover:bg-bg-3'
+  1426→        } ${isDragOver ? 'ring-2 ring-accent/60' : ''}`}
+  1427→      >
+  1428→        <span className="flex items-center gap-1 text-[9px] font-mono text-text-dim">
+  1429→          <span
+  1430→            className="flex h-3 w-3 items-center justify-center rounded-sm text-[7px] font-bold text-text-mid"
+  1431→            style={bgStyle}
+  1432→          >
+  1433→            {index + 1}
+  1434→          </span>
+  1435→          {transition !== 'none' && (
+  1436→            <span className="opacity-60" title={`Transition: ${transition}`}>↻</span>
+  1437→          )}
+  1438→          {animation !== 'none' && (
+  1439→            <span className="opacity-60" title={`Animation: ${animation}`}>✨</span>
+  1440→          )}
+  1441→        </span>
+  1442→        <span
+  1443→          className="block aspect-video w-full overflow-hidden rounded-sm border border-border/50"
+  1444→          style={bgStyle}
+  1445→        >
+  1446→          <span
+  1447→            className="block h-full w-full origin-top-left scale-[0.18] text-[7px] text-text opacity-80"
+  1448→            dangerouslySetInnerHTML={{ __html: content || '<span style="opacity:0.4">Blank slide</span>' }}
+  1449→          />
+  1450→        </span>
+  1451→      </button>
+  1452→    </li>
+  1453→  );
+  1454→});
+  1455→
+  1456→/** Right-click context menu for a slide thumbnail. Renders as a fixed-position
+  1457→ *  popover at the click coords; closes on outside click / Escape. */
+  1458→function ContextMenu({
+  1459→  x, y, idx, canMoveLeft, canMoveRight, canDelete,
+  1460→  onAdd, onDuplicate, onDelete, onMoveLeft, onMoveRight, onClose,
+  1461→}: {
+  1462→  x: number; y: number; idx: number;
+  1463→  canMoveLeft: boolean; canMoveRight: boolean; canDelete: boolean;
+  1464→  onAdd: () => void; onDuplicate: () => void; onDelete: () => void;
+  1465→  onMoveLeft: () => void; onMoveRight: () => void; onClose: () => void;
+  1466→}) {
+  1467→  useEffect(() => {
+  1468→    const onDown = (e: MouseEvent) => {
+  1469→      // Don't close if the click is inside the menu (let the menu item's own
+  1470→      // onClick handle it).
+  1471→      const el = document.getElementById('slate-slide-ctx-menu');
+  1472→      if (el && el.contains(e.target as Node)) return;
+  1473→      onClose();
+  1474→    };
+  1475→    const onKey = (e: KeyboardEvent) => {
+  1476→      if (e.key === 'Escape') onClose();
+  1477→    };
+  1478→    window.addEventListener('mousedown', onDown);
+  1479→    window.addEventListener('keydown', onKey);
+  1480→    return () => {
+  1481→      window.removeEventListener('mousedown', onDown);
+  1482→      window.removeEventListener('keydown', onKey);
+  1483→    };
+  1484→  }, [onClose]);
+  1485→
+  1486→  // Clamp the menu to the viewport so it doesn't get cut off near the edges.
+  1487→  const left = Math.min(x, window.innerWidth - 200);
+  1488→  const top = Math.min(y, window.innerHeight - 200);
+  1489→
+  1490→  const item = (label: string, action: () => void, opts?: { disabled?: boolean; danger?: boolean }) => (
+  1491→    <button
+  1492→      type="button"
+  1493→      disabled={opts?.disabled}
+  1494→      onClick={action}
+  1495→      className={`flex w-full items-center rounded-sm px-2.5 py-1.5 text-left text-[12px] ${
+  1496→        opts?.danger ? 'text-danger' : 'text-text'
+  1497→      } hover:bg-bg-3 disabled:opacity-40 disabled:hover:bg-transparent`}
+  1498→    >
+  1499→      {label}
+  1500→    </button>
+  1501→  );
+  1502→
+  1503→  return (
+  1504→    <div
+  1505→      id="slate-slide-ctx-menu"
+  1506→      role="menu"
+  1507→      className="fixed z-[300] min-w-[180px] rounded-md border border-border bg-bg-2 p-1 shadow-xl"
+  1508→      style={{ left, top }}
+  1509→    >
+  1510→      <div className="px-2 pb-1 pt-0.5 text-[10px] font-mono uppercase tracking-wider text-text-dim">
+  1511→        Slide {idx + 1}
+  1512→      </div>
+  1513→      {item('Add slide after', onAdd)}
+  1514→      {item('Duplicate', onDuplicate)}
+  1515→      {item('Move left', onMoveLeft, { disabled: !canMoveLeft })}
+  1516→      {item('Move right', onMoveRight, { disabled: !canMoveRight })}
+  1517→      {item('Delete', onDelete, { disabled: !canDelete, danger: true })}
+  1518→    </div>
+  1519→  );
+  1520→}
+  1521→
+  1522→/** HTML-escape a plain string for safe interpolation into the exported file. */
+  1523→function escapeHtml(s: string): string {
+  1524→  return s
+  1525→    .replace(/&/g, '&amp;')
+  1526→    .replace(/</g, '&lt;')
+  1527→    .replace(/>/g, '&gt;')
+  1528→    .replace(/"/g, '&quot;');
+  1529→}
+  1530→
+  1531→/** Format a seconds count as `m:ss` (or `h:mm:ss` past the hour) for the
+  1532→ *  present-mode elapsed-time readout. Keeps the corner compact while still
+  1533→ *  scaling for long presentations. */
+  1534→function formatElapsed(totalSeconds: number): string {
+  1535→  const s = Math.max(0, Math.floor(totalSeconds));
+  1536→  const h = Math.floor(s / 3600);
+  1537→  const m = Math.floor((s % 3600) / 60);
+  1538→  const sec = s % 60;
+  1539→  const mm = String(m).padStart(2, '0');
+  1540→  const ss = String(sec).padStart(2, '0');
+  1541→  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+  1542→}
+  1543→
+  1544→export default PresentationEditor;
+  1545→

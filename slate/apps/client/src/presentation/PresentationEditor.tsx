@@ -36,13 +36,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
-  Plus, Trash2, Copy as CopyIcon, ChevronLeft, ChevronRight,
-  Play as PlayIcon, X, StickyNote as NotesIcon, FileCode2,
-  Bold, Italic, Underline as UnderlineIcon, Strikethrough,
-  Heading1, Heading2, Heading3, Palette, Eraser,
-  List as ListIcon, ListOrdered, AlignLeft, AlignCenter, AlignRight,
-  Square, Circle as CircleIcon, ArrowRight, Minus,
-  Image as ImageIcon, Eye,
+  Plus, ChevronLeft, ChevronRight,
+  Play as PlayIcon, X, StickyNote as NotesIcon,
+  Bold, Italic, Underline as UnderlineIcon,
+  Palette, List as ListIcon,
+  ChevronDown, Eye,
   type LucideIcon,
 } from 'lucide-react';
 import { useRoom } from '../sync/RoomContext';
@@ -51,6 +49,7 @@ import { useIsMobile } from '../workspace/useMediaQuery';
 import { toast } from '../ui/Toast';
 import {
   PRESENTATION_COMMAND_EVENT,
+  runPresentationCommand,
   type PresentationCommandDetail,
 } from './presentationBridge';
 
@@ -70,26 +69,16 @@ const BG_SWATCHES = [
   '#dcfce7',
 ];
 
-const TRANSITIONS = [
-  { id: 'none', label: 'None' },
-  { id: 'fade', label: 'Fade' },
-  { id: 'slide', label: 'Slide' },
-  { id: 'zoom', label: 'Zoom' },
-] as const;
-type TransitionId = (typeof TRANSITIONS)[number]['id'];
+/** Transition ids (none / fade / slide / zoom). The matching dropdown used
+ *  to live in the editor toolbar — moved to the dock panel's Transition
+ *  picker (which dispatches `setTransition` with one of these ids). */
+type TransitionId = 'none' | 'fade' | 'slide' | 'zoom';
 
-/** Slide ANIMATIONS — distinct from transitions: a transition fires when
+/** Animation ids — distinct from transitions: a transition fires when
  *  navigating BETWEEN slides (the new slide's entrance animation), while an
  *  animation is the in-slide content reveal. They stack (a slide can have
  *  transition=fade AND animation=slide-up). */
-const ANIMATIONS = [
-  { id: 'none', label: 'None' },
-  { id: 'fade-in', label: 'Fade In' },
-  { id: 'slide-up', label: 'Slide Up' },
-  { id: 'zoom-in', label: 'Zoom In' },
-  { id: 'bounce', label: 'Bounce' },
-] as const;
-type AnimationId = (typeof ANIMATIONS)[number]['id'];
+type AnimationId = 'none' | 'fade-in' | 'slide-up' | 'zoom-in' | 'bounce';
 
 function isAnimationId(v: unknown): v is AnimationId {
   return v === 'none' || v === 'fade-in' || v === 'slide-up' || v === 'zoom-in' || v === 'bounce';
@@ -227,6 +216,40 @@ export function PresentationEditor() {
   /** The present-mode fullscreen container. */
   const presentRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Shape selection / drag / resize ───────────────────────────────────
+  /** The currently-selected `.slate-shape` element (or null). The element
+   *  lives inside the contenteditable; we keep a direct DOM ref so the
+   *  pointermove handlers can mutate its inline `left/top/width/height`
+   *  styles without going through React. */
+  const [selectedShapeEl, setSelectedShapeEl] = useState<HTMLElement | null>(null);
+  /** The selected shape's current geometry (in px, relative to the slide
+   *  contenteditable). Tracked in React state so the selection overlay
+   *  (outline + 4 corner handles) can re-render as the shape is dragged
+   *  or resized. */
+  const [shapeSel, setShapeSel] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  /** Active shape drag (pointermove on the window). Null when not dragging. */
+  const shapeDragRef = useRef<{
+    el: HTMLElement;
+    startX: number;
+    startY: number;
+    origLeft: number;
+    origTop: number;
+  } | null>(null);
+  /** Active shape resize (one of 4 corners). Null when not resizing. */
+  const shapeResizeRef = useRef<{
+    el: HTMLElement;
+    corner: 'nw' | 'ne' | 'sw' | 'se';
+    startX: number;
+    startY: number;
+    origLeft: number;
+    origTop: number;
+    origWidth: number;
+    origHeight: number;
+  } | null>(null);
+  /** The slide container ref — the `relative`-positioned ancestor that
+   *  holds the contenteditable + the shape selection overlay. */
+  const slideContainerRef = useRef<HTMLDivElement | null>(null);
+
   // ── Yjs subscription ──────────────────────────────────────────────────
   useEffect(() => {
     let pending = false;
@@ -290,6 +313,10 @@ export function PresentationEditor() {
     if (!slide) return;
     if (el.innerHTML !== slide.content) {
       el.innerHTML = slide.content;
+      // The DOM was just replaced — any selected shape ref is now stale,
+      // so clear the selection (the shape elements no longer exist).
+      setSelectedShapeEl(null);
+      setShapeSel(null);
     }
   }, [slides, current]);
 
@@ -444,46 +471,38 @@ export function PresentationEditor() {
     slide.set('textColor', theme.color);
   }, [slidesArr, current]);
 
-  /** Insert a shape (rect / circle / arrow / line) at the cursor. Shapes are
-   *  absolutely positioned <div>s with inline styles, so they live inside the
-   *  same contenteditable HTML and round-trip through Yjs like any other
-   *  content. The default position is `top:20%; left:10%` — the user drags
-   *  them by editing the inline style (no separate shape layer needed). */
-  const insertShape = useCallback((shape: 'rect' | 'circle' | 'arrow' | 'line') => {
+  /** Insert a shape (rect or circle) as an absolutely-positioned div directly
+   *  appended to the contenteditable. The shape carries the `slate-shape`
+   *  class + a `data-shape` attribute + inline `position:absolute;
+   *  left/top/width/height` styles — so it syncs through Yjs as part of the
+   *  slide's HTML content and is draggable / resizable via the pointer
+   *  handlers below. `contenteditable="false"` keeps the caret out of the
+   *  shape so text editing doesn't bleed into it. */
+  const insertShape = useCallback((shape: 'rect' | 'circle') => {
     const el = editorRef.current;
     if (!el) return;
     el.focus();
-    let html = '';
-    // Place the shape inside a positioned wrapper so the absolute coords are
-    // relative to the slide (the contenteditable fills the slide).
-    const wrap = (inner: string) =>
-      `<div data-shape="${shape}" style="position:absolute;top:20%;left:10%;width:30%;height:30%;display:flex;align-items:center;justify-content:center;">${inner}</div>`;
-    switch (shape) {
-      case 'rect':
-        html = wrap('<div style="width:100%;height:100%;background:#3b82f6;border:2px solid #1d4ed8;border-radius:4px;"></div>');
-        break;
-      case 'circle':
-        html = wrap('<div style="width:100%;aspect-ratio:1/1;background:#10b981;border:2px solid #047857;border-radius:50%;"></div>');
-        break;
-      case 'arrow':
-        // A right-pointing arrow built from a horizontal bar + a triangular
-        // head via border-trick + transform. Inline styles only so it survives
-        // the HTML string round-trip.
-        html = wrap(
-          '<div style="display:flex;align-items:center;width:100%;height:24px;">' +
-          '<div style="flex:1;height:8px;background:#ef4444;"></div>' +
-          '<div style="width:0;height:0;border-top:14px solid transparent;border-bottom:14px solid transparent;border-left:18px solid #ef4444;"></div>' +
-          '</div>'
-        );
-        break;
-      case 'line':
-        html = wrap('<div style="width:100%;height:4px;background:#e5e7eb;border-radius:2px;"></div>');
-        break;
-    }
-    // execCommand('insertHTML') inserts at the caret; placing the wrapper
-    // before the caret keeps the cursor outside the shape so subsequent text
-    // doesn't end up inside the shape div.
-    document.execCommand('insertHTML', false, html);
+    const shapeEl = document.createElement('div');
+    shapeEl.className = 'slate-shape';
+    shapeEl.setAttribute('data-shape', shape);
+    shapeEl.setAttribute('contenteditable', 'false');
+    // Default size + position (in px relative to the slide contenteditable).
+    const width = 120;
+    const height = shape === 'circle' ? 120 : 80;
+    shapeEl.style.position = 'absolute';
+    shapeEl.style.left = '100px';
+    shapeEl.style.top = '100px';
+    shapeEl.style.width = `${width}px`;
+    shapeEl.style.height = `${height}px`;
+    shapeEl.style.background = '#7c6aff';
+    shapeEl.style.borderRadius = shape === 'circle' ? '50%' : '8px';
+    shapeEl.style.zIndex = '10';
+    shapeEl.style.cursor = 'move';
+    el.appendChild(shapeEl);
+    // Select the freshly-inserted shape so the user can drag/resize it
+    // immediately.
+    setSelectedShapeEl(shapeEl);
+    setShapeSel({ left: 100, top: 100, width, height });
     commitContent();
   }, [commitContent]);
 
@@ -559,6 +578,19 @@ export function PresentationEditor() {
     commitContent();
   }, [commitContent]);
 
+  /** Text-size preset names from the toolbar dropdown mapped to px values.
+   *  Wraps the selection in a span with the matching font-size. */
+  const setTextSize = useCallback((sizeId: string) => {
+    const map: Record<string, number> = {
+      small: 14,
+      medium: 18,
+      large: 24,
+      title: 40,
+    };
+    const px = map[sizeId];
+    if (px) setFontSize(px);
+  }, [setFontSize]);
+
   /** Clear the font size on the current selection: walk up from every text
    *  node inside the range and strip `font-size` from its parent's style. */
   const clearFontSize = useCallback(() => {
@@ -578,6 +610,159 @@ export function PresentationEditor() {
     }
     commitContent();
   }, [commitContent]);
+
+  // ── Shape selection / drag / resize ──────────────────────────────────
+
+  /** Read the shape's current geometry (left/top/width/height in px) from
+   *  its inline style. Returns zeros if anything is missing. */
+  const readShapeGeom = useCallback((el: HTMLElement) => {
+    return {
+      left: parseInt(el.style.left, 10) || 0,
+      top: parseInt(el.style.top, 10) || 0,
+      width: parseInt(el.style.width, 10) || 100,
+      height: parseInt(el.style.height, 10) || 80,
+    };
+  }, []);
+
+  /** Begin dragging a shape. Records the pointer start + the shape's original
+   *  left/top, then attaches window-level pointermove/up listeners that
+   *  update the shape's inline style and the `shapeSel` state (so the
+   *  selection overlay tracks the shape as it moves). On pointerup, the
+   *  new position is committed to Yjs via the debounced commitContent. */
+  const startShapeDrag = useCallback((shape: HTMLElement, e: React.PointerEvent | PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const geom = readShapeGeom(shape);
+    shapeDragRef.current = {
+      el: shape,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: geom.left,
+      origTop: geom.top,
+    };
+    const onMove = (ev: PointerEvent) => {
+      const d = shapeDragRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX;
+      const dy = ev.clientY - d.startY;
+      const newLeft = Math.max(0, d.origLeft + dx);
+      const newTop = Math.max(0, d.origTop + dy);
+      d.el.style.left = `${newLeft}px`;
+      d.el.style.top = `${newTop}px`;
+      setShapeSel((s) => (s ? { ...s, left: newLeft, top: newTop } : null));
+    };
+    const onUp = () => {
+      shapeDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      commitContent();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [readShapeGeom, commitContent]);
+
+  /** Begin resizing a shape from one of its 4 corners. The corner id tells
+   *  us which edges move: dragging the SE corner grows width+height; the
+   *  NW corner also moves left+top. The geometry is clamped so the shape
+   *  never collapses below 20px on either axis. */
+  const startShapeResize = useCallback((corner: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => {
+    const shape = selectedShapeEl;
+    if (!shape) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const geom = readShapeGeom(shape);
+    shapeResizeRef.current = {
+      el: shape,
+      corner,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: geom.left,
+      origTop: geom.top,
+      origWidth: geom.width,
+      origHeight: geom.height,
+    };
+    const onMove = (ev: PointerEvent) => {
+      const d = shapeResizeRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX;
+      const dy = ev.clientY - d.startY;
+      let { left, top, width, height } = {
+        left: d.origLeft,
+        top: d.origTop,
+        width: d.origWidth,
+        height: d.origHeight,
+      };
+      if (d.corner === 'se') {
+        width = Math.max(20, d.origWidth + dx);
+        height = Math.max(20, d.origHeight + dy);
+      } else if (d.corner === 'sw') {
+        width = Math.max(20, d.origWidth - dx);
+        height = Math.max(20, d.origHeight + dy);
+        left = d.origLeft + (d.origWidth - width);
+      } else if (d.corner === 'ne') {
+        width = Math.max(20, d.origWidth + dx);
+        height = Math.max(20, d.origHeight - dy);
+        top = d.origTop + (d.origHeight - height);
+      } else { // nw
+        width = Math.max(20, d.origWidth - dx);
+        height = Math.max(20, d.origHeight - dy);
+        left = d.origLeft + (d.origWidth - width);
+        top = d.origTop + (d.origHeight - height);
+      }
+      d.el.style.left = `${left}px`;
+      d.el.style.top = `${top}px`;
+      d.el.style.width = `${width}px`;
+      d.el.style.height = `${height}px`;
+      setShapeSel({ left, top, width, height });
+    };
+    const onUp = () => {
+      shapeResizeRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      commitContent();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [selectedShapeEl, readShapeGeom, commitContent]);
+
+  /** Delete the currently-selected shape from the DOM and commit the change
+   *  back to Yjs. Bound to the Delete/Backspace key when a shape is selected
+   *  (and the contenteditable doesn't have focus). */
+  const deleteSelectedShape = useCallback(() => {
+    const shape = selectedShapeEl;
+    if (!shape) return;
+    shape.remove();
+    setSelectedShapeEl(null);
+    setShapeSel(null);
+    commitContent();
+  }, [selectedShapeEl, commitContent]);
+
+  /** Pointer-down handler on the slide container. If the user pressed on a
+   *  `.slate-shape`, select it + start dragging. Otherwise, deselect the
+   *  current shape and let the contenteditable take focus (so the user can
+   *  edit text). */
+  const onSlidePointerDown = useCallback((e: React.PointerEvent) => {
+    const target = e.target as HTMLElement;
+    const shape = target.closest('.slate-shape') as HTMLElement | null;
+    if (shape && editorRef.current?.contains(shape)) {
+      // Clicked on a shape — select + start drag.
+      setSelectedShapeEl(shape);
+      setShapeSel(readShapeGeom(shape));
+      startShapeDrag(shape, e);
+      return;
+    }
+    // Clicked outside any shape — deselect + let the contenteditable focus.
+    if (selectedShapeEl) {
+      setSelectedShapeEl(null);
+      setShapeSel(null);
+    }
+    // Don't steal focus if the user clicked into the contenteditable itself
+    // (the browser will place the caret naturally). Only focus explicitly
+    // when they clicked the slide background (e.g. the padding area).
+    if (target === slideContainerRef.current || !editorRef.current?.contains(target)) {
+      editorRef.current?.focus();
+    }
+  }, [selectedShapeEl, readShapeGeom, startShapeDrag]);
 
   // ── Navigation ────────────────────────────────────────────────────────
 
@@ -684,6 +869,21 @@ export function PresentationEditor() {
         void startPresent();
         return;
       }
+      // Delete/Backspace — if a shape is selected, remove the shape;
+      // otherwise (when not editing text) delete the current slide.
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const target = e.target as HTMLElement | null;
+        const editing = target?.isContentEditable || target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+        if (selectedShapeEl && !editing) {
+          e.preventDefault();
+          deleteSelectedShape();
+          return;
+        }
+        if (editing) return;
+        e.preventDefault();
+        deleteSlide(current);
+        return;
+      }
       // ArrowLeft / ArrowRight / PageUp / PageDown — navigate slides, but
       // only when the user ISN'T editing text (so arrow keys in the
       // contenteditable still move the caret).
@@ -696,14 +896,11 @@ export function PresentationEditor() {
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         e.preventDefault();
         goPrev();
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        deleteSlide(current);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [presenting, current, addSlide, duplicateSlide, startPresent, goNext, goPrev, deleteSlide]);
+  }, [presenting, current, addSlide, duplicateSlide, startPresent, goNext, goPrev, deleteSlide, selectedShapeEl, deleteSelectedShape]);
 
   // ── Export deck as a single standalone HTML file ──────────────────────
   // Defined before the command listener because the listener calls it for
@@ -769,16 +966,20 @@ ${sections}
       const cmd = detail?.command;
       if (!cmd) return;
       switch (cmd) {
-        // Slide ops
-        case 'addSlideTemplate': {
+        // Slide ops (legacy + new short names)
+        case 'addSlideTemplate':
+        case 'addSlide': {
           const tpl = detail.value ?? 'blank';
           addSlideInternal(tpl);
           break;
         }
+        case 'newSlide': addSlideInternal('blank'); break;
         case 'duplicateSlide': duplicateSlide(current); break;
         case 'deleteSlide': deleteSlide(current); break;
-        case 'moveSlideLeft': moveSlide(current, -1); break;
-        case 'moveSlideRight': moveSlide(current, 1); break;
+        case 'moveSlideLeft':
+        case 'moveLeft': moveSlide(current, -1); break;
+        case 'moveSlideRight':
+        case 'moveRight': moveSlide(current, 1); break;
         // Text formatting (execCommand — focuses the contenteditable first)
         case 'bold': exec('bold'); break;
         case 'italic': exec('italic'); break;
@@ -834,9 +1035,15 @@ ${sections}
           if (px > 0) setFontSize(px);
           break;
         }
+        case 'textSize': {
+          // Toolbar dropdown sends a size id ('small'|'medium'|'large'|'title').
+          if (detail.value) setTextSize(detail.value);
+          break;
+        }
         case 'clearFontSize': clearFontSize(); break;
-        // Design
-        case 'setBackground': {
+        // Design — background, themes, transitions, animations
+        case 'setBackground':
+        case 'background': {
           const bg = detail.value;
           if (bg) setBackground(bg);
           break;
@@ -851,17 +1058,23 @@ ${sections}
           if (isAnimationId(a)) setAnimation(a);
           break;
         }
-        case 'applyTheme': {
+        case 'applyTheme':
+        case 'theme': {
           const themeId = detail.value;
           if (themeId) applyTheme(themeId);
           break;
         }
-        case 'insertShape': {
-          const shape = detail.value;
-          if (shape === 'rect' || shape === 'circle' || shape === 'arrow' || shape === 'line') insertShape(shape);
+        // Insert — shapes (rect/circle) + image. The new short command
+        // names (shapeRect / shapeCircle / image) map to the same handler.
+        case 'insertShape':
+        case 'shapeRect':
+        case 'shapeCircle': {
+          const shape = cmd === 'shapeRect' ? 'rect' : cmd === 'shapeCircle' ? 'circle' : detail.value;
+          if (shape === 'rect' || shape === 'circle') insertShape(shape);
           break;
         }
-        case 'insertImage': {
+        case 'insertImage':
+        case 'image': {
           imageInputRef.current?.click();
           break;
         }
@@ -873,7 +1086,7 @@ ${sections}
     };
     window.addEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
     return () => window.removeEventListener(PRESENTATION_COMMAND_EVENT, handler as EventListener);
-  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml, commitContent]);
+  }, [current, addSlideInternal, duplicateSlide, deleteSlide, moveSlide, exec, setFontSize, setTextSize, clearFontSize, setBackground, setTransition, setAnimation, applyTheme, insertShape, startPresent, exportHtml, commitContent]);
 
   // ── Drag-to-reorder in the slide navigator ────────────────────────────
   /** Refs read inside document-level pointer handlers (which don't re-bind
@@ -939,129 +1152,52 @@ ${sections}
 
   return (
     <div className="flex h-full w-full flex-col bg-bg text-text overflow-hidden">
-      {/* Toolbar — slide ops + inline formatting + background + navigation + present.
-          Mobile-tightened: keeps the essentials (Add / Duplicate / Delete /
-          Notes / Prev-Next / Export / Present) in the horizontally-scrolling
-          strip; the inline-formatting + background + transition + animation +
-          shapes + image + theme controls are desktop-only (the dock panel has
-          the full set). */}
+      {/* Toolbar — essential-only inline toolbar.
+          Bold / Italic / Underline · Text size · Text color · Bullet list ·
+          Add Slide (with template dropdown) · Background swatches ·
+          Present. The dock panel hosts the rest (duplicate/delete/move,
+          numbered list, alignment, shapes, image, themes, export, etc.). */}
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-bg-2 px-2 py-1.5 [&>*]:shrink-0">
-        <button onClick={addSlide} className="flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20" title="Add slide (Ctrl+Shift+N)">
-          <Plus size={12} /> Slide
-        </button>
-        <button onClick={() => duplicateSlide(current)} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3" title="Duplicate slide (Ctrl+Shift+D)">
-          <CopyIcon size={12} /> Duplicate
-        </button>
-        <button onClick={() => deleteSlide(current)} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3 hover:text-danger" title="Delete slide">
-          <Trash2 size={12} /> Delete
-        </button>
-        <button onClick={() => setNotesOpen((v) => !v)} className={`flex items-center gap-1 rounded border px-2 py-1 text-[11px] ${notesOpen ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Toggle speaker notes">
-          <NotesIcon size={12} /> Notes
-        </button>
+        {/* Inline text formatting — always available (mobile + desktop). */}
+        <ToolbarButton onClick={() => exec('bold')} title="Bold" Icon={Bold} />
+        <ToolbarButton onClick={() => exec('italic')} title="Italic" Icon={Italic} />
+        <ToolbarButton onClick={() => exec('underline')} title="Underline" Icon={UnderlineIcon} />
+        {/* Text size — small dropdown (Small / Medium / Large / Title). */}
+        <TextSizeDropdown />
+        {/* Text color — native color input behind a label. */}
+        <label title="Text color" aria-label="Text color" className="relative flex h-7 w-7 cursor-pointer items-center justify-center rounded text-text-mid hover:bg-bg-3">
+          <Palette size={14} />
+          <input
+            type="color"
+            aria-label="Text color"
+            className="absolute inset-0 cursor-pointer opacity-0"
+            onChange={(e) => exec('foreColor', e.target.value)}
+            defaultValue="#ffffff"
+          />
+        </label>
+        <ToolbarButton onClick={() => exec('insertUnorderedList')} title="Bullet list" Icon={ListIcon} />
         <div className="mx-1 h-5 w-px bg-border" />
-        {/* Inline formatting + Insert (shapes/image) + design (bg/transition/
-            animation/theme) — desktop only. Mobile users reach these from
-            the dock's PresentationToolsPanel (or the FAB on portrait phones). */}
-        {!isMobile && (
-          <>
-            <ToolbarButton onClick={() => exec('formatBlock', 'h1')} title="Heading 1" Icon={Heading1} />
-            <ToolbarButton onClick={() => exec('formatBlock', 'h2')} title="Heading 2" Icon={Heading2} />
-            <ToolbarButton onClick={() => exec('formatBlock', 'h3')} title="Heading 3" Icon={Heading3} />
-            <ToolbarButton onClick={() => exec('bold')} title="Bold" Icon={Bold} />
-            <ToolbarButton onClick={() => exec('italic')} title="Italic" Icon={Italic} />
-            <ToolbarButton onClick={() => exec('underline')} title="Underline" Icon={UnderlineIcon} />
-            <ToolbarButton onClick={() => exec('strikeThrough')} title="Strikethrough" Icon={Strikethrough} />
-            <ToolbarButton onClick={() => exec('insertUnorderedList')} title="Bullet list" Icon={ListIcon} />
-            <ToolbarButton onClick={() => exec('insertOrderedList')} title="Numbered list" Icon={ListOrdered} />
-            <ToolbarButton onClick={() => exec('justifyLeft')} title="Align left" Icon={AlignLeft} />
-            <ToolbarButton onClick={() => exec('justifyCenter')} title="Align center" Icon={AlignCenter} />
-            <ToolbarButton onClick={() => exec('justifyRight')} title="Align right" Icon={AlignRight} />
-            <ToolbarButton onClick={() => exec('removeFormat')} title="Clear formatting" Icon={Eraser} />
-            {/* Text color: native color input behind a label (same pattern as
-                DocToolsPanel / PresentationToolsPanel — kept inline so the
-                user has a quick color picker without opening the dock). */}
-            <label title="Text color" aria-label="Text color" className="relative flex h-7 w-7 cursor-pointer items-center justify-center rounded text-text-mid hover:bg-bg-3">
-              <Palette size={14} />
-              <input
-                type="color"
-                aria-label="Text color"
-                className="absolute inset-0 cursor-pointer opacity-0"
-                onChange={(e) => exec('foreColor', e.target.value)}
-                defaultValue="#ffffff"
-              />
-            </label>
-            <div className="mx-1 h-5 w-px bg-border" />
-            {/* Insert — shapes + image. Shapes are absolutely positioned divs
-                inside the contenteditable; images are <img> with a max-width. */}
-            <ToolbarButton onClick={() => insertShape('rect')} title="Insert rectangle" Icon={Square} />
-            <ToolbarButton onClick={() => insertShape('circle')} title="Insert circle" Icon={CircleIcon} />
-            <ToolbarButton onClick={() => insertShape('arrow')} title="Insert arrow" Icon={ArrowRight} />
-            <ToolbarButton onClick={() => insertShape('line')} title="Insert line" Icon={Minus} />
-            <ToolbarButton onClick={() => imageInputRef.current?.click()} title="Insert image" Icon={ImageIcon} />
-            <div className="mx-1 h-5 w-px bg-border" />
-          </>
-        )}
-        {/* Background swatches — desktop only (mobile uses the dock panel). */}
-        {!isMobile && (
-          <div className="flex items-center gap-0.5">
-            {BG_SWATCHES.map((bg) => (
-              <button
-                key={bg}
-                onClick={() => setBackground(bg)}
-                className={`h-5 w-5 rounded-full border ${activeBg === bg ? 'border-accent ring-1 ring-accent' : 'border-border'}`}
-                style={{ backgroundColor: bg }}
-                title={`Background: ${bg}`}
-                aria-label={`Set background ${bg}`}
-              />
-            ))}
-          </div>
-        )}
-        {/* Transition + Animation selectors + Theme quick-picker — desktop
-            only. Mobile uses the dock panel. */}
-        {!isMobile && (
-          <>
-            <div className="mx-1 h-5 w-px bg-border" />
-            <label className="flex items-center gap-1 text-[10px] text-text-dim">
-              Transition
-              <select
-                value={activeSlide?.transition ?? 'none'}
-                onChange={(e) => setTransition(e.target.value as TransitionId)}
-                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
-              >
-                {TRANSITIONS.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-1 text-[10px] text-text-dim">
-              Animation
-              <select
-                value={activeSlide?.animation ?? 'none'}
-                onChange={(e) => setAnimation(e.target.value as AnimationId)}
-                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
-              >
-                {ANIMATIONS.map((a) => (
-                  <option key={a.id} value={a.id}>{a.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-1 text-[10px] text-text-dim">
-              Theme
-              <select
-                value=""
-                onChange={(e) => { if (e.target.value) applyTheme(e.target.value); e.target.value = ''; }}
-                className="rounded border border-border bg-bg-3 px-1 py-0.5 text-[10px] text-text"
-                title="Apply a quick theme preset"
-              >
-                <option value="">Apply…</option>
-                {THEMES.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
+        {/* Add slide — template dropdown (Blank / Title / Title+Content /
+            Two Column). Clicking the dropdown chevron opens the menu; the
+            main button area adds a blank slide directly. */}
+        <AddSlideDropdown onPick={(tpl) => addSlideInternal(tpl)} />
         <div className="mx-1 h-5 w-px bg-border" />
+        {/* Background swatches — quick color picker. */}
+        <div className="flex items-center gap-0.5">
+          {BG_SWATCHES.map((bg) => (
+            <button
+              key={bg}
+              onClick={() => setBackground(bg)}
+              className={`h-5 w-5 rounded-full border ${activeBg === bg ? 'border-accent ring-1 ring-accent' : 'border-border'}`}
+              style={{ backgroundColor: bg }}
+              title={`Background: ${bg}`}
+              aria-label={`Set background ${bg}`}
+            />
+          ))}
+        </div>
+        <div className="mx-1 h-5 w-px bg-border" />
+        {/* Slide navigation + counter (kept for usability — the navigator
+            thumbnails also work, but in-line prev/next is faster). */}
         <button onClick={goPrev} disabled={current === 0} className="flex h-7 w-7 items-center justify-center rounded text-text-mid hover:bg-bg-3 disabled:opacity-30" title="Previous slide (←)">
           <ChevronLeft size={14} />
         </button>
@@ -1072,10 +1208,12 @@ ${sections}
           <ChevronRight size={14} />
         </button>
         <div className="mx-1 h-5 w-px bg-border" />
-        <button onClick={exportHtml} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text-mid hover:bg-bg-3" title="Export HTML">
-          <FileCode2 size={12} /> Export
+        {/* Notes toggle — kept here (not a "command"; it's a UI state). */}
+        <button onClick={() => setNotesOpen((v) => !v)} className={`flex items-center gap-1 rounded border px-2 py-1 text-[11px] ${notesOpen ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border text-text-mid hover:bg-bg-3'}`} title="Toggle speaker notes">
+          <NotesIcon size={12} /> Notes
         </button>
-        <button onClick={startPresent} className="flex items-center gap-1 rounded bg-accent px-2 py-1 text-[11px] text-white hover:opacity-80" title="Present (Ctrl+Shift+P)">
+        {/* Present — primary action, accent fill. */}
+        <button onClick={startPresent} className="ml-auto flex items-center gap-1 rounded bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white hover:opacity-90" title="Present (Ctrl+Shift+P)">
           <PlayIcon size={12} /> Present
         </button>
       </div>
@@ -1111,10 +1249,14 @@ ${sections}
         )}
 
         {/* Main editing surface — the current slide, centered, with a 16:9
-            aspect ratio. The contenteditable fills the slide; the user
-            clicks anywhere to edit. */}
+            aspect ratio. The contenteditable fills the slide; shapes (inserted
+            via the dock's Rectangle/Circle buttons) live as absolutely-
+            positioned `.slate-shape` divs inside the contenteditable and are
+            dragged / resized via the `onSlidePointerDown` handler below. */}
         <main className="flex min-w-0 flex-1 flex-col items-center justify-center overflow-auto bg-bg-3 p-2 sm:p-4">
           <div
+            ref={slideContainerRef}
+            onPointerDown={onSlidePointerDown}
             className="relative flex aspect-video w-full max-w-4xl items-center justify-center overflow-hidden rounded-lg border border-border shadow-xl"
             style={activeBgStyle}
           >
@@ -1145,11 +1287,23 @@ ${sections}
               }}
               // The active slide's textColor (set by a theme) overrides the
               // default text color via inline style. Empty string falls back
-              // to the inherited .text-text color.
-              className="h-full w-full overflow-auto p-[6%] outline-none"
+              // to the inherited .text-text color. `position: relative` makes
+              // the contenteditable the positioning context for `.slate-shape`
+              // children (so their absolute left/top are relative to the slide
+              // surface, not the viewport).
+              className="relative h-full w-full overflow-hidden p-[6%] outline-none"
               style={{ caretColor: 'currentColor', color: activeSlide?.textColor || 'currentColor' }}
-              data-placeholder="Click to add slide content…"
+              data-placeholder="Click to add text"
             />
+            {/* Shape selection overlay — outline + 4 corner resize handles,
+                rendered as a sibling of the contenteditable so it doesn't
+                pollute the committed HTML. Hidden in present mode. */}
+            {selectedShapeEl && shapeSel && !presenting && (
+              <ShapeSelectionOverlay
+                geom={shapeSel}
+                onResizeStart={startShapeResize}
+              />
+            )}
           </div>
 
           {/* Speaker notes — collapsible textarea below the slide. Smaller
@@ -1228,7 +1382,7 @@ ${sections}
       {presenting && (
         <div
           ref={presentRef}
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black"
+          className="present-mode fixed inset-0 z-[200] flex items-center justify-center bg-black"
           // Click-to-advance: any click on the backdrop (not on a control)
           // moves to the next slide, mirroring Keynote / PowerPoint.
           onClick={(e) => {
@@ -1247,12 +1401,16 @@ ${sections}
             // Transition + animation stack: the transition fires on the
             // container (entrance), the animation fires on the inner content
             // (reveal). Both re-trigger on navigation because presentKey
-            // remounts the wrapper.
-            className={`flex aspect-video h-full max-h-screen w-full max-w-[177vh] items-center justify-center overflow-hidden present-transition-${activeSlide?.transition ?? 'none'} present-animation-${activeSlide?.animation ?? 'none'}`}
+            // remounts the wrapper. `relative` makes the inner div the
+            // positioning context for any `.slate-shape` elements in the
+            // slide content (shapes are visible but not interactive — the
+            // `.present-mode .slate-shape { pointer-events: none }` CSS rule
+            // below disables their drag handles).
+            className={`relative flex aspect-video h-full max-h-screen w-full max-w-[177vh] items-center justify-center overflow-hidden present-transition-${activeSlide?.transition ?? 'none'} present-animation-${activeSlide?.animation ?? 'none'}`}
             style={activeBgStyle}
           >
             <div
-              className="h-full w-full overflow-auto p-[6%]"
+              className="relative h-full w-full overflow-hidden p-[6%]"
               style={{ color: activeSlide?.textColor || '#fff' }}
               dangerouslySetInnerHTML={{ __html: activeSlide?.content ?? '' }}
             />
@@ -1343,11 +1501,24 @@ ${sections}
         </div>
       )}
 
-      {/* Inline CSS for the contenteditable placeholder (empty slide hint). */}
+      {/* Inline CSS for the contenteditable placeholder (empty slide hint),
+          shape drag styling, and present-mode shape interactivity. */}
       <style>{`
         [data-placeholder]:empty::before {
           content: attr(data-placeholder);
           opacity: 0.4;
+          pointer-events: none;
+        }
+        /* Shapes sit above the text content (z-index is also set inline on
+           each .slate-shape; this is the catch-all for any shapes that
+           pre-date the inline z-index). */
+        .slate-shape {
+          box-sizing: border-box;
+          user-select: none;
+        }
+        /* In present mode, shapes render but don't capture pointer events
+           (so click-to-advance works through them). */
+        .present-mode .slate-shape {
           pointer-events: none;
         }
       `}</style>
@@ -1367,6 +1538,190 @@ function ToolbarButton({ onClick, title, Icon }: { onClick: () => void; title: s
     >
       <Icon size={14} />
     </button>
+  );
+}
+
+/** Text size dropdown — Small / Medium / Large / Title. Dispatches the
+ *  `textSize` command with the size id; PresentationEditor maps each id to
+ *  a px value (14/18/24/40) and wraps the selection in a span. */
+function TextSizeDropdown() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const SIZES: { id: string; label: string; px: number }[] = [
+    { id: 'small', label: 'Small', px: 14 },
+    { id: 'medium', label: 'Medium', px: 18 },
+    { id: 'large', label: 'Large', px: 24 },
+    { id: 'title', label: 'Title', px: 40 },
+  ];
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        title="Text size"
+        aria-label="Text size"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-7 items-center gap-1 rounded px-1.5 text-[11px] text-text-mid hover:bg-bg-3 hover:text-text"
+      >
+        A·A
+        <ChevronDown size={12} className="opacity-70" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="Text size"
+          className="absolute top-full left-0 z-30 mt-1 w-28 rounded-md border border-border bg-bg-2 p-1 shadow-lg"
+        >
+          {SIZES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                runPresentationCommand('textSize', s.id);
+                setOpen(false);
+              }}
+              className="block w-full rounded px-2 py-1.5 text-left text-text-mid hover:bg-bg-3 hover:text-text"
+              style={{ fontSize: `${Math.min(s.px, 16)}px` }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Add-slide dropdown — a button that opens a small menu of slide templates
+ *  (Blank / Title / Title+Content / Two Column). Picking one calls onPick
+ *  with the template id. Mirrors the dock's PresentationToolsPanel Add Slide
+ *  button but lives inline in the toolbar so it's reachable on mobile. */
+function AddSlideDropdown({ onPick }: { onPick: (templateId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const TEMPLATES: { id: string; label: string }[] = [
+    { id: 'blank', label: 'Blank' },
+    { id: 'title', label: 'Title' },
+    { id: 'title+content', label: 'Title + Content' },
+    { id: 'two-column', label: 'Two Column' },
+  ];
+  return (
+    <div ref={ref} className="relative flex items-center">
+      <button
+        type="button"
+        onClick={() => onPick('blank')}
+        title="Add slide (Blank — Ctrl+Shift+N)"
+        aria-label="Add slide"
+        className="flex items-center gap-1 rounded-l border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20"
+      >
+        <Plus size={12} /> Slide
+      </button>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Pick a slide template"
+        aria-label="Pick a slide template"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex h-7 items-center rounded-r border border-l-0 border-accent/40 bg-accent/10 px-1 text-accent hover:bg-accent/20"
+      >
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="Slide templates"
+          className="absolute top-full left-0 z-30 mt-1 w-40 rounded-md border border-border bg-bg-2 p-1 shadow-lg"
+        >
+          {TEMPLATES.map((tpl) => (
+            <button
+              key={tpl.id}
+              type="button"
+              role="menuitem"
+              onClick={() => { onPick(tpl.id); setOpen(false); }}
+              className="block w-full rounded px-2 py-1.5 text-left text-[11px] text-text-mid hover:bg-bg-3 hover:text-text"
+            >
+              {tpl.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Shape selection overlay — renders an accent outline + 4 corner resize
+ *  handles around the currently-selected `.slate-shape`. The overlay is a
+ *  sibling of the contenteditable (inside the slide container) so it
+ *  doesn't pollute the committed HTML. Position + size come from the
+ *  `geom` prop (synced to the shape's inline style via the parent's
+ *  `shapeSel` state, updated on every drag/resize tick). */
+function ShapeSelectionOverlay({
+  geom,
+  onResizeStart,
+}: {
+  geom: { left: number; top: number; width: number; height: number };
+  onResizeStart: (corner: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => void;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute"
+      style={{
+        left: geom.left,
+        top: geom.top,
+        width: geom.width,
+        height: geom.height,
+        outline: '2px solid var(--accent, #7c6aff)',
+        outlineOffset: '2px',
+      }}
+    >
+      {/* The outline box is `pointer-events: none` so it doesn't block
+          clicks on the underlying shape (which would re-trigger drag). The
+          4 corner handles are `pointer-events: auto` so they catch the
+          resize pointerdown. */}
+      <div
+        className="pointer-events-auto absolute -left-1.5 -top-1.5 cursor-nwse-resize"
+        onPointerDown={(e) => onResizeStart('nw', e)}
+        style={{ width: 10, height: 10, background: 'var(--accent, #7c6aff)', border: '2px solid #fff', borderRadius: 2 }}
+      />
+      <div
+        className="pointer-events-auto absolute -right-1.5 -top-1.5 cursor-nesw-resize"
+        onPointerDown={(e) => onResizeStart('ne', e)}
+        style={{ width: 10, height: 10, background: 'var(--accent, #7c6aff)', border: '2px solid #fff', borderRadius: 2 }}
+      />
+      <div
+        className="pointer-events-auto absolute -left-1.5 -bottom-1.5 cursor-nesw-resize"
+        onPointerDown={(e) => onResizeStart('sw', e)}
+        style={{ width: 10, height: 10, background: 'var(--accent, #7c6aff)', border: '2px solid #fff', borderRadius: 2 }}
+      />
+      <div
+        className="pointer-events-auto absolute -right-1.5 -bottom-1.5 cursor-nwse-resize"
+        onPointerDown={(e) => onResizeStart('se', e)}
+        style={{ width: 10, height: 10, background: 'var(--accent, #7c6aff)', border: '2px solid #fff', borderRadius: 2 }}
+      />
+    </div>
   );
 }
 

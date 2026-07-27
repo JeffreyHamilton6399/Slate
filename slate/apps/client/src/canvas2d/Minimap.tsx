@@ -29,21 +29,80 @@ const MM_H = 120;
 
 export function Minimap({ getSnapshot, viewport, size, onPan, paper }: MinimapProps) {
   const cvs = useRef<HTMLCanvasElement | null>(null);
+  // Latest props for the render loop. Read through a ref so panning — which
+  // hands down a fresh `viewport` object every render — doesn't tear down and
+  // restart the loop on every frame.
+  const propsRef = useRef({ getSnapshot, viewport, size, paper });
+  propsRef.current = { getSnapshot, viewport, size, paper };
 
   useEffect(() => {
     let raf = 0;
+    // The minimap used to redraw the whole board, from scratch, 60 times a
+    // second whether or not anything had moved — including reallocating the
+    // canvas backing store each frame. Nothing here changes unless the doc
+    // rebuilt or the camera moved, and the engine hands back new snapshot
+    // collections exactly when it rebuilds, so identity comparison is enough
+    // to detect "actually different" without hashing the board.
+    let last: {
+      layers: unknown;
+      shapes: unknown;
+      strokes: unknown;
+      zoom: number;
+      panX: number;
+      panY: number;
+      width: number;
+      height: number;
+      paper: string | undefined;
+      dpr: number;
+    } | null = null;
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const c = cvs.current;
       if (!c) return;
       const ctx = c.getContext('2d');
       if (!ctx) return;
-      const snap = getSnapshot();
-      c.width = MM_W * (window.devicePixelRatio || 1);
-      c.height = MM_H * (window.devicePixelRatio || 1);
-      c.style.width = `${MM_W}px`;
-      c.style.height = `${MM_H}px`;
-      ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+      const { getSnapshot: get, viewport, size, paper } = propsRef.current;
+      const snap = get();
+      const dpr = window.devicePixelRatio || 1;
+      const key = {
+        layers: snap?.layers,
+        shapes: snap?.shapesByLayer,
+        strokes: snap?.strokesByLayer,
+        zoom: viewport.zoom,
+        panX: viewport.panX,
+        panY: viewport.panY,
+        width: size.width,
+        height: size.height,
+        paper,
+        dpr,
+      };
+      if (
+        last &&
+        last.layers === key.layers &&
+        last.shapes === key.shapes &&
+        last.strokes === key.strokes &&
+        last.zoom === key.zoom &&
+        last.panX === key.panX &&
+        last.panY === key.panY &&
+        last.width === key.width &&
+        last.height === key.height &&
+        last.paper === key.paper &&
+        last.dpr === key.dpr
+      ) {
+        return;
+      }
+      last = key;
+      // Assigning width/height reallocates and clears the backing store, so
+      // only do it when the pixel size actually changed.
+      const pw = Math.round(MM_W * dpr);
+      const ph = Math.round(MM_H * dpr);
+      if (c.width !== pw || c.height !== ph) {
+        c.width = pw;
+        c.height = ph;
+        c.style.width = `${MM_W}px`;
+        c.style.height = `${MM_H}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = paper || '#0c0c0e';
       ctx.fillRect(0, 0, MM_W, MM_H);
       if (!snap) return;
@@ -106,11 +165,11 @@ export function Minimap({ getSnapshot, viewport, size, onPan, paper }: MinimapPr
           paper: paper || '#0c0c0e',
         },
         { zoom: k, panX: tx, panY: ty },
-        { width: MM_W, height: MM_H, dpr: window.devicePixelRatio || 1 },
+        { width: MM_W, height: MM_H, dpr },
       );
 
       // Viewport overlay.
-      ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.strokeStyle = '#7c6aff';
       ctx.lineWidth = 1;
       ctx.strokeRect(vx * k + tx, vy * k + ty, vw * k, vh * k);
@@ -120,7 +179,8 @@ export function Minimap({ getSnapshot, viewport, size, onPan, paper }: MinimapPr
     };
     loop();
     return () => cancelAnimationFrame(raf);
-  }, [getSnapshot, viewport, size, paper]);
+    // Everything the loop reads comes through propsRef, so it mounts once.
+  }, []);
 
   return (
     <div

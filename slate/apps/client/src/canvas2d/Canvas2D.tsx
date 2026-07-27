@@ -21,8 +21,8 @@ import { Timeline2D } from './Timeline2D';
 import { useCanvasStore } from './store';
 import { useLayersStore } from './store';
 import { useAppStore } from '../app/store';
-import { boardToScreen, screenToBoard } from './transform';
-import { pointInShape } from './geometry';
+import { boardToScreen, clamp, screenToBoard } from './transform';
+import { pointInShape, shapeBounds, strokeBounds } from './geometry';
 import { fileToImageShape, isImageFile } from './importImage';
 import { uploadDataUrl } from '../supabase/storage';
 import { makeId } from '../utils/id';
@@ -59,7 +59,6 @@ export function Canvas2D({ room }: Canvas2DProps) {
   const setViewport = useCanvasStore((s) => s.setViewport);
   const pan = useCanvasStore((s) => s.pan);
   const zoomAt = useCanvasStore((s) => s.zoomAt);
-  const fit = useCanvasStore((s) => s.fit);
   const setStroke = useCanvasStore((s) => s.setStroke);
   const setTool = useCanvasStore((s) => s.setTool);
   const activeLayerId = useLayersStore((s) => s.activeLayerId);
@@ -670,6 +669,67 @@ export function Canvas2D({ room }: Canvas2DProps) {
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoomAt, pan]);
 
+  // ── Framing ────────────────────────────────────────────────────────────────
+  /** Union bounds of the given ids, or of everything when `ids` is omitted.
+   *  Hidden layers are excluded — you can't frame what you can't see. */
+  const contentBounds = useCallback((ids?: Set<string>): Rect | null => {
+    const snap = engineRef.current?.snapshot();
+    if (!snap) return null;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    const add = (b: Rect) => {
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x + b.w > maxX) maxX = b.x + b.w;
+      if (b.y + b.h > maxY) maxY = b.y + b.h;
+    };
+    for (const layer of snap.layers) {
+      if (!layer.visible) continue;
+      for (const sh of snap.shapesByLayer.get(layer.id) ?? []) {
+        if (!ids || ids.has(sh.id)) add(shapeBounds(sh));
+      }
+      for (const st of snap.strokesByLayer.get(layer.id) ?? []) {
+        if (!ids || ids.has(st.id)) add(strokeBounds(st));
+      }
+    }
+    if (!isFinite(minX)) return null;
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  }, []);
+
+  /** Center and zoom the viewport on a board rect. */
+  const frameRect = useCallback(
+    (bounds: Rect | null) => {
+      const c = canvasRef.current;
+      if (!c) return;
+      const r = c.getBoundingClientRect();
+      if (!bounds) {
+        // Nothing to frame — fall back to the home view.
+        setViewport(1, 0, 0);
+        return;
+      }
+      const pad = 64;
+      const w = Math.max(bounds.w, 1);
+      const h = Math.max(bounds.h, 1);
+      // Capped at 4x so framing a single dot doesn't slam the view to max zoom.
+      const zoom = clamp(Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h), 0.05, 4);
+      setViewport(
+        zoom,
+        r.width / 2 - (bounds.x + bounds.w / 2) * zoom,
+        r.height / 2 - (bounds.y + bounds.h / 2) * zoom,
+      );
+    },
+    [setViewport],
+  );
+
+  /** Frame the selection, or the whole board when nothing is selected. */
+  const frameSelection = useCallback(() => {
+    frameRect(contentBounds(selection.size > 0 ? selection : undefined));
+  }, [frameRect, contentBounds, selection]);
+
+  const frameAll = useCallback(() => frameRect(contentBounds()), [frameRect, contentBounds]);
+
   // Keyboard shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -689,7 +749,35 @@ export function Canvas2D({ room }: Canvas2DProps) {
       }
       if (ctrl && e.key === '0') {
         e.preventDefault();
-        fit();
+        frameAll();
+        return;
+      }
+      // Arrow keys nudge the selection: 1 board unit, 10 with Shift. The whole
+      // nudge is one transaction, so it's one undo step however much is moved.
+      if (
+        !ctrl &&
+        selection.size > 0 &&
+        (e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight' ||
+          e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown')
+      ) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+        engineRef.current?.translateIds(selection, dx, dy);
+        return;
+      }
+      // Matches the 3D viewport: F frames the selection, Home frames the board.
+      if (!ctrl && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        frameSelection();
+        return;
+      }
+      if (!ctrl && e.key === 'Home') {
+        e.preventDefault();
+        frameAll();
         return;
       }
       if (e.key === '+' || e.key === '=') {
@@ -838,7 +926,7 @@ export function Canvas2D({ room }: Canvas2DProps) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onUp);
     };
-  }, [room, setTool, selection, fit, zoomAt]);
+  }, [room, setTool, selection, frameAll, frameSelection, zoomAt]);
 
   // Awareness cursor publication: pointermove stashes the latest position;
   // a 20 Hz interval publishes when it changed. The trailing position is
@@ -945,7 +1033,7 @@ export function Canvas2D({ room }: Canvas2DProps) {
         onClear={onClear}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
-        onFit={fit}
+        onFit={frameAll}
         onInsertImage={() => imagePickerRef.current?.click()}
         zoomLabel={`${Math.round(zoom * 100)}%`}
       />

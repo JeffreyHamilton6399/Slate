@@ -12,7 +12,7 @@
  *   rendered  — PBR materials lit only by the scene's own lights
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Html } from '@react-three/drei';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
@@ -60,7 +60,13 @@ interface SceneObjectsProps {
   showMeasurements?: boolean;
 }
 
-export function SceneObjects({
+/**
+ * Memoized: rebuilding this tree means re-deriving every object's geometry
+ * props, and the parent viewport re-renders for plenty of reasons that have
+ * nothing to do with the scene (peer awareness, modifier keys, HUD state). All
+ * of the props below are referentially stable across those renders.
+ */
+export const SceneObjects = memo(function SceneObjects({
   objects,
   meshes,
   materials,
@@ -144,7 +150,7 @@ export function SceneObjects({
       })}
     </>
   );
-}
+});
 
 const EMPTY: number[] = [];
 

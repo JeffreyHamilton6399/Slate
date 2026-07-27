@@ -185,6 +185,11 @@ export function Viewport3D({ room }: Viewport3DProps) {
     }
     return m.size > 0 ? m : null;
   }, [animTime, snapshot, modalTool, gizmoDragging, selection]);
+  // Selection as a Set for SceneObjects' per-object lookups. Memoized because
+  // building it inline made a fresh object every render, which defeated the
+  // memo on SceneObjects and rebuilt the whole 3D object tree whenever anything
+  // in this component changed — awareness ticks, the shift key, HUD state.
+  const selectionSet = useMemo(() => new Set(selection), [selection]);
   const viewingCameraId = useScene3DStore((s) => s.viewingCameraId);
   const editorMode = useScene3DStore((s) => s.editorMode);
   const editSelection = useScene3DStore((s) => s.editSelection);
@@ -1116,7 +1121,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
           objects={snapshot.objects}
           meshes={snapshot.meshes}
           materials={snapshot.materials}
-          selection={new Set(selection)}
+          selection={selectionSet}
           onObjectPick={onObjectPick}
           onElementPick={onElementPick}
           selectedFaces={editSelection.faces}

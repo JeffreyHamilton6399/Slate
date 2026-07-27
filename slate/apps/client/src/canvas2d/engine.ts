@@ -59,6 +59,23 @@ export class CanvasEngine {
   private cachedLayers: Layer[] = [];
   private cachedShapesByLayer = new Map<string, Shape[]>();
   private cachedStrokesByLayer = new Map<string, Stroke[]>();
+  /**
+   * Parsed-item cache keyed by the backing Y.Map.
+   *
+   * A rebuild used to zod-parse every shape and stroke on the board, on every
+   * doc change — so dragging one shape cost a full-board validation pass per
+   * pointer move. These caches make a rebuild only parse what actually changed;
+   * the observer below evicts the maps a change touched. `null` is cached too,
+   * so items that fail validation aren't re-parsed on every frame either.
+   *
+   * The identity guarantee this gives is load-bearing beyond the parse saving:
+   * an unchanged shape/stroke keeps the *same object* across rebuilds, which is
+   * what lets the renderer memoize tessellated stroke outlines against it.
+   */
+  private parsedShapes = new WeakMap<Y.Map<unknown>, Shape | null>();
+  private parsedStrokes = new WeakMap<Y.Map<unknown>, Stroke | null>();
+  /** Set when a doc change arrived; the RAF loop rebuilds at most once a frame. */
+  private rebuildPending = true;
 
   constructor(opts: EngineOpts) {
     this.opts = opts;
@@ -74,8 +91,32 @@ export class CanvasEngine {
     this.loop();
   }
 
+  /** Mark the snapshot stale; the RAF loop (or a snapshot() read) rebuilds it. */
+  private scheduleRebuild = (): void => {
+    this.rebuildPending = true;
+    this.markDirty();
+  };
+
+  /**
+   * Evict the parse cache for every item a change touched, then schedule the
+   * rebuild. Updating an existing item fires an event whose target is that
+   * item's own map; replacing one (commitShape) installs a brand-new Y.Map that
+   * was never cached, so it parses fresh either way.
+   */
+  private onItemsChanged = (events: Y.YEvent<Y.AbstractType<unknown>>[]): void => {
+    for (const ev of events) {
+      const target = ev.target;
+      if (target instanceof Y.Map) {
+        this.parsedShapes.delete(target);
+        this.parsedStrokes.delete(target);
+      }
+    }
+    this.scheduleRebuild();
+  };
+
   /** Re-read Yjs state and rebuild the plain-JS snapshot. */
   rebuild = (): void => {
+    this.rebuildPending = false;
     const { slate } = this.opts.room;
     const layers = readLayers(slate.layers());
     const shapesByLayer = new Map<string, Shape[]>();
@@ -87,7 +128,11 @@ export class CanvasEngine {
     });
     const fallbackLayer = layers[layers.length - 1]?.id;
     slate.shapes().forEach((m) => {
-      const sh = readShape(m);
+      let sh = this.parsedShapes.get(m);
+      if (sh === undefined) {
+        sh = readShape(m);
+        this.parsedShapes.set(m, sh);
+      }
       if (!sh) return;
       const lid = shapesByLayer.has(sh.layerId)
         ? sh.layerId
@@ -96,7 +141,11 @@ export class CanvasEngine {
       (shapesByLayer.get(lid) ?? []).push(sh);
     });
     slate.strokes().forEach((m) => {
-      const st = readStroke(m);
+      let st = this.parsedStrokes.get(m);
+      if (st === undefined) {
+        st = readStroke(m);
+        this.parsedStrokes.set(m, st);
+      }
       if (!st) return;
       const lid = strokesByLayer.has(st.layerId)
         ? st.layerId
@@ -188,6 +237,38 @@ export class CanvasEngine {
     });
   }
 
+  /** Move shapes/strokes by a board-space delta in one transaction, so a nudge
+   *  is a single undo step and a single update on the wire. */
+  translateIds(ids: Iterable<string>, dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
+    const room = this.opts.room;
+    room.slate.doc.transact(() => {
+      for (const id of ids) {
+        const sm = room.slate.shapes().get(id);
+        if (sm) {
+          const x = sm.get('x');
+          const y = sm.get('y');
+          if (typeof x === 'number' && typeof y === 'number') {
+            sm.set('x', x + dx);
+            sm.set('y', y + dy);
+          }
+          continue;
+        }
+        const st = room.slate.strokes().get(id);
+        if (!st) continue;
+        const pts = st.get('points');
+        if (!Array.isArray(pts)) continue;
+        // Points are a flat [x, y, pressure, …] triple stream.
+        const next = pts.slice() as number[];
+        for (let i = 0; i < next.length; i += 3) {
+          next[i] = (next[i] ?? 0) + dx;
+          next[i + 1] = (next[i + 1] ?? 0) + dy;
+        }
+        st.set('points', next);
+      }
+    });
+  }
+
   deleteIds(ids: Iterable<string>): void {
     const room = this.opts.room;
     room.slate.doc.transact(() => {
@@ -264,6 +345,9 @@ export class CanvasEngine {
     shapesByLayer: Map<string, Shape[]>;
     strokesByLayer: Map<string, Stroke[]>;
   } {
+    // Rebuilds are deferred to the frame loop, but tools hit-test against the
+    // snapshot synchronously — flush first so a read never sees stale state.
+    if (this.rebuildPending) this.rebuild();
     return {
       layers: this.cachedLayers,
       shapesByLayer: this.cachedShapesByLayer,
@@ -278,15 +362,15 @@ export class CanvasEngine {
     const strokes = slate.strokes();
     const layers = slate.layers();
     const meta = slate.meta();
-    shapes.observeDeep(this.rebuild);
-    strokes.observeDeep(this.rebuild);
-    layers.observeDeep(this.rebuild);
-    meta.observe(this.rebuild);
+    shapes.observeDeep(this.onItemsChanged);
+    strokes.observeDeep(this.onItemsChanged);
+    layers.observeDeep(this.scheduleRebuild);
+    meta.observe(this.scheduleRebuild);
     this.offShapes.add(onImageReady(() => this.markDirty()));
-    this.offShapes.add(() => shapes.unobserveDeep(this.rebuild));
-    this.offStrokes.add(() => strokes.unobserveDeep(this.rebuild));
-    this.offLayers.add(() => layers.unobserveDeep(this.rebuild));
-    this.offLayers.add(() => meta.unobserve(this.rebuild));
+    this.offShapes.add(() => shapes.unobserveDeep(this.onItemsChanged));
+    this.offStrokes.add(() => strokes.unobserveDeep(this.onItemsChanged));
+    this.offLayers.add(() => layers.unobserveDeep(this.scheduleRebuild));
+    this.offLayers.add(() => meta.unobserve(this.scheduleRebuild));
     this.rebuild();
   }
 
@@ -305,6 +389,10 @@ export class CanvasEngine {
     const animPreview = this.opts.getAnimPreview();
     // Always-paint when there is a live preview OR animation is playing/scrubbing.
     if (!this.dirty && !live.stroke && !live.shape && !animPreview) return;
+    // A burst of doc changes (remote sync, a multi-shape edit) coalesces into
+    // one rebuild here instead of one per event. Runs before clearing `dirty`
+    // because rebuild() marks dirty itself.
+    if (this.rebuildPending) this.rebuild();
     this.dirty = false;
     const transform = this.opts.getTransform();
     const size = this.opts.getViewport();

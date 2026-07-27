@@ -16,7 +16,7 @@
 import { getStroke } from 'perfect-freehand';
 import type { Layer, Shape, Stroke, Transform2D } from '@slate/sync-protocol';
 import type { Rect, ViewportTransform } from './types';
-import { shapeBounds, smoothPath, strokeBounds } from './geometry';
+import { rectIntersects, rotatedShapeAABB, shapeBounds, smoothPath, strokeBounds } from './geometry';
 import { sampleAnim2D } from './animation';
 
 export interface SceneFrame {
@@ -91,6 +91,45 @@ function getImage(src: string): HTMLImageElement | null {
   return img.complete && img.naturalWidth > 0 ? img : null;
 }
 
+// ── Geometry caches ──────────────────────────────────────────────────────────
+// Turning a stroke into pixels means tessellating it first: perfect-freehand
+// for the brush kinds, a Catmull-Rom subdivision for highlighter/eraser. That
+// was re-run for every stroke on every frame, so a board with a few hundred
+// strokes paid to re-tessellate the entire board 60 times a second just to sit
+// still — and the cost grew with the board, not with what you were doing.
+//
+// The engine now hands back the *same* Stroke object for anything that hasn't
+// changed, which makes a WeakMap keyed on the stroke both exact and self-
+// managing: an edited stroke is a new object (so it misses and re-tessellates),
+// a deleted one is garbage collected along with its path. In-progress strokes
+// are re-drafted each pointer move, so they always miss — which is correct.
+const strokePathCache = new WeakMap<Stroke, Path2D>();
+const strokeBoundsCache = new WeakMap<Stroke, Rect>();
+
+/** `strokeBounds` walks every point; cache it per stroke for cull/overlay use. */
+function cachedStrokeBounds(s: Stroke): Rect {
+  let b = strokeBoundsCache.get(s);
+  if (!b) {
+    b = strokeBounds(s);
+    strokeBoundsCache.set(s, b);
+  }
+  return b;
+}
+
+/**
+ * Board-space rect currently on screen, padded by one viewport on each side.
+ *
+ * The padding is deliberate slack: it keeps culling from ever being visible at
+ * the edges (wide brushes and text whose stored bounds under-measure the glyphs
+ * both extend past their nominal box) while still bounding the work by what's
+ * near the view rather than by the size of the board.
+ */
+function visibleBoardRect(t: ViewportTransform, size: ViewportSize): Rect {
+  const w = size.width / t.zoom;
+  const h = size.height / t.zoom;
+  return { x: -t.panX / t.zoom - w, y: -t.panY / t.zoom - h, w: w * 3, h: h * 3 };
+}
+
 /** Regular polygon / star outline path centered in bounds. */
 function tracePolygon(
   ctx: CanvasRenderingContext2D,
@@ -143,6 +182,20 @@ export function renderScene(
 
   const celMode = !!scene.animMode;
   const curFrame = scene.animFrame ?? 0;
+  // Anything wholly outside this rect can't affect the frame. Keyframed shapes
+  // are exempt: their drawn position comes from the sampled transform, not from
+  // their stored bounds, so culling on those bounds could drop a visible shape.
+  const view = visibleBoardRect(transform, size);
+  const shapeOnScreen = (s: Shape): boolean => {
+    if (s.anim?.length) return true;
+    const b = rotatedShapeAABB(s);
+    const pad = s.strokeWidth;
+    return rectIntersects(
+      { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 },
+      view,
+    );
+  };
+  const strokeOnScreen = (s: Stroke): boolean => rectIntersects(cachedStrokeBounds(s), view);
   for (const layer of scene.layers) {
     if (!layer.visible) continue;
     ctx.globalAlpha = layer.opacity;
@@ -163,10 +216,10 @@ export function renderScene(
         const drawGhost = (f: number, tint: string, alpha: number) => {
           ctx.globalAlpha = layer.opacity * alpha;
           for (const sh of shapes) {
-            if (sh.frame === f) { ctx.save(); drawShapeTint(ctx, sh, tint); ctx.restore(); }
+            if (sh.frame === f && shapeOnScreen(sh)) { ctx.save(); drawShapeTint(ctx, sh, tint); ctx.restore(); }
           }
           for (const st of strokes) {
-            if (st.frame === f) { ctx.save(); drawStrokeTint(ctx, st, tint); ctx.restore(); }
+            if (st.frame === f && strokeOnScreen(st)) { ctx.save(); drawStrokeTint(ctx, st, tint); ctx.restore(); }
           }
           ctx.globalAlpha = layer.opacity;
         };
@@ -183,11 +236,11 @@ export function renderScene(
           // frame timeline became the only mode keep playing.
           const override = (sh.anim?.length ?? 0) > 0 ? sampleAnim2D(sh.anim, animTime) : null;
           if (override) drawShapeWithAnim(ctx, sh, override);
-          else drawShape(ctx, sh);
+          else if (shapeOnScreen(sh)) drawShape(ctx, sh);
         }
       }
       for (const st of strokes) {
-        if (st.frame == null || st.frame === curFrame) drawStroke(ctx, st);
+        if ((st.frame == null || st.frame === curFrame) && strokeOnScreen(st)) drawStroke(ctx, st);
       }
       ctx.globalAlpha = 1;
       continue;
@@ -222,11 +275,13 @@ export function renderScene(
       const override = (animTime > 0 || (sh.anim?.length ?? 0) > 0) ? sampleAnim2D(sh.anim, animTime) : null;
       if (override) {
         drawShapeWithAnim(ctx, sh, override);
-      } else {
+      } else if (shapeOnScreen(sh)) {
         drawShape(ctx, sh);
       }
     }
-    for (const st of strokes) drawStroke(ctx, st);
+    for (const st of strokes) {
+      if (strokeOnScreen(st)) drawStroke(ctx, st);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -242,7 +297,7 @@ export function renderScene(
   const visibleOnFrame = (item: { frame?: number }) =>
     !celMode || item.frame == null || item.frame === curFrame;
   for (const layer of scene.layers) {
-    if (!layer.visible) continue;
+    if (!layer.visible || scene.selection.size === 0) continue;
     for (const sh of scene.shapesByLayer.get(layer.id) ?? []) {
       if (scene.selection.has(sh.id) && visibleOnFrame(sh)) {
         const b = shapeBounds(sh);
@@ -260,7 +315,7 @@ export function renderScene(
     }
     for (const st of scene.strokesByLayer.get(layer.id) ?? []) {
       if (scene.selection.has(st.id) && visibleOnFrame(st)) {
-        const b = strokeBounds(st);
+        const b = cachedStrokeBounds(st);
         ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
       }
     }
@@ -365,9 +420,10 @@ function drawShapeTint(ctx: CanvasRenderingContext2D, s: Shape, tint: string): v
   drawShape(ctx, { ...s, stroke: tint, fill: s.fill ? tint : null });
 }
 
-/** Stroke equivalent of drawShapeTint. */
+/** Stroke equivalent of drawShapeTint. Passes the tint as an override rather
+ *  than spreading a copy, so the ghost still hits the tessellation cache. */
 function drawStrokeTint(ctx: CanvasRenderingContext2D, s: Stroke, tint: string): void {
-  drawStroke(ctx, { ...s, color: tint });
+  drawStroke(ctx, s, tint);
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {
@@ -581,11 +637,24 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {
   if (s.rotation) ctx.restore();
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
-  if (s.points.length < 3) return;
-  // Brush variants that use the perfect-freehand outline path (pen, pencil,
-  // marker, calligraphy, airbrush) — each tuned for a different feel.
-  if (s.kind === 'pen' || s.kind === 'pencil' || s.kind === 'marker' || s.kind === 'calligraphy' || s.kind === 'airbrush') {
+/** True for the brush kinds drawn as a filled perfect-freehand outline. */
+function isBrushKind(kind: Stroke['kind']): boolean {
+  return (
+    kind === 'pen' ||
+    kind === 'pencil' ||
+    kind === 'marker' ||
+    kind === 'calligraphy' ||
+    kind === 'airbrush'
+  );
+}
+
+/**
+ * Tessellate a stroke into a reusable Path2D — the expensive half of drawing
+ * one. Cached per stroke object; see `strokePathCache`.
+ */
+function buildStrokePath(s: Stroke): Path2D {
+  const path = new Path2D();
+  if (isBrushKind(s.kind)) {
     const points: [number, number, number][] = [];
     for (let i = 0; i < s.points.length; i += 3) {
       points.push([s.points[i] ?? 0, s.points[i + 1] ?? 0, s.points[i + 2] ?? 0.5]);
@@ -609,12 +678,9 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
       simulatePressure: s.kind === 'calligraphy',
       last: true,
     });
-    if (!outline.length) return;
-    ctx.fillStyle = s.color;
-    ctx.globalAlpha *= s.opacity;
-    ctx.beginPath();
+    if (!outline.length) return path;
     const start = outline[0]!;
-    ctx.moveTo(start[0]!, start[1]!);
+    path.moveTo(start[0]!, start[1]!);
     // Use quadratic curves through the outline midpoints for a smooth fill
     // instead of straight lineTo segments (which read as connected circles
     // when the brush is large or sampling is sparse).
@@ -623,39 +689,62 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
       const next = outline[i + 1]!;
       const mx = (p[0]! + next[0]!) / 2;
       const my = (p[1]! + next[1]!) / 2;
-      ctx.quadraticCurveTo(p[0]!, p[1]!, mx, my);
+      path.quadraticCurveTo(p[0]!, p[1]!, mx, my);
     }
     const last = outline[outline.length - 1]!;
-    ctx.lineTo(last[0]!, last[1]!);
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha /= s.opacity || 1;
-    return;
+    path.lineTo(last[0]!, last[1]!);
+    path.closePath();
+    return path;
   }
 
-  // Highlighter / eraser: polyline.
+  // Highlighter / eraser: smoothed polyline.
   const polyline: number[] = [];
   for (let i = 0; i < s.points.length; i += 3) {
     polyline.push(s.points[i] ?? 0, s.points[i + 1] ?? 0);
   }
   const smoothed = smoothPath(polyline);
+  path.moveTo(smoothed[0] ?? 0, smoothed[1] ?? 0);
+  for (let i = 2; i < smoothed.length; i += 2) {
+    path.lineTo(smoothed[i] ?? 0, smoothed[i + 1] ?? 0);
+  }
+  return path;
+}
+
+function strokePath(s: Stroke): Path2D {
+  let path = strokePathCache.get(s);
+  if (!path) {
+    path = buildStrokePath(s);
+    strokePathCache.set(s, path);
+  }
+  return path;
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, colorOverride?: string): void {
+  if (s.points.length < 3) return;
+  const path = strokePath(s);
+  const color = colorOverride ?? s.color;
+  // Brush variants that use the perfect-freehand outline path (pen, pencil,
+  // marker, calligraphy, airbrush) — each tuned for a different feel.
+  if (isBrushKind(s.kind)) {
+    ctx.fillStyle = color;
+    ctx.globalAlpha *= s.opacity;
+    ctx.fill(path);
+    ctx.globalAlpha /= s.opacity || 1;
+    return;
+  }
+
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.lineWidth = s.size;
   ctx.globalAlpha *= s.opacity;
   if (s.kind === 'highlighter') {
     ctx.globalCompositeOperation = 'multiply';
-    ctx.strokeStyle = s.color;
+    ctx.strokeStyle = color;
   } else {
     ctx.globalCompositeOperation = 'destination-out';
     ctx.strokeStyle = '#000';
   }
-  ctx.beginPath();
-  ctx.moveTo(smoothed[0] ?? 0, smoothed[1] ?? 0);
-  for (let i = 2; i < smoothed.length; i += 2) {
-    ctx.lineTo(smoothed[i] ?? 0, smoothed[i + 1] ?? 0);
-  }
-  ctx.stroke();
+  ctx.stroke(path);
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha /= s.opacity || 1;
 }

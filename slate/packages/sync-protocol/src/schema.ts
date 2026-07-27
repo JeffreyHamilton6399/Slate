@@ -317,6 +317,63 @@ export interface DiagramEdge {
   authorId: string;
 }
 
+// ── Presentation (slides) element model (Google Slides / Keynote-style presentations) ──────
+
+/** Logical slide canvas size — every slide is authored in this fixed 16:9
+ *  coordinate space and scaled to fit wherever it renders (stage, thumbnail
+ *  rail, present mode). Rendering from one shared coordinate space is what
+ *  keeps thumbnails pixel-faithful to the slide. */
+export const SLIDE_W = 1280;
+export const SLIDE_H = 720;
+
+/** A slide (page) in a presentation. Elements reference it by id. */
+export interface Slide {
+  id: string;
+  /** Sort position in the deck. Fractional so a reorder is a single-key
+   *  write on one slide (no renumbering cascade to conflict with peers). */
+  order: number;
+  /** Slide background color. */
+  background: string;
+  /** Speaker notes for this slide (shown to the presenter, never on screen). */
+  notes?: string;
+  createdAt: number;
+  authorId: string;
+}
+
+export type SlideElementKind = 'text' | 'image' | 'rect' | 'ellipse' | 'line' | 'arrow';
+
+/** One placed element on a slide — a text box, image, or shape. Positioned
+ *  in the logical SLIDE_W×SLIDE_H space. */
+export interface SlideElement {
+  id: string;
+  slideId: string;
+  kind: SlideElementKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Rotation about the element center, radians. */
+  rotation: number;
+  /** Stacking order within the slide (higher = on top). */
+  z: number;
+  /** Text content (kind === 'text'). */
+  text?: string;
+  fontSize?: number;
+  /** Text color (kind === 'text'). */
+  color?: string;
+  align?: 'left' | 'center' | 'right';
+  bold?: boolean;
+  /** Shape fill (rect/ellipse). null = outline only. */
+  fill?: string | null;
+  /** Shape border / line color. */
+  stroke?: string;
+  strokeWidth?: number;
+  /** Image URL or data URL (kind === 'image'). */
+  src?: string;
+  createdAt: number;
+  authorId: string;
+}
+
 /** Server-side public-room registry info (also consumed by client). */
 export interface RoomInfo {
   name: string;
@@ -497,4 +554,10 @@ export interface SlateDocSnapshot {
    *  from older clients (and on slides that never set them) — they default
    *  safely inside PresentationEditor.readSlide. */
   slides?: { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[];
+  /** 'presentation' boards, structured element model: the deck plus every
+   *  placed element. Optional — absent on snapshots from older clients. */
+  presentation?: {
+    slides: Slide[];
+    elements: SlideElement[];
+  };
 }

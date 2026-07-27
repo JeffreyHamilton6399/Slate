@@ -24,7 +24,7 @@ import { DocToolsPanel } from './DocToolsPanel';
 import { CodeFilesPanel } from './CodeFilesPanel';
 import { CodePreviewPanel } from './CodePreviewPanel';
 import { DiagramToolsPanel } from './DiagramToolsPanel';
-import { PresentationToolsPanel } from './PresentationToolsPanel';
+import { SlideLayoutPanel } from './SlideLayoutPanel';
 import { AiChatPanel } from './AiChatPanel';
 
 let registered = false;
@@ -184,7 +184,7 @@ export function registerBuiltInPanels(): void {
     id: 'presentation-tools',
     title: 'Tools',
     defaultSide: 'left',
-    render: PresentationToolsPanel,
+    render: SlideLayoutPanel,
     order: 0,
     mode: 'presentation',
   });

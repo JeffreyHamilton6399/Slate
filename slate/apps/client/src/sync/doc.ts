@@ -28,7 +28,9 @@ import {
   codeTextKey,
   DIAGRAM_NODES_KEY,
   DIAGRAM_EDGES_KEY,
-  SLIDES_KEY,
+  LEGACY_SLIDES_KEY,
+  PRESENTATION_SLIDES_KEY,
+  PRESENTATION_ELEMENTS_KEY,
   type BoardMeta,
   type DocMode,
 } from '@slate/sync-protocol';
@@ -70,9 +72,15 @@ export interface SlateDoc {
   diagramNodes: () => Y.Map<Y.Map<unknown>>;
   /** 'diagram' boards: edge id → Y.Map (a DiagramEdge). */
   diagramEdges: () => Y.Map<Y.Map<unknown>>;
-  /** 'presentation' boards: ordered Y.Array of slide Y.Maps
-   *  ({ id, content, background }). */
-  slides: () => Y.Array<Y.Map<unknown>>;
+  /** LEGACY 'presentation' container: ordered Y.Array of slide Y.Maps
+   *  ({ id, content: HTML, background }). Read-only — it holds decks authored
+   *  before the structured element model, and `slides/migrate.ts` converts
+   *  them on first open. New writes go to the two containers below. */
+  legacySlides: () => Y.Array<Y.Map<unknown>>;
+  /** 'presentation' boards: slide id → Y.Map (a Slide). */
+  slides: () => Y.Map<Y.Map<unknown>>;
+  /** 'presentation' boards: element id → Y.Map (a SlideElement). */
+  slideElements: () => Y.Map<Y.Map<unknown>>;
 }
 
 export function createSlateDoc(): SlateDoc {
@@ -100,7 +108,9 @@ export function createSlateDoc(): SlateDoc {
     codeText: (fileId: string) => doc.getText(codeTextKey(fileId)),
     diagramNodes: () => doc.getMap<Y.Map<unknown>>(DIAGRAM_NODES_KEY),
     diagramEdges: () => doc.getMap<Y.Map<unknown>>(DIAGRAM_EDGES_KEY),
-    slides: () => doc.getArray<Y.Map<unknown>>(SLIDES_KEY),
+    legacySlides: () => doc.getArray<Y.Map<unknown>>(LEGACY_SLIDES_KEY),
+    slides: () => doc.getMap<Y.Map<unknown>>(PRESENTATION_SLIDES_KEY),
+    slideElements: () => doc.getMap<Y.Map<unknown>>(PRESENTATION_ELEMENTS_KEY),
   };
 }
 

@@ -44,7 +44,7 @@ const Canvas2D = lazy(() => import('../canvas2d/Canvas2D').then((m) => ({ defaul
 // canvas + connector routing. Both ship default exports so plain `import()`
 // works (no `.then` wrapper needed). Lazy so opening a 2D / 3D / audio / doc
 // / code board never pays the parse/eval cost of either.
-const PresentationEditor = lazy(() => import('../presentation/PresentationEditor'));
+const PresentationEditor = lazy(() => import('../slides/SlidesEditor'));
 const DiagramEditor = lazy(() => import('../diagram/DiagramEditor'));
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { toast } from '../ui/Toast';

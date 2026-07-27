@@ -226,6 +226,41 @@ export const diagramEdgeSchema = z.object({
   authorId: idSchema,
 });
 
+/** Slide validator — matches the Slide interface in schema.ts. */
+export const slideSchema = z.object({
+  id: idSchema,
+  order: z.number().finite(),
+  background: colorString,
+  notes: z.string().max(20000).optional(),
+  createdAt: z.number().int().nonnegative(),
+  authorId: idSchema,
+});
+
+/** Slide element validator — matches the SlideElement interface. */
+export const slideElementSchema = z.object({
+  id: idSchema,
+  slideId: idSchema,
+  kind: z.enum(['text', 'image', 'rect', 'ellipse', 'line', 'arrow']),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  w: z.number().finite(),
+  h: z.number().finite(),
+  rotation: z.number().finite(),
+  z: z.number().finite(),
+  text: z.string().max(20_000).optional(),
+  fontSize: z.number().min(4).max(512).optional(),
+  color: colorString.optional(),
+  align: z.enum(['left', 'center', 'right']).optional(),
+  bold: z.boolean().optional(),
+  fill: colorString.nullable().optional(),
+  stroke: colorString.optional(),
+  strokeWidth: z.number().min(0).max(64).optional(),
+  // Data-URL image payload; same cap rationale as the 2D image shape.
+  src: z.string().max(600_000).optional(),
+  createdAt: z.number().int().nonnegative(),
+  authorId: idSchema,
+});
+
 export const chatMessageSchema = z.object({
   id: idSchema,
   authorId: idSchema,

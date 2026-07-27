@@ -33,6 +33,10 @@ import { docFragmentToMarkdown } from '../docs/exportMarkdown';
 import { codeZipBlob, listCodeFiles } from '../code/exportCode';
 import { readNodes, readEdges } from '../diagram/model';
 import { diagramToSvg, diagramSvgToPng } from '../diagram/exportDiagram';
+import { readSlides, readElements as readSlideElements } from '../slides/model';
+import { deckToHtml, exportSlidePng } from '../slides/exportSlides';
+import { useSlidesStore } from '../slides/store';
+import type { SlideElement } from '@slate/sync-protocol';
 import { toast } from '../ui/Toast';
 import {
   layerSchema,
@@ -149,11 +153,27 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         // per-slide page-break CSS. Slides are read straight from the Yjs
         // slides array (no PresentationEditor instance is reachable here).
         const boardName = board?.name ?? 'presentation';
-        const html = presentationDeckToHtml(room.slate, boardName);
+        const deck = readSlides(room.slate.slides());
+        if (deck.length === 0) throw new Error('Nothing to export — add a slide first.');
+        const bySlide = new Map<string, SlideElement[]>();
+        for (const el of readSlideElements(room.slate.slideElements())) {
+          const arr = bySlide.get(el.slideId);
+          if (arr) arr.push(el);
+          else bySlide.set(el.slideId, [el]);
+        }
         if (format === 'html') {
-          downloadText(html, `${boardName}.html`, 'text/html');
+          downloadText(deckToHtml(boardName, deck, bySlide), `${boardName}.html`, 'text/html');
         } else if (format === 'pdf') {
-          await printHtmlInIframe(html);
+          await printHtmlInIframe(deckToHtml(boardName, deck, bySlide));
+        } else if (format === 'png') {
+          // Current slide only — the deck as a whole has no single image.
+          const activeId = useSlidesStore.getState().activeSlideId;
+          const slide = deck.find((s) => s.id === activeId) ?? deck[0]!;
+          const index = deck.findIndex((s) => s.id === slide.id) + 1;
+          downloadBlob(
+            await exportSlidePng(slide.background, bySlide.get(slide.id) ?? [], 2),
+            `${boardName}-${index}.png`,
+          );
         } else {
           throw new Error(`Unsupported presentation format: ${format}`);
         }
@@ -292,7 +312,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           : isDiagram
             ? (['svg', 'png'] as const)
             : isPresentation
-              ? (['html', 'pdf'] as const)
+              ? (['html', 'pdf', 'png'] as const)
               : (['png', 'jpg', 'webp', 'svg', 'mp4'] as const);
   const raster = !is3d && !isAudio && !isDoc && !isCode && !isDiagram && !isPresentation && format !== 'svg' && format !== 'mp4';
 
@@ -545,80 +565,6 @@ function docMarkdownToStandaloneHtml(boardName: string, md: string): string {
 </head>
 <body>
 <pre>${esc(md)}</pre>
-</body>
-</html>`;
-}
-
-/** Build a standalone HTML document for a presentation deck — one full-
- *  viewport `<section>` per slide, with the slide's background, content,
- *  and (if present) speaker notes inline. Mirrors the export path the
- *  PresentationEditor's toolbar button uses, but reads straight from Yjs
- *  (the dialog can't reach the editor instance). */
-function presentationDeckToHtml(
-  slate: ReturnType<typeof useRoom>['slate'],
-  boardName: string,
-): string {
-  const arr = slate.slides();
-  const slides: { content: string; background: string; textColor: string; notes: string; transition: string; animation: string }[] = [];
-  for (let i = 0; i < arr.length; i++) {
-    const m = arr.get(i);
-    slides.push({
-      content: (m.get('content') as string | undefined) ?? '',
-      background: (m.get('background') as string | undefined) ?? '#0c0c0e',
-      textColor: (m.get('textColor') as string | undefined) ?? '',
-      notes: (m.get('notes') as string | undefined) ?? '',
-      transition: (m.get('transition') as string | undefined) ?? 'none',
-      animation: (m.get('animation') as string | undefined) ?? 'none',
-    });
-  }
-  const escAttr = (v: string) => v.replace(/"/g, '&quot;');
-  const escText = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const sections = slides
-    .map(
-      (s, i) => {
-        // Inline `color` carries the slide's textColor (set by a theme) so
-        // the exported deck preserves the visual styling without external CSS.
-        const colorStyle = s.textColor ? `color:${escAttr(s.textColor)};` : '';
-        return (
-          `<section class="slide" data-index="${i}" data-transition="${escAttr(s.transition)}" data-animation="${escAttr(s.animation)}" style="background:${escAttr(s.background)};${colorStyle}">` +
-          `<div class="slide-inner">${s.content || '<p class="placeholder">Empty slide</p>'}</div>` +
-          (s.notes ? `<aside class="notes"><strong>Notes:</strong> ${escText(s.notes)}</aside>` : '') +
-          '</section>'
-        );
-      },
-    )
-    .join('\n');
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escText(boardName)}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #000; font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #fff; }
-  .slide {
-    width: 100vw; height: 100vh; min-height: 100vh;
-    display: flex; align-items: center; justify-content: center;
-    padding: 6%; position: relative; page-break-after: always;
-  }
-  .slide-inner { width: 100%; max-width: 1280px; line-height: 1.5; font-size: 1.4rem; }
-  .slide-inner h1 { font-size: 2.6em; margin: 0 0 0.5em; font-weight: 700; }
-  .slide-inner h2 { font-size: 2em; margin: 0 0 0.5em; font-weight: 700; }
-  .slide-inner h3 { font-size: 1.5em; margin: 0 0 0.4em; font-weight: 700; }
-  .slide-inner ul, .slide-inner ol { padding-left: 1.4em; }
-  .slide-inner .placeholder { opacity: 0.4; font-style: italic; }
-  .notes { position: absolute; bottom: 1rem; left: 1rem; right: 1rem; font-size: 0.85rem; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem; border-radius: 4px; }
-  @media print {
-    body { background: #fff; }
-    .notes { display: none; }
-    .slide { page-break-after: always; }
-  }
-</style>
-</head>
-<body>
-${sections}
 </body>
 </html>`;
 }

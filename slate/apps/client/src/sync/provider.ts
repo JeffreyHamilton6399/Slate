@@ -81,6 +81,8 @@ export class SlateRoom {
       this.slate.notes(),
       this.slate.diagramNodes(),
       this.slate.diagramEdges(),
+      this.slate.slides(),
+      this.slate.slideElements(),
     ] as unknown as Y.AbstractType<unknown>[];
     this.undo = new Y.UndoManager(tracked, {
       captureTimeout: 350,

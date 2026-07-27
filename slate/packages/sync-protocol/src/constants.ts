@@ -109,7 +109,16 @@ export const codeTextKey = (fileId: string): string => `code:text:${fileId}`;
 export const DIAGRAM_NODES_KEY = 'diagram:nodes';
 export const DIAGRAM_EDGES_KEY = 'diagram:edges';
 
-/** Top-level Y.Array for 'presentation' boards: an ordered list of slide
- *  Y.Maps ({ id, content, background }). Top-level + globally keyed so every
- *  client resolves the same shared container (see doc.ts container doctrine). */
-export const SLIDES_KEY = 'slides';
+/** LEGACY top-level Y.Array for 'presentation' boards: an ordered list of
+ *  slide Y.Maps ({ id, content: HTML string, background }). Superseded by the
+ *  structured element model below, but kept forever: it's the only copy of a
+ *  deck authored before the swap, and `slides/migrate.ts` reads it to rebuild
+ *  those decks as elements on first open. Never write to it. */
+export const LEGACY_SLIDES_KEY = 'slides';
+
+/** Top-level Y.Maps for 'presentation' boards: slide id → Y.Map, element id →
+ *  Y.Map. Each slide is a page; each element is a positioned text box, image,
+ *  or shape in the fixed SLIDE_W × SLIDE_H space. Top-level + globally keyed
+ *  for the same reason as the scene/audio containers (doc.ts doctrine). */
+export const PRESENTATION_SLIDES_KEY = 'pres:slides';
+export const PRESENTATION_ELEMENTS_KEY = 'pres:elements';

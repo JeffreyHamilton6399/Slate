@@ -27,6 +27,8 @@ import type {
   Object3D,
   Shape,
   SlateDocSnapshot,
+  Slide,
+  SlideElement,
   Stroke,
 } from '@slate/sync-protocol';
 import {
@@ -39,6 +41,8 @@ import {
   noteSectionSchema,
   object3DSchema,
   shapeSchema,
+  slideElementSchema,
+  slideSchema,
   strokeSchema,
 } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
@@ -145,6 +149,7 @@ export function snapshotDoc(room: SlateRoom): SavedSnapshot {
       // Cheap no-op (empty array) on other modes; captured unconditionally so
       // a board that switched modes never silently loses its slides.
       slides: snapshotSlides(slate),
+      presentation: snapshotPresentation(slate),
     },
   };
 }
@@ -184,7 +189,7 @@ function snapshotCodeFiles(slate: SlateRoom['slate']): { files: { id: string; na
 function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[] {
   const slides: { id: string; content: string; background: string; textColor?: string; notes?: string; transition?: string; animation?: string }[] = [];
   try {
-    const arr = slate.slides();
+    const arr = slate.legacySlides();
     for (let i = 0; i < arr.length; i++) {
       const m = arr.get(i);
       const id = (m.get('id') as string | undefined) ?? `slide-${i}`;
@@ -207,6 +212,29 @@ function snapshotSlides(slate: SlateRoom['slate']): { id: string; content: strin
     // ignore — return what we have
   }
   return slides;
+}
+
+/** Capture 'presentation' boards in the structured element model — the deck
+ *  plus every placed element. The legacy HTML array is captured separately by
+ *  snapshotSlides so a pre-swap deck stays recoverable from either field. */
+function snapshotPresentation(
+  slate: SlateRoom['slate'],
+): { slides: Slide[]; elements: SlideElement[] } {
+  const slides: Slide[] = [];
+  const elements: SlideElement[] = [];
+  try {
+    slate.slides().forEach((m, id) => {
+      const parsed = slideSchema.safeParse({ ...plainObj(m), id });
+      if (parsed.success) slides.push(parsed.data);
+    });
+    slate.slideElements().forEach((m, id) => {
+      const parsed = slideElementSchema.safeParse({ ...plainObj(m), id });
+      if (parsed.success) elements.push(parsed.data);
+    });
+  } catch {
+    // ignore — return what we have
+  }
+  return { slides, elements };
 }
 
 export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
@@ -240,9 +268,13 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
     diagramNodes.forEach((_, k) => diagramNodes.delete(k));
     const diagramEdges = slate.diagramEdges();
     diagramEdges.forEach((_, k) => diagramEdges.delete(k));
-    // Reset presentation slides array (clear + repopulate below).
-    const slides = slate.slides();
+    // Reset presentation containers (clear + repopulate below).
+    const slides = slate.legacySlides();
     slides.delete(0, slides.length);
+    const presSlides = slate.slides();
+    presSlides.forEach((_, k) => presSlides.delete(k));
+    const presElements = slate.slideElements();
+    presElements.forEach((_, k) => presElements.delete(k));
 
     // Re-hydrate.
     const meta = slate.meta();
@@ -307,6 +339,14 @@ export function applySnapshot(room: SlateRoom, snapshot: SavedSnapshot): void {
         }
       }
     } catch { /* slides not ready */ }
+    // Structured presentation model (absent on snapshots from older clients —
+    // those restore the legacy array above and get migrated on next open).
+    try {
+      if (snap.presentation) {
+        for (const s of snap.presentation.slides) presSlides.set(s.id, toYMap(s));
+        for (const el of snap.presentation.elements) presElements.set(el.id, toYMap(el));
+      }
+    } catch { /* presentation containers not ready */ }
   });
 }
 

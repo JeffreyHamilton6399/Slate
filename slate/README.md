@@ -27,8 +27,6 @@ packages/
   ui-tokens/      design tokens + Tailwind preset
 ```
 
-The `Slate/Reference]/` folder contains the v1 reference snapshot — read-only design intent, never imported.
-
 ## Scripts
 
 - `pnpm dev` — client only

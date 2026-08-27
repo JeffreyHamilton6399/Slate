@@ -1,8 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm install && cd slate && pnpm install && pnpm --filter @slate/client run build",
+  "buildCommand": "cd slate && pnpm install --frozen-lockfile && pnpm --filter @slate/client run build",
   "outputDirectory": "slate/apps/client/dist",
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  "installCommand": "echo 'install runs inside slate/'",
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
 }

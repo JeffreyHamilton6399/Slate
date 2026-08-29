@@ -36,10 +36,13 @@ import {
   Undo2,
   Redo2,
   Play,
+  ChevronDown as CaretDown,
   Bold,
   AlignLeft,
   AlignCenter,
   AlignRight,
+  StickyNote,
+  GripVertical,
 } from 'lucide-react';
 import {
   SLIDE_W,
@@ -50,12 +53,21 @@ import {
 } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
+import { useIsMobile } from '../workspace/useMediaQuery';
 import { makeId } from '../utils/id';
 import { cn } from '../utils/cn';
 import { toast } from '../ui/Toast';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/DropdownMenu';
 import { fileToImageShape, isImageFile } from '../canvas2d/importImage';
 import { uploadDataUrl } from '../supabase/storage';
 import { SlideView } from './SlideView';
+import { PresentOverlay } from './PresentOverlay';
 import { useSlidesStore } from './store';
 import { defaultTextColor, setSlideBackground } from './background';
 import { readSlides, readElements, toYMap, orderBetween, topZ } from './model';
@@ -64,6 +76,11 @@ import { migrateLegacyDeck, needsMigration } from './migrate';
 const MIN_SIZE = 24;
 const PASTE_OFFSET = 24;
 const DEFAULT_BG = '#14141b';
+/** Snap distance in SCREEN pixels — converted to slide units per zoom level so
+ *  the magnet feels the same however far you're zoomed in. */
+const SNAP_PX = 6;
+/** Rotation snap increment while Shift is held. */
+const ROT_SNAP = Math.PI / 12; // 15°
 
 /** Slide background palette (dark-friendly plus a light paper). */
 const BG_SWATCHES = ['#14141b', '#0c0c0e', '#1d1d2b', '#232333', '#f6f5f0', '#ffffff'];
@@ -73,9 +90,30 @@ const EL_SWATCHES = ['#e0dff5', '#7c6aff', '#8fd4ff', '#8fe6b0', '#ffd68f', '#ff
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
+/** Candidate alignment lines gathered once at drag start. */
+interface SnapTargets {
+  xs: number[];
+  ys: number[];
+}
+
+/** An alignment line currently being snapped to, in slide coordinates. */
+interface Guide {
+  axis: 'x' | 'y';
+  at: number;
+}
+
 type Drag =
-  | { kind: 'move'; start: { x: number; y: number }; origin: Map<string, { x: number; y: number }>; moved: boolean }
-  | { kind: 'resize'; id: string; handle: Handle; start: SlideElement; aspect: boolean };
+  | {
+      kind: 'move';
+      start: { x: number; y: number };
+      origin: Map<string, { x: number; y: number }>;
+      /** Union box of the dragged selection at drag start. */
+      box: { x: number; y: number; w: number; h: number };
+      snap: SnapTargets;
+      moved: boolean;
+    }
+  | { kind: 'resize'; id: string; handle: Handle; start: SlideElement; aspect: boolean }
+  | { kind: 'rotate'; id: string; center: { x: number; y: number }; start: number; grab: number };
 
 interface TextEdit {
   elementId: string;
@@ -89,6 +127,11 @@ export default function SlidesEditor() {
   const slidesMap = useMemo(() => room.slate.slides(), [room]);
   const elementsMap = useMemo(() => room.slate.slideElements(), [room]);
   const iAmCreator = useAppStore((s) => s.currentBoard?.iAmCreator ?? false);
+  // On a phone the slide rail becomes a horizontal filmstrip above the stage:
+  // a 192px vertical rail is half a portrait viewport, which left the stage
+  // too narrow to edit and pushed the toolbar off screen.
+  const isMobile = useIsMobile();
+  const thumbW = isMobile ? 104 : 152;
 
   // Re-read the Yjs maps into plain arrays on any deep change. This single
   // version counter is what keeps the STAGE and the THUMBNAILS in lockstep.
@@ -194,6 +237,11 @@ export default function SlidesEditor() {
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
   const [presenting, setPresenting] = useState<number | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
+  /** Rail drag-reorder: id being dragged, and the gap it would drop into. */
+  const [railDrag, setRailDrag] = useState<{ id: string; over: number | null } | null>(null);
+  /** Alignment lines currently being snapped to (drawn over the stage). */
+  const [guides, setGuides] = useState<Guide[]>([]);
   const dragRef = useRef<Drag | null>(null);
   const clipboardRef = useRef<SlideElement[]>([]);
   const selectionRef = useRef(selection);
@@ -221,21 +269,36 @@ export default function SlidesEditor() {
   }, [activeSlide, activeSlideId, setActiveSlideId]);
 
   // ── Stage scale ────────────────────────────────────────────────────────────
+  // Attached via a CALLBACK ref, not a mount effect: the component returns a
+  // "setting up your first slide…" placeholder until the deck loads, so a
+  // []-dep effect ran while the wrapper was still unmounted, bailed out, and
+  // never re-ran — the stage stayed pinned at the initial 0.5 scale forever,
+  // at every window size.
   const stageWrapRef = useRef<HTMLDivElement | null>(null);
+  const stageObserverRef = useRef<ResizeObserver | null>(null);
   const [scale, setScale] = useState(0.5);
-  useEffect(() => {
+  const measureStage = useCallback(() => {
     const el = stageWrapRef.current;
     if (!el) return;
-    const update = () => {
-      const r = el.getBoundingClientRect();
-      const k = Math.min((r.width - 48) / SLIDE_W, (r.height - 88) / SLIDE_H);
-      setScale(Math.max(0.05, Math.min(2, k)));
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    const r = el.getBoundingClientRect();
+    // Insets leave room for the floating toolbar and the Present button.
+    const k = Math.min((r.width - 32) / SLIDE_W, (r.height - 88) / SLIDE_H);
+    setScale(Math.max(0.05, Math.min(2, k)));
   }, []);
+  const attachStageWrap = useCallback(
+    (el: HTMLDivElement | null) => {
+      stageObserverRef.current?.disconnect();
+      stageObserverRef.current = null;
+      stageWrapRef.current = el;
+      if (!el) return;
+      const ro = new ResizeObserver(measureStage);
+      ro.observe(el);
+      stageObserverRef.current = ro;
+      measureStage();
+    },
+    [measureStage],
+  );
+  useEffect(() => () => stageObserverRef.current?.disconnect(), []);
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
@@ -380,6 +443,30 @@ export default function SlidesEditor() {
     [slidesMap, transact],
   );
 
+  /** Drop `id` into gap `to` (0 = before slide 0, list.length = at the end).
+   *  One fractional-order write, so two peers reordering different slides
+   *  never fight over a renumbering pass. */
+  const reorderSlide = useCallback(
+    (id: string, to: number) => {
+      const list = readSlides(slidesMap);
+      const from = list.findIndex((s) => s.id === id);
+      if (from < 0 || to === from || to === from + 1) return;
+      const rest = list.filter((s) => s.id !== id);
+      const at = to > from ? to - 1 : to;
+      transact(() => {
+        slidesMap.get(id)?.set('order', orderBetween(rest[at - 1]?.order, rest[at]?.order));
+      });
+    },
+    [slidesMap, transact],
+  );
+
+  const setNotes = useCallback(
+    (id: string, notes: string) => {
+      transact(() => slidesMap.get(id)?.set('notes', notes));
+    },
+    [slidesMap, transact],
+  );
+
   // ── Insertions ─────────────────────────────────────────────────────────────
   const insertText = useCallback(
     (at?: { x: number; y: number }) => {
@@ -511,14 +598,49 @@ export default function SlidesEditor() {
       setSelection(next);
       if (!next.has(id)) return;
       const origin = new Map<string, { x: number; y: number }>();
+      const picked: SlideElement[] = [];
       for (const el of activeElements) {
-        if (next.has(el.id)) origin.set(el.id, { x: el.x, y: el.y });
+        if (next.has(el.id)) {
+          origin.set(el.id, { x: el.x, y: el.y });
+          picked.push(el);
+        }
       }
-      dragRef.current = { kind: 'move', start: { x: e.clientX, y: e.clientY }, origin, moved: false };
+      // Union box of the dragged set, so a multi-selection snaps as one shape.
+      const box = {
+        x: Math.min(...picked.map((p) => p.x)),
+        y: Math.min(...picked.map((p) => p.y)),
+        w: 0,
+        h: 0,
+      };
+      box.w = Math.max(...picked.map((p) => p.x + p.w)) - box.x;
+      box.h = Math.max(...picked.map((p) => p.y + p.h)) - box.y;
+      dragRef.current = {
+        kind: 'move',
+        start: { x: e.clientX, y: e.clientY },
+        origin,
+        box,
+        snap: snapTargets(activeElements, next),
+        moved: false,
+      };
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     },
     [activeElements, commitTextEdit],
   );
+
+  const beginRotate = useCallback((e: React.PointerEvent, el: SlideElement) => {
+    e.stopPropagation();
+    const c = { x: el.x + el.w / 2, y: el.y + el.h / 2 };
+    const p = toSlide(e.clientX, e.clientY);
+    dragRef.current = {
+      kind: 'rotate',
+      id: el.id,
+      center: c,
+      start: el.rotation ?? 0,
+      // Angle of the initial grab, so the element doesn't jump to the cursor.
+      grab: Math.atan2(p.y - c.y, p.x - c.x),
+    };
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, [toSlide]);
 
   const beginResize = useCallback(
     (e: React.PointerEvent, el: SlideElement, handle: Handle) => {
@@ -543,10 +665,31 @@ export default function SlidesEditor() {
       if (!drag) return;
       const k = scaleRef.current;
       if (drag.kind === 'move') {
-        const dx = (e.clientX - drag.start.x) / k;
-        const dy = (e.clientY - drag.start.y) / k;
+        let dx = (e.clientX - drag.start.x) / k;
+        let dy = (e.clientY - drag.start.y) / k;
         if (!drag.moved && Math.hypot(dx, dy) * k < 3) return;
         drag.moved = true;
+        // Snap the union box's edges/centers onto nearby alignment lines.
+        // Alt suspends it for pixel-exact placement.
+        let gx: number | null = null;
+        let gy: number | null = null;
+        if (!e.altKey) {
+          const tol = SNAP_PX / k;
+          const sx = snapAxis(drag.box.x, drag.box.w, dx, drag.snap.xs, tol);
+          const sy = snapAxis(drag.box.y, drag.box.h, dy, drag.snap.ys, tol);
+          dx = sx.offset;
+          dy = sy.offset;
+          gx = sx.guide;
+          gy = sy.guide;
+        }
+        const next: Guide[] = [];
+        if (gx !== null) next.push({ axis: 'x', at: gx });
+        if (gy !== null) next.push({ axis: 'y', at: gy });
+        setGuides((cur) =>
+          cur.length === next.length && cur.every((g, i) => g.axis === next[i]!.axis && g.at === next[i]!.at)
+            ? cur
+            : next,
+        );
         room.slate.doc.transact(() => {
           for (const [id, o] of drag.origin) {
             const m = elementsMap.get(id);
@@ -557,31 +700,43 @@ export default function SlidesEditor() {
         });
         return;
       }
-      // Resize.
+
+      if (drag.kind === 'rotate') {
+        const p = toSlide(e.clientX, e.clientY);
+        const a = Math.atan2(p.y - drag.center.y, p.x - drag.center.x);
+        let next = drag.start + (a - drag.grab);
+        if (e.shiftKey) next = Math.round(next / ROT_SNAP) * ROT_SNAP;
+        room.slate.doc.transact(() => elementsMap.get(drag.id)?.set('rotation', next));
+        return;
+      }
+
+      // ── Resize ───────────────────────────────────────────────────────────
+      // Done in the element's OWN frame so a rotated box resizes along its own
+      // axes with the opposite corner pinned, instead of shearing away from
+      // the cursor.
       const { start, handle } = drag;
+      const rot = start.rotation ?? 0;
       const p = toSlide(e.clientX, e.clientY);
-      let x = start.x;
-      let y = start.y;
-      let w = start.w;
-      let h = start.h;
-      if (handle.includes('e')) w = Math.max(MIN_SIZE, p.x - start.x);
-      if (handle.includes('s')) h = Math.max(MIN_SIZE, p.y - start.y);
-      if (handle.includes('w')) {
-        w = Math.max(MIN_SIZE, start.x + start.w - p.x);
-        x = start.x + start.w - w;
-      }
-      if (handle.includes('n')) {
-        h = Math.max(MIN_SIZE, start.y + start.h - p.y);
-        y = start.y + start.h - h;
-      }
-      const corner = handle.length === 2;
-      if (drag.aspect && corner && start.w > 0 && start.h > 0) {
+      const dirX = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
+      const dirY = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
+      const cx = start.x + start.w / 2;
+      const cy = start.y + start.h / 2;
+      // The fixed point: the corner/edge opposite the handle, in world space.
+      const anchorLocal = { x: (-dirX * start.w) / 2, y: (-dirY * start.h) / 2 };
+      const anchorRot = rotate(anchorLocal.x, anchorLocal.y, rot);
+      const anchor = { x: cx + anchorRot.x, y: cy + anchorRot.y };
+      // Pointer relative to the anchor, in the element's unrotated frame.
+      const v = rotate(p.x - anchor.x, p.y - anchor.y, -rot);
+      let w = dirX === 0 ? start.w : Math.max(MIN_SIZE, dirX * v.x);
+      let h = dirY === 0 ? start.h : Math.max(MIN_SIZE, dirY * v.y);
+      if (drag.aspect && dirX !== 0 && dirY !== 0 && start.w > 0 && start.h > 0) {
         const ratio = start.w / start.h;
         if (w / h > ratio) w = h * ratio;
         else h = w / ratio;
-        if (handle.includes('w')) x = start.x + start.w - w;
-        if (handle.includes('n')) y = start.y + start.h - h;
       }
+      const offset = rotate((dirX * w) / 2, (dirY * h) / 2, rot);
+      const x = anchor.x + offset.x - w / 2;
+      const y = anchor.y + offset.y - h / 2;
       room.slate.doc.transact(() => {
         const m = elementsMap.get(drag.id);
         if (!m) return;
@@ -593,6 +748,7 @@ export default function SlidesEditor() {
     };
     const onUp = () => {
       dragRef.current = null;
+      setGuides((cur) => (cur.length ? [] : cur));
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -655,8 +811,12 @@ export default function SlidesEditor() {
         return;
       }
       if (k === 'f5') {
+        // F5 picks up where you are; Shift+F5 runs the deck from the top —
+        // the same split PowerPoint and Keynote use.
         e.preventDefault();
-        setPresenting(Math.max(0, slides.findIndex((s) => s.id === activeSlide?.id)));
+        setPresenting(
+          e.shiftKey ? 0 : Math.max(0, slides.findIndex((s) => s.id === activeSlide?.id)),
+        );
         return;
       }
       if (e.key === 'PageDown' || e.key === 'PageUp') {
@@ -773,40 +933,120 @@ export default function SlidesEditor() {
   }
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-bg">
-      {/* ── Slide rail ─────────────────────────────────────────────────────── */}
-      <div className="flex w-44 flex-none flex-col border-r border-border bg-bg-2/60">
+    <div className={cn('flex h-full w-full overflow-hidden bg-bg', isMobile && 'flex-col')}>
+      {/* ── Slide rail (filmstrip on phones) ───────────────────────────────── */}
+      <div
+        className={cn(
+          'flex flex-none bg-bg-2/60',
+          isMobile
+            ? 'w-full items-center gap-2 border-b border-border px-2 py-1.5'
+            : 'w-48 flex-col border-r border-border',
+        )}
+      >
         {/* "New slide" sits at the TOP: the floating People widget anchors to
             the bottom-left of the workspace and would swallow clicks on a
             bottom-docked button. The rail also gets generous bottom padding so
             the last thumbnail can always be scrolled clear of that widget. */}
         <button
-          className="m-2 flex items-center justify-center gap-1 rounded-md border border-border py-1.5 text-xs text-text-dim transition-colors hover:border-accent hover:text-text"
+          title="New slide"
+          className={cn(
+            'flex items-center justify-center gap-1 rounded-md border border-border text-xs text-text-dim transition-colors hover:border-accent hover:text-text',
+            isMobile ? 'h-[59px] w-9 flex-none' : 'm-2 py-1.5',
+          )}
           onClick={() => addSlide(activeSlide.id)}
         >
-          <Plus size={14} /> New slide
+          <Plus size={14} />
+          {!isMobile && 'New slide'}
         </button>
-        <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-28">
+        {/* Thumbnails. Drag one to reorder; the drop gap is shown as an accent
+            rule so the target is never ambiguous. */}
+        <div
+          className={cn(
+            'flex-1',
+            isMobile
+              ? 'flex min-w-0 gap-2 overflow-x-auto'
+              : 'space-y-2 overflow-y-auto px-2 pb-28',
+          )}
+          onDragOver={(e) => {
+            if (railDrag) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            if (!railDrag) return;
+            e.preventDefault();
+            if (railDrag.over !== null) reorderSlide(railDrag.id, railDrag.over);
+            setRailDrag(null);
+          }}
+        >
           {slides.map((s, i) => (
             <div
               key={s.id}
               data-slide-thumb={s.id}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                // Firefox refuses to start a drag without payload.
+                e.dataTransfer.setData('text/plain', s.id);
+                setRailDrag({ id: s.id, over: null });
+              }}
+              onDragEnd={() => setRailDrag(null)}
+              onDragOver={(e) => {
+                if (!railDrag) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                const over = isMobile
+                  ? e.clientX < r.left + r.width / 2
+                    ? i
+                    : i + 1
+                  : e.clientY < r.top + r.height / 2
+                    ? i
+                    : i + 1;
+                setRailDrag((d) => (d && d.over !== over ? { ...d, over } : d));
+              }}
               className={cn(
-                'group relative cursor-pointer rounded-md border p-1 transition-colors',
-                s.id === activeSlide.id
-                  ? 'border-accent bg-accent/10'
-                  : 'border-border hover:border-text-dim/40',
+                'group flex cursor-pointer items-start gap-1',
+                isMobile && 'flex-none',
+                railDrag?.id === s.id && 'opacity-40',
+                railDrag && railDrag.over === i && (isMobile ? 'border-l-2 border-l-accent' : 'border-t-2 border-t-accent'),
+                railDrag && railDrag.over === i + 1 && (isMobile ? 'border-r-2 border-r-accent' : 'border-b-2 border-b-accent'),
               )}
               onClick={() => setActiveSlideId(s.id)}
             >
+              {/* Number in a gutter, not stamped on the slide: every layout
+                  puts its title in exactly the top-left corner a badge would
+                  cover. */}
+              <span
+                className={cn(
+                  'w-3.5 pt-1 text-right font-mono text-[10px] leading-none',
+                  s.id === activeSlide.id ? 'text-accent' : 'text-text-dim',
+                )}
+              >
+                {i + 1}
+              </span>
+              <div
+                className={cn(
+                  'relative flex-1 rounded-md border p-1 transition-colors',
+                  s.id === activeSlide.id
+                    ? 'border-accent bg-accent/10'
+                    : 'border-border hover:border-text-dim/40',
+                )}
+              >
               <SlideView
                 background={s.background}
                 elements={elementsBySlide.get(s.id) ?? []}
-                scale={152 / SLIDE_W}
+                scale={thumbW / SLIDE_W}
                 className="rounded-sm"
               />
-              <span className="absolute left-1.5 top-1.5 rounded bg-bg/80 px-1 text-[10px] font-mono text-text-dim">
-                {i + 1}
+              {/* A slide with notes says so — otherwise it's invisible work. */}
+              {s.notes?.trim() && (
+                <span
+                  title="Has speaker notes"
+                  className="absolute bottom-1.5 left-1.5 rounded bg-bg/80 p-0.5 text-text-dim"
+                >
+                  <StickyNote size={10} />
+                </span>
+              )}
+              <span className="absolute bottom-1.5 right-1.5 hidden text-text-dim group-hover:block">
+                <GripVertical size={12} />
               </span>
               <div
                 className="absolute right-1 top-1 hidden flex-col gap-0.5 group-hover:flex"
@@ -825,18 +1065,24 @@ export default function SlidesEditor() {
                 <RailButton title="Duplicate slide" onClick={() => duplicateSlide(s.id)}>
                   <Copy size={12} />
                 </RailButton>
-                <RailButton title="Delete slide" onClick={() => deleteSlide(s.id)}>
+                <RailButton
+                  title="Delete slide"
+                  disabled={slides.length === 1}
+                  onClick={() => deleteSlide(s.id)}
+                >
                   <Trash2 size={12} />
                 </RailButton>
+              </div>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ── Stage ──────────────────────────────────────────────────────────── */}
+      {/* ── Stage column: the stage itself plus the speaker-notes strip ───── */}
+      <div className="flex min-w-0 flex-1 flex-col">
       <div
-        ref={stageWrapRef}
+        ref={attachStageWrap}
         className="relative flex flex-1 items-center justify-center overflow-hidden"
         onDragOver={(e) => {
           if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault();
@@ -891,19 +1137,49 @@ export default function SlidesEditor() {
                   }
                 }}
               >
-                {isSel && selection.size === 1 &&
-                  HANDLES.map((h) => (
+                {isSel && selection.size === 1 && (
+                  <>
+                    {HANDLES.map((h) => (
+                      <div
+                        key={h}
+                        data-handle={h}
+                        className="absolute z-10 h-2.5 w-2.5 rounded-[2px] border border-accent bg-bg"
+                        style={{ ...handlePos(h), cursor: handleCursor(h) }}
+                        onPointerDown={(e) => beginResize(e, el, h)}
+                      />
+                    ))}
+                    {/* Rotation handle. `rotation` was in the model and drawn
+                        by the stage, the thumbnails and both exporters, but
+                        nothing could ever set it. */}
                     <div
-                      key={h}
-                      data-handle={h}
-                      className="absolute z-10 h-2.5 w-2.5 rounded-[2px] border border-accent bg-bg"
-                      style={{ ...handlePos(h), cursor: handleCursor(h) }}
-                      onPointerDown={(e) => beginResize(e, el, h)}
+                      data-handle="rotate"
+                      title="Drag to rotate (Shift snaps to 15°)"
+                      className="absolute left-[calc(50%-6px)] top-[-22px] z-10 h-3 w-3 rounded-full border border-accent bg-bg"
+                      style={{ cursor: 'grab' }}
+                      onPointerDown={(e) => beginRotate(e, el)}
                     />
-                  ))}
+                    <div className="pointer-events-none absolute left-1/2 top-[-19px] h-[19px] w-px bg-accent" />
+                  </>
+                )}
               </div>
             );
           })}
+
+          {/* Alignment guides. Purely visual — pointer-events-none so they
+              never intercept the drag that produced them. */}
+          {guides.map((g) => (
+            <div
+              key={`${g.axis}-${g.at}`}
+              className="pointer-events-none absolute z-10"
+              style={{
+                background: 'var(--accent)',
+                boxShadow: '0 0 0 0.5px var(--accent)',
+                ...(g.axis === 'x'
+                  ? { left: g.at * scale, top: 0, width: 1, height: SLIDE_H * scale }
+                  : { top: g.at * scale, left: 0, height: 1, width: SLIDE_W * scale }),
+              }}
+            />
+          ))}
 
           {/* Inline text editor. */}
           {textEdit && editingEl && (
@@ -951,7 +1227,7 @@ export default function SlidesEditor() {
         {/* ── Floating toolbar ─────────────────────────────────────────────── */}
         <div
           data-no-canvas
-          className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-bg-2/95 px-2 py-1 shadow-lg backdrop-blur"
+          className="absolute bottom-3 left-1/2 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-lg border border-border bg-bg-2/95 px-2 py-1 shadow-lg backdrop-blur [&>*]:flex-none"
           onPointerDown={(e) => e.stopPropagation()}
         >
           <ToolButton title="Text box (double-click canvas)" onClick={() => insertText()}>
@@ -1053,17 +1329,59 @@ export default function SlidesEditor() {
           </ToolButton>
         </div>
 
-        {/* Present button + slide counter. */}
+        {/* Present button + slide counter. The split button matches PowerPoint:
+            the big half runs from here, the caret offers "from the start". */}
         <div className="absolute right-3 top-3 z-30 flex items-center gap-2">
           <span className="text-xs font-mono text-text-dim">
             {slideIndex + 1} / {slides.length}
           </span>
-          <button
-            className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white shadow transition-transform hover:scale-105"
-            onClick={() => setPresenting(slideIndex)}
-          >
-            <Play size={13} /> Present
-          </button>
+          <div className="flex overflow-hidden rounded-md shadow">
+            <button
+              title="Present from this slide (F5)"
+              className="flex items-center gap-1.5 bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-2"
+              onClick={() => setPresenting(slideIndex)}
+            >
+              <Play size={13} /> Present
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  title="Presentation options"
+                  aria-label="Presentation options"
+                  className="grid w-6 place-items-center border-l border-white/25 bg-accent text-white transition-colors hover:bg-accent-2"
+                >
+                  <CaretDown size={12} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem shortcut="F5" onSelect={() => setPresenting(slideIndex)}>
+                  From this slide
+                </DropdownMenuItem>
+                <DropdownMenuItem shortcut="⇧F5" onSelect={() => setPresenting(0)}>
+                  From the beginning
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setNotesOpen((v) => !v)}>
+                  {notesOpen ? 'Hide speaker notes' : 'Show speaker notes'}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {/* Slide actions also live on the rail's hover controls, which
+                    touch devices never get — this is their only route there. */}
+                <DropdownMenuItem onSelect={() => addSlide(activeSlide.id)}>
+                  New slide
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => duplicateSlide(activeSlide.id)}>
+                  Duplicate slide
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  destructive
+                  disabled={slides.length === 1}
+                  onSelect={() => deleteSlide(activeSlide.id)}
+                >
+                  Delete slide
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         <input
@@ -1080,6 +1398,47 @@ export default function SlidesEditor() {
         />
       </div>
 
+      {/* ── Speaker notes ──────────────────────────────────────────────────── */}
+      {/* Notes are the half of a deck the audience never sees, and until now
+          there was nowhere to write them even though present mode and the HTML
+          export both read them. Collapsed by default so the stage keeps the
+          room it had. */}
+      <div className="flex-none border-t border-border bg-bg-2/40">
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-text-dim transition-colors hover:text-text"
+          onClick={() => setNotesOpen((v) => !v)}
+        >
+          <StickyNote size={12} />
+          Speaker notes
+          {!notesOpen && activeSlide.notes?.trim() && (
+            <span className="truncate text-text-dim/70">— {activeSlide.notes.trim()}</span>
+          )}
+          <CaretDown
+            size={12}
+            className={cn('ml-auto flex-none transition-transform', notesOpen && 'rotate-180')}
+          />
+        </button>
+        {notesOpen && (
+          <textarea
+            key={activeSlide.id}
+            defaultValue={activeSlide.notes ?? ''}
+            // Committed on blur rather than per-keystroke: notes are prose, and
+            // one Yjs write per character would flood every peer's undo stack.
+            onBlur={(e) => {
+              if (e.target.value !== (activeSlide.notes ?? '')) setNotes(activeSlide.id, e.target.value);
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Escape') e.currentTarget.blur();
+            }}
+            placeholder={`Notes for slide ${slideIndex + 1} — shown to you in present mode (S), never on screen.`}
+            spellCheck
+            className="h-24 w-full resize-none bg-transparent px-3 pb-2 text-sm leading-relaxed text-text outline-none placeholder:text-text-dim/60"
+          />
+        )}
+      </div>
+      </div>
+
       {/* ── Present mode ───────────────────────────────────────────────────── */}
       {presenting !== null && (
         <PresentOverlay
@@ -1092,6 +1451,52 @@ export default function SlidesEditor() {
       )}
     </div>
   );
+}
+
+/**
+ * Alignment lines a dragged element can snap to: every OTHER element's left /
+ * center / right and top / middle / bottom, plus the slide's own edges and
+ * center. Gathered once per drag — they don't move while you're dragging.
+ */
+function snapTargets(elements: SlideElement[], dragging: Set<string>): SnapTargets {
+  const xs = [0, SLIDE_W / 2, SLIDE_W];
+  const ys = [0, SLIDE_H / 2, SLIDE_H];
+  for (const el of elements) {
+    if (dragging.has(el.id)) continue;
+    xs.push(el.x, el.x + el.w / 2, el.x + el.w);
+    ys.push(el.y, el.y + el.h / 2, el.y + el.h);
+  }
+  return { xs, ys };
+}
+
+/**
+ * Nudge `offset` so one of the box's three edges lands on a target line.
+ * Returns the adjusted offset and the line we locked onto (for the guide).
+ */
+function snapAxis(
+  origin: number,
+  size: number,
+  offset: number,
+  targets: number[],
+  tolerance: number,
+): { offset: number; guide: number | null } {
+  const edges = [origin + offset, origin + offset + size / 2, origin + offset + size];
+  let best: { delta: number; at: number } | null = null;
+  for (const edge of edges) {
+    for (const t of targets) {
+      const delta = t - edge;
+      if (Math.abs(delta) > tolerance) continue;
+      if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at: t };
+    }
+  }
+  return best ? { offset: offset + best.delta, guide: best.at } : { offset, guide: null };
+}
+
+/** Rotate (x, y) about the origin by `a` radians. */
+function rotate(x: number, y: number, a: number): { x: number; y: number } {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return { x: x * c - y * s, y: x * s + y * c };
 }
 
 function handlePos(h: Handle): React.CSSProperties {
@@ -1166,66 +1571,5 @@ function ToolButton({
     >
       {children}
     </button>
-  );
-}
-
-/** Fullscreen presentation overlay — arrows / space / click advance, Esc exits. */
-function PresentOverlay({
-  slides,
-  elementsBySlide,
-  index,
-  onNavigate,
-  onExit,
-}: {
-  slides: Slide[];
-  elementsBySlide: Map<string, SlideElement[]>;
-  index: number;
-  onNavigate: (i: number) => void;
-  onExit: () => void;
-}) {
-  const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
-  useEffect(() => {
-    const update = () => setSize({ w: window.innerWidth, h: window.innerHeight });
-    window.addEventListener('resize', update);
-    // Best-effort fullscreen; presentation still works if the browser refuses.
-    document.documentElement.requestFullscreen?.().catch(() => {});
-    return () => {
-      window.removeEventListener('resize', update);
-      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-    };
-  }, []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onExit();
-      } else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
-        e.preventDefault();
-        if (index < slides.length - 1) onNavigate(index + 1);
-      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        e.preventDefault();
-        if (index > 0) onNavigate(index - 1);
-      }
-    };
-    window.addEventListener('keydown', onKey, { capture: true });
-    return () => window.removeEventListener('keydown', onKey, { capture: true });
-  }, [index, slides.length, onNavigate, onExit]);
-  const slide = slides[index];
-  if (!slide) return null;
-  const k = Math.min(size.w / SLIDE_W, size.h / SLIDE_H);
-  return (
-    <div
-      data-present-overlay
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black"
-      onClick={() => {
-        if (index < slides.length - 1) onNavigate(index + 1);
-        else onExit();
-      }}
-    >
-      <SlideView background={slide.background} elements={elementsBySlide.get(slide.id) ?? []} scale={k} />
-      <span className="absolute bottom-3 right-4 text-xs font-mono text-white/50">
-        {index + 1} / {slides.length}
-      </span>
-    </div>
   );
 }

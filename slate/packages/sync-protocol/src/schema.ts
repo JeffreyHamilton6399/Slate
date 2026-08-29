@@ -336,9 +336,15 @@ export interface Slide {
   background: string;
   /** Speaker notes for this slide (shown to the presenter, never on screen). */
   notes?: string;
+  /** Entrance animation used when this slide comes up in present mode.
+   *  Absent on slides authored before transitions existed — treat as 'fade'. */
+  transition?: SlideTransition;
   createdAt: number;
   authorId: string;
 }
+
+/** Entrance animation for a slide in present mode. */
+export type SlideTransition = 'none' | 'fade' | 'slide' | 'zoom';
 
 export type SlideElementKind = 'text' | 'image' | 'rect' | 'ellipse' | 'line' | 'arrow';
 

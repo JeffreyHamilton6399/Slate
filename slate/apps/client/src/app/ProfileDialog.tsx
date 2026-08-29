@@ -124,6 +124,7 @@ export function ProfileDialog({ open, onOpenChange, initialTab = 'profile' }: Pr
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
+      ariaTitle="Profile and settings"
       className="max-w-5xl w-[95vw] p-0"
     >
       <div className="flex max-h-[85vh] min-h-[300px] flex-col sm:flex-row">
@@ -414,6 +415,8 @@ function SettingsTabView() {
   const setShowOnline = useAppStore((s) => s.setShowOnline);
   const voiceVolume = useAppStore((s) => s.voiceVolume);
   const storeSetVoiceVolume = useAppStore((s) => s.setVoiceVolume);
+  const showTransformHud = useAppStore((s) => s.showTransformHud);
+  const setShowTransformHud = useAppStore((s) => s.setShowTransformHud);
   const voice = useVoiceOptional();
   const setVoiceVolume = (v: number) => {
     if (voice) voice.setOutputVolume(v);
@@ -531,6 +534,28 @@ function SettingsTabView() {
             Show when I&apos;m online
             <span className="block text-text-dim">
               Friends see a green dot while you&apos;re active. Turn off to always appear offline.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      {/* 3D viewport. `showTransformHud` gates the fly/edit/modal-tool
+          readouts in Viewport3D but its only toggle lived in an orphaned
+          SettingsDialog that nothing ever imported — the setting was live and
+          unreachable. */}
+      <div>
+        <FieldLabel>3D viewport</FieldLabel>
+        <label className="flex items-start gap-2 text-xs text-text-mid">
+          <input
+            type="checkbox"
+            checked={showTransformHud}
+            onChange={(e) => setShowTransformHud(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span>
+            Show the transform HUD
+            <span className="block text-text-dim">
+              On-screen readouts while flying, in edit mode, and during move / rotate / scale.
             </span>
           </span>
         </label>

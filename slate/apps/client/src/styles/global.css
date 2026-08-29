@@ -287,3 +287,84 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 500px;
 }
+
+/* ── Present mode slide transitions ────────────────────────────────────────
+   One entrance animation per slide, chosen per-slide in the deck. The stage
+   wrapper is keyed on the slide id, so React remounts it on every navigation
+   and the animation replays without any manual timer bookkeeping. Directional
+   variants are picked from the direction of travel so going BACK slides the
+   other way. All of them collapse to a plain cut under reduced motion. */
+@keyframes slideEnterFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slideEnterRight {
+  from {
+    opacity: 0;
+    transform: translate3d(5%, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes slideEnterLeft {
+  from {
+    opacity: 0;
+    transform: translate3d(-5%, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes slideEnterZoom {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.slide-enter-fade {
+  animation: slideEnterFade 0.28s ease-out both;
+}
+.slide-enter-right {
+  animation: slideEnterRight 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.slide-enter-left {
+  animation: slideEnterLeft 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.slide-enter-zoom {
+  animation: slideEnterZoom 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-enter-fade,
+  .slide-enter-right,
+  .slide-enter-left,
+  .slide-enter-zoom {
+    animation: none;
+  }
+}
+
+/* Dock tab strips overflow on narrow docks. A right-edge mask makes the cut
+   visible so a scrolled-off panel reads as "keep scrolling", not "missing".
+   The mask only bites once the strip actually scrolls, because a strip that
+   fits has nothing hidden to hint at. */
+.dock-tabs {
+  scrollbar-width: none;
+}
+.dock-tabs::-webkit-scrollbar {
+  display: none;
+}
+.dock-tabs {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent 100%);
+}

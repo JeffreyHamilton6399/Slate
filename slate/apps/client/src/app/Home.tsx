@@ -34,7 +34,24 @@ import { useAccount } from '../account/useAccount';
 import { restoreSavesFromCloud } from '../account/cloudSaves';
 import { ensureMyProfile, fetchMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
-import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
+import {
+  modeBadgeClass,
+  modeGradientClass,
+  modeHeaderClass,
+  modeHoverBorderClass,
+  modeTextClass,
+} from './modeColors';
+
+/** The seven editors offered by the create bar, in picker order. */
+const CREATE_MODES: { id: DocMode; hint: string; Icon: typeof BoxIcon }[] = [
+  { id: '2d', hint: '2D whiteboard', Icon: PenLineIcon },
+  { id: '3d', hint: '3D scene', Icon: BoxIcon },
+  { id: 'doc', hint: 'Document', Icon: FileTextIcon },
+  { id: 'code', hint: 'Code editor', Icon: BracesIcon },
+  { id: 'diagram', hint: 'Diagram', Icon: WorkflowIcon },
+  { id: 'presentation', hint: 'Presentation', Icon: PresentationIcon },
+  { id: 'audio', hint: 'Audio studio', Icon: MusicIcon },
+];
 
 export function Entry() {
   const { user, loading } = useAccount();
@@ -502,17 +519,33 @@ function Home({ email, userId }: { email: string; userId: string }) {
                   onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
                   onIcon={<Globe size={15} />}
                   offIcon={<Lock size={15} />}
-                  onLabel="Public"
-                  offLabel="Private"
+                  onLabel="Public — listed for anyone to join"
+                  offLabel="Private — link only"
                 />
-                <IconToggle
-                  active={createMode !== '2d'}
-                  onClick={() => setCreateMode(createMode === '2d' ? '3d' : createMode === '3d' ? 'audio' : createMode === 'audio' ? 'doc' : createMode === 'doc' ? 'code' : createMode === 'code' ? 'diagram' : createMode === 'diagram' ? 'presentation' : '2d')}
-                  onIcon={createMode === 'audio' ? <MusicIcon size={15} /> : createMode === 'doc' ? <FileTextIcon size={15} /> : createMode === 'code' ? <BracesIcon size={15} /> : createMode === 'diagram' ? <WorkflowIcon size={15} /> : createMode === 'presentation' ? <PresentationIcon size={15} /> : <BoxIcon size={15} />}
-                  offIcon={<PenLineIcon size={15} />}
-                  onLabel={createMode === '3d' ? '3D scene' : createMode === 'audio' ? 'Audio' : createMode === 'doc' ? 'Doc' : createMode === 'code' ? 'Code' : createMode === 'diagram' ? 'Diagram' : 'Presentation'}
-                  offLabel="2D whiteboard"
-                />
+                {/* One tile per editor. This was a single icon that cycled all
+                    seven modes, so picking Slides took six clicks and nothing
+                    on screen said the other editors existed. */}
+                <span className="mx-0.5 hidden h-5 w-px bg-border-2 sm:block" aria-hidden />
+                <div className="flex items-center gap-1" role="group" aria-label="Editor">
+                  {CREATE_MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      title={m.hint}
+                      aria-label={m.hint}
+                      aria-pressed={createMode === m.id}
+                      onClick={() => setCreateMode(m.id)}
+                      className={cn(
+                        'flex h-9 w-9 items-center justify-center rounded-md border transition-colors',
+                        createMode === m.id
+                          ? cn('border-accent/70 shadow-[0_0_0_2px_var(--accent-glow)]', modeHeaderClass(m.id))
+                          : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
+                      )}
+                    >
+                      <m.Icon size={15} />
+                    </button>
+                  ))}
+                </div>
                 <Button variant="primary" size="md" onClick={() => create(createMode)} disabled={!board.trim()} className="ml-0.5">
                   <Plus size={14} />
                   <span className="ml-1.5">Create</span>

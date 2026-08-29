@@ -1063,7 +1063,10 @@ export function Viewport3D({ room }: Viewport3DProps) {
       }}
     >
       <Canvas
-        camera={{ position: [4, 3, 4], fov: 50, near: 0.1, far: 200 }}
+        // Blender's default framing: far enough back that a few grid sections
+        // and the horizon are both in shot. At the old [4,3,4] an empty scene
+        // opened nose-down on two grid cells with the horizon off screen.
+        camera={{ position: [7.5, 5, 7.5], fov: 45, near: 0.1, far: 500 }}
         shadows
         onPointerMissed={(e) => {
           // Don't clear when the click was confirming/cancelling a modal tool.
@@ -1109,8 +1112,12 @@ export function Viewport3D({ room }: Viewport3DProps) {
             sectionThickness={1.2}
             sectionColor={viewportColors.section}
             infiniteGrid
-            fadeDistance={10000}
-            fadeStrength={1}
+            // Fade the ground plane out ~12 sections away. At the old 10000
+            // the "infinite" grid never faded, so every view — an empty scene
+            // most of all — filled with a dense band of converging lines right
+            // up to the horizon instead of reading as a floor.
+            fadeDistance={grid.section * 12}
+            fadeStrength={1.5}
             // followCamera keeps the grid centered under the camera as you
             // fly/orbit around — Blender's ground plane always sits under the
             // view, not stuck at the origin where it gets left behind.

@@ -30,6 +30,8 @@ interface HeaderProps {
   awareness: AwarenessState[];
   onLeave: () => void;
   onFileMenu: (action: FileMenuAction) => void;
+  /** Autosave state, shown as a quiet badge beside the File menu. */
+  autosave?: { dirty: boolean; savedAt: number | null };
 }
 
 export type FileMenuAction =
@@ -45,7 +47,7 @@ export type FileMenuAction =
   | 'shortcuts'
   | 'install';
 
-export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) {
+export function Header({ status, awareness, onLeave, onFileMenu, autosave }: HeaderProps) {
   const board = useAppStore((s) => s.currentBoard);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const isMobile = useIsMobile();
@@ -56,8 +58,14 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
   // each blip spams "Connection lost / Back online". We debounce: a drop must
   // hold ~3s before we announce it, and we only announce recovery if we had
   // actually announced the drop.
+  //
+  // Deployments with no sync server are local-only BY DESIGN — the pill below
+  // says LOCAL for exactly that reason. Announcing "Connection lost" there
+  // contradicts the pill and reports a failure that never happened.
+  const serverAvailability = useServerStatus((s) => s.availability);
   const lastToastedRef = useRef<'up' | 'down'>('up');
   useEffect(() => {
+    if (serverAvailability === 'none') return;
     if (status === 'connected') {
       if (lastToastedRef.current === 'down') {
         lastToastedRef.current = 'up';
@@ -75,7 +83,7 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [status]);
+  }, [status, serverAvailability]);
 
   return (
     <header
@@ -136,6 +144,8 @@ export function Header({ status, awareness, onLeave, onFileMenu }: HeaderProps) 
           <DropdownMenuItem onSelect={() => onFileMenu('install')}>Install app…</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {autosave && <AutosaveBadge state={autosave} />}
 
       <div className="flex-1" />
 
@@ -334,3 +344,33 @@ function shareBoard(board: { name: string; mode: string } | null | undefined) {
   }
 }
 
+
+const SAVED_FLASH_MS = 2000;
+
+/**
+ * Autosave state as a small badge beside the File menu.
+ *
+ * It used to float bottom-center over the editor, where it landed squarely on
+ * the slides and diagram toolbars. The header has an uncontested slot next to
+ * the menu the badge is really about, and it reads the same in every mode.
+ */
+function AutosaveBadge({ state }: { state: { dirty: boolean; savedAt: number | null } }) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (state.dirty || !state.savedAt) return;
+    // Re-render once after the flash window so the badge disappears on its own.
+    const t = setTimeout(() => bump((x) => x + 1), SAVED_FLASH_MS + 100);
+    return () => clearTimeout(t);
+  }, [state.dirty, state.savedAt]);
+
+  const flashing = !!state.savedAt && Date.now() - state.savedAt < SAVED_FLASH_MS;
+  if (!state.dirty && !flashing) return null;
+  return (
+    <span
+      role="status"
+      className="ml-1.5 hidden select-none font-mono text-[10px] uppercase tracking-wider text-text-dim sm:inline"
+    >
+      {state.dirty ? 'Saving…' : 'Saved ✓'}
+    </span>
+  );
+}

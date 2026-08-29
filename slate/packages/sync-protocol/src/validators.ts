@@ -232,6 +232,7 @@ export const slideSchema = z.object({
   order: z.number().finite(),
   background: colorString,
   notes: z.string().max(20000).optional(),
+  transition: z.enum(['none', 'fade', 'slide', 'zoom']).optional(),
   createdAt: z.number().int().nonnegative(),
   authorId: idSchema,
 });

@@ -10,9 +10,20 @@ interface DialogProps {
   description?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Accessible name for a dialog that draws its own header and so passes no
+   *  visible `title`. Rendered screen-reader-only. */
+  ariaTitle?: string;
 }
 
-export function Dialog({ open, onOpenChange, title, description, children, className }: DialogProps) {
+export function Dialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+  className,
+  ariaTitle,
+}: DialogProps) {
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
@@ -31,8 +42,14 @@ export function Dialog({ open, onOpenChange, title, description, children, class
             className,
           )}
         >
-          {title && (
+          {/* Radix requires a Title on every Content — without one it logs an
+              accessibility error and screen readers announce an unnamed
+              dialog. A caller that draws its own header passes `ariaTitle`
+              instead and gets a screen-reader-only one. */}
+          {title ? (
             <RadixDialog.Title className="text-lg font-semibold mb-1.5">{title}</RadixDialog.Title>
+          ) : (
+            <RadixDialog.Title className="sr-only">{ariaTitle ?? 'Dialog'}</RadixDialog.Title>
           )}
           {description && (
             <RadixDialog.Description className="text-sm text-text-mid mb-4">

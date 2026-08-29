@@ -22,7 +22,30 @@ import { cn } from '../utils/cn';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
-import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
+import {
+  modeBadgeClass,
+  modeGradientClass,
+  modeHeaderClass,
+  modeHoverBorderClass,
+  modeTextClass,
+} from './modeColors';
+
+/** The seven editors, in the order the picker offers them. */
+const MODES: { id: DocMode; label: string; hint: string; Icon: typeof BoxIcon }[] = [
+  { id: '2d', label: '2D', hint: 'Whiteboard — draw, shapes, images', Icon: PenLine },
+  { id: '3d', label: '3D', hint: 'Blender-style 3D scene editor', Icon: BoxIcon },
+  { id: 'doc', label: 'Doc', hint: 'Collaborative rich-text document', Icon: FileText },
+  { id: 'code', label: 'Code', hint: 'Code editor with live preview', Icon: BracesIcon },
+  { id: 'diagram', label: 'Diagram', hint: 'Nodes and connectors', Icon: WorkflowIcon },
+  { id: 'presentation', label: 'Slides', hint: 'Presentation deck', Icon: PresentationIcon },
+  { id: 'audio', label: 'Audio', hint: 'Multitrack audio studio', Icon: MusicIcon },
+];
+
+/** Board visibility, as a labelled pair rather than a mystery globe icon. */
+const VISIBILITIES: { id: 'private' | 'public'; label: string; hint: string; Icon: typeof Lock }[] = [
+  { id: 'private', label: 'Private', hint: 'Only people you share the link with', Icon: Lock },
+  { id: 'public', label: 'Public', hint: 'Listed publicly — anyone can join', Icon: Globe },
+];
 
 export function Onboarding() {
   const cachedName = useAppStore((s) => s.displayName);
@@ -209,24 +232,58 @@ export function Onboarding() {
               required
             />
           </div>
-          {/* Single-icon toggles: click to flip visibility / mode. Compact. */}
-          <div className="flex items-center gap-3">
-            <IconToggle
-              active={visibility === 'public'}
-              onClick={() => setVisibility(visibility === 'public' ? 'private' : 'public')}
-              onIcon={<Globe size={15} />}
-              offIcon={<Lock size={15} />}
-              onLabel="Public"
-              offLabel="Private"
-            />
-            <IconToggle
-              active={mode !== '2d'}
-              onClick={() => setMode(mode === '2d' ? '3d' : mode === '3d' ? 'audio' : mode === 'audio' ? 'doc' : mode === 'doc' ? 'code' : mode === 'code' ? 'diagram' : mode === 'diagram' ? 'presentation' : '2d')}
-              onIcon={mode === 'audio' ? <MusicIcon size={15} /> : mode === 'doc' ? <FileText size={15} /> : mode === 'code' ? <BracesIcon size={15} /> : mode === 'diagram' ? <WorkflowIcon size={15} /> : mode === 'presentation' ? <PresentationIcon size={15} /> : <BoxIcon size={15} />}
-              offIcon={<PenLine size={15} />}
-              onLabel={mode === '3d' ? '3D' : mode === 'audio' ? 'Audio' : mode === 'doc' ? 'Doc' : mode === 'code' ? 'Code' : mode === 'diagram' ? 'Diagram' : 'Slides'}
-              offLabel="2D"
-            />
+          {/* Mode picker. This used to be ONE icon that cycled through all
+              seven modes on click: reaching Slides from 2D took six clicks,
+              and nothing on screen said the other six editors existed. Every
+              mode is now a labelled, mode-tinted tile. */}
+          <div>
+            <FieldLabel>Editor</FieldLabel>
+            <div className="grid grid-cols-4 gap-1.5">
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  title={m.hint}
+                  aria-pressed={mode === m.id}
+                  onClick={() => setMode(m.id)}
+                  className={cn(
+                    'flex flex-col items-center gap-1 rounded-md border px-1 py-2 transition-colors',
+                    mode === m.id
+                      ? cn('border-accent/70 shadow-[0_0_0_2px_var(--accent-glow)]', modeHeaderClass(m.id))
+                      : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
+                  )}
+                >
+                  <m.Icon size={15} />
+                  <span className="text-[10px] leading-none">{m.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <FieldLabel>Visibility</FieldLabel>
+            <div className="grid grid-cols-2 gap-1.5">
+              {VISIBILITIES.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  title={v.hint}
+                  aria-pressed={visibility === v.id}
+                  onClick={() => setVisibility(v.id)}
+                  className={cn(
+                    'flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors',
+                    // bg-accent/15 resolves through color-mix on the CSS
+                    // variable and washes out (see modeColors.ts); the glow
+                    // ring is what actually reads as "selected" here.
+                    visibility === v.id
+                      ? 'border-accent/70 bg-accent/20 text-accent shadow-[0_0_0_2px_var(--accent-glow)]'
+                      : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
+                  )}
+                >
+                  <v.Icon size={14} /> {v.label}
+                </button>
+              ))}
+            </div>
           </div>
           {/* Terms of Service acceptance — required to enter the board. Mirrors
               the sign-up flow's checkbox so guests and accounts see the same
@@ -421,48 +478,7 @@ function timeAgo(t: number): string {
 
 /** A single-icon toggle button: shows one icon when active, another when not.
  *  Clicking flips the state. More compact than a 2-button segmented control. */
-function IconToggle({
-  active,
-  onClick,
-  onIcon,
-  offIcon,
-  onLabel,
-  offLabel,
-}: {
-  active: boolean;
-  onClick: () => void;
-  onIcon: React.ReactNode;
-  offIcon: React.ReactNode;
-  onLabel: string;
-  offLabel: string;
-}) {
-  return (
-    <Tooltip content={active ? onLabel : offLabel}>
-      <button
-        type="button"
-        onClick={onClick}
-        aria-pressed={active}
-        aria-label={active ? onLabel : offLabel}
-        className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-md border transition-all',
-          active
-            ? 'border-accent/70 bg-accent/20 text-accent shadow-[0_0_0_2px_var(--accent-glow)]'
-            : 'border-border-2 text-text-mid hover:border-border hover:bg-bg-3 hover:text-text',
-        )}
-      >
-        {active ? onIcon : offIcon}
-      </button>
-    </Tooltip>
-  );
-}
 
-function Tooltip({ content, children }: { content: string; children: React.ReactNode }) {
-  return (
-    <span title={content} className="contents">
-      {children}
-    </span>
-  );
-}
 
 export function SlateMark({ size = 32 }: { size?: number }) {
   return (

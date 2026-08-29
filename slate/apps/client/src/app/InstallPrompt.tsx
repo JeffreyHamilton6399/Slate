@@ -16,9 +16,33 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
+/**
+ * Fire the browser's deferred install prompt.
+ *
+ * Returns false when there is nothing to fire (iOS Safari, already installed,
+ * or a browser that never sent `beforeinstallprompt`) so the caller can fall
+ * back to manual instructions. Shared with the File menu's "Install app…",
+ * which otherwise had no way to install — dismissing the banner below sets a
+ * permanent localStorage flag, so the menu was a dead end for anyone who had
+ * closed it once.
+ */
+export async function promptInstall(): Promise<boolean> {
+  const w = window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent };
+  const evt = w.__pwaPrompt;
+  if (!evt) return false;
+  try {
+    await evt.prompt();
+    await evt.userChoice;
+  } catch {
+    return false;
+  }
+  w.__pwaPrompt = undefined;
+  useAppStore.getState().setPwaInstallable(false);
+  return true;
+}
+
 export function InstallPrompt() {
   const installable = useAppStore((s) => s.pwaInstallable);
-  const setInstallable = useAppStore((s) => s.setPwaInstallable);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISS_KEY) === '1');
   const [isIOS, setIsIOS] = useState(false);
 
@@ -30,12 +54,7 @@ export function InstallPrompt() {
   if (!installable && !isIOS) return null;
 
   const onInstall = async () => {
-    const evt = (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt;
-    if (!evt) return;
-    await evt.prompt();
-    await evt.userChoice;
-    (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt = undefined;
-    setInstallable(false);
+    if (!(await promptInstall())) return;
     setDismissed(true);
     localStorage.setItem(DISMISS_KEY, '1');
   };

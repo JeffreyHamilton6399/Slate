@@ -3,8 +3,15 @@
  * Complements the compact left rail: same store, so selecting a tool in
  * either place stays in sync. Tools can be favorited (star), which pins them
  * to a Favorites group at the top.
+ *
+ * Tiles are icon-over-label, matching the Diagram and Doc tool panels. The
+ * previous icon-BESIDE-label rows left roughly 40px for text at the default
+ * dock width, which truncated every tool to its first letter ("S…", "P…",
+ * "M…") — the panel's entire reason to exist over the icon rail. Column count
+ * follows the dock width so widening the dock shows more per row.
  */
 
+import { useEffect, useRef, useState } from 'react';
 import {
   MousePointer2,
   Pencil,
@@ -90,6 +97,11 @@ const ALL_TOOLS: Record<string, ToolDef> = Object.fromEntries(
   GROUPS.flatMap((g) => g.tools).map((t) => [t.id, t]),
 );
 
+/** Tile columns by available panel width. Tiles want ~62px each. */
+function columnsFor(width: number): number {
+  return Math.max(2, Math.min(6, Math.floor(width / 62)));
+}
+
 export function ToolsPanel() {
   const tool = useCanvasStore((s) => s.tool);
   const setTool = useCanvasStore((s) => s.setTool);
@@ -98,26 +110,43 @@ export function ToolsPanel() {
 
   const favTools = favorites.map((id) => ALL_TOOLS[id]).filter(Boolean) as ToolDef[];
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [cols, setCols] = useState(3);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const w = entry?.contentRect.width;
+      if (w) setCols(columnsFor(w));
+    });
+    ro.observe(el);
+    setCols(columnsFor(el.getBoundingClientRect().width));
+    return () => ro.disconnect();
+  }, []);
+
   const ToolButton = ({ id, label, Icon, shortcut }: ToolDef) => {
     const fav = favorites.includes(id);
     return (
-      <div
-        className={cn(
-          'group flex items-center gap-2 rounded-sm border px-2 py-1.5 text-xs',
-          tool === id
-            ? 'border-accent/60 bg-accent/15 text-accent'
-            : 'border-transparent text-text-mid hover:bg-bg-4 hover:text-text',
-        )}
-      >
+      <div className="group relative">
         <button
           type="button"
           onClick={() => setTool(id)}
           aria-pressed={tool === id}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={`${label} (${shortcut})`}
+          className={cn(
+            'flex w-full flex-col items-center gap-1 rounded-md border px-1 py-2',
+            tool === id
+              ? 'border-accent/60 bg-accent/15 text-accent'
+              : 'border-border bg-bg-2 text-text-mid hover:border-accent/40 hover:bg-bg-3 hover:text-text',
+          )}
         >
-          <Icon size={14} className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <Icon size={16} />
+          {/* Two lines max: "Parallelogram" and "Speech Bubble" don't fit one. */}
+          <span className="line-clamp-2 text-center text-[9px] leading-tight">{label}</span>
         </button>
+        <kbd className="pointer-events-none absolute left-1 top-1 font-mono text-[8px] text-text-dim">
+          {shortcut}
+        </kbd>
         <button
           type="button"
           onClick={() => toggleFavorite(id)}
@@ -125,27 +154,26 @@ export function ToolsPanel() {
           aria-pressed={fav}
           title={fav ? 'Remove from favorites' : 'Add to favorites'}
           className={cn(
-            'shrink-0 rounded p-0.5 transition-opacity',
-            fav ? 'text-warn opacity-100' : 'text-text-dim opacity-0 group-hover:opacity-100 hover:text-text',
+            'absolute right-0.5 top-0.5 rounded p-0.5 transition-opacity',
+            fav
+              ? 'text-warn opacity-100'
+              : 'text-text-dim opacity-0 hover:text-text group-hover:opacity-100',
           )}
         >
-          <Star size={12} fill={fav ? 'currentColor' : 'none'} />
+          <Star size={11} fill={fav ? 'currentColor' : 'none'} />
         </button>
-        <kbd className="shrink-0 rounded border border-border bg-bg-3 px-1 font-mono text-[9px] text-text-dim">
-          {shortcut}
-        </kbd>
       </div>
     );
   };
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-2">
+    <div ref={rootRef} className="flex h-full flex-col gap-3 overflow-y-auto p-2">
       {favTools.length > 0 && (
         <div>
           <h5 className="panel-title mb-1.5 flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-dim">
             <Star size={9} className="text-warn" fill="currentColor" /> Favorites
           </h5>
-          <div className="grid grid-cols-2 gap-1">
+          <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
             {favTools.map((t) => (
               <ToolButton key={`fav-${t.id}`} {...t} />
             ))}
@@ -157,7 +185,7 @@ export function ToolsPanel() {
           <h5 className="panel-title mb-1.5 text-[10px] font-mono uppercase tracking-wider text-text-dim">
             {group.title}
           </h5>
-          <div className="grid grid-cols-2 gap-1">
+          <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
             {group.tools.map((t) => (
               <ToolButton key={t.id} {...t} />
             ))}

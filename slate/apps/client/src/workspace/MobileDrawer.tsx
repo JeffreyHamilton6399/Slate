@@ -1,10 +1,15 @@
 /**
  * MobileDrawer — bottom sheet that replaces both docks on narrow screens.
  * Tabs are presented as a horizontal scroll strip; the body is the panel.
+ *
+ * It also owns the button that OPENS it. Nothing else in the app called
+ * setMobileDrawer(true), so on a phone every dock panel — Layers, Tools,
+ * Properties, Hierarchy, Files, Preview, the AI assistant, Chat, Notes,
+ * Friends, the audio racks, the slide layouts — was unreachable.
  */
 
 import { useEffect, useMemo } from 'react';
-import { X } from 'lucide-react';
+import { PanelsTopLeft, X } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { usePanelRegistry, RenderPanel, panelMatchesMode } from './panelRegistry';
 import { useDockStore } from './dockStore';
@@ -47,7 +52,23 @@ export function MobileDrawer() {
     }
   }, [open, activeTab, allTabs, setMobileDrawer]);
 
-  if (!open) return null;
+  // Closed: show the launcher. Bottom-RIGHT, clear of the People widget
+  // (bottom-left) and raised above each editor's bottom status strip.
+  if (!open) {
+    if (allTabs.length === 0) return null;
+    return (
+      <button
+        type="button"
+        aria-label="Open panels"
+        title="Panels"
+        onClick={() => setMobileDrawer(true, activeTab ?? allTabs[0] ?? null)}
+        className="fixed bottom-16 right-3 z-[150] grid h-12 w-12 place-items-center rounded-full border border-border bg-bg-2/95 text-text-mid shadow-xl backdrop-blur transition-transform active:scale-95"
+        style={{ marginBottom: 'var(--safe-bottom, 0px)' }}
+      >
+        <PanelsTopLeft size={20} />
+      </button>
+    );
+  }
 
   return (
     <>

@@ -19,10 +19,16 @@
  */
 
 import * as Y from 'yjs';
-import { SLIDE_W, SLIDE_H } from '@slate/sync-protocol';
+import { SLIDE_W, SLIDE_H, type SlideTransition } from '@slate/sync-protocol';
 import { makeId } from '../utils/id';
 import { toYMap } from './model';
 import { defaultTextColor } from './background';
+
+/** Legacy decks stored the transition as a free-form string; keep the ones
+ *  the current model still understands and default the rest to 'fade'. */
+function legacyTransition(raw: unknown): SlideTransition {
+  return raw === 'none' || raw === 'slide' || raw === 'zoom' ? raw : 'fade';
+}
 
 /** Page margin used when laying converted content down the slide. */
 const M = 80;
@@ -145,8 +151,9 @@ export function migrateLegacyDeck(
         toYMap({
           order: index + 1,
           background,
-          // Speaker notes survive the conversion.
+          // Speaker notes and the slide transition survive the conversion.
           notes: (m.get('notes') as string | undefined) || '',
+          transition: legacyTransition(m.get('transition')),
           createdAt: now,
           authorId,
         }),

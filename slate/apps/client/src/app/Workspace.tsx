@@ -13,6 +13,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Dock } from '../workspace/Dock';
 import { FloatingPanels } from '../workspace/FloatingPanels';
 import { MobileDrawer } from '../workspace/MobileDrawer';
+import { promptInstall } from './InstallPrompt';
 import { useDockStore } from '../workspace/dockStore';
 import { useIsMobile } from '../workspace/useMediaQuery';
 import { usePanelRegistry } from '../workspace/panelRegistry';
@@ -83,12 +84,17 @@ export function Workspace() {
   const autosave = useAutosave(room);
 
   // On first open, push default tabs based on mode + register fresh panels.
+  // Sorted by each panel's declared `order`: tabs are appended in the order we
+  // call ensureTab, so iterating the registry as-authored put the generic
+  // Boards/Chat/Notes/Friends set ahead of the mode's own panels and pushed
+  // them off the end of a 220px strip — the code Preview and the audio AI
+  // assistant were registered, docked, and invisible.
   const panels = usePanelRegistry((s) => s.panels);
   useEffect(() => {
-    Object.values(panels).forEach((p) => {
-      if (p.mode && p.mode !== 'both' && p.mode !== board.mode) return;
-      ensureTab(p.defaultSide, p.id);
-    });
+    Object.values(panels)
+      .filter((p) => !p.mode || p.mode === 'both' || p.mode === board.mode)
+      .sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || a.title.localeCompare(b.title))
+      .forEach((p) => ensureTab(p.defaultSide, p.id));
   }, [panels, board.mode, ensureTab]);
 
   // Initialize meta if this is the creator on a fresh board.
@@ -304,10 +310,15 @@ export function Workspace() {
           setShortcutsOpen(true);
           break;
         case 'install':
-          toast({
-            title: 'Install Slate',
-            description:
-              'Use your browser menu → "Install app" / "Add to Home Screen". Slate works fully offline once installed.',
+          // Use the browser's real install prompt when we have one; the
+          // instructions are the fallback, not the whole feature.
+          void promptInstall().then((installed) => {
+            if (installed) return;
+            toast({
+              title: 'Install Slate',
+              description:
+                'Use your browser menu → "Install app" / "Add to Home Screen". Slate works fully offline once installed.',
+            });
           });
           break;
       }
@@ -338,6 +349,7 @@ export function Workspace() {
           awareness={awareness}
           onLeave={leaveBoard}
           onFileMenu={handleFileMenu}
+          autosave={autosave}
         />
         <div className="flex flex-1 min-h-0">
           {!isMobile && (
@@ -391,34 +403,9 @@ export function Workspace() {
         <BackgroundDialog open={bgOpen} onOpenChange={setBgOpen} />
         <BoardSettingsDialog open={boardSettingsOpen} onOpenChange={setBoardSettingsOpen} />
         <NewProjectDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
-        <AutosaveBadge state={autosave} />
       </div>
       </VoiceProvider>
     </RoomProvider>
-  );
-}
-
-const SAVED_FLASH_MS = 2000;
-
-/** Shows "Saving…" while dirty, flashes "Saved" briefly, then disappears. */
-function AutosaveBadge({ state }: { state: ReturnType<typeof useAutosave> }) {
-  const [, bump] = useState(0);
-  useEffect(() => {
-    if (state.dirty || !state.savedAt) return;
-    // Re-render once after the flash window so the badge unmounts.
-    const t = setTimeout(() => bump((x) => x + 1), SAVED_FLASH_MS + 100);
-    return () => clearTimeout(t);
-  }, [state.dirty, state.savedAt]);
-
-  const flashing = !!state.savedAt && Date.now() - state.savedAt < SAVED_FLASH_MS;
-  if (!state.dirty && !flashing) return null;
-  return (
-    <div
-      className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2 rounded-md border border-border bg-bg-2/90 backdrop-blur px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-text-dim sm:bottom-12"
-      role="status"
-    >
-      {state.dirty ? 'Saving…' : 'Saved ✓'}
-    </div>
   );
 }
 

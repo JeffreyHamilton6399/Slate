@@ -25,8 +25,10 @@ interface WidgetPos {
 }
 
 function defaultPos(): WidgetPos {
-  // Clear of the 2D tool rail (left) and the mobile bottom style bar.
-  return window.innerWidth < 640 ? { x: 8, y: 72 } : { x: 60, y: 14 };
+  // Clear of the 2D tool rail, which is 40px wide at left-2 on EVERY width —
+  // the old 8px mobile offset parked the pill on top of the rail's zoom
+  // controls. Sits higher on phones to clear the bottom style/status bars.
+  return window.innerWidth < 640 ? { x: 56, y: 72 } : { x: 60, y: 14 };
 }
 
 function clampPos(p: WidgetPos): WidgetPos {

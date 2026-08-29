@@ -7,7 +7,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { DocMode } from '@slate/sync-protocol';
-import type { LengthUnit } from '../viewport3d/units';
 
 export type Theme = 'dark' | 'light';
 
@@ -47,10 +46,6 @@ interface AppState {
    *  device, like the 3D viewport; the board's shared background color is
    *  used when off. */
   paperFollowsTheme: boolean;
-  /** Display unit for 3D lengths (canonical scale: 1 world unit = 1 m). */
-  units: LengthUnit;
-  /** CAD behavior: modal transforms snap by default; Ctrl frees them. */
-  cadSnap: boolean;
   /** UI accent color (hex), applied to the CSS custom properties. */
   accent: string;
   /** Voice output volume for everyone you hear (0–1). */
@@ -68,8 +63,6 @@ interface AppState {
   setShowOnline: (v: boolean) => void;
   setTheme: (t: Theme) => void;
   setPaperFollowsTheme: (v: boolean) => void;
-  setUnits: (u: LengthUnit) => void;
-  setCadSnap: (v: boolean) => void;
   setAccent: (c: string) => void;
   setVoiceVolume: (v: number) => void;
   setShowTransformHud: (v: boolean) => void;
@@ -96,8 +89,6 @@ export const useAppStore = create<AppState>()(
       pwaInstallable: false,
       theme: 'dark',
       paperFollowsTheme: true,
-      units: 'm',
-      cadSnap: false,
       accent: '#7c6aff',
       voiceVolume: 1,
       showTransformHud: true,
@@ -110,8 +101,6 @@ export const useAppStore = create<AppState>()(
       setShowOnline: (showOnline) => set({ showOnline }),
       setTheme: (theme) => set({ theme }),
       setPaperFollowsTheme: (paperFollowsTheme) => set({ paperFollowsTheme }),
-      setUnits: (units) => set({ units }),
-      setCadSnap: (cadSnap) => set({ cadSnap }),
       setAccent: (accent) => set({ accent }),
       setVoiceVolume: (voiceVolume) => set({ voiceVolume: Math.max(0, Math.min(1, voiceVolume)) }),
       setShowTransformHud: (showTransformHud) => set({ showTransformHud }),
@@ -134,8 +123,6 @@ export const useAppStore = create<AppState>()(
         currentBoard: s.currentBoard,
         theme: s.theme,
         paperFollowsTheme: s.paperFollowsTheme,
-        units: s.units,
-        cadSnap: s.cadSnap,
         accent: s.accent,
         voiceVolume: s.voiceVolume,
         showTransformHud: s.showTransformHud,

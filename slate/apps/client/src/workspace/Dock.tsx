@@ -140,36 +140,57 @@ function DockZoneSection({
   }, [tabs, activeTab, setActiveTab, zone]);
 
   const empty = tabs.length === 0;
+
+  // Keep the active tab reachable. Four panels overflow a 220px strip, and a
+  // tab that scrolls off looks to the user like a panel that failed to open.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || !activeTab) return;
+    el.querySelector(`[data-tab-id="${CSS.escape(activeTab)}"]`)?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [activeTab, tabs]);
+
   return (
     <div
       data-dock-drop={zone}
       className={cn('flex min-h-0 flex-col', empty && 'flex-none')}
       style={style}
     >
+      {/* Only the tabs scroll. "+" is pinned: with four or more panels in a
+          220px dock the strip overflows, and a scrolled-away "Add panel"
+          button is a control the user can't find. */}
       <div
         data-tab-strip={zone}
         className={cn(
-          'flex items-center gap-0.5 border-b border-border px-1.5 py-1 overflow-x-auto',
+          'flex items-center border-b border-border px-1.5 py-1',
           dropHint === zone && 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(124,106,255,0.55)]',
         )}
       >
-        {tabs.map((id) => (
-          <DraggableTab
-            key={id}
-            id={id}
-            zone={zone}
-            title={panels[id]?.title ?? id}
-            active={activeTab === id}
-            onSelect={() => setActiveTab(zone, id)}
-            onClose={() => closePanel(id)}
-            onFloat={(x, y) => floatPanel(id, { x, y })}
-          />
-        ))}
-        {empty && (
-          <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-dim">
-            {emptyHint ?? 'Empty'}
-          </span>
-        )}
+        <div
+          ref={stripRef}
+          className="dock-tabs flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+        >
+          {tabs.map((id) => (
+            <DraggableTab
+              key={id}
+              id={id}
+              zone={zone}
+              title={panels[id]?.title ?? id}
+              active={activeTab === id}
+              onSelect={() => setActiveTab(zone, id)}
+              onClose={() => closePanel(id)}
+              onFloat={(x, y) => floatPanel(id, { x, y })}
+            />
+          ))}
+          {empty && (
+            <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-dim">
+              {emptyHint ?? 'Empty'}
+            </span>
+          )}
+        </div>
         <AddTabMenu zone={zone} />
       </div>
       {!empty && (
@@ -306,18 +327,26 @@ function DraggableTab({
       )}
     >
       <span>{title}</span>
-      <button
-        type="button"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        aria-label={`Close ${title}`}
-        className="opacity-0 group-hover:opacity-100 text-text-dim hover:text-text rounded-sm p-0.5"
-      >
-        <X size={11} />
-      </button>
+      {/* Close affordance on the ACTIVE tab only. An always-rendered
+          opacity-0 button still costs ~19px of layout per tab, which is what
+          pushed the fourth panel off a 260px strip; revealing it on hover
+          instead would make the whole strip jump under the cursor. Inactive
+          panels close by selecting them first, or by dragging them out. */}
+      {active && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label={`Close ${title}`}
+          title={`Close ${title}`}
+          className="rounded-sm p-0.5 text-text-dim hover:text-text"
+        >
+          <X size={11} />
+        </button>
+      )}
     </div>
   );
 }

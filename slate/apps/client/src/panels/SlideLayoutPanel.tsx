@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { SLIDE_W, SLIDE_H, type SlideElement } from '@slate/sync-protocol';
+import { SLIDE_W, SLIDE_H, type SlideElement, type SlideTransition } from '@slate/sync-protocol';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { makeId } from '../utils/id';
@@ -91,6 +91,14 @@ const LAYOUTS: Layout[] = [
 ];
 
 const BG_SWATCHES = ['#14141b', '#0c0c0e', '#1d1d2b', '#232333', '#2b2036', '#f6f5f0', '#ffffff'];
+
+/** Entrance animations offered per slide, in present mode. */
+const TRANSITIONS: { id: SlideTransition; name: string }[] = [
+  { id: 'none', name: 'Cut' },
+  { id: 'fade', name: 'Fade' },
+  { id: 'slide', name: 'Slide' },
+  { id: 'zoom', name: 'Zoom' },
+];
 
 export function SlideLayoutPanel() {
   const room = useRoom();
@@ -192,7 +200,7 @@ export function SlideLayoutPanel() {
         <div className="mb-1.5 px-0.5 text-[10px] font-mono uppercase tracking-wider text-text-dim">
           Background
         </div>
-        <div className="flex flex-wrap gap-1.5 px-0.5">
+        <div className="flex flex-wrap gap-1 px-0.5">
           {BG_SWATCHES.map((c) => (
             <button
               key={c}
@@ -201,17 +209,67 @@ export function SlideLayoutPanel() {
                 setSlideBackground(room.slate.doc, slidesMap, elementsMap, active.id, c)
               }
               className={cn(
-                'h-6 w-6 rounded-md border transition-transform hover:scale-110',
+                'h-[22px] w-[22px] rounded-md border transition-transform hover:scale-110',
                 active.background === c ? 'border-accent' : 'border-border',
               )}
               style={{ background: c }}
             />
           ))}
         </div>
+        <button
+          className="mt-1.5 w-full rounded-md border border-border py-1 text-[10px] text-text-dim transition-colors hover:border-accent hover:text-text"
+          title="Give every slide in the deck this background"
+          onClick={() => {
+            room.slate.doc.transact(() => {
+              for (const s of slides) {
+                setSlideBackground(room.slate.doc, slidesMap, elementsMap, s.id, active.background);
+              }
+            });
+          }}
+        >
+          Apply background to all slides
+        </button>
+      </div>
+
+      <div>
+        <div className="mb-1.5 px-0.5 text-[10px] font-mono uppercase tracking-wider text-text-dim">
+          Transition
+        </div>
+        <div className="grid grid-cols-4 gap-1">
+          {TRANSITIONS.map((t) => (
+            <button
+              key={t.id}
+              title={`Play this slide with a ${t.name.toLowerCase()} entrance`}
+              onClick={() => room.slate.doc.transact(() => slidesMap.get(active.id)?.set('transition', t.id))}
+              className={cn(
+                'rounded-md border py-1 text-[10px] transition-colors',
+                (active.transition ?? 'fade') === t.id
+                  ? 'border-accent bg-accent/15 text-text'
+                  : 'border-border text-text-dim hover:text-text',
+              )}
+            >
+              {t.name}
+            </button>
+          ))}
+        </div>
+        <button
+          className="mt-1.5 w-full rounded-md border border-border py-1 text-[10px] text-text-dim transition-colors hover:border-accent hover:text-text"
+          title="Give every slide in the deck this transition"
+          onClick={() => {
+            const t = active.transition ?? 'fade';
+            room.slate.doc.transact(() => {
+              for (const s of slides) slidesMap.get(s.id)?.set('transition', t);
+            });
+          }}
+        >
+          Apply transition to all slides
+        </button>
       </div>
 
       <p className="px-0.5 text-[10px] leading-relaxed text-text-dim">
-        Double-click the slide to add text · drag/paste an image to place it · F5 presents.
+        Double-click the slide to add text · drag/paste an image to place it · drag the top handle
+        to rotate · elements snap to alignment guides (hold Alt to override) · F5 presents ·
+        ⇧F5 presents from the start.
       </p>
     </div>
   );

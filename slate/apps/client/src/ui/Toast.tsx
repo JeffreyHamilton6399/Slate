@@ -14,22 +14,40 @@ interface ToastEntry {
 
 interface ToastStore {
   toasts: ToastEntry[];
+  /** True while a full-screen presentation is running. */
+  muted: boolean;
   push: (t: Omit<ToastEntry, 'id'>) => string;
   remove: (id: string) => void;
+  setMuted: (v: boolean) => void;
 }
 
 export const useToasts = create<ToastStore>((set) => ({
   toasts: [],
+  muted: false,
   push: (t) => {
     const id = makeId('toast');
     set((s) => ({ toasts: [...s.toasts, { id, ...t }] }));
     return id;
   },
   remove: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
+  setMuted: (muted) => set({ muted }),
 }));
 
 export function toast(t: Omit<ToastEntry, 'id'>): string {
   return useToasts.getState().push(t);
+}
+
+/**
+ * Hide toasts while presenting.
+ *
+ * A "Connection lost — reconnecting…" card sliding onto a projector mid-talk
+ * is the single worst thing this app can do to a user, and none of these
+ * messages are actionable while you're presenting anyway. Entries stay mounted
+ * (so their auto-dismiss timers still run) — only the viewport is hidden, so
+ * exiting the show doesn't dump a backlog of stale cards on screen.
+ */
+export function muteToasts(muted: boolean): void {
+  useToasts.getState().setMuted(muted);
 }
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -44,12 +62,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 function ToastViewport() {
   const toasts = useToasts((s) => s.toasts);
   const remove = useToasts((s) => s.remove);
+  const muted = useToasts((s) => s.muted);
   return (
     <>
       {toasts.map((t) => (
         <ToastItem key={t.id} entry={t} onClose={() => remove(t.id)} />
       ))}
-      <RadixToast.Viewport className="fixed bottom-4 right-4 z-[1104] flex w-[360px] max-w-[92vw] flex-col gap-2 outline-none" />
+      <RadixToast.Viewport
+        className={cn(
+          'fixed bottom-4 right-4 z-[1104] flex w-[360px] max-w-[92vw] flex-col gap-2 outline-none',
+          muted && 'hidden',
+        )}
+      />
     </>
   );
 }

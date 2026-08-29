@@ -11,7 +11,10 @@ import { Button } from '../ui/Button';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
 import { toast } from '../ui/Toast';
-import { importModel } from './import3d';
+// three.js loads only when a 3D model is actually imported — a static import
+// here made the 872KB three chunk a hard dependency of the entry, since this
+// dialog is mounted on every board.
+import type { importModel as ImportModelFn } from './import3d';
 import { fileToImageShape } from '../canvas2d/importImage';
 import { uploadDataUrl } from '../supabase/storage';
 import { useScene3DStore } from '../viewport3d/store';
@@ -37,6 +40,7 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
       setBusy(true);
       try {
         if (is3d) {
+          const { importModel } = (await import('./import3d')) as { importModel: typeof ImportModelFn };
           const ids = await importModel(room, file);
           toast({ title: 'Import complete', description: `${ids.length} object${ids.length === 1 ? '' : 's'} imported` });
           // Select the new objects and ask the viewport to frame them so the

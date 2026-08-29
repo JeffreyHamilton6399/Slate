@@ -21,11 +21,13 @@ import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
 import { useRoom } from '../sync/RoomContext';
 import { useAppStore } from '../app/store';
-import { exportRaster, exportSvg, type RasterFormat } from './export2d';
-import { export3D, type ThreeDFormat } from './export3d';
-import { export2dVideo } from './export2dVideo';
-import { exportAudioWav, exportAudioMp3 } from './exportAudio';
-import { readSceneSnapshot } from '../viewport3d/scene';
+// The exporters are pulled in on DEMAND, not at import time. This dialog is
+// mounted on every board, and statically importing them made the whole three.js
+// stack (export3d) and a full JS MP3 encoder (exportAudio → lamejs) hard
+// dependencies of the main bundle — downloaded and parsed by someone who only
+// opened a document. They now cost nothing until an export actually runs.
+import type { RasterFormat } from './export2d';
+import type { ThreeDFormat } from './export3d';
 import { useScene3DStore } from '../viewport3d/store';
 import { useCanvasStore } from '../canvas2d/store';
 import { readAudioClip } from '../audio/scene';
@@ -220,8 +222,10 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         const duration = computeAudioDuration(room.slate);
         if (duration <= 0) throw new Error('Nothing to export — add some audio clips first.');
         if (format === 'wav') {
+          const { exportAudioWav } = await import('./exportAudio');
           await exportAudioWav({ slate: room.slate, duration, onProgress: setProgress });
         } else if (format === 'mp3') {
+          const { exportAudioMp3 } = await import('./exportAudio');
           await exportAudioMp3({ slate: room.slate, duration, onProgress: setProgress });
         } else {
           throw new Error(`Unsupported audio format: ${format}`);
@@ -233,6 +237,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           window.dispatchEvent(new CustomEvent('slate:export-3d-animation'));
           toast({ title: 'Rendering animation', description: 'Capturing the 3D viewport…' });
         } else {
+          const { readSceneSnapshot } = await import('../viewport3d/scene');
           const snap = readSceneSnapshot(room.slate);
           const selection = new Set(useScene3DStore.getState().selection);
           const objects =
@@ -240,6 +245,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
               ? snap.objects.filter((o) => selection.has(o.id))
               : snap.objects;
           if (objects.length === 0) throw new Error('Nothing selected to export.');
+          const { export3D } = await import('./export3d');
           const blob = await export3D(format as ThreeDFormat, {
             objects,
             meshes: snap.meshes,
@@ -259,6 +265,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             throw new Error('This browser can’t record the canvas.');
           }
           const store = useCanvasStore.getState();
+          const { export2dVideo } = await import('./export2dVideo');
           await export2dVideo({
             canvas,
             fps: store.animFps,
@@ -268,6 +275,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         } else if (format === 'svg') {
           const { layers, shapesByLayer, strokesByLayer } = read2DScene(room);
           const meta = readMeta(room.slate);
+          const { exportSvg } = await import('./export2d');
           downloadText(
             exportSvg({ layers, shapesByLayer, strokesByLayer, paper: meta.paper ?? '#0c0c0e' }),
             `${board?.name ?? 'slate'}.svg`,
@@ -276,6 +284,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         } else {
           const { layers, shapesByLayer, strokesByLayer } = read2DScene(room);
           const meta = readMeta(room.slate);
+          const { exportRaster } = await import('./export2d');
           const blob = await exportRaster({
             layers,
             shapesByLayer,

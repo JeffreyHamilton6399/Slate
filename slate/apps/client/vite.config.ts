@@ -3,6 +3,62 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
+/**
+ * Vendor chunk groups, in priority order — the FIRST group whose package owns
+ * a module wins. Shared runtime libraries come first so a feature bundle can't
+ * swallow them; everything below is split so a board only downloads the editor
+ * it actually opened.
+ */
+/**
+ * Vendor chunk groups, in priority order — the FIRST group whose package
+ * matches wins. An entry ending in `/` or `-` is treated as a prefix.
+ *
+ * Two rules here were learned the hard way:
+ *
+ *   1. Shared runtime libraries must be listed BEFORE the feature bundles that
+ *      would otherwise absorb them. React was unlisted, fell through to
+ *      Rollup's automatic chunking, and landed inside `three` — so every chunk
+ *      in the app imported the 1.2MB three bundle just to reach React, and the
+ *      entry preloaded it on a 2D board.
+ *
+ *   2. Cyclically-coupled packages must stay in ONE chunk. `three` and
+ *      `three-stdlib` import each other; splitting them per-package produced
+ *      "Cannot access 'Ot' before initialization" and took out the entire 3D
+ *      editor at runtime. Groups are drawn around ecosystems for that reason,
+ *      not around individual packages.
+ */
+const CHUNK_GROUPS: [string, string[]][] = [
+  ['react', ['react', 'react-dom', 'scheduler']],
+  // use-sync-external-store is zustand's React shim, so it belongs here. Left
+  // unlisted it landed inside `tiptap`, and because every store in the app
+  // needs it the entry side-effect-imported that 500KB chunk on every board.
+  ['state', ['zustand', 'use-sync-external-store', 'fast-equals']],
+  ['three', ['three', 'three-stdlib', '@react-three/']],
+  ['yjs', ['yjs', 'y-indexeddb', 'y-protocols', 'lib0', '@hocuspocus/']],
+  // TipTap + ProseMirror only load on doc-mode boards.
+  ['tiptap', ['@tiptap/', 'prosemirror-', 'y-prosemirror']],
+  // CodeMirror + Lezer only load on code-mode boards.
+  ['codemirror', ['@codemirror/', '@lezer/', 'y-codemirror.next']],
+  // Radix primitives back every dialog / dropdown / menu; shared, so they
+  // cache independently of app code.
+  ['radix', ['@radix-ui/']],
+  ['icons', ['lucide-react']],
+];
+
+
+/** npm package name for a node_modules module id, or null. Handles scoped
+ *  names and pnpm's nested .pnpm/<pkg>@<ver>/node_modules/<pkg>/ layout, where
+ *  the LAST node_modules segment names the real package. Rollup normalises ids
+ *  to POSIX separators on every platform, so no separator juggling here.
+ *  Returns the RAW name (scope included) — CHUNK_GROUPS matches on it. */
+function packageOf(id: string): string | null {
+  const at = id.lastIndexOf('/node_modules/');
+  if (at < 0) return null;
+  const rest = id.slice(at + '/node_modules/'.length).split('/');
+  const name = rest[0]?.startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0];
+  return name ?? null;
+}
+
 export default defineConfig({
   define: {
     // Build stamp shown in Settings → About. The PWA service worker can keep
@@ -41,49 +97,29 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three', '@react-three/fiber', '@react-three/drei'],
-          yjs: ['yjs', 'y-indexeddb', '@hocuspocus/provider'],
-          // TipTap + ProseMirror only load on doc-mode boards — pull them
-          // out of the main chunk so audio/2D/3D/code boards skip the
-          // ~250KB parse/eval cost. `@tiptap/extension-collaboration-caret`
-          // is the v3 name (was `-cursor` in v2).
-          tiptap: [
-            '@tiptap/react',
-            '@tiptap/starter-kit',
-            '@tiptap/extension-collaboration',
-            '@tiptap/extension-collaboration-caret',
-          ],
-          // CodeMirror only loads on code-mode boards — same idea.
-          codemirror: [
-            '@codemirror/state',
-            '@codemirror/view',
-            '@codemirror/commands',
-            '@codemirror/language',
-            '@codemirror/autocomplete',
-            '@codemirror/search',
-          ],
-          // Radix UI primitives — shared across every dialog/dropdown/menu
-          // in the app. Splitting them out of the main chunk keeps the
-          // initial load leaner (the main bundle no longer ships the entire
-          // primitive layer up front; it streams in parallel). Every
-          // @radix-ui/* package we depend on is listed here.
-          radix: [
-            '@radix-ui/react-dialog',
-            '@radix-ui/react-dropdown-menu',
-            '@radix-ui/react-popover',
-            '@radix-ui/react-slider',
-            '@radix-ui/react-switch',
-            '@radix-ui/react-tabs',
-            '@radix-ui/react-toast',
-            '@radix-ui/react-tooltip',
-          ],
-          // lucide-react — icon library imported app-wide. Tree-shaking
-          // already keeps per-route icon counts low, but the shared runtime
-          // (icon base + the handful of icons used on the Home / Header
-          // surfaces that everyone hits) is non-trivial; its own chunk
-          // means it caches independently of app code.
-          icons: ['lucide-react'],
+        manualChunks(id) {
+          // Vite's own dynamic-import preload helper. Rollup puts shared code
+          // in whichever chunk claims it first, and this landed inside
+          // `three` — so the ENTRY chunk statically imported 868KB of three.js
+          // purely to reach a ~1KB helper, on every board including 2D and
+          // doc. Pinning it here keeps the entry's static graph honest.
+          if (id.includes('vite/preload-helper') || id.includes('vite/modulepreload-polyfill')) {
+            return 'vite-helpers';
+          }
+          const pkg = packageOf(id);
+          if (!pkg) return undefined;
+          // First match wins; see CHUNK_GROUPS for why order matters.
+          for (const [chunk, patterns] of CHUNK_GROUPS) {
+            const hit = patterns.some((p) =>
+              p.endsWith('/') || p.endsWith('-') ? pkg.startsWith(p) : pkg === p,
+            );
+            if (hit) return chunk;
+          }
+          // Everything else falls to Rollup automatic chunking. Splitting the
+          // long tail per-package is tempting but unsafe: unrelated vendors
+          // can be cyclically coupled, and separate chunks break their
+          // initialization order.
+          return undefined;
         },
       },
     },

@@ -1,31 +1,50 @@
 /**
  * Registers all built-in panels at module import time. Add new panels here.
  *
- * Heavy panels (3D Properties / Hierarchy) are still lightweight to import
- * because they only attach a React component reference; the component itself
- * is lazy-rendered only when its tab is opened.
+ * MODE-SPECIFIC panels are registered as React.lazy components. This file runs
+ * at app start, so a plain `import` of a panel pulls its ENTIRE module graph
+ * into the main bundle — the Instrument panel alone dragged in the synth
+ * engine and the GM sample tables, which someone opening a document has no use
+ * for. Registering a lazy component still attaches only a component reference
+ * (what the old comment here claimed a static import did), and RenderPanel's
+ * Suspense boundary shows a one-line fallback while the chunk arrives.
+ *
+ * The four 'both' panels (Boards / Chat / Notes / Friends) stay static: they
+ * are docked in every mode, so deferring them would only add a flash.
  */
 
+import { lazy, type ComponentType } from 'react';
 import { registerPanel } from '../workspace/panelRegistry';
 import { ChatPanel } from './ChatPanel';
 import { NotesPanel } from './NotesPanel';
 import { BoardsPanel } from './BoardsPanel';
-import { LayersPanel } from './LayersPanel';
-import { HierarchyPanel } from './HierarchyPanel';
-import { PropertiesPanel } from './PropertiesPanel';
-import { AssetsPanel } from './AssetsPanel';
-import { ToolsPanel } from './ToolsPanel';
-import { AudioAssetsPanel } from './AudioAssetsPanel';
-import { AudioSettingsPanel } from './AudioSettingsPanel';
-import { InstrumentPanel } from './InstrumentPanel';
 import { FriendsPanel } from './FriendsPanel';
-import { DocOutlinePanel } from './DocOutlinePanel';
-import { DocToolsPanel } from './DocToolsPanel';
-import { CodeFilesPanel } from './CodeFilesPanel';
-import { CodePreviewPanel } from './CodePreviewPanel';
-import { DiagramToolsPanel } from './DiagramToolsPanel';
-import { SlideLayoutPanel } from './SlideLayoutPanel';
-import { AiChatPanel } from './AiChatPanel';
+
+/** Register a named export from a module as a lazily-loaded panel component. */
+function lazyPanel<K extends string>(
+  load: () => Promise<Record<K, ComponentType>>,
+  name: K,
+): ComponentType {
+  // Annotate `default` explicitly: without it React infers the lazy component's
+  // props from the generic and the result stops matching PanelDef.render.
+  return lazy(async () => ({ default: (await load())[name] as ComponentType }));
+}
+
+const LayersPanel = lazyPanel(() => import('./LayersPanel'), 'LayersPanel');
+const HierarchyPanel = lazyPanel(() => import('./HierarchyPanel'), 'HierarchyPanel');
+const PropertiesPanel = lazyPanel(() => import('./PropertiesPanel'), 'PropertiesPanel');
+const AssetsPanel = lazyPanel(() => import('./AssetsPanel'), 'AssetsPanel');
+const ToolsPanel = lazyPanel(() => import('./ToolsPanel'), 'ToolsPanel');
+const AudioAssetsPanel = lazyPanel(() => import('./AudioAssetsPanel'), 'AudioAssetsPanel');
+const AudioSettingsPanel = lazyPanel(() => import('./AudioSettingsPanel'), 'AudioSettingsPanel');
+const InstrumentPanel = lazyPanel(() => import('./InstrumentPanel'), 'InstrumentPanel');
+const DocOutlinePanel = lazyPanel(() => import('./DocOutlinePanel'), 'DocOutlinePanel');
+const DocToolsPanel = lazyPanel(() => import('./DocToolsPanel'), 'DocToolsPanel');
+const CodeFilesPanel = lazyPanel(() => import('./CodeFilesPanel'), 'CodeFilesPanel');
+const CodePreviewPanel = lazyPanel(() => import('./CodePreviewPanel'), 'CodePreviewPanel');
+const DiagramToolsPanel = lazyPanel(() => import('./DiagramToolsPanel'), 'DiagramToolsPanel');
+const SlideLayoutPanel = lazyPanel(() => import('./SlideLayoutPanel'), 'SlideLayoutPanel');
+const AiChatPanel = lazyPanel(() => import('./AiChatPanel'), 'AiChatPanel');
 
 let registered = false;
 

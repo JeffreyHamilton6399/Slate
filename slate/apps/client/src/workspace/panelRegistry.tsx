@@ -4,7 +4,7 @@
  * lets us code-split heavy panels (e.g. 3D properties).
  */
 
-import type { ComponentType, ReactNode } from 'react';
+import { Suspense, type ComponentType, type ReactNode } from 'react';
 import { create } from 'zustand';
 import type { DocMode } from '@slate/sync-protocol';
 import { RecoverBoundary } from '../app/RecoverBoundary';
@@ -61,10 +61,20 @@ export function RenderPanel({ id }: { id: string }): ReactNode {
   if (!def) return null;
   const C = def.render;
   // A throw inside one panel renders an inline recovery card instead of
-  // unmounting the whole app via the root ErrorBoundary.
+  // unmounting the whole app via the root ErrorBoundary. Suspense lets a panel
+  // be registered as a React.lazy component so its module (and everything it
+  // imports) only downloads when its tab is first opened.
   return (
     <RecoverBoundary label={`“${def.title}”`}>
-      <C />
+      <Suspense
+        fallback={
+          <div className="p-3 text-xs text-text-dim" role="status">
+            Loading {def.title}…
+          </div>
+        }
+      >
+        <C />
+      </Suspense>
     </RecoverBoundary>
   );
 }

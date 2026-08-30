@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, PhoneOff, Crown, GripHorizontal, PencilOff, UserX } from 'lucide-react';
-import type { AwarenessState } from '@slate/sync-protocol';
+import { VOICE_ACTIVE_LEVEL, type AwarenessState } from '@slate/sync-protocol';
 import type { SlateRoom } from '../sync/provider';
 import { useVoiceOptional } from '../voice/useVoiceOptional';
 import { useServerStatus } from '../sync/serverStatus';
@@ -147,8 +147,11 @@ export function PeopleWidget({
   /** Session-local per-person volume (applied to the live voice client). */
   const [peerVol, setPeerVol] = useState<Record<string, number>>({});
 
+  // Shared threshold: the roster snapshot this widget renders from is only
+  // republished when a peer CROSSES it (see rosterKey), so reading a different
+  // number here would light the ring off a level nobody re-rendered for.
   const speaking = (s: AwarenessState) =>
-    (s.id === me ? (voice?.selfLevel ?? 0) : s.voiceLevel) > 0.08;
+    (s.id === me ? (voice?.selfLevel ?? 0) : s.voiceLevel) > VOICE_ACTIVE_LEVEL;
   const inVoice = (s: AwarenessState) => (s.id === me ? !!voice?.connected : s.inVoice);
   const voiceCount = members.filter(inVoice).length;
 

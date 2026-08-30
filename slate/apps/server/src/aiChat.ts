@@ -22,16 +22,31 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { env } from './config.js';
 
+/** The client truncates editor context to 8000 chars before sending, so this
+ *  ceiling only ever trips on a hand-crafted body. */
+const MAX_CONTEXT_CHARS = 32_000;
+
 const chatBody = z.object({
   messages: z
     .array(z.object({ role: z.string(), content: z.string() }))
     .min(1),
-  context: z.string().optional(),
-  instructions: z.string().optional(),
+  context: z.string().max(MAX_CONTEXT_CHARS).optional(),
+  instructions: z.string().max(MAX_CONTEXT_CHARS).optional(),
 });
 
+/**
+ * Every call here spends the operator's Z.AI credits, and the route is
+ * unauthenticated — the chat panel sends no identity token. The server-wide
+ * limit of 200/min is sized for cheap JSON endpoints and would let a single
+ * client run up a real bill, so this one gets its own much tighter budget.
+ * Interactive chat rarely needs more than a handful of turns a minute.
+ */
+const aiChatRouteOptions = {
+  config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+};
+
 export function registerAiChatRoutes(app: FastifyInstance): void {
-  app.post('/api/ai-chat', async (req, reply) => {
+  app.post('/api/ai-chat', aiChatRouteOptions, async (req, reply) => {
     const baseUrl = env.ZAI_BASE_URL?.replace(/\/+$/, '');
     const apiKey = env.ZAI_API_KEY;
 
@@ -46,7 +61,14 @@ export function registerAiChatRoutes(app: FastifyInstance): void {
     const parsed = chatBody.safeParse(req.body);
     if (!parsed.success) {
       reply.code(400);
-      return { error: 'Messages array is required' };
+      // Report what actually failed: with the size caps above, a rejected body
+      // is as often an over-long context as a missing messages array.
+      const issue = parsed.error.issues[0];
+      return {
+        error: issue
+          ? `Invalid request: ${issue.path.join('.') || 'body'} — ${issue.message}`
+          : 'Messages array is required',
+      };
     }
     const { messages, context, instructions } = parsed.data;
 

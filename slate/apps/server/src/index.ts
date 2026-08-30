@@ -42,7 +42,15 @@ await app.register(helmet, {
   crossOriginEmbedderPolicy: false,
 });
 await app.register(compress, { threshold: 1024 });
-await app.register(rateLimit, { max: 200, timeWindow: '1 minute' });
+// Per-IP HTTP budget. Sized for what the client itself asks for, times the
+// number of people who can share one public address: every open tab polls
+// /api/rooms every 5s (12/min) and re-dials the relay on each reconnect, so a
+// classroom or an office behind a single NAT address spends one budget
+// together — at 200/min a couple of dozen tabs would start getting 429s, the
+// health probe among them, and the whole room would fall back to local-only
+// at once. 600/min is ~50 concurrent tabs from one address while still
+// bounding a scripted flood.
+await app.register(rateLimit, { max: 600, timeWindow: '1 minute' });
 
 // "*" allows any origin (identity is anonymous JWTs, boards are open by
 // design); a comma-separated list restricts to specific client origins.
@@ -74,7 +82,13 @@ const rooms = new RoomRegistry();
 const relay = createRelay(rooms);
 
 // ── Routes ──────────────────────────────────────────────────────────────────
-app.get('/health', async () => ({ status: 'ok', uptime: Math.floor(process.uptime()) }));
+// Exempt from the rate limiter: this is the client's availability probe, and a
+// 429 here reads as "no server" — the whole app drops to local-only. It costs
+// a constant-size JSON, cheaper than the 429 path it would otherwise take.
+app.get('/health', { config: { rateLimit: false } }, async () => ({
+  status: 'ok',
+  uptime: Math.floor(process.uptime()),
+}));
 
 const identityBody = z.object({
   displayName: z.string().min(1).max(80),

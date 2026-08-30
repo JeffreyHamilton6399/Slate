@@ -268,7 +268,8 @@ export function SlideLayoutPanel() {
 
       <p className="px-0.5 text-[10px] leading-relaxed text-text-dim">
         Double-click the slide to add text · drag/paste an image to place it · drag the top handle
-        to rotate · elements snap to alignment guides (hold Alt to override) · F5 presents ·
+        to rotate · elements snap to alignment guides (hold Alt to override) · Ctrl+A selects the
+        slide, then the align menu in the toolbar lines a selection up · F5 presents ·
         ⇧F5 presents from the start.
       </p>
     </div>

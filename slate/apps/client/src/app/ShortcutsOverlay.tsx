@@ -118,6 +118,7 @@ const sections: Section[] = [
       { keys: ['Enter'], desc: 'Commit text · Shift+Enter for a new line' },
       { keys: ['Ctrl', 'C'], desc: 'Copy · Ctrl+X cut · Ctrl+V paste' },
       { keys: ['Ctrl', 'D'], desc: 'Duplicate selection' },
+      { keys: ['Ctrl', 'A'], desc: 'Select every element on the slide' },
       { keys: ['Del'], desc: 'Delete selection' },
       { keys: ['←↑↓→'], desc: 'Nudge selection (Shift = 10×)' },
       { keys: [']'], desc: 'Bring to front · [ send to back' },

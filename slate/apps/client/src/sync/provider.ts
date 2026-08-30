@@ -19,12 +19,18 @@ import {
   sanitizeDisplayName,
   type AwarenessState,
 } from '@slate/sync-protocol';
-import { ensureIdentity, type Identity } from './identity.js';
+import { clearIdentity, ensureIdentity, type Identity } from './identity.js';
 import { ensureServerProbe, useServerStatus } from './serverStatus.js';
 import { wsUrl } from './serverUrl.js';
 import { createSlateDoc, migrateLegacyContainers, type SlateDoc } from './doc.js';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
+
+/** Re-auth backoff bounds after the server rejects our token. */
+const AUTH_RETRY_BASE_MS = 2_000;
+const AUTH_RETRY_MAX_MS = 30_000;
+/** Beat between closing the refused socket and dialling a fresh one. */
+const AUTH_SOCKET_REBUILD_MS = 250;
 
 export interface SlateRoomOptions {
   /** Room name (board name) — used both as Yjs doc name and WS topic. */
@@ -53,6 +59,9 @@ export class SlateRoom {
   private status: ConnectionStatus = 'connecting';
   /** Set while waiting for a late server appearance (local-only start). */
   unsubscribeServerStatus: (() => void) | null = null;
+  /** Pending re-auth attempt after a rejected token, and its current backoff. */
+  private authRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private authRetryDelay = AUTH_RETRY_BASE_MS;
 
   private constructor(opts: {
     room: string;
@@ -92,6 +101,7 @@ export class SlateRoom {
     this.provider.on('disconnect', this.onDisconnect);
     this.provider.on('connect', this.onConnect);
     this.provider.on('synced', this.onSynced);
+    this.provider.on('authenticationFailed', this.onAuthFailed);
     this.provider.awareness?.on('change', this.onAwareness);
 
     // Publish initial awareness immediately so other peers see us as joining.
@@ -124,6 +134,10 @@ export class SlateRoom {
     // top-level containers the accessors now read from.
     migrateLegacyContainers(slate.doc);
 
+    // Last token the server actually issued us, kept as the fallback for the
+    // reconnect callback below.
+    let lastToken = identity.token;
+
     const wsUrl = computeWsUrl(opts.room);
     const socket = new HocuspocusProviderWebsocket({
       url: wsUrl,
@@ -133,7 +147,25 @@ export class SlateRoom {
       websocketProvider: socket,
       name: opts.room,
       document: slate.doc,
-      token: identity.token,
+      // Resolved on every (re)connect rather than captured once. A token is
+      // only valid for JWT_TTL_SECONDS (24h) and is signed with a secret the
+      // server may have rotated since — in production an unset JWT_SECRET is a
+      // fresh random key each boot. With a fixed string here, Hocuspocus keeps
+      // replaying the same dead token: the server closes with Forbidden, the
+      // provider reconnects, and the loop never ends, so the board sits
+      // disconnected until the tab is reloaded.
+      token: async () => {
+        const fresh = await ensureIdentity(identity.name);
+        if (fresh.token) lastToken = fresh.token;
+        // Never resolve to an empty string. ensureIdentity falls back to a
+        // token-less offline identity whenever the issuing request fails —
+        // which is exactly what happens while the server is restarting — and
+        // Hocuspocus closes an empty auth message with Unauthorized, then sets
+        // shouldConnect = false and gives up for good. Any non-empty token is
+        // merely Forbidden, which keeps retrying until the server is back.
+        // 'notoken' is the library's own placeholder for this case.
+        return lastToken || 'notoken';
+      },
       // Hocuspocus client sends token in connectionParams.
       forceSyncInterval: 30_000,
     });
@@ -218,10 +250,15 @@ export class SlateRoom {
   dispose(): void {
     this.unsubscribeServerStatus?.();
     this.unsubscribeServerStatus = null;
+    if (this.authRetryTimer !== null) {
+      clearTimeout(this.authRetryTimer);
+      this.authRetryTimer = null;
+    }
     this.provider.off('status', this.onStatus);
     this.provider.off('disconnect', this.onDisconnect);
     this.provider.off('connect', this.onConnect);
     this.provider.off('synced', this.onSynced);
+    this.provider.off('authenticationFailed', this.onAuthFailed);
     this.provider.awareness?.off('change', this.onAwareness);
     this.statusListeners.clear();
     this.awarenessListeners.clear();
@@ -244,12 +281,44 @@ export class SlateRoom {
     for (const fn of this.statusListeners) fn(next);
   };
   private onConnect = (): void => {
+    this.authRetryDelay = AUTH_RETRY_BASE_MS;
     this.status = 'connected';
     for (const fn of this.statusListeners) fn('connected');
   };
   private onDisconnect = (): void => {
     this.status = 'disconnected';
     for (const fn of this.statusListeners) fn('disconnected');
+  };
+  /** The token we sent was rejected — it expired, or the server is signing
+   *  with a different secret than the one that issued it. Hocuspocus reacts by
+   *  detaching the provider and going quiet, so nothing reconnects on its own:
+   *  without this the board stays dead until the tab is reloaded.
+   *
+   *  Drop the cached identity (so the token callback issues a fresh one rather
+   *  than replaying the dead token) and dial back in. `this.identity` is left
+   *  alone for display — re-issuing mints a new peer id, and swapping it
+   *  mid-session would make the user reappear to everyone else as a stranger.
+   *
+   *  Backs off 2s → 30s so a server that is rejecting every token gets a
+   *  steady retry rather than a hot loop; a successful connect resets it. */
+  private onAuthFailed = (): void => {
+    clearIdentity();
+    if (this.authRetryTimer !== null) return; // a retry is already queued
+    const delay = this.authRetryDelay;
+    this.authRetryDelay = Math.min(delay * 2, AUTH_RETRY_MAX_MS);
+    this.authRetryTimer = setTimeout(() => {
+      // Rebuild the socket rather than retrying on the refused one. After a
+      // permission-denied the server leaves that connection open, and the idle
+      // timer it armed on connect then closes it with Unauthorized — which the
+      // provider treats as fatal (shouldConnect = false). A same-socket retry
+      // races that timer and loses, ending the session for good.
+      this.socket.disconnect();
+      this.authRetryTimer = setTimeout(() => {
+        this.authRetryTimer = null;
+        this.socket.connect();
+        void this.provider.connect();
+      }, AUTH_SOCKET_REBUILD_MS);
+    }, delay);
   };
   // First server sync can deliver a board still using the old nested container
   // layout; lift it into the top-level containers so the scene/audio show up.

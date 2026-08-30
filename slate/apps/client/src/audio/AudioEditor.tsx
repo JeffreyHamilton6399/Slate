@@ -1382,7 +1382,7 @@ export function AudioEditor() {
     loopDragCleanupRef.current = onUp;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [loopStart, loopEnd, pxPerSec]);
+  }, [loopStart, loopEnd]);
 
   // Unmount safety: if the user closes the audio panel (or navigates away)
   // while a loop-handle drag is in flight, the window pointermove/pointerup

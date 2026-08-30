@@ -11,6 +11,10 @@ kill_timeout = "10s"
 [build]
   dockerfile = "Dockerfile"
 
+# Set a stable signing secret once per app, before the first deploy:
+#   flyctl secrets set JWT_SECRET="$(openssl rand -base64 32)"
+# Without it the server generates a random key on every boot, so sessions do
+# not survive a restart and a second machine would not agree with the first.
 [env]
   NODE_ENV = "production"
   PORT = "8080"

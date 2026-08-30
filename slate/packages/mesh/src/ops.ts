@@ -828,7 +828,6 @@ export function bevelEdgesDetailed(
     const dl = length(dir);
     let fit: { S: Vec3; R: number; pole: Vec3 } | null = null;
     if (dl > 1e-9) {
-      const dhat = scale(dir, 1 / dl);
       const spread = (t: number): number => {
         const S = add(C0, scale(dir, t));
         const ds = pts.map((p) => length(sub(p, S)));

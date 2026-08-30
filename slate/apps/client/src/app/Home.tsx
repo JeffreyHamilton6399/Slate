@@ -27,7 +27,7 @@ import { Avatar } from './Avatar';
 import { ProfileDialog, type ProfileTab } from './ProfileDialog';
 import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
-import { fetchRooms, type PublicRoom } from '../sync/rooms';
+import { fetchRooms, pollRooms, type PublicRoom } from '../sync/rooms';
 import { listSaves, deleteSave } from '../files/snapshot';
 import { accountsEnabled, supabase } from '../account/supabase';
 import { useAccount } from '../account/useAccount';
@@ -393,16 +393,11 @@ function Home({ email, userId }: { email: string; userId: string }) {
     return () => { cancelled = true; };
   }, [userId]);
 
-  useEffect(() => {
-    fetchRooms().then(setRooms).catch(() => setRooms([]));
-    // Poll for live board updates (visibility toggles, member counts) so
-    // changes made by other users in their boards reflect here without a
-    // manual refresh. 5s keeps the list feeling live.
-    const interval = setInterval(() => {
-      fetchRooms().then(setRooms).catch(() => {});
-    }, 5_000);
-    return () => clearInterval(interval);
-  }, []);
+  // Poll for live board updates (visibility toggles, member counts) so changes
+  // made by other users in their boards reflect here without a manual refresh.
+  // 5s keeps the list feeling live; pollRooms pauses itself while the tab is
+  // hidden and refreshes on the way back.
+  useEffect(() => pollRooms(setRooms, 5_000), []);
 
   // Honor share links (?board=…&mode=…) by joining straight away. Whether
   // we're the creator matters: creators bootstrap the first layer + meta.

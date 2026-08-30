@@ -12,7 +12,7 @@
  * short grace period so a StrictMode remount reattaches instead of churning).
  */
 import { useEffect, useRef, useState } from 'react';
-import type { AwarenessState } from '@slate/sync-protocol';
+import { rosterKey, type AwarenessState } from '@slate/sync-protocol';
 import { SlateRoom, type ConnectionStatus } from './provider.js';
 import { registerSampleSyncMap } from '../audio/sampleStore';
 
@@ -89,6 +89,11 @@ export function useSlateRoom(roomName: string | null, displayName?: string): Use
   const nameRef = useRef(displayName);
   nameRef.current = displayName;
 
+  // Last roster we published to React. Awareness fires at cursor rate (20 Hz
+  // per peer), and this state sits at the root of the workspace tree — see
+  // rosterKey for why only roster-level changes are allowed through.
+  const rosterRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!roomName) {
       setRoom(null);
@@ -107,7 +112,14 @@ export function useSlateRoom(roomName: string | null, displayName?: string): Use
       if (cancelled) return;
       setRoom(r);
       unsubs.push(r.onStatusChange(setStatus));
-      unsubs.push(r.onAwarenessChange(setAwareness));
+      unsubs.push(
+        r.onAwarenessChange((states) => {
+          const key = rosterKey(states);
+          if (key === rosterRef.current) return;
+          rosterRef.current = key;
+          setAwareness(states);
+        }),
+      );
       // Register the multiplayer audio sample-sync map as soon as the room
       // resolves — NOT from the AudioEditor mount. Previously this only ran
       // when the AudioEditor mounted, so a peer on a 2D/3D board (with the
@@ -126,6 +138,7 @@ export function useSlateRoom(roomName: string | null, displayName?: string): Use
     return () => {
       cancelled = true;
       for (const off of unsubs) off();
+      rosterRef.current = null; // a remount must republish, not dedupe away
       setRoom(null);
       releaseRoom(roomName, entry);
     };

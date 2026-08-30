@@ -43,6 +43,17 @@ import {
   AlignRight,
   StickyNote,
   GripVertical,
+  Minus,
+  ArrowRight,
+  AlignHorizontalJustifyCenter,
+  AlignVerticalJustifyCenter,
+  AlignStartVertical,
+  AlignCenterVertical,
+  AlignEndVertical,
+  AlignStartHorizontal,
+  AlignCenterHorizontal,
+  AlignEndHorizontal,
+  LayoutGrid,
 } from 'lucide-react';
 import {
   SLIDE_W,
@@ -88,6 +99,20 @@ const BG_SWATCHES = ['#14141b', '#0c0c0e', '#1d1d2b', '#232333', '#f6f5f0', '#ff
 const EL_SWATCHES = ['#e0dff5', '#7c6aff', '#8fd4ff', '#8fe6b0', '#ffd68f', '#ff9db8', '#2a2a35'];
 
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+/** Edge (or centre line) of the selection's bounding box to align against. */
+type AlignEdge = 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom';
+
+/** The three fill presets a closed shape can use. */
+type FillStyle = 'solid' | 'tint' | 'none';
+
+/** Which preset a shape's current fill corresponds to. Tints are written as
+ *  8-digit hex with an alpha suffix, so a short (or fully opaque) value is a
+ *  solid colour and an absent one is outline-only. */
+function fillStyleOf(el: SlideElement): FillStyle {
+  if (!el.fill) return 'none';
+  return /^#[0-9a-f]{8}$/i.test(el.fill) && !/ff$/i.test(el.fill) ? 'tint' : 'solid';
+}
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 /** Candidate alignment lines gathered once at drag start. */
@@ -497,8 +522,11 @@ export default function SlidesEditor() {
   const insertShape = useCallback(
     (kind: SlideElementKind) => {
       if (!activeSlide) return;
-      const w = kind === 'ellipse' ? 260 : 300;
-      const h = kind === 'ellipse' ? 260 : 200;
+      // Lines and arrows are drawn across the middle of their box, so they get
+      // a wide, short one; closed shapes get a chunkier default.
+      const linear = kind === 'line' || kind === 'arrow';
+      const w = linear ? 420 : kind === 'ellipse' ? 260 : 300;
+      const h = linear ? 48 : kind === 'ellipse' ? 260 : 200;
       const id = addElement({
         slideId: activeSlide.id,
         kind,
@@ -507,9 +535,11 @@ export default function SlidesEditor() {
         w,
         h,
         rotation: 0,
-        fill: '#7c6aff33',
+        // A line has no interior — a fill would paint a rectangle behind the
+        // stroke, so it stays explicitly empty.
+        fill: linear ? null : '#7c6aff33',
         stroke: '#7c6aff',
-        strokeWidth: 2,
+        strokeWidth: linear ? 3 : 2,
       });
       setSelection(new Set([id]));
     },
@@ -549,6 +579,67 @@ export default function SlidesEditor() {
       if (newIds.length) setSelection(new Set(newIds));
     },
     [activeSlide, addElement],
+  );
+
+  // ── Arrange ────────────────────────────────────────────────────────────────
+  /** Selected elements read fresh from the doc — these run from callbacks that
+   *  outlive a render, so they read selectionRef rather than closing over it. */
+  const readSelectedElements = useCallback(
+    (): SlideElement[] =>
+      readElements(elementsMap).filter((el) => selectionRef.current.has(el.id)),
+    [elementsMap],
+  );
+
+  /** Align every selected element to the edge (or centre line) of the bounding
+   *  box they share — the standard behaviour in every slide editor. */
+  const alignSelection = useCallback(
+    (edge: AlignEdge) => {
+      const els = readSelectedElements();
+      if (els.length < 2) return;
+      const minX = Math.min(...els.map((e) => e.x));
+      const maxX = Math.max(...els.map((e) => e.x + e.w));
+      const minY = Math.min(...els.map((e) => e.y));
+      const maxY = Math.max(...els.map((e) => e.y + e.h));
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      room.slate.doc.transact(() => {
+        for (const el of els) {
+          const m = elementsMap.get(el.id);
+          if (!m) continue;
+          switch (edge) {
+            case 'left': m.set('x', minX); break;
+            case 'hcenter': m.set('x', cx - el.w / 2); break;
+            case 'right': m.set('x', maxX - el.w); break;
+            case 'top': m.set('y', minY); break;
+            case 'vmiddle': m.set('y', cy - el.h / 2); break;
+            case 'bottom': m.set('y', maxY - el.h); break;
+          }
+        }
+      });
+    },
+    [elementsMap, room, readSelectedElements],
+  );
+
+  /** Even out the gaps between the selection's centres, holding the two
+   *  outermost elements still. Needs three to have a middle to move. */
+  const distributeSelection = useCallback(
+    (axis: 'h' | 'v') => {
+      const els = readSelectedElements();
+      if (els.length < 3) return;
+      const pos = axis === 'h' ? 'x' : 'y';
+      const size = axis === 'h' ? 'w' : 'h';
+      const centre = (e: SlideElement): number => e[pos] + e[size] / 2;
+      const sorted = [...els].sort((a, b) => centre(a) - centre(b));
+      const start = centre(sorted[0]!);
+      const gap = (centre(sorted[sorted.length - 1]!) - start) / (sorted.length - 1);
+      room.slate.doc.transact(() => {
+        sorted.forEach((el, i) => {
+          if (i === 0 || i === sorted.length - 1) return;
+          elementsMap.get(el.id)?.set(pos, start + gap * i - el[size] / 2);
+        });
+      });
+    },
+    [elementsMap, room, readSelectedElements],
   );
 
   const imagePickerRef = useRef<HTMLInputElement | null>(null);
@@ -883,6 +974,17 @@ export default function SlidesEditor() {
         if (copySelection()) pasteClipboard();
         return;
       }
+      if (ctrl && k === 'a') {
+        e.preventDefault();
+        setSelection(
+          new Set(
+            readElements(elementsMap)
+              .filter((el) => el.slideId === activeSlide?.id)
+              .map((el) => el.id),
+          ),
+        );
+        return;
+      }
       if (e.key === 'Escape') {
         setSelection(new Set());
         return;
@@ -905,10 +1007,31 @@ export default function SlidesEditor() {
   // ── Derived bits for render ────────────────────────────────────────────────
   const selectedElements = activeElements.filter((el) => selection.has(el.id));
   const selectedText = selectedElements.find((el) => el.kind === 'text');
+  /** First closed shape in the selection — lines have no interior to fill. */
+  const selectedShape = selectedElements.find(
+    (el) => el.kind === 'rect' || el.kind === 'ellipse',
+  );
   const editingEl = textEdit
     ? activeElements.find((el) => el.id === textEdit.elementId) ?? null
     : null;
   const slideIndex = Math.max(0, slides.findIndex((s) => s.id === activeSlide?.id));
+
+  /** Switch every selected closed shape between solid / tinted / no fill,
+   *  keeping the hue of its outline so it still matches the chosen swatch. */
+  const setFillStyle = useCallback(
+    (style: FillStyle) => {
+      room.slate.doc.transact(() => {
+        for (const el of selectedElements) {
+          if (el.kind !== 'rect' && el.kind !== 'ellipse') continue;
+          const m = elementsMap.get(el.id);
+          if (!m) continue;
+          const base = (el.stroke ?? el.fill ?? '#7c6aff').slice(0, 7);
+          m.set('fill', style === 'none' ? null : style === 'tint' ? `${base}33` : base);
+        }
+      });
+    },
+    [elementsMap, room, selectedElements],
+  );
 
   const applyToSelection = useCallback(
     (patch: Partial<SlideElement>, textPatch: Partial<SlideElement>) => {
@@ -1242,6 +1365,12 @@ export default function SlidesEditor() {
           <ToolButton title="Ellipse" onClick={() => insertShape('ellipse')}>
             <Circle size={16} />
           </ToolButton>
+          <ToolButton title="Line" onClick={() => insertShape('line')}>
+            <Minus size={16} />
+          </ToolButton>
+          <ToolButton title="Arrow" onClick={() => insertShape('arrow')}>
+            <ArrowRight size={16} />
+          </ToolButton>
           <div className="mx-1 h-5 w-px bg-border" />
           {selection.size > 0 ? (
             <>
@@ -1294,6 +1423,80 @@ export default function SlidesEditor() {
                   <ToolButton title="Align right" active={selectedText.align === 'right'} onClick={() => applyToSelection({}, { align: 'right' })}>
                     <AlignRight size={14} />
                   </ToolButton>
+                </>
+              )}
+              {selectedShape && (
+                <>
+                  <div className="mx-1 h-5 w-px bg-border" />
+                  <ToolButton
+                    title="Solid fill"
+                    active={fillStyleOf(selectedShape) === 'solid'}
+                    onClick={() => setFillStyle('solid')}
+                  >
+                    <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
+                  </ToolButton>
+                  <ToolButton
+                    title="Tinted fill"
+                    active={fillStyleOf(selectedShape) === 'tint'}
+                    onClick={() => setFillStyle('tint')}
+                  >
+                    <span className="h-3.5 w-3.5 rounded-[3px] border border-current bg-current opacity-40" />
+                  </ToolButton>
+                  <ToolButton
+                    title="No fill (outline only)"
+                    active={fillStyleOf(selectedShape) === 'none'}
+                    onClick={() => setFillStyle('none')}
+                  >
+                    <span className="h-3.5 w-3.5 rounded-[3px] border border-current" />
+                  </ToolButton>
+                </>
+              )}
+              {selection.size >= 2 && (
+                <>
+                  <div className="mx-1 h-5 w-px bg-border" />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        title="Align & distribute"
+                        aria-label="Align and distribute"
+                        className="grid h-7 w-7 place-items-center rounded text-text-mid hover:bg-bg-3 hover:text-text"
+                      >
+                        <LayoutGrid size={16} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center">
+                      <DropdownMenuItem onSelect={() => alignSelection('left')}>
+                        <AlignStartVertical size={14} /> Align left
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => alignSelection('hcenter')}>
+                        <AlignCenterVertical size={14} /> Align centre
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => alignSelection('right')}>
+                        <AlignEndVertical size={14} /> Align right
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => alignSelection('top')}>
+                        <AlignStartHorizontal size={14} /> Align top
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => alignSelection('vmiddle')}>
+                        <AlignCenterHorizontal size={14} /> Align middle
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => alignSelection('bottom')}>
+                        <AlignEndHorizontal size={14} /> Align bottom
+                      </DropdownMenuItem>
+                      {selection.size >= 3 && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => distributeSelection('h')}>
+                            <AlignHorizontalJustifyCenter size={14} /> Space evenly across
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => distributeSelection('v')}>
+                            <AlignVerticalJustifyCenter size={14} /> Space evenly down
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               )}
               <div className="mx-1 h-5 w-px bg-border" />

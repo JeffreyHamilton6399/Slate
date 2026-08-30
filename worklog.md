@@ -2041,3 +2041,82 @@ Stage Summary:
 - Shapes are now real draggable + resizable + selectable objects (slate-shape divs with inline absolute positioning, 4 corner resize handles, accent selection outline, Delete-to-remove).
 - Every toolbar + dock command has a handler in the editor's switch statement.
 - Editing UX cleaned: "Click to add text" placeholder, click-outside-deselect, shape z-index above text, 16:9 aspect preserved, present-mode shapes visible-but-not-editable.
+
+---
+Task ID: ROUND38-A
+Agent: main (Claude Code)
+Task: Verify the whole stack, and make multi-user collaboration correct and fast
+
+Work Log:
+- Verified the in-flight re-auth work end to end in real browsers: started the
+  server with one JWT_SECRET, joined a board, restarted the server with a
+  DIFFERENT secret (what a production restart does, since an unset secret is a
+  random per-boot key), then joined a second browser. The first tab noticed the
+  rejection, re-issued an identity, reconnected, and its typing reached the
+  second browser — the exact failure `provider.ts`'s `onAuthFailed` path and
+  `relay.ts`'s codeless-rethrow exist to prevent.
+- **Rate limiting reworked: back-pressure instead of refusal** (relay.ts,
+  rateLimit.ts). Measured the old behaviour first: a peer over budget was
+  closed with Forbidden, which the Hocuspocus client reads as an auth denial —
+  the socket stopped dead and the board stopped syncing until the app re-dialled
+  (verified: writer stuck `disconnected`, reader stalled at 237 of 776 updates).
+  Handing the client a close code it doesn't special-case was worse: it
+  reconnected instantly and looped ~500 reconnects/s. Now an over-budget peer
+  has its socket paused for 250ms (escalating to 1s while it keeps flooding),
+  so TCP slows the sender. Re-measured: a peer sending ~500/s stays connected
+  with every update delivered, and under a ~1200/s flood from one peer the other
+  peers' p50 latency stays at 0.8ms, /health stays at 2.9ms, nobody
+  disconnects, and the flood's tail drains in 1.7s with zero loss.
+- rateLimit.ts is now a token bucket (sustained RATE_LIMIT_UPDATES_PER_SEC,
+  burst 2x) rather than a fixed window, so bursty-but-legitimate authoring — a
+  chunked audio publish is one Yjs update per ~512KB — doesn't trip on a window
+  boundary. Idle buckets are still swept. Tests rewritten (7 cases).
+- Budget key falls back to the socket id instead of a shared 'anon' bucket, so
+  an unauthenticated message can't drain a budget shared by every such peer.
+- **Awareness no longer re-renders the workspace at cursor rate** — the main
+  multi-user slowdown. `useSlateRoom` fed every awareness event into React
+  state at the ROOT of the editor tree (Header, docks, Canvas2D/Viewport3D,
+  PeopleWidget, panels — none memoised). Measured: 8 peers moving cursors =
+  128 events/s, 16 peers = 256/s, each one a full-tree re-render. Added
+  `rosterKey` (packages/sync-protocol) which keys only what roster UI draws;
+  cursor/camera/playhead/selection movement is excluded because the components
+  that draw those already subscribe to the room and write transforms
+  imperatively. After: ~0/s steady-state re-renders. 6 unit tests.
+- Viewport3D had the same bug plus a worse one: `PeerCamera` read the pose from
+  props, so every remote camera nudge re-rendered the R3F tree. It now
+  subscribes to the room itself and writes into the refs the useFrame damping
+  already used; the parent only re-renders when the peer list changes.
+- PeopleWidget's speaking threshold moved to the shared VOICE_ACTIVE_LEVEL so
+  the widget and the roster key agree on what "talking" means.
+- HTTP limiter raised 200→600/min per IP and /health exempted: a classroom or
+  office behind one NAT address shares one budget, and every open tab polls
+  /api/rooms every 5s, so ~16 tabs used to start 429ing each other — including
+  the health probe, which drops the whole room to local-only. `pollRooms` now
+  also pauses while the tab is hidden and refreshes on return (Home switched to
+  it instead of its own interval).
+- vite.config: `preview` now proxies /api, /yjs, /voice, /health like `server`
+  does. Without it the e2e suite could never reach a sync server — /health
+  answered with SPA HTML and every test silently ran single-user.
+- New e2e `collab.spec.ts`: two browser contexts on one board assert presence
+  (both see 2), bidirectional doc sync through the relay, and the roster
+  dropping back to 1 on leave. Skips cleanly when no server is reachable.
+
+Verification:
+- `pnpm -r typecheck` exit 0; `pnpm lint` 0 errors 0 warnings; `pnpm -r test`
+  128 tests passing (13 new).
+- `npx playwright test` against a live stack: 15 passed, 5 skipped (the
+  pre-existing mobile slides skips), including the new collab spec on both
+  chromium and mobile-chrome.
+- Relay load harness against the running server: 16 peers on one board sync in
+  2ms, doc-update fanout p50 1.9ms / p95 5.4ms, 16x60 concurrent ops converge
+  identically on all 16 docs in 747ms, zero flaps, room member count exact.
+
+Stage Summary:
+- Multi-user correctness: an over-budget peer is slowed, not disconnected;
+  auth-key rotation heals itself (verified in real browsers); presence counts
+  and convergence verified at 8 and 16 peers.
+- Multi-user performance: cursor traffic no longer re-renders the editor tree
+  (128-256 wasted full-tree renders/s removed at 8-16 peers), remote 3D
+  cameras no longer re-render the R3F tree, hidden tabs stop polling.
+- 9 files modified, 3 added (collab.spec.ts, awareness.test.ts, and the
+  rewritten rateLimit tests).

@@ -59,6 +59,16 @@ function packageOf(id: string): string | null {
   return name ?? null;
 }
 
+/** Dev + preview both talk to a sync server on :8080 (the port the Fastify
+ *  server defaults to), so a locally running stack is reachable at the same
+ *  origin the production deployment serves everything from. */
+const devProxy = {
+  '/api': 'http://localhost:8080',
+  '/yjs': { target: 'ws://localhost:8080', ws: true },
+  '/voice': { target: 'ws://localhost:8080', ws: true },
+  '/health': 'http://localhost:8080',
+};
+
 export default defineConfig({
   define: {
     // Build stamp shown in Settings → About. The PWA service worker can keep
@@ -75,12 +85,15 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      '/api': 'http://localhost:8080',
-      '/yjs': { target: 'ws://localhost:8080', ws: true },
-      '/voice': { target: 'ws://localhost:8080', ws: true },
-      '/health': 'http://localhost:8080',
-    },
+    proxy: devProxy,
+  },
+  // `vite preview` is what the e2e suite runs against, and without the same
+  // proxy the built bundle has no server: /health answers with the SPA's HTML,
+  // the client decides it is on static hosting and goes local-only, and every
+  // collaboration test silently degrades into a single-user one.
+  preview: {
+    port: 4173,
+    proxy: devProxy,
   },
   build: {
     target: 'es2022',

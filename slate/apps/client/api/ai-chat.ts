@@ -24,6 +24,15 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 // Long generations (a multi-file app) can exceed the default 10s.
 export const maxDuration = 60;
 
+// NOTE: the Fastify twin caps this route at 20 requests/min per IP. A
+// serverless function holds no shared state, so that limit cannot be mirrored
+// here — this route is an unauthenticated call that spends the operator's Z.AI
+// credits. If you deploy the client to Vercel with ZAI_* set, put Vercel's own
+// WAF / rate limiting in front of it.
+
+/** Keep in sync with MAX_CONTEXT_CHARS in apps/server/src/aiChat.ts. */
+const MAX_CONTEXT_CHARS = 32_000;
+
 interface ChatMessage {
   role: string;
   content: string;
@@ -67,6 +76,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       res.status(400).json({ error: "Messages array is required" });
       return;
+    }
+    // Mirrors MAX_CONTEXT_CHARS in the Fastify twin. The client truncates
+    // editor context to 8000 chars, so this only trips on a crafted body.
+    for (const [field, value] of [
+      ["context", context],
+      ["instructions", instructions],
+    ] as const) {
+      if (typeof value === "string" && value.length > MAX_CONTEXT_CHARS) {
+        res.status(400).json({
+          error: `Invalid request: ${field} — String must contain at most ${MAX_CONTEXT_CHARS} character(s)`,
+        });
+        return;
+      }
     }
 
     let systemContent = context

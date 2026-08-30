@@ -53,10 +53,13 @@ export const CURSOR_THROTTLE_MS = 33; // ~30 Hz
 /** Auto-save snapshot interval. */
 export const AUTOSAVE_INTERVAL_MS = 30_000;
 
-/** Per-connection update rate limit (messages per second). Generous:
- *  cursor moves (~16/s) + awareness + sync bursts must fit with headroom —
- *  exceeding this closes the connection, which users see as the status
- *  pill flapping between connecting and online. */
+/** Sustained per-peer message rate (messages per second) the relay refills a
+ *  peer's budget at; the server allows a burst of twice this on top (see
+ *  rateLimit.ts). Generous on purpose — cursor awareness (20 Hz), camera poses
+ *  (up to 20 Hz), the audio playhead (7 Hz) and doc updates all share it, and
+ *  real sessions sit an order of magnitude below. A peer that outruns it isn't
+ *  disconnected or dropped: the relay stops reading its socket for a moment
+ *  and lets TCP slow it down. */
 export const RATE_LIMIT_UPDATES_PER_SEC = 240;
 
 /** Soft cap on objects in a 3D scene before warning the user. */

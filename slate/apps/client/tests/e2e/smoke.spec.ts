@@ -1,11 +1,29 @@
 /**
  * Smoke test — ensures the production bundle boots, the onboarding card
- * renders, and the user can enter a board (offline / no-server). Network
- * provider failures are handled gracefully so this can run without the
- * server up.
+ * renders, and the user can enter a board. Runs either standalone or against
+ * a live sync server: network provider failures are handled gracefully, and
+ * the assertions that depend on a server probe `/health` first.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+
+/** Boards are keyed by name, and a running sync server persists each board's
+ *  Yjs doc — so a hard-coded name carries state across projects and across
+ *  runs (the deck test would open yesterday's slides and miscount). Unique
+ *  per test, per project, per run. */
+const boardName = (prefix: string): string =>
+  `${prefix}-${test.info().project.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+/** Is a sync server reachable behind the preview proxy? The connection pill's
+ *  resting state depends on it, so the assertions below have to branch: these
+ *  tests run both standalone and against a full stack. */
+async function hasServer(request: APIRequestContext): Promise<boolean> {
+  try {
+    return (await request.get('/health')).ok();
+  } catch {
+    return false;
+  }
+}
 
 /** Fill in onboarding and enter the board. "Enter board" stays disabled until
  *  a project name is set AND the Terms box is ticked, so every test that needs
@@ -14,32 +32,37 @@ import { test, expect, type Page } from '@playwright/test';
 async function enterBoard(page: Page, name = 'Alice'): Promise<void> {
   await page.getByPlaceholder(/e\.g\. Alex/i).fill(name);
   const board = page.getByPlaceholder(/name your project/i);
-  if (!(await board.inputValue())) await board.fill('smoke');
+  if (!(await board.inputValue())) await board.fill(boardName('smoke'));
   await page.locator('input[type=checkbox]').first().check();
   await page.getByRole('button', { name: /enter board/i }).click();
 }
 
-test('renders onboarding and enters a working board', async ({ page }) => {
+test('renders onboarding and enters a working board', async ({ page, request }) => {
+  const online = await hasServer(request);
   await page.goto('/');
   await expect(page.getByText(/Slate/i).first()).toBeVisible();
   await enterBoard(page);
-  // Workspace chrome appears: tool rail + connection pill (LOCAL without a
-  // server, ONLINE with one) + style toolbar.
+  // Workspace chrome appears: tool rail + style toolbar.
   await expect(page.getByRole('toolbar', { name: 'Canvas tools' })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('status').filter({ hasText: /local|online|waking/i }).first()).toBeVisible({
-    timeout: 30_000,
-  });
   await expect(page.getByRole('toolbar', { name: 'Style' })).toBeVisible();
+  // The connection pill then settles into its resting state. With no server
+  // that is a calm LOCAL badge; with one, the pill disappears entirely once
+  // the connection is healthy — Header only surfaces a problem state, and
+  // routes connect/disconnect transitions to toasts instead.
+  const pill = page.getByRole('status').filter({ hasText: /local|waking|connecting|offline|error/i }).first();
+  if (online) await expect(pill).toBeHidden({ timeout: 30_000 });
+  else await expect(pill).toHaveText(/local/i, { timeout: 30_000 });
 });
 
 test('share link prefills the board name', async ({ page }) => {
-  await page.goto('/?board=smoke-shared&mode=2d');
+  const shared = boardName('smoke-shared');
+  await page.goto(`/?board=${shared}&mode=2d`);
   const boardInput = page.getByPlaceholder(/name your project/i);
-  await expect(boardInput).toHaveValue('smoke-shared', { timeout: 15_000 });
+  await expect(boardInput).toHaveValue(shared, { timeout: 15_000 });
 });
 
 test('presenting a deck runs the show and comes back', async ({ page }) => {
-  await page.goto('/?board=smoke-slides&mode=presentation');
+  await page.goto(`/?board=${boardName('smoke-slides')}&mode=presentation`);
   await enterBoard(page);
 
   // The deck bootstraps with one slide; add a second so navigation has

@@ -16,25 +16,91 @@ import {
   DOC_KEYS,
   MAX_BOARD_NAME_LEN,
   MAX_UPDATE_BYTES,
-  RATE_LIMIT_UPDATES_PER_SEC,
   type BoardMeta,
 } from '@slate/sync-protocol';
 import { env, isProd } from './config.js';
 import { verifyIdentity } from './identity.js';
 import { persistence } from './persistence.js';
+import { checkRateLimit } from './rateLimit.js';
 import { RoomRegistry } from './rooms.js';
 
-const rateLimits = new Map<string, { count: number; resetAt: number }>();
+/**
+ * What we do about a peer that outruns its message budget: stop reading its
+ * socket for a moment, then carry on.
+ *
+ * The obvious alternative — refusing the message — is worse in both
+ * directions. Hocuspocus turns a rejected message into a closed connection,
+ * and the client reads the close code it uses (Forbidden) as "your token was
+ * refused": the socket stops dead and only comes back when the app re-dials by
+ * hand. Handing it a code it doesn't special-case instead makes it reconnect
+ * immediately, which is worse still — a peer that is genuinely sending too
+ * fast reconnects, replays, trips again, and hammers the server with a full
+ * re-sync several hundred times a second (measured: ~500 reconnects/s from a
+ * single peer). And dropping the message silently is the worst of the three:
+ * the client believes it sent the update and nothing ever asks for it again,
+ * so that edit is simply lost for everyone else.
+ *
+ * Pausing the socket pushes back through TCP instead. The sender's own buffers
+ * fill, its writes slow down, nothing is dropped, no connection is lost, and
+ * the peer's edits all arrive — just spread over slightly more time. One pause
+ * refills a quarter-second of budget.
+ */
+const THROTTLE_PAUSE_MS = 250;
+/** Ceiling on a single pause. A peer that keeps flooding gets progressively
+ *  longer pauses, but never long enough to look like a dead connection. */
+const THROTTLE_MAX_PAUSE_MS = 1_000;
+/** Going over budget again this soon after being resumed means the peer is
+ *  still flooding rather than having had one legitimate burst, so the next
+ *  pause doubles. A peer that blips once pays 250ms and nothing more. */
+const THROTTLE_ESCALATE_WINDOW_MS = 1_000;
 
-function checkRateLimit(peerId: string): boolean {
-  const now = Date.now();
-  const slot = rateLimits.get(peerId);
-  if (!slot || slot.resetAt < now) {
-    rateLimits.set(peerId, { count: 1, resetAt: now + 1000 });
-    return true;
+interface ThrottleState {
+  paused: boolean;
+  /** Length of the next pause. */
+  pause: number;
+  /** When the last pause ended. */
+  resumedAt: number;
+}
+
+/** Per-socket throttle bookkeeping, so a burst schedules one pause rather than
+ *  one per message. WeakMap: a closed socket must not be kept alive by this. */
+const throttles = new WeakMap<object, ThrottleState>();
+
+/** The raw `ws` socket behind a Hocuspocus connection, when it exposes the
+ *  stream controls (it always does in this deployment — @fastify/websocket
+ *  hands the relay real `ws` sockets — but the relay must not fall over if a
+ *  future transport doesn't). */
+interface PausableSocket {
+  pause?: () => void;
+  resume?: () => void;
+}
+
+function throttlePeer(connection: { webSocket?: PausableSocket } | undefined): void {
+  const ws = connection?.webSocket;
+  if (!ws || typeof ws.pause !== 'function' || typeof ws.resume !== 'function') return;
+  let state = throttles.get(ws);
+  if (!state) {
+    state = { paused: false, pause: THROTTLE_PAUSE_MS, resumedAt: 0 };
+    throttles.set(ws, state);
   }
-  slot.count++;
-  return slot.count <= RATE_LIMIT_UPDATES_PER_SEC;
+  if (state.paused) return;
+  const now = Date.now();
+  state.pause =
+    now - state.resumedAt < THROTTLE_ESCALATE_WINDOW_MS
+      ? Math.min(state.pause * 2, THROTTLE_MAX_PAUSE_MS)
+      : THROTTLE_PAUSE_MS;
+  state.paused = true;
+  ws.pause();
+  const timer = setTimeout(() => {
+    state.paused = false;
+    state.resumedAt = Date.now();
+    try {
+      ws.resume?.();
+    } catch {
+      // Socket closed while paused — nothing to resume.
+    }
+  }, state.pause);
+  timer.unref?.(); // never hold the process open for a throttle
 }
 
 /** Observers we attach so we can clean them up on doc destroy. */
@@ -95,7 +161,21 @@ export function createRelay(rooms: RoomRegistry): Hocuspocus {
       if (!documentName || documentName.length > MAX_BOARD_NAME_LEN) {
         throw new Error('invalid room name');
       }
-      const claims = await verifyIdentity(token);
+      let claims;
+      try {
+        claims = await verifyIdentity(token);
+      } catch {
+        // Rethrow as a plain Error. jose's failures (ERR_JWT_EXPIRED,
+        // ERR_JWS_SIGNATURE_VERIFICATION_FAILED, ...) carry a *string* `code`,
+        // and Hocuspocus passes error.code straight to websocket.close() —
+        // a non-numeric close code throws there, and its fallback closes the
+        // socket as Unauthorized. The client treats Unauthorized as fatal
+        // (shouldConnect = false) and never reconnects, so an expired token or
+        // a rotated signing secret would strand that tab until a page reload.
+        // A codeless error closes with Forbidden, which the client retries —
+        // and its token callback re-issues on the way back in.
+        throw new Error('invalid token');
+      }
       return {
         peerId: claims.sub,
         name: claims.name,
@@ -116,25 +196,43 @@ export function createRelay(rooms: RoomRegistry): Hocuspocus {
         if (next === 0 && r.visibility === 'private') rooms.remove(r.name);
       }
     },
-    async onStateless({ payload, connection }: { payload: string; connection: { context: { peerId?: string } } }) {
-      const peerId = connection.context?.peerId ?? 'anon';
-      if (!checkRateLimit(peerId)) return;
+    async onStateless({
+      payload,
+      connection,
+      socketId,
+    }: {
+      payload: string;
+      connection: { context: { peerId?: string }; webSocket?: PausableSocket };
+      socketId?: string;
+    }) {
+      if (!checkRateLimit(budgetKey(connection.context, socketId))) throttlePeer(connection);
       void payload;
     },
-    // Reject oversized incoming updates at the transport layer too.
     async beforeHandleMessage(data: {
       update?: Uint8Array;
       context: { peerId?: string };
+      socketId?: string;
+      connection?: { webSocket?: PausableSocket };
     }) {
-      const peerId = data.context?.peerId ?? 'anon';
-      if (!checkRateLimit(peerId)) {
-        throw new Error('rate limit');
-      }
+      // Over budget: slow this peer down rather than refusing the message.
+      if (!checkRateLimit(budgetKey(data.context, data.socketId))) throttlePeer(data.connection);
+      // Oversized updates ARE refused — they're rejected by the transport's
+      // maxPayload a step earlier anyway, and no amount of waiting makes a
+      // 48 MB message acceptable.
       if (data.update && data.update.byteLength > MAX_UPDATE_BYTES) {
         throw new Error('update too large');
       }
     },
   });
+}
+
+/** Which budget an incoming message spends from. The peer id is the real
+ *  subject — one bucket per person, shared across their reconnects — and the
+ *  socket id is the fallback so a message that somehow arrives without a
+ *  verified context spends its OWN budget rather than a single shared 'anon'
+ *  bucket that every such connection would drain together. */
+function budgetKey(context: { peerId?: string } | undefined, socketId?: string): string {
+  return context?.peerId ?? (socketId ? `socket:${socketId}` : 'anon');
 }
 
 void env;

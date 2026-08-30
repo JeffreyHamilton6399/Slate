@@ -19,6 +19,7 @@ import {
   OrbitControls,
 } from '@react-three/drei';
 import * as THREE from 'three';
+import { rosterKey } from '@slate/sync-protocol';
 import type {
   AwarenessState,
   Object3D as Object3DSchema,
@@ -205,7 +206,20 @@ export function Viewport3D({ room }: Viewport3DProps) {
   const pivotScreenRef = useRef<{ x: number; y: number } | null>(null);
   const guideLineRef = useRef<SVGLineElement | null>(null);
 
-  useEffect(() => room.onAwarenessChange(setAwareness), [room]);
+  // Only the peer LIST drives a re-render here: awareness also carries camera
+  // poses and 2D cursors that move at up to 20 Hz per peer, and this component
+  // rebuilds the whole R3F tree. Live poses reach the glyphs through
+  // PeerCamera's own subscription instead (same doctrine as RemoteCursors).
+  const rosterRef = useRef<string | null>(null);
+  useEffect(() => {
+    rosterRef.current = null;
+    return room.onAwarenessChange((states) => {
+      const key = rosterKey(states);
+      if (key === rosterRef.current) return;
+      rosterRef.current = key;
+      setAwareness(states);
+    });
+  }, [room]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -1169,7 +1183,7 @@ export function Viewport3D({ room }: Viewport3DProps) {
         <ViewPresets snapshot={snapshot} lookThroughRef={lookThroughRef} cameraFollowRef={cameraFollowRef} />
         <PivotProjector snapshot={snapshot} out={pivotScreenRef} />
         <CameraTracking out={cameraInfoRef} room={room} />
-        <RemotePeers3D peers={awareness} selfId={room.identity.peerId} />
+        <RemotePeers3D room={room} peers={awareness} selfId={room.identity.peerId} />
         <FrameSelectedBinding
           frameRef={frameSelectedRef}
           snapshot={snapshot}
@@ -1375,13 +1389,21 @@ function CameraTracking({
 }
 
 /** Other peers' cameras: a colored wire pyramid at their eye, name attached. */
-function RemotePeers3D({ peers, selfId }: { peers: AwarenessState[]; selfId: string }) {
+function RemotePeers3D({
+  room,
+  peers,
+  selfId,
+}: {
+  room: SlateRoom;
+  peers: AwarenessState[];
+  selfId: string;
+}) {
   const remote = peers.filter((p) => p.id !== selfId && p.cam);
   if (remote.length === 0) return null;
   return (
     <>
       {remote.map((p) => (
-        <PeerCamera key={p.id} state={p} />
+        <PeerCamera key={p.id} room={room} peerId={p.id} name={p.name} color={p.color} />
       ))}
     </>
   );
@@ -1406,15 +1428,37 @@ const PEER_CAM_LINES = (() => {
   return g;
 })();
 
-function PeerCamera({ state }: { state: AwarenessState }) {
-  const cam = state.cam!;
+function PeerCamera({
+  room,
+  peerId,
+  name,
+  color,
+}: {
+  room: SlateRoom;
+  peerId: string;
+  name: string;
+  color: string;
+}) {
+  const initial = room.awarenessStates().find((s) => s.id === peerId)?.cam;
   const groupRef = useRef<THREE.Group | null>(null);
   // Poses arrive ~6/s; damp per frame so remote cameras glide, not hop.
-  const targetPos = useRef(new THREE.Vector3(cam.p[0], cam.p[1], cam.p[2]));
-  const lookCur = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
-  const lookTarget = useRef(new THREE.Vector3(cam.t[0], cam.t[1], cam.t[2]));
-  targetPos.current.set(cam.p[0], cam.p[1], cam.p[2]);
-  lookTarget.current.set(cam.t[0], cam.t[1], cam.t[2]);
+  const start = initial ?? { p: [0, 0, 0] as const, t: [0, 0, 0] as const };
+  const targetPos = useRef(new THREE.Vector3(start.p[0], start.p[1], start.p[2]));
+  const lookCur = useRef(new THREE.Vector3(start.t[0], start.t[1], start.t[2]));
+  const lookTarget = useRef(new THREE.Vector3(start.t[0], start.t[1], start.t[2]));
+  // Poses land in refs, never in state: this component sits inside the R3F
+  // tree, and re-rendering it at the peer's publish rate would rebuild the
+  // glyph's geometry bindings for every camera nudge anyone makes.
+  useEffect(
+    () =>
+      room.onAwarenessChange((states) => {
+        const cam = states.find((s) => s.id === peerId)?.cam;
+        if (!cam) return;
+        targetPos.current.set(cam.p[0], cam.p[1], cam.p[2]);
+        lookTarget.current.set(cam.t[0], cam.t[1], cam.t[2]);
+      }),
+    [room, peerId],
+  );
   useFrame((_, delta) => {
     const g = groupRef.current;
     if (!g) return;
@@ -1431,21 +1475,21 @@ function PeerCamera({ state }: { state: AwarenessState }) {
     g.lookAt(lookCur.current);
   });
   return (
-    <group ref={groupRef} position={[cam.p[0], cam.p[1], cam.p[2]]}>
+    <group ref={groupRef} position={[start.p[0], start.p[1], start.p[2]]}>
       <lineSegments geometry={PEER_CAM_LINES} raycast={() => null}>
-        <lineBasicMaterial color={state.color} transparent opacity={0.9} />
+        <lineBasicMaterial color={color} transparent opacity={0.9} />
       </lineSegments>
       {/* Small solid eye so the camera reads at a distance. */}
       <mesh raycast={() => null}>
         <sphereGeometry args={[0.06, 10, 10]} />
-        <meshBasicMaterial color={state.color} />
+        <meshBasicMaterial color={color} />
       </mesh>
       <Html position={[0, 0.55, 0]} center distanceFactor={14} occlude={false}>
         <div
           className="pointer-events-none w-max max-w-[140px] truncate rounded-full px-1.5 py-px text-[10px] font-medium leading-4 text-black/85 shadow"
-          style={{ backgroundColor: state.color }}
+          style={{ backgroundColor: color }}
         >
-          {state.name}
+          {name}
         </div>
       </Html>
     </group>

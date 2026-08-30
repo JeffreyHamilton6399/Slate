@@ -11,6 +11,15 @@ kill_timeout = "10s"
 [build]
   dockerfile = "Dockerfile"
 
+# ONE MACHINE ONLY. The relay holds live documents, presence and the room
+# registry in the process that serves them, so a second machine is a second
+# disjoint world: two people on the same board would each see an empty room and
+# never receive each other's edits, with no error anywhere. The /data volume
+# below pins this to a single machine (a Fly volume attaches to one machine at
+# a time) — do not scale the app out or add a second volume without putting
+# shared state behind the relay first. See README → "Scaling: one instance
+# only".
+#
 # Set a stable signing secret once per app, before the first deploy:
 #   flyctl secrets set JWT_SECRET="$(openssl rand -base64 32)"
 # Without it the server generates a random key on every boot, so sessions do

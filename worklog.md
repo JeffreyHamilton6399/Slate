@@ -2120,3 +2120,53 @@ Stage Summary:
   cameras no longer re-render the R3F tree, hidden tabs stop polling.
 - 9 files modified, 3 added (collab.spec.ts, awareness.test.ts, and the
   rewritten rateLimit tests).
+
+---
+Task ID: ROUND38-B
+Agent: main (Claude Code)
+Task: Wire the tests into CI and pin the single-instance constraint
+
+Work Log:
+- **CI was never running.** `.github/workflows/` sat inside `slate/`, but
+  GitHub only reads workflows from the REPO ROOT — the same flattening that
+  broke Render's blueprint (documented at the top of render.yaml) silently
+  orphaned both ci.yml and deploy.yml. Moved them to the root and added
+  `defaults.run.working-directory: slate` so every shell step still runs in the
+  workspace. `actions/setup-node`'s pnpm cache now points at
+  `slate/pnpm-lock.yaml` (the repo root holds an unrelated leftover project
+  with its own lockfile). deploy.yml needed the same working-directory or
+  `flyctl deploy` would look for fly.toml in the wrong place.
+- **New `e2e` CI job.** The multiplayer tests are only meaningful against a
+  live relay — collab.spec.ts drives two browsers through one board, and
+  without a server behind the preview proxy it skips rather than fails. The job
+  installs Playwright's chromium, builds client + server, starts the PRODUCTION
+  server artifact (`node apps/server/dist/index.js`) on :8080, waits for
+  /health, then runs `pnpm test:e2e`. Server log dumped and test-results
+  uploaded on failure.
+- Verified the CI sequence locally, command for command: built the server
+  bundle, ran it with the CI env, and ran `CI=1 pnpm test:e2e` → 15 passed,
+  5 skipped (the pre-existing mobile slides skips). Confirmed collab.spec.ts
+  actually RUNS rather than skipping under CI on both projects.
+- **Single-instance constraint documented where someone would hit it.** The
+  relay holds live docs, presence and the room registry in the process that
+  serves them, so a second instance is a second disjoint world — two people on
+  one board each see an empty room and never receive each other's edits, with
+  no error anywhere. Added a README "Scaling: one instance only" section (with
+  what going wider would need: extension-redis, a shared registry, a stable
+  JWT_SECRET), a header warning in fly.toml explaining that the /data volume is
+  what currently pins it to one machine, and the same note in render.yaml.
+- README's API rate-limit figure corrected 200 → 600/min to match index.ts.
+
+Verification:
+- Both workflow files parse as YAML (js-yaml); jobs resolve to test + e2e and
+  deploy, each with the workspace working-directory.
+- `pnpm -r typecheck` 0 errors; `pnpm lint` 0 errors 0 warnings.
+- `CI=1 pnpm test:e2e` against the built server: 15 passed, 5 skipped.
+
+Stage Summary:
+- CI now actually runs — and runs the multiplayer e2e tests against a real
+  relay, so a regression in collaboration fails the build instead of silently
+  skipping.
+- The one deployment mistake that would break collaboration invisibly (scaling
+  past one instance) is now called out in all three places someone would be
+  looking when they make it.

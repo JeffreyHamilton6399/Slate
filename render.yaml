@@ -12,6 +12,11 @@
 #   - No persistent disk, so server-side Yjs snapshots reset on restart.
 #     Boards live in each browser's IndexedDB and re-seed the server on
 #     reconnect, so this is acceptable for casual use.
+#
+# ONE INSTANCE ONLY (the free plan runs one; keep it that way on paid plans).
+# The relay holds live documents, presence and the room registry in memory, so
+# a second instance is a second disjoint world — two people on the same board
+# would silently never see each other. See README, "Scaling: one instance only".
 services:
   - type: web
     name: slate

@@ -1,3 +1,10 @@
+# CI for the Slate workspace, which lives in slate/ inside this repo.
+#
+# This file has to sit at the REPO ROOT: GitHub only reads .github/workflows
+# from the root, so while these workflows lived in slate/.github/ they never
+# ran at all (the same flattening that broke Render's blueprint — see the note
+# at the top of render.yaml). `defaults.run.working-directory` points every
+# shell step back at the workspace.
 name: CI
 
 on:
@@ -9,6 +16,10 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: slate
 
 jobs:
   test:
@@ -24,6 +35,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          # The repo root holds an unrelated leftover project with its own
+          # lockfile; point the cache at the workspace's.
+          cache-dependency-path: slate/pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile=false
 
@@ -41,3 +55,64 @@ jobs:
 
       - name: Build server
         run: pnpm build:server
+
+  # The multiplayer tests need a real relay: collab.spec.ts drives two browsers
+  # through one board, and without a server reachable behind the preview proxy
+  # it (and the online half of smoke.spec.ts) skips rather than fails. So this
+  # job runs the production server artifact alongside the preview.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: slate/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile=false
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @slate/client exec playwright install --with-deps chromium
+
+      - name: Build client
+        run: pnpm build:client
+
+      - name: Build server
+        run: pnpm build:server
+
+      - name: Start sync server
+        run: |
+          JWT_SECRET=ci-not-a-real-secret \
+          STORAGE_DIR="${RUNNER_TEMP}/slate-data" \
+          PORT=8080 HOST=127.0.0.1 \
+          node apps/server/dist/index.js > "${RUNNER_TEMP}/server.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8080/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8080/health || {
+            echo "::error::sync server never became healthy"
+            cat "${RUNNER_TEMP}/server.log"
+            exit 1
+          }
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Server log
+        if: failure()
+        run: cat "${RUNNER_TEMP}/server.log" || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: slate/apps/client/test-results
+          retention-days: 7
+          if-no-files-found: ignore

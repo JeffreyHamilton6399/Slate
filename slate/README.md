@@ -52,11 +52,28 @@ The `Slate/Reference]/` folder contains the v1 reference snapshot — read-only 
 ### AI chat costs
 
 `/api/ai-chat` is unauthenticated and spends the operator's Z.AI credits, so
-the server caps it at 20 requests/min per IP (the rest of the API gets 200).
+the server caps it at 20 requests/min per IP (the rest of the API gets 600).
 The Vercel serverless twin holds no shared state and cannot enforce that — if
 you deploy the client to Vercel with `ZAI_*` set, put Vercel's own rate
 limiting in front of it. Leaving `ZAI_*` unset disables the route entirely
 (503), which is the default.
+
+### Scaling: one instance only
+
+The relay keeps everything in the process that serves it — live Yjs documents,
+the awareness/presence state, and the public room registry — with snapshots on
+local disk. **Two instances are two separate worlds.** Nothing errors: two
+people who open the same board land on different machines, each sees an empty
+room and a lone cursor, and neither one's edits ever reach the other. The
+symptom looks like "collaboration randomly doesn't work for some people".
+
+So run exactly one instance. On Fly the `/data` volume already pins the app to
+a single machine (a volume attaches to one machine at a time) — keep it that
+way rather than scaling the app out. Render's free plan runs one instance.
+
+Going wider needs shared state behind the relay: `@hocuspocus/extension-redis`
+to fan updates between instances, a shared room registry, and a stable
+`JWT_SECRET` so tokens verify on whichever instance answers.
 
 ### Signing secret (`JWT_SECRET`)
 

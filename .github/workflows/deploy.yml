@@ -1,5 +1,9 @@
 # Deploy to Fly.io. Auth failures are almost always the GitHub secret — see steps below.
 #
+# Lives at the REPO ROOT because GitHub only reads .github/workflows from there;
+# while this sat in slate/.github/ it never ran. `defaults.run.working-directory`
+# points flyctl at slate/, where fly.toml and the Dockerfile live.
+#
 # Fly.io no longer recommends short-lived `fly auth token` for CI. Use one of:
 #   cd <repo> && fly tokens create deploy -a slate --name github-actions --expiry 8760h
 #   (use the app slug from fly.toml after -a)
@@ -22,6 +26,10 @@ on:
 concurrency:
   group: deploy-production
   cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: slate
 
 jobs:
   deploy:

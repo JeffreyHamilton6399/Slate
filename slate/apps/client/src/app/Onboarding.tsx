@@ -24,7 +24,7 @@ import { AboutDialog } from './AboutDialog';
 import { TermsDialog } from './TermsDialog';
 import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
 
-export function Onboarding() {
+export function Onboarding({ onSignIn }: { onSignIn?: () => void } = {}) {
   const cachedName = useAppStore((s) => s.displayName);
   const enterBoard = useAppStore((s) => s.enterBoard);
   const setDisplayName = useAppStore((s) => s.setDisplayName);
@@ -153,6 +153,16 @@ export function Onboarding() {
             <Coffee size={12} />
             <span>Donate</span>
           </a>
+          {/* Back to the account screen, for a guest who changes their mind. */}
+          {onSignIn && (
+            <button
+              type="button"
+              onClick={onSignIn}
+              className="text-[11px] text-text-dim transition-colors hover:text-accent"
+            >
+              Sign in
+            </button>
+          )}
           {/* Guest profile dropdown — no account, so no Settings / Sign-in. */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

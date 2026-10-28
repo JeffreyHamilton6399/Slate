@@ -36,8 +36,37 @@ import { ensureMyProfile, fetchMyProfile } from '../account/friends';
 import { useFriends } from '../account/useFriends';
 import { modeBadgeClass, modeGradientClass, modeHoverBorderClass, modeTextClass } from './modeColors';
 
+/**
+ * Remembers that this visitor chose to work without an account, so a reload
+ * does not drop them back at the sign-in wall.
+ */
+const GUEST_KEY = 'slate.guest';
+const readGuest = () => {
+  try {
+    return localStorage.getItem(GUEST_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+const writeGuest = (on: boolean) => {
+  try {
+    if (on) localStorage.setItem(GUEST_KEY, '1');
+    else localStorage.removeItem(GUEST_KEY);
+  } catch {
+    /* private window — the choice just doesn't outlive the tab */
+  }
+};
+
 export function Entry() {
   const { user, loading } = useAccount();
+  /**
+   * An account buys cross-device saves and friends; it is not what makes the
+   * app run. Boards live in IndexedDB and sync peer to peer, so a visitor who
+   * doesn't want an account still gets the whole editor — which is what the
+   * account-less build has always done. Without this, configuring Supabase
+   * turned the sign-in screen into a wall nobody could see past.
+   */
+  const [guest, setGuest] = useState(readGuest);
   if (!accountsEnabled) return <Onboarding />;
   if (loading) {
     return (
@@ -46,12 +75,28 @@ export function Entry() {
       </div>
     );
   }
-  if (!user) return <SignIn />;
-  return <Home email={user.email ?? ''} userId={user.id} />;
+  if (user) return <Home email={user.email ?? ''} userId={user.id} />;
+  if (guest)
+    return (
+      <Onboarding
+        onSignIn={() => {
+          writeGuest(false);
+          setGuest(false);
+        }}
+      />
+    );
+  return (
+    <SignIn
+      onGuest={() => {
+        writeGuest(true);
+        setGuest(true);
+      }}
+    />
+  );
 }
 
 /** Email + password sign-in / sign-up (display name + ToS on sign-up). */
-function SignIn() {
+function SignIn({ onGuest }: { onGuest: () => void }) {
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -284,6 +329,17 @@ function SignIn() {
           )}
           {notice && <p className="text-xs text-text-mid">{notice}</p>}
         </form>
+
+        {/* An account is for saves that follow you and for friends. The editor
+            itself needs none, so the door is never locked. */}
+        <div className="flex flex-col gap-2 border-t border-border pt-4">
+          <Button type="button" variant="ghost" size="lg" onClick={onGuest} className="w-full">
+            Continue without an account
+          </Button>
+          <p className="text-center text-[11px] text-text-dim">
+            Boards stay on this device and still sync live with anyone you share them with.
+          </p>
+        </div>
       </div>
       <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} />
     </div>
